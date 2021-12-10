@@ -185,6 +185,10 @@ type DeviceProperties struct {
 	// Defaults to sdk_version if not set.
 	Min_sdk_version *string
 
+	// if not blank, set the maximum version of the sdk that the compiled artifacts will run against.
+	// Defaults to empty string "". See sdk_version for possible values.
+	Max_sdk_version *string
+
 	// if not blank, set the targetSdkVersion in the AndroidManifest.xml.
 	// Defaults to sdk_version if not set.
 	Target_sdk_version *string
@@ -367,6 +371,7 @@ type Module struct {
 
 	sdkVersion    android.SdkSpec
 	minSdkVersion android.SdkSpec
+	maxSdkVersion android.SdkSpec
 }
 
 func (j *Module) CheckStableSdkVersion(ctx android.BaseModuleContext) error {
@@ -522,6 +527,13 @@ func (j *Module) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
 		return android.SdkSpecFrom(ctx, *j.deviceProperties.Min_sdk_version)
 	}
 	return j.SdkVersion(ctx)
+}
+
+func (j *Module) MaxSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
+	maxSdkVersion := proptools.StringDefault(j.deviceProperties.Max_sdk_version, "")
+	// SdkSpecFrom returns SdkSpecPrivate for this, which may be confusing.
+	// TODO(b/208456999): ideally MaxSdkVersion should be an ApiLevel and not SdkSpec.
+	return android.SdkSpecFrom(ctx, maxSdkVersion)
 }
 
 func (j *Module) MinSdkVersionString() string {
@@ -1152,10 +1164,25 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 
 	// Check package restrictions if necessary.
 	if len(j.properties.Permitted_packages) > 0 {
-		// Check packages and copy to package-checked file.
+		// Time stamp file created by the package check rule.
 		pkgckFile := android.PathForModuleOut(ctx, "package-check.stamp")
+
+		// Create a rule to copy the output jar to another path and add a validate dependency that
+		// will check that the jar only contains the permitted packages. The new location will become
+		// the output file of this module.
+		inputFile := outputFile
+		outputFile = android.PathForModuleOut(ctx, "package-check", jarName).OutputPath
+		ctx.Build(pctx, android.BuildParams{
+			Rule:   android.Cp,
+			Input:  inputFile,
+			Output: outputFile,
+			// Make sure that any dependency on the output file will cause ninja to run the package check
+			// rule.
+			Validation: pkgckFile,
+		})
+
+		// Check packages and create a timestamp file when complete.
 		CheckJarPackages(ctx, pkgckFile, outputFile, j.properties.Permitted_packages)
-		j.additionalCheckedModules = append(j.additionalCheckedModules, pkgckFile)
 
 		if ctx.Failed() {
 			return
@@ -1473,8 +1500,7 @@ func (j *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Modu
 }
 
 // Implements android.ApexModule
-func (j *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
-	sdkVersion android.ApiLevel) error {
+func (j *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersion android.ApiLevel) error {
 	sdkSpec := j.MinSdkVersion(ctx)
 	if !sdkSpec.Specified() {
 		return fmt.Errorf("min_sdk_version is not specified")
