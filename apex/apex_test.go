@@ -622,7 +622,7 @@ func TestDefaults(t *testing.T) {
 			java_libs: ["myjar"],
 			apps: ["AppFoo"],
 			rros: ["rro"],
-			bpfs: ["bpf"],
+			bpfs: ["bpf", "netd_test"],
 			updatable: false,
 		}
 
@@ -675,6 +675,12 @@ func TestDefaults(t *testing.T) {
 			srcs: ["bpf.c", "bpf2.c"],
 		}
 
+		bpf {
+			name: "netd_test",
+			srcs: ["netd_test.c"],
+			sub_dir: "netd",
+		}
+
 	`)
 	ensureExactContents(t, ctx, "myapex", "android_common_myapex_image", []string{
 		"etc/myetc",
@@ -684,6 +690,7 @@ func TestDefaults(t *testing.T) {
 		"overlay/blue/rro.apk",
 		"etc/bpf/bpf.o",
 		"etc/bpf/bpf2.o",
+		"etc/bpf/netd/netd_test.o",
 	})
 }
 
@@ -2293,22 +2300,21 @@ func TestFilesInSubDir(t *testing.T) {
 	`)
 
 	generateFsRule := ctx.ModuleForTests("myapex", "android_common_myapex_image").Rule("generateFsConfig")
-	dirs := strings.Split(generateFsRule.Args["exec_paths"], " ")
+	cmd := generateFsRule.RuleParams.Command
 
 	// Ensure that the subdirectories are all listed
-	ensureListContains(t, dirs, "etc")
-	ensureListContains(t, dirs, "etc/foo")
-	ensureListContains(t, dirs, "etc/foo/bar")
-	ensureListContains(t, dirs, "lib64")
-	ensureListContains(t, dirs, "lib64/foo")
-	ensureListContains(t, dirs, "lib64/foo/bar")
-	ensureListContains(t, dirs, "lib")
-	ensureListContains(t, dirs, "lib/foo")
-	ensureListContains(t, dirs, "lib/foo/bar")
-
-	ensureListContains(t, dirs, "bin")
-	ensureListContains(t, dirs, "bin/foo")
-	ensureListContains(t, dirs, "bin/foo/bar")
+	ensureContains(t, cmd, "/etc ")
+	ensureContains(t, cmd, "/etc/foo ")
+	ensureContains(t, cmd, "/etc/foo/bar ")
+	ensureContains(t, cmd, "/lib64 ")
+	ensureContains(t, cmd, "/lib64/foo ")
+	ensureContains(t, cmd, "/lib64/foo/bar ")
+	ensureContains(t, cmd, "/lib ")
+	ensureContains(t, cmd, "/lib/foo ")
+	ensureContains(t, cmd, "/lib/foo/bar ")
+	ensureContains(t, cmd, "/bin ")
+	ensureContains(t, cmd, "/bin/foo ")
+	ensureContains(t, cmd, "/bin/foo/bar ")
 }
 
 func TestFilesInSubDirWhenNativeBridgeEnabled(t *testing.T) {
@@ -6897,6 +6903,7 @@ func TestApexPermittedPackagesRules(t *testing.T) {
 					apex_available: ["myapex"],
 					sdk_version: "none",
 					system_modules: "none",
+					min_sdk_version: "30",
 				}
 				java_library {
 					name: "nonbcp_lib2",
@@ -6905,9 +6912,11 @@ func TestApexPermittedPackagesRules(t *testing.T) {
 					permitted_packages: ["a.b"],
 					sdk_version: "none",
 					system_modules: "none",
+					min_sdk_version: "30",
 				}
 				apex {
 					name: "myapex",
+					min_sdk_version: "30",
 					key: "myapex.key",
 					java_libs: ["bcp_lib1", "nonbcp_lib2"],
 					updatable: false,
@@ -6920,8 +6929,8 @@ func TestApexPermittedPackagesRules(t *testing.T) {
 			},
 		},
 		{
-			name:          "Bootclasspath apex jar not satisfying allowed module packages.",
-			expectedError: `module "bcp_lib2" .* which is restricted because jars that are part of the myapex module may only allow these packages: foo.bar. Please jarjar or move code around.`,
+			name:          "Bootclasspath apex jar not satisfying allowed module packages on Q.",
+			expectedError: `module "bcp_lib2" .* which is restricted because jars that are part of the myapex module may only allow these packages: foo.bar with min_sdk < T. Please jarjar or move code around.`,
 			bp: `
 				java_library {
 					name: "bcp_lib1",
@@ -6930,6 +6939,7 @@ func TestApexPermittedPackagesRules(t *testing.T) {
 					permitted_packages: ["foo.bar"],
 					sdk_version: "none",
 					system_modules: "none",
+					min_sdk_version: "29",
 				}
 				java_library {
 					name: "bcp_lib2",
@@ -6938,9 +6948,85 @@ func TestApexPermittedPackagesRules(t *testing.T) {
 					permitted_packages: ["foo.bar", "bar.baz"],
 					sdk_version: "none",
 					system_modules: "none",
+					min_sdk_version: "29",
 				}
 				apex {
 					name: "myapex",
+					min_sdk_version: "29",
+					key: "myapex.key",
+					java_libs: ["bcp_lib1", "bcp_lib2"],
+					updatable: false,
+				}
+			`,
+			bootJars: []string{"bcp_lib1", "bcp_lib2"},
+			modulesPackages: map[string][]string{
+				"myapex": []string{
+					"foo.bar",
+				},
+			},
+		},
+		{
+			name:          "Bootclasspath apex jar not satisfying allowed module packages on R.",
+			expectedError: `module "bcp_lib2" .* which is restricted because jars that are part of the myapex module may only allow these packages: foo.bar with min_sdk < T. Please jarjar or move code around.`,
+			bp: `
+				java_library {
+					name: "bcp_lib1",
+					srcs: ["lib1/src/*.java"],
+					apex_available: ["myapex"],
+					permitted_packages: ["foo.bar"],
+					sdk_version: "none",
+					system_modules: "none",
+					min_sdk_version: "30",
+				}
+				java_library {
+					name: "bcp_lib2",
+					srcs: ["lib2/src/*.java"],
+					apex_available: ["myapex"],
+					permitted_packages: ["foo.bar", "bar.baz"],
+					sdk_version: "none",
+					system_modules: "none",
+					min_sdk_version: "30",
+				}
+				apex {
+					name: "myapex",
+					min_sdk_version: "30",
+					key: "myapex.key",
+					java_libs: ["bcp_lib1", "bcp_lib2"],
+					updatable: false,
+				}
+			`,
+			bootJars: []string{"bcp_lib1", "bcp_lib2"},
+			modulesPackages: map[string][]string{
+				"myapex": []string{
+					"foo.bar",
+				},
+			},
+		},
+		{
+			name:          "Bootclasspath apex jar >= T not satisfying Q/R/S allowed module packages.",
+			expectedError: "",
+			bp: `
+				java_library {
+					name: "bcp_lib1",
+					srcs: ["lib1/src/*.java"],
+					apex_available: ["myapex"],
+					permitted_packages: ["foo.bar"],
+					sdk_version: "none",
+					system_modules: "none",
+					min_sdk_version: "current",
+				}
+				java_library {
+					name: "bcp_lib2",
+					srcs: ["lib2/src/*.java"],
+					apex_available: ["myapex"],
+					permitted_packages: ["foo.bar", "bar.baz"],
+					sdk_version: "none",
+					system_modules: "none",
+					min_sdk_version: "current",
+				}
+				apex {
+					name: "myapex",
+					min_sdk_version: "current",
 					key: "myapex.key",
 					java_libs: ["bcp_lib1", "bcp_lib2"],
 					updatable: false,
