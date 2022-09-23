@@ -587,19 +587,17 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	a.onDeviceDir = android.InstallPathToOnDevicePath(ctx, a.installDir)
 
+	a.classLoaderContexts = a.usesLibrary.classLoaderContextForUsesLibDeps(ctx)
+
+	var noticeAssetPath android.WritablePath
 	if Bool(a.appProperties.Embed_notices) || ctx.Config().IsEnvTrue("ALWAYS_EMBED_NOTICES") {
-		noticeFile := android.PathForModuleOut(ctx, "NOTICE.html.gz")
-		android.BuildNoticeHtmlOutputFromLicenseMetadata(ctx, noticeFile)
-		noticeAssetPath := android.PathForModuleOut(ctx, "NOTICE", "NOTICE.html.gz")
-		builder := android.NewRuleBuilder(pctx, ctx)
-		builder.Command().Text("cp").
-			Input(noticeFile).
-			Output(noticeAssetPath)
-		builder.Build("notice_dir", "Building notice dir")
+		// The rule to create the notice file can't be generated yet, as the final output path
+		// for the apk isn't known yet.  Add the path where the notice file will be generated to the
+		// aapt rules now before calling aaptBuildActions, the rule to create the notice file will
+		// be generated later.
+		noticeAssetPath = android.PathForModuleOut(ctx, "NOTICE", "NOTICE.html.gz")
 		a.aapt.noticeFile = android.OptionalPathForPath(noticeAssetPath)
 	}
-
-	a.classLoaderContexts = a.usesLibrary.classLoaderContextForUsesLibDeps(ctx)
 
 	// Process all building blocks, from AAPT to certificates.
 	a.aaptBuildActions(ctx)
@@ -675,6 +673,23 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		a.extraOutputFiles = append(a.extraOutputFiles, v4SignatureFile)
 	}
 
+	if a.aapt.noticeFile.Valid() {
+		// Generating the notice file rule has to be here after a.outputFile is known.
+		noticeFile := android.PathForModuleOut(ctx, "NOTICE.html.gz")
+		android.BuildNoticeHtmlOutputFromLicenseMetadata(
+			ctx, noticeFile, "", "",
+			[]string{
+				a.installDir.String() + "/",
+				android.PathForModuleInstall(ctx).String() + "/",
+				a.outputFile.String(),
+			})
+		builder := android.NewRuleBuilder(pctx, ctx)
+		builder.Command().Text("cp").
+			Input(noticeFile).
+			Output(noticeAssetPath)
+		builder.Build("notice_dir", "Building notice dir")
+	}
+
 	for _, split := range a.aapt.splits {
 		// Sign the split APKs
 		packageFile := android.PathForModuleOut(ctx, a.installApkName+"_"+split.suffix+".apk")
@@ -734,7 +749,7 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 		tag := ctx.OtherModuleDependencyTag(module)
 
 		if IsJniDepTag(tag) || cc.IsSharedDepTag(tag) {
-			if dep, ok := module.(*cc.Module); ok {
+			if dep, ok := module.(cc.LinkableInterface); ok {
 				if dep.IsNdk(ctx.Config()) || dep.IsStubs() {
 					return false
 				}
@@ -946,6 +961,18 @@ type AndroidTest struct {
 
 func (a *AndroidTest) InstallInTestcases() bool {
 	return true
+}
+
+type androidTestApp interface {
+	includedInTestSuite(searchPrefix string) bool
+}
+
+func (a *AndroidTest) includedInTestSuite(searchPrefix string) bool {
+	return android.PrefixInList(a.testProperties.Test_suites, searchPrefix)
+}
+
+func (a *AndroidTestHelperApp) includedInTestSuite(searchPrefix string) bool {
+	return android.PrefixInList(a.appTestHelperAppProperties.Test_suites, searchPrefix)
 }
 
 func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
