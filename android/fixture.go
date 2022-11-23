@@ -588,6 +588,18 @@ func FixtureExpectsAllErrorsToMatchAPattern(patterns []string) FixtureErrorHandl
 	})
 }
 
+// FixtureExpectsOneErrorPattern returns an error handler that will cause the test to fail
+// if there is more than one error or the error does not match the pattern.
+//
+// If the test fails this handler will call `result.FailNow()` which will exit the goroutine within
+// which the test is being run which means that the RunTest() method will not return.
+func FixtureExpectsOneErrorPattern(pattern string) FixtureErrorHandler {
+	return FixtureCustomErrorHandler(func(t *testing.T, result *TestResult) {
+		t.Helper()
+		CheckErrorsAgainstExpectations(t, result.Errs, []string{pattern})
+	})
+}
+
 // FixtureCustomErrorHandler creates a custom error handler
 func FixtureCustomErrorHandler(function func(t *testing.T, result *TestResult)) FixtureErrorHandler {
 	return simpleErrorHandler{
@@ -646,7 +658,7 @@ func (t *TestPathContext) AddNinjaFileDeps(deps ...string) {
 
 func createFixture(t *testing.T, buildDir string, preparers []*simpleFixturePreparer) Fixture {
 	config := TestConfig(buildDir, nil, "", nil)
-	ctx := NewTestContext(config)
+	ctx := newTestContextForFixture(config)
 	fixture := &fixture{
 		preparers: preparers,
 		t:         t,
@@ -777,6 +789,16 @@ func (f *fixture) RunTest() *TestResult {
 			ctx.SetModuleListFile(ctx.config.mockBpList)
 		}
 	}
+
+	// Create and set the Context's NameInterface. It needs to be created here as it depends on the
+	// configuration that has been prepared for this fixture.
+	resolver := NewNameResolver(ctx.config)
+
+	// Set the NameInterface in the main Context.
+	ctx.SetNameInterface(resolver)
+
+	// Set the NameResolver in the TestContext.
+	ctx.NameResolver = resolver
 
 	ctx.Register()
 	var ninjaDeps []string
