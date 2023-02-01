@@ -15,13 +15,17 @@
 package java
 
 import (
-	"android/soong/android"
 	"path/filepath"
+	"runtime"
 	"testing"
+
+	"android/soong/android"
+	"android/soong/cc"
 )
 
 var prepForJavaFuzzTest = android.GroupFixturePreparers(
 	PrepareForTestWithJavaDefaultModules,
+	cc.PrepareForTestWithCcBuildComponents,
 	android.FixtureRegisterWithContext(RegisterJavaFuzzBuildComponents),
 )
 
@@ -32,6 +36,13 @@ func TestJavaFuzz(t *testing.T) {
 			srcs: ["a.java"],
 			libs: ["bar"],
 			static_libs: ["baz"],
+            jni_libs: [
+                "libjni",
+            ],
+            sanitizers: [
+                "address",
+                "fuzzer",
+            ],
 		}
 
 		java_library_host {
@@ -42,9 +53,18 @@ func TestJavaFuzz(t *testing.T) {
 		java_library_host {
 			name: "baz",
 			srcs: ["c.java"],
-		}`)
+		}
+
+		cc_library_shared {
+			name: "libjni",
+			host_supported: true,
+			device_supported: false,
+			stl: "none",
+		}
+		`)
 
 	osCommonTarget := result.Config.BuildOSCommonTarget.String()
+
 	javac := result.ModuleForTests("foo", osCommonTarget).Rule("javac")
 	combineJar := result.ModuleForTests("foo", osCommonTarget).Description("for javac")
 
@@ -61,5 +81,19 @@ func TestJavaFuzz(t *testing.T) {
 
 	if len(combineJar.Inputs) != 2 || combineJar.Inputs[1].String() != baz {
 		t.Errorf("foo combineJar inputs %v does not contain %q", combineJar.Inputs, baz)
+	}
+
+	ctx := result.TestContext
+	foo := ctx.ModuleForTests("foo", osCommonTarget).Module().(*JavaFuzzLibrary)
+
+	expected := "lib64/libjni.so"
+	if runtime.GOOS == "darwin" {
+		expected = "lib64/libjni.dylib"
+	}
+
+	fooJniFilePaths := foo.jniFilePaths
+	if len(fooJniFilePaths) != 1 || fooJniFilePaths[0].Rel() != expected {
+		t.Errorf(`expected foo test data relative path [%q], got %q`,
+			expected, fooJniFilePaths.Strings())
 	}
 }

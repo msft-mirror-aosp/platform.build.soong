@@ -25,6 +25,7 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
+	"android/soong/bazel"
 	"android/soong/cc/config"
 )
 
@@ -84,15 +85,17 @@ var (
 //
 // Example:
 //
-//	ndk_library {
-//	    name: "libfoo",
-//	    symbol_file: "libfoo.map.txt",
-//	    first_version: "9",
-//	}
+// ndk_library {
+//
+//	name: "libfoo",
+//	symbol_file: "libfoo.map.txt",
+//	first_version: "9",
+//
+// }
 type libraryProperties struct {
 	// Relative path to the symbol map.
 	// An example file can be seen here: TODO(danalbert): Make an example.
-	Symbol_file *string
+	Symbol_file *string `android:"path"`
 
 	// The first API level a library was available. A library will be generated
 	// for every API level beginning with this one.
@@ -109,6 +112,9 @@ type libraryProperties struct {
 	// where it is enabled pending a fix for http://b/190554910 (no debug info
 	// for asm implemented symbols).
 	Allow_untyped_symbols *bool
+
+	// Headers presented by this library to the Public API Surface
+	Export_header_libs []string
 }
 
 type stubDecorator struct {
@@ -283,6 +289,10 @@ func parseNativeAbiDefinition(ctx ModuleContext, symbolFile string,
 }
 
 func compileStubLibrary(ctx ModuleContext, flags Flags, src android.Path) Objects {
+	// libc/libm stubs libraries end up mismatching with clang's internal definition of these
+	// functions (which have noreturn attributes and other things). Because we just want to create a
+	// stub with symbol definitions, and types aren't important in C, ignore the mismatch.
+	flags.Local.ConlyFlags = append(flags.Local.ConlyFlags, "-fno-builtin")
 	return compileObjs(ctx, flagsToBuilderFlags(flags), "",
 		android.Paths{src}, nil, nil, nil, nil)
 }
@@ -297,6 +307,7 @@ func (this *stubDecorator) findImplementationLibrary(ctx ModuleContext) android.
 	impl, ok := dep.(*Module)
 	if !ok {
 		ctx.ModuleErrorf("Implementation for stub is not correct module type")
+		return nil
 	}
 	output := impl.UnstrippedOutputFile()
 	if output == nil {
@@ -385,14 +396,14 @@ func findNextApiLevel(ctx ModuleContext, apiLevel android.ApiLevel) *android.Api
 }
 
 func (this *stubDecorator) diffAbi(ctx ModuleContext) {
-	missingPrebuiltError := fmt.Sprintf(
-		"Did not find prebuilt ABI dump for %q. Generate with "+
-			"//development/tools/ndk/update_ndk_abi.sh.", this.libraryName(ctx))
-
 	// Catch any ABI changes compared to the checked-in definition of this API
 	// level.
 	abiDiffPath := android.PathForModuleOut(ctx, "abidiff.timestamp")
 	prebuiltAbiDump := this.findPrebuiltAbiDump(ctx, this.apiLevel)
+	missingPrebuiltError := fmt.Sprintf(
+		"Did not find prebuilt ABI dump for %q (%q). Generate with "+
+			"//development/tools/ndk/update_ndk_abi.sh.", this.libraryName(ctx),
+		prebuiltAbiDump.InvalidReason())
 	if !prebuiltAbiDump.Valid() {
 		ctx.Build(pctx, android.BuildParams{
 			Rule:   android.ErrorRule,
@@ -479,8 +490,11 @@ func (c *stubDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) O
 	return objs
 }
 
+// Add a dependency on the header modules of this ndk_library
 func (linker *stubDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
-	return Deps{}
+	return Deps{
+		HeaderLibs: linker.properties.Export_header_libs,
+	}
 }
 
 func (linker *stubDecorator) Name(name string) string {
@@ -556,5 +570,43 @@ func newStubLibrary() *Module {
 func NdkLibraryFactory() android.Module {
 	module := newStubLibrary()
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibBoth)
+	android.InitBazelModule(module)
 	return module
+}
+
+type bazelCcApiContributionAttributes struct {
+	Api          bazel.LabelAttribute
+	Api_surfaces bazel.StringListAttribute
+	Hdrs         bazel.LabelListAttribute
+	Library_name string
+}
+
+// Names of the cc_api_header targets in the bp2build workspace
+func apiHeaderLabels(ctx android.TopDownMutatorContext, hdrLibs []string) bazel.LabelList {
+	addSuffix := func(ctx android.BazelConversionPathContext, module blueprint.Module) string {
+		label := android.BazelModuleLabel(ctx, module)
+		return android.ApiContributionTargetName(label)
+	}
+	return android.BazelLabelForModuleDepsWithFn(ctx, hdrLibs, addSuffix)
+}
+
+func ndkLibraryBp2build(ctx android.TopDownMutatorContext, m *Module) {
+	props := bazel.BazelTargetModuleProperties{
+		Rule_class:        "cc_api_contribution",
+		Bzl_load_location: "//build/bazel/rules/apis:cc_api_contribution.bzl",
+	}
+	stubLibrary := m.compiler.(*stubDecorator)
+	attrs := &bazelCcApiContributionAttributes{
+		Library_name: stubLibrary.implementationModuleName(m.Name()),
+		Api_surfaces: bazel.MakeStringListAttribute(
+			[]string{android.PublicApi.String()}),
+	}
+	if symbolFile := stubLibrary.properties.Symbol_file; symbolFile != nil {
+		apiLabel := android.BazelLabelForModuleSrcSingle(ctx, proptools.String(symbolFile)).Label
+		attrs.Api = *bazel.MakeLabelAttribute(apiLabel)
+	}
+	apiHeaders := apiHeaderLabels(ctx, stubLibrary.properties.Export_header_libs)
+	attrs.Hdrs = bazel.MakeLabelListAttribute(apiHeaders)
+	apiContributionTargetName := android.ApiContributionTargetName(ctx.ModuleName())
+	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: apiContributionTargetName}, attrs)
 }

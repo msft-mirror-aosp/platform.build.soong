@@ -18,10 +18,9 @@ package android
 // product variables necessary for soong_build's operation.
 
 import (
+	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -67,6 +66,68 @@ const productVariablesFileName = "soong.variables"
 type Config struct {
 	*config
 }
+
+type SoongBuildMode int
+
+type CmdArgs struct {
+	bootstrap.Args
+	RunGoTests  bool
+	OutDir      string
+	SoongOutDir string
+
+	SymlinkForestMarker string
+	Bp2buildMarker      string
+	BazelQueryViewDir   string
+	BazelApiBp2buildDir string
+	ModuleGraphFile     string
+	ModuleActionsFile   string
+	DocFile             string
+
+	BazelMode                bool
+	BazelModeDev             bool
+	BazelModeStaging         bool
+	BazelForceEnabledModules string
+}
+
+// Build modes that soong_build can run as.
+const (
+	// Don't use bazel at all during module analysis.
+	AnalysisNoBazel SoongBuildMode = iota
+
+	// Symlink fores mode: merge two directory trees into a symlink forest
+	SymlinkForest
+
+	// Bp2build mode: Generate BUILD files from blueprint files and exit.
+	Bp2build
+
+	// Generate BUILD files which faithfully represent the dependency graph of
+	// blueprint modules. Individual BUILD targets will not, however, faitfhully
+	// express build semantics.
+	GenerateQueryView
+
+	// Generate BUILD files for API contributions to API surfaces
+	ApiBp2build
+
+	// Create a JSON representation of the module graph and exit.
+	GenerateModuleGraph
+
+	// Generate a documentation file for module type definitions and exit.
+	GenerateDocFile
+
+	// Use bazel during analysis of many allowlisted build modules. The allowlist
+	// is considered a "developer mode" allowlist, as some modules may be
+	// allowlisted on an experimental basis.
+	BazelDevMode
+
+	// Use bazel during analysis of a few allowlisted build modules. The allowlist
+	// is considered "staging, as these are modules being prepared to be released
+	// into prod mode shortly after.
+	BazelStagingMode
+
+	// Use bazel during analysis of build modules from an allowlist carefully
+	// curated by the build team to be proven stable.
+	BazelProdMode
+)
 
 // SoongOutDir returns the build output directory for the configuration.
 func (c Config) SoongOutDir() string {
@@ -162,8 +223,8 @@ type config struct {
 	fs         pathtools.FileSystem
 	mockBpList string
 
-	runningAsBp2Build              bool
-	bp2buildPackageConfig          bp2BuildConversionAllowlist
+	BuildMode                      SoongBuildMode
+	Bp2buildPackageConfig          Bp2BuildConversionAllowlist
 	Bp2buildSoongConfigDefinitions soongconfig.Bp2BuildSoongConfigDefinitions
 
 	// If testAllowNonExistentPaths is true then PathForSource and PathForModuleSrc won't error
@@ -175,6 +236,21 @@ type config struct {
 	ninjaFileDepsSet sync.Map
 
 	OncePer
+
+	// These fields are only used for metrics collection. A module should be added
+	// to these maps only if its implementation supports Bazel handling in mixed
+	// builds. A module being in the "enabled" list indicates that there is a
+	// variant of that module for which bazel-handling actually took place.
+	// A module being in the "disabled" list indicates that there is a variant of
+	// that module for which bazel-handling was denied.
+	mixedBuildsLock           sync.Mutex
+	mixedBuildEnabledModules  map[string]struct{}
+	mixedBuildDisabledModules map[string]struct{}
+
+	// These are modules to be built with Bazel beyond the allowlisted/build-mode
+	// specified modules. They are passed via the command-line flag
+	// "--bazel-force-enabled-modules"
+	bazelForceEnabledModules map[string]struct{}
 }
 
 type deviceConfig struct {
@@ -250,7 +326,7 @@ func saveToConfigFile(config *productVariables, filename string) error {
 		return fmt.Errorf("cannot marshal config data: %s", err.Error())
 	}
 
-	f, err := ioutil.TempFile(filepath.Dir(filename), "config")
+	f, err := os.CreateTemp(filepath.Dir(filename), "config")
 	if err != nil {
 		return fmt.Errorf("cannot create empty config file %s: %s", filename, err.Error())
 	}
@@ -306,6 +382,9 @@ func saveToBazelConfigFile(config *productVariables, outDir string) error {
 	if err != nil {
 		return fmt.Errorf("cannot marshal config data: %s", err.Error())
 	}
+	// The backslashes need to be escaped because this text is going to be put
+	// inside a Starlark string literal.
+	configJson = bytes.ReplaceAll(configJson, []byte("\\"), []byte("\\\\"))
 
 	bzl := []string{
 		bazel.GeneratedBazelFileWarning,
@@ -318,11 +397,11 @@ product_var_constraints = _product_var_constraints
 arch_variant_product_var_constraints = _arch_variant_product_var_constraints
 `,
 	}
-	err = ioutil.WriteFile(filepath.Join(dir, "product_variables.bzl"), []byte(strings.Join(bzl, "\n")), 0644)
+	err = os.WriteFile(filepath.Join(dir, "product_variables.bzl"), []byte(strings.Join(bzl, "\n")), 0644)
 	if err != nil {
 		return fmt.Errorf("Could not write .bzl config file %s", err)
 	}
-	err = ioutil.WriteFile(filepath.Join(dir, "BUILD"), []byte(bazel.GeneratedBazelFileWarning), 0644)
+	err = os.WriteFile(filepath.Join(dir, "BUILD"), []byte(bazel.GeneratedBazelFileWarning), 0644)
 	if err != nil {
 		return fmt.Errorf("Could not write BUILD config file %s", err)
 	}
@@ -342,140 +421,25 @@ func NullConfig(outDir, soongOutDir string) Config {
 	}
 }
 
-// TestConfig returns a Config object for testing.
-func TestConfig(buildDir string, env map[string]string, bp string, fs map[string][]byte) Config {
-	envCopy := make(map[string]string)
-	for k, v := range env {
-		envCopy[k] = v
-	}
-
-	// Copy the real PATH value to the test environment, it's needed by
-	// NonHermeticHostSystemTool() used in x86_darwin_host.go
-	envCopy["PATH"] = os.Getenv("PATH")
-
-	config := &config{
-		productVariables: productVariables{
-			DeviceName:                          stringPtr("test_device"),
-			DeviceProduct:                       stringPtr("test_product"),
-			Platform_sdk_version:                intPtr(30),
-			Platform_sdk_codename:               stringPtr("S"),
-			Platform_base_sdk_extension_version: intPtr(1),
-			Platform_version_active_codenames:   []string{"S", "Tiramisu"},
-			DeviceSystemSdkVersions:             []string{"14", "15"},
-			Platform_systemsdk_versions:         []string{"29", "30"},
-			AAPTConfig:                          []string{"normal", "large", "xlarge", "hdpi", "xhdpi", "xxhdpi"},
-			AAPTPreferredConfig:                 stringPtr("xhdpi"),
-			AAPTCharacteristics:                 stringPtr("nosdcard"),
-			AAPTPrebuiltDPI:                     []string{"xhdpi", "xxhdpi"},
-			UncompressPrivAppDex:                boolPtr(true),
-			ShippingApiLevel:                    stringPtr("30"),
-		},
-
-		outDir:       buildDir,
-		soongOutDir:  filepath.Join(buildDir, "soong"),
-		captureBuild: true,
-		env:          envCopy,
-
-		// Set testAllowNonExistentPaths so that test contexts don't need to specify every path
-		// passed to PathForSource or PathForModuleSrc.
-		TestAllowNonExistentPaths: true,
-
-		BazelContext: noopBazelContext{},
-	}
-	config.deviceConfig = &deviceConfig{
-		config: config,
-	}
-	config.TestProductVariables = &config.productVariables
-
-	config.mockFileSystem(bp, fs)
-
-	determineBuildOS(config)
-
-	return Config{config}
-}
-
-func modifyTestConfigToSupportArchMutator(testConfig Config) {
-	config := testConfig.config
-
-	config.Targets = map[OsType][]Target{
-		Android: []Target{
-			{Android, Arch{ArchType: Arm64, ArchVariant: "armv8-a", Abi: []string{"arm64-v8a"}}, NativeBridgeDisabled, "", "", false},
-			{Android, Arch{ArchType: Arm, ArchVariant: "armv7-a-neon", Abi: []string{"armeabi-v7a"}}, NativeBridgeDisabled, "", "", false},
-		},
-		config.BuildOS: []Target{
-			{config.BuildOS, Arch{ArchType: X86_64}, NativeBridgeDisabled, "", "", false},
-			{config.BuildOS, Arch{ArchType: X86}, NativeBridgeDisabled, "", "", false},
-		},
-	}
-
-	// Make the CommonOS OsType available for all products.
-	config.Targets[CommonOS] = []Target{commonTargetMap[CommonOS.Name]}
-
-	if runtime.GOOS == "darwin" {
-		config.Targets[config.BuildOS] = config.Targets[config.BuildOS][:1]
-	}
-
-	config.BuildOSTarget = config.Targets[config.BuildOS][0]
-	config.BuildOSCommonTarget = getCommonTargets(config.Targets[config.BuildOS])[0]
-	config.AndroidCommonTarget = getCommonTargets(config.Targets[Android])[0]
-	config.AndroidFirstDeviceTarget = FirstTarget(config.Targets[Android], "lib64", "lib32")[0]
-	config.TestProductVariables.DeviceArch = proptools.StringPtr("arm64")
-	config.TestProductVariables.DeviceArchVariant = proptools.StringPtr("armv8-a")
-	config.TestProductVariables.DeviceSecondaryArch = proptools.StringPtr("arm")
-	config.TestProductVariables.DeviceSecondaryArchVariant = proptools.StringPtr("armv7-a-neon")
-}
-
-func modifyTestConfigForMusl(config Config) {
-	delete(config.Targets, config.BuildOS)
-	config.productVariables.HostMusl = boolPtr(true)
-	determineBuildOS(config.config)
-	config.Targets[config.BuildOS] = []Target{
-		{config.BuildOS, Arch{ArchType: X86_64}, NativeBridgeDisabled, "", "", false},
-		{config.BuildOS, Arch{ArchType: X86}, NativeBridgeDisabled, "", "", false},
-	}
-
-	config.BuildOSTarget = config.Targets[config.BuildOS][0]
-	config.BuildOSCommonTarget = getCommonTargets(config.Targets[config.BuildOS])[0]
-}
-
-// TestArchConfig returns a Config object suitable for using for tests that
-// need to run the arch mutator.
-func TestArchConfig(buildDir string, env map[string]string, bp string, fs map[string][]byte) Config {
-	testConfig := TestConfig(buildDir, env, bp, fs)
-	modifyTestConfigToSupportArchMutator(testConfig)
-	return testConfig
-}
-
-// ConfigForAdditionalRun is a config object which is "reset" for another
-// bootstrap run. Only per-run data is reset. Data which needs to persist across
-// multiple runs in the same program execution is carried over (such as Bazel
-// context or environment deps).
-func ConfigForAdditionalRun(c Config) (Config, error) {
-	newConfig, err := NewConfig(c.moduleListFile, c.runGoTests, c.outDir, c.soongOutDir, c.env)
-	if err != nil {
-		return Config{}, err
-	}
-	newConfig.BazelContext = c.BazelContext
-	newConfig.envDeps = c.envDeps
-	return newConfig, nil
-}
-
 // NewConfig creates a new Config object. The srcDir argument specifies the path
 // to the root source directory. It also loads the config file, if found.
-func NewConfig(moduleListFile string, runGoTests bool, outDir, soongOutDir string, availableEnv map[string]string) (Config, error) {
+func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) {
 	// Make a config with default options.
 	config := &config{
-		ProductVariablesFileName: filepath.Join(soongOutDir, productVariablesFileName),
+		ProductVariablesFileName: filepath.Join(cmdArgs.SoongOutDir, productVariablesFileName),
 
 		env: availableEnv,
 
-		outDir:            outDir,
-		soongOutDir:       soongOutDir,
-		runGoTests:        runGoTests,
+		outDir:            cmdArgs.OutDir,
+		soongOutDir:       cmdArgs.SoongOutDir,
+		runGoTests:        cmdArgs.RunGoTests,
 		multilibConflicts: make(map[ArchType]bool),
 
-		moduleListFile: moduleListFile,
-		fs:             pathtools.NewOsFs(absSrcDir),
+		moduleListFile:            cmdArgs.ModuleListFile,
+		fs:                        pathtools.NewOsFs(absSrcDir),
+		mixedBuildDisabledModules: make(map[string]struct{}),
+		mixedBuildEnabledModules:  make(map[string]struct{}),
+		bazelForceEnabledModules:  make(map[string]struct{}),
 	}
 
 	config.deviceConfig = &deviceConfig{
@@ -484,7 +448,7 @@ func NewConfig(moduleListFile string, runGoTests bool, outDir, soongOutDir strin
 
 	// Soundness check of the build and source directories. This won't catch strange
 	// configurations with symlinks, but at least checks the obvious case.
-	absBuildDir, err := filepath.Abs(soongOutDir)
+	absBuildDir, err := filepath.Abs(cmdArgs.SoongOutDir)
 	if err != nil {
 		return Config{}, err
 	}
@@ -504,7 +468,7 @@ func NewConfig(moduleListFile string, runGoTests bool, outDir, soongOutDir strin
 		return Config{}, err
 	}
 
-	KatiEnabledMarkerFile := filepath.Join(soongOutDir, ".soong.kati_enabled")
+	KatiEnabledMarkerFile := filepath.Join(cmdArgs.SoongOutDir, ".soong.kati_enabled")
 	if _, err := os.Stat(absolutePath(KatiEnabledMarkerFile)); err == nil {
 		config.katiEnabled = true
 	}
@@ -557,8 +521,40 @@ func NewConfig(moduleListFile string, runGoTests bool, outDir, soongOutDir strin
 		config.AndroidFirstDeviceTarget = FirstTarget(config.Targets[Android], "lib64", "lib32")[0]
 	}
 
+	setBuildMode := func(arg string, mode SoongBuildMode) {
+		if arg != "" {
+			if config.BuildMode != AnalysisNoBazel {
+				fmt.Fprintf(os.Stderr, "buildMode is already set, illegal argument: %s", arg)
+				os.Exit(1)
+			}
+			config.BuildMode = mode
+		}
+	}
+	setBazelMode := func(arg bool, argName string, mode SoongBuildMode) {
+		if arg {
+			if config.BuildMode != AnalysisNoBazel {
+				fmt.Fprintf(os.Stderr, "buildMode is already set, illegal argument: %s", argName)
+				os.Exit(1)
+			}
+			config.BuildMode = mode
+		}
+	}
+	setBuildMode(cmdArgs.SymlinkForestMarker, SymlinkForest)
+	setBuildMode(cmdArgs.Bp2buildMarker, Bp2build)
+	setBuildMode(cmdArgs.BazelQueryViewDir, GenerateQueryView)
+	setBuildMode(cmdArgs.BazelApiBp2buildDir, ApiBp2build)
+	setBuildMode(cmdArgs.ModuleGraphFile, GenerateModuleGraph)
+	setBuildMode(cmdArgs.DocFile, GenerateDocFile)
+	setBazelMode(cmdArgs.BazelModeDev, "--bazel-mode-dev", BazelDevMode)
+	setBazelMode(cmdArgs.BazelMode, "--bazel-mode", BazelProdMode)
+	setBazelMode(cmdArgs.BazelModeStaging, "--bazel-mode-staging", BazelStagingMode)
+
 	config.BazelContext, err = NewBazelContext(config)
-	config.bp2buildPackageConfig = bp2buildAllowlist
+	config.Bp2buildPackageConfig = GetBp2BuildAllowList()
+
+	for _, module := range strings.Split(cmdArgs.BazelForceEnabledModules, ",") {
+		config.bazelForceEnabledModules[module] = struct{}{}
+	}
 
 	return Config{config}, err
 }
@@ -591,6 +587,37 @@ func (c *config) mockFileSystem(bp string, fs map[string][]byte) {
 
 	c.fs = pathtools.MockFs(mockFS)
 	c.mockBpList = blueprint.MockModuleListFile
+}
+
+// TODO(b/265062549): Add a field to our collected (and uploaded) metrics which
+// describes a reason that we fell back to non-mixed builds.
+// Returns true if "Bazel builds" is enabled. In this mode, part of build
+// analysis is handled by Bazel.
+func (c *config) IsMixedBuildsEnabled() bool {
+	globalMixedBuildsSupport := c.Once(OnceKey{"globalMixedBuildsSupport"}, func() interface{} {
+		if c.productVariables.DeviceArch != nil && *c.productVariables.DeviceArch == "riscv64" {
+			return false
+		}
+		if c.IsEnvTrue("GLOBAL_THINLTO") {
+			return false
+		}
+		if len(c.productVariables.SanitizeHost) > 0 {
+			return false
+		}
+		if len(c.productVariables.SanitizeDevice) > 0 {
+			return false
+		}
+		if len(c.productVariables.SanitizeDeviceDiag) > 0 {
+			return false
+		}
+		if len(c.productVariables.SanitizeDeviceArch) > 0 {
+			return false
+		}
+		return true
+	}).(bool)
+
+	bazelModeEnabled := c.BuildMode == BazelProdMode || c.BuildMode == BazelDevMode || c.BuildMode == BazelStagingMode
+	return globalMixedBuildsSupport && bazelModeEnabled
 }
 
 func (c *config) SetAllowMissingDependencies() {
@@ -698,6 +725,10 @@ func (c *config) IsEnvFalse(key string) bool {
 	return value == "0" || value == "n" || value == "no" || value == "off" || value == "false"
 }
 
+func (c *config) TargetsJava17() bool {
+	return c.IsEnvTrue("EXPERIMENTAL_TARGET_JAVA_VERSION_17")
+}
+
 // EnvDeps returns the environment variables this build depends on. The first
 // call to this function blocks future reads from the environment.
 func (c *config) EnvDeps() map[string]string {
@@ -735,10 +766,16 @@ func (c *config) DeviceName() string {
 // DeviceProduct returns the current product target. There could be multiple of
 // these per device type.
 //
-// NOTE: Do not base conditional logic on this value. It may break product
-//       inheritance.
+// NOTE: Do not base conditional logic on this value. It may break product inheritance.
 func (c *config) DeviceProduct() string {
 	return *c.productVariables.DeviceProduct
+}
+
+// HasDeviceProduct returns if the build has a product. A build will not
+// necessarily have a product when --skip-config is passed to soong, like it is
+// in prebuilts/build-tools/build-prebuilts.sh
+func (c *config) HasDeviceProduct() bool {
+	return c.productVariables.DeviceProduct != nil
 }
 
 func (c *config) DeviceResourceOverlays() []string {
@@ -793,8 +830,12 @@ func (c *config) PlatformVersionLastStable() string {
 	return String(c.productVariables.Platform_version_last_stable)
 }
 
+func (c *config) PlatformVersionKnownCodenames() string {
+	return String(c.productVariables.Platform_version_known_codenames)
+}
+
 func (c *config) MinSupportedSdkVersion() ApiLevel {
-	return uncheckedFinalApiLevel(19)
+	return uncheckedFinalApiLevel(21)
 }
 
 func (c *config) FinalApiLevels() []ApiLevel {
@@ -901,6 +942,15 @@ func (c *config) ApexKeyDir(ctx ModuleContext) SourcePath {
 	}
 	// If not, APEX keys are under the specified directory
 	return PathForSource(ctx, filepath.Dir(defaultCert))
+}
+
+// Certificate for the NetworkStack sepolicy context
+func (c *config) MainlineSepolicyDevCertificatesDir(ctx ModuleContext) SourcePath {
+	cert := String(c.productVariables.MainlineSepolicyDevCertificates)
+	if cert != "" {
+		return PathForSource(ctx, cert)
+	}
+	return c.DefaultAppCertificateDir(ctx)
 }
 
 // AllowMissingDependencies configures Blueprint/Soong to not fail when modules
@@ -1105,6 +1155,10 @@ func (c *config) ExportedNamespaces() []string {
 	return append([]string(nil), c.productVariables.NamespacesToExport...)
 }
 
+func (c *config) IncludeTags() []string {
+	return c.productVariables.IncludeTags
+}
+
 func (c *config) HostStaticBinaries() bool {
 	return Bool(c.productVariables.HostStaticBinaries)
 }
@@ -1140,14 +1194,14 @@ func (c *config) DexpreoptGlobalConfig(ctx PathContext) ([]byte, error) {
 		return nil, nil
 	}
 	ctx.AddNinjaFileDeps(path.String())
-	return ioutil.ReadFile(absolutePath(path.String()))
+	return os.ReadFile(absolutePath(path.String()))
 }
 
 func (c *deviceConfig) WithDexpreopt() bool {
 	return c.config.productVariables.WithDexpreopt
 }
 
-func (c *config) FrameworksBaseDirExists(ctx PathContext) bool {
+func (c *config) FrameworksBaseDirExists(ctx PathGlobContext) bool {
 	return ExistentPathForSource(ctx, "frameworks", "base", "Android.bp").Valid()
 }
 
@@ -1159,8 +1213,12 @@ func (c *config) HasMultilibConflict(arch ArchType) bool {
 	return c.multilibConflicts[arch]
 }
 
-func (c *config) PrebuiltHiddenApiDir(ctx PathContext) string {
+func (c *config) PrebuiltHiddenApiDir(_ PathContext) string {
 	return String(c.productVariables.PrebuiltHiddenApiDir)
+}
+
+func (c *config) BazelModulesForceEnabledByFlag() map[string]struct{} {
+	return c.bazelForceEnabledModules
 }
 
 func (c *deviceConfig) Arches() []Arch {
@@ -1310,10 +1368,6 @@ func (c *deviceConfig) NativeCoverageEnabledForPath(path string) bool {
 	return coverage
 }
 
-func (c *deviceConfig) AfdoAdditionalProfileDirs() []string {
-	return c.config.productVariables.AfdoAdditionalProfileDirs
-}
-
 func (c *deviceConfig) PgoAdditionalProfileDirs() []string {
 	return c.config.productVariables.PgoAdditionalProfileDirs
 }
@@ -1442,8 +1496,12 @@ func (c *config) ForceApexSymlinkOptimization() bool {
 	return Bool(c.productVariables.ForceApexSymlinkOptimization)
 }
 
-func (c *config) CompressedApex() bool {
-	return Bool(c.productVariables.CompressedApex)
+func (c *config) ApexCompressionEnabled() bool {
+	return Bool(c.productVariables.CompressedApex) && !c.UnbundledBuildApps()
+}
+
+func (c *config) ApexTrimEnabled() bool {
+	return Bool(c.productVariables.TrimmedApex)
 }
 
 func (c *config) EnforceSystemCertificate() bool {
@@ -1496,6 +1554,10 @@ func (c *config) ProductPrivateSepolicyDirs() []string {
 
 func (c *config) MissingUsesLibraries() []string {
 	return c.productVariables.MissingUsesLibraries
+}
+
+func (c *config) TargetMultitreeUpdateMeta() bool {
+	return c.productVariables.MultitreeUpdateMeta
 }
 
 func (c *deviceConfig) DeviceArch() string {
@@ -1669,6 +1731,18 @@ func (c *deviceConfig) ShippingApiLevel() ApiLevel {
 	return uncheckedFinalApiLevel(apiLevel)
 }
 
+func (c *deviceConfig) BuildBrokenClangAsFlags() bool {
+	return c.config.productVariables.BuildBrokenClangAsFlags
+}
+
+func (c *deviceConfig) BuildBrokenClangCFlags() bool {
+	return c.config.productVariables.BuildBrokenClangCFlags
+}
+
+func (c *deviceConfig) BuildBrokenClangProperty() bool {
+	return c.config.productVariables.BuildBrokenClangProperty
+}
+
 func (c *deviceConfig) BuildBrokenEnforceSyspropOwner() bool {
 	return c.config.productVariables.BuildBrokenEnforceSyspropOwner
 }
@@ -1687,6 +1761,10 @@ func (c *deviceConfig) BuildBrokenVendorPropertyNamespace() bool {
 
 func (c *deviceConfig) BuildBrokenInputDir(name string) bool {
 	return InList(name, c.config.productVariables.BuildBrokenInputDirModules)
+}
+
+func (c *deviceConfig) BuildBrokenDepfile() bool {
+	return Bool(c.config.productVariables.BuildBrokenDepfile)
 }
 
 func (c *deviceConfig) RequiresInsecureExecmemForSwiftshader() bool {
@@ -1713,315 +1791,9 @@ func (c *deviceConfig) GenerateAidlNdkPlatformBackend() bool {
 	return c.config.productVariables.GenerateAidlNdkPlatformBackend
 }
 
-// The ConfiguredJarList struct provides methods for handling a list of (apex, jar) pairs.
-// Such lists are used in the build system for things like bootclasspath jars or system server jars.
-// The apex part is either an apex name, or a special names "platform" or "system_ext". Jar is a
-// module name. The pairs come from Make product variables as a list of colon-separated strings.
-//
-// Examples:
-//   - "com.android.art:core-oj"
-//   - "platform:framework"
-//   - "system_ext:foo"
-//
-type ConfiguredJarList struct {
-	// A list of apex components, which can be an apex name,
-	// or special names like "platform" or "system_ext".
-	apexes []string
-
-	// A list of jar module name components.
-	jars []string
+func (c *config) IgnorePrefer32OnDevice() bool {
+	return c.productVariables.IgnorePrefer32OnDevice
 }
-
-// Len returns the length of the list of jars.
-func (l *ConfiguredJarList) Len() int {
-	return len(l.jars)
-}
-
-// Jar returns the idx-th jar component of (apex, jar) pairs.
-func (l *ConfiguredJarList) Jar(idx int) string {
-	return l.jars[idx]
-}
-
-// Apex returns the idx-th apex component of (apex, jar) pairs.
-func (l *ConfiguredJarList) Apex(idx int) string {
-	return l.apexes[idx]
-}
-
-// ContainsJar returns true if the (apex, jar) pairs contains a pair with the
-// given jar module name.
-func (l *ConfiguredJarList) ContainsJar(jar string) bool {
-	return InList(jar, l.jars)
-}
-
-// If the list contains the given (apex, jar) pair.
-func (l *ConfiguredJarList) containsApexJarPair(apex, jar string) bool {
-	for i := 0; i < l.Len(); i++ {
-		if apex == l.apexes[i] && jar == l.jars[i] {
-			return true
-		}
-	}
-	return false
-}
-
-// ApexOfJar returns the apex component of the first pair with the given jar name on the list, or
-// an empty string if not found.
-func (l *ConfiguredJarList) ApexOfJar(jar string) string {
-	if idx := IndexList(jar, l.jars); idx != -1 {
-		return l.Apex(IndexList(jar, l.jars))
-	}
-	return ""
-}
-
-// IndexOfJar returns the first pair with the given jar name on the list, or -1
-// if not found.
-func (l *ConfiguredJarList) IndexOfJar(jar string) int {
-	return IndexList(jar, l.jars)
-}
-
-func copyAndAppend(list []string, item string) []string {
-	// Create the result list to be 1 longer than the input.
-	result := make([]string, len(list)+1)
-
-	// Copy the whole input list into the result.
-	count := copy(result, list)
-
-	// Insert the extra item at the end.
-	result[count] = item
-
-	return result
-}
-
-// Append an (apex, jar) pair to the list.
-func (l *ConfiguredJarList) Append(apex string, jar string) ConfiguredJarList {
-	// Create a copy of the backing arrays before appending to avoid sharing backing
-	// arrays that are mutated across instances.
-	apexes := copyAndAppend(l.apexes, apex)
-	jars := copyAndAppend(l.jars, jar)
-
-	return ConfiguredJarList{apexes, jars}
-}
-
-// Append a list of (apex, jar) pairs to the list.
-func (l *ConfiguredJarList) AppendList(other *ConfiguredJarList) ConfiguredJarList {
-	apexes := make([]string, 0, l.Len()+other.Len())
-	jars := make([]string, 0, l.Len()+other.Len())
-
-	apexes = append(apexes, l.apexes...)
-	jars = append(jars, l.jars...)
-
-	apexes = append(apexes, other.apexes...)
-	jars = append(jars, other.jars...)
-
-	return ConfiguredJarList{apexes, jars}
-}
-
-// RemoveList filters out a list of (apex, jar) pairs from the receiving list of pairs.
-func (l *ConfiguredJarList) RemoveList(list ConfiguredJarList) ConfiguredJarList {
-	apexes := make([]string, 0, l.Len())
-	jars := make([]string, 0, l.Len())
-
-	for i, jar := range l.jars {
-		apex := l.apexes[i]
-		if !list.containsApexJarPair(apex, jar) {
-			apexes = append(apexes, apex)
-			jars = append(jars, jar)
-		}
-	}
-
-	return ConfiguredJarList{apexes, jars}
-}
-
-// Filter keeps the entries if a jar appears in the given list of jars to keep. Returns a new list
-// and any remaining jars that are not on this list.
-func (l *ConfiguredJarList) Filter(jarsToKeep []string) (ConfiguredJarList, []string) {
-	var apexes []string
-	var jars []string
-
-	for i, jar := range l.jars {
-		if InList(jar, jarsToKeep) {
-			apexes = append(apexes, l.apexes[i])
-			jars = append(jars, jar)
-		}
-	}
-
-	return ConfiguredJarList{apexes, jars}, RemoveListFromList(jarsToKeep, jars)
-}
-
-// CopyOfJars returns a copy of the list of strings containing jar module name
-// components.
-func (l *ConfiguredJarList) CopyOfJars() []string {
-	return CopyOf(l.jars)
-}
-
-// CopyOfApexJarPairs returns a copy of the list of strings with colon-separated
-// (apex, jar) pairs.
-func (l *ConfiguredJarList) CopyOfApexJarPairs() []string {
-	pairs := make([]string, 0, l.Len())
-
-	for i, jar := range l.jars {
-		apex := l.apexes[i]
-		pairs = append(pairs, apex+":"+jar)
-	}
-
-	return pairs
-}
-
-// BuildPaths returns a list of build paths based on the given directory prefix.
-func (l *ConfiguredJarList) BuildPaths(ctx PathContext, dir OutputPath) WritablePaths {
-	paths := make(WritablePaths, l.Len())
-	for i, jar := range l.jars {
-		paths[i] = dir.Join(ctx, ModuleStem(jar)+".jar")
-	}
-	return paths
-}
-
-// BuildPathsByModule returns a map from module name to build paths based on the given directory
-// prefix.
-func (l *ConfiguredJarList) BuildPathsByModule(ctx PathContext, dir OutputPath) map[string]WritablePath {
-	paths := map[string]WritablePath{}
-	for _, jar := range l.jars {
-		paths[jar] = dir.Join(ctx, ModuleStem(jar)+".jar")
-	}
-	return paths
-}
-
-// UnmarshalJSON converts JSON configuration from raw bytes into a
-// ConfiguredJarList structure.
-func (l *ConfiguredJarList) UnmarshalJSON(b []byte) error {
-	// Try and unmarshal into a []string each item of which contains a pair
-	// <apex>:<jar>.
-	var list []string
-	err := json.Unmarshal(b, &list)
-	if err != nil {
-		// Did not work so return
-		return err
-	}
-
-	apexes, jars, err := splitListOfPairsIntoPairOfLists(list)
-	if err != nil {
-		return err
-	}
-	l.apexes = apexes
-	l.jars = jars
-	return nil
-}
-
-func (l *ConfiguredJarList) MarshalJSON() ([]byte, error) {
-	if len(l.apexes) != len(l.jars) {
-		return nil, errors.New(fmt.Sprintf("Inconsistent ConfiguredJarList: apexes: %q, jars: %q", l.apexes, l.jars))
-	}
-
-	list := make([]string, 0, len(l.apexes))
-
-	for i := 0; i < len(l.apexes); i++ {
-		list = append(list, l.apexes[i]+":"+l.jars[i])
-	}
-
-	return json.Marshal(list)
-}
-
-// ModuleStem hardcodes the stem of framework-minus-apex to return "framework".
-//
-// TODO(b/139391334): hard coded until we find a good way to query the stem of a
-// module before any other mutators are run.
-func ModuleStem(module string) string {
-	if module == "framework-minus-apex" {
-		return "framework"
-	}
-	return module
-}
-
-// DevicePaths computes the on-device paths for the list of (apex, jar) pairs,
-// based on the operating system.
-func (l *ConfiguredJarList) DevicePaths(cfg Config, ostype OsType) []string {
-	paths := make([]string, l.Len())
-	for i, jar := range l.jars {
-		apex := l.apexes[i]
-		name := ModuleStem(jar) + ".jar"
-
-		var subdir string
-		if apex == "platform" {
-			subdir = "system/framework"
-		} else if apex == "system_ext" {
-			subdir = "system_ext/framework"
-		} else {
-			subdir = filepath.Join("apex", apex, "javalib")
-		}
-
-		if ostype.Class == Host {
-			paths[i] = filepath.Join(cfg.Getenv("OUT_DIR"), "host", cfg.PrebuiltOS(), subdir, name)
-		} else {
-			paths[i] = filepath.Join("/", subdir, name)
-		}
-	}
-	return paths
-}
-
-func (l *ConfiguredJarList) String() string {
-	var pairs []string
-	for i := 0; i < l.Len(); i++ {
-		pairs = append(pairs, l.apexes[i]+":"+l.jars[i])
-	}
-	return strings.Join(pairs, ",")
-}
-
-func splitListOfPairsIntoPairOfLists(list []string) ([]string, []string, error) {
-	// Now we need to populate this list by splitting each item in the slice of
-	// pairs and appending them to the appropriate list of apexes or jars.
-	apexes := make([]string, len(list))
-	jars := make([]string, len(list))
-
-	for i, apexjar := range list {
-		apex, jar, err := splitConfiguredJarPair(apexjar)
-		if err != nil {
-			return nil, nil, err
-		}
-		apexes[i] = apex
-		jars[i] = jar
-	}
-
-	return apexes, jars, nil
-}
-
-// Expected format for apexJarValue = <apex name>:<jar name>
-func splitConfiguredJarPair(str string) (string, string, error) {
-	pair := strings.SplitN(str, ":", 2)
-	if len(pair) == 2 {
-		apex := pair[0]
-		jar := pair[1]
-		if apex == "" {
-			return apex, jar, fmt.Errorf("invalid apex '%s' in <apex>:<jar> pair '%s', expected format: <apex>:<jar>", apex, str)
-		}
-		return apex, jar, nil
-	} else {
-		return "error-apex", "error-jar", fmt.Errorf("malformed (apex, jar) pair: '%s', expected format: <apex>:<jar>", str)
-	}
-}
-
-// CreateTestConfiguredJarList is a function to create ConfiguredJarList for tests.
-func CreateTestConfiguredJarList(list []string) ConfiguredJarList {
-	// Create the ConfiguredJarList in as similar way as it is created at runtime by marshalling to
-	// a json list of strings and then unmarshalling into a ConfiguredJarList instance.
-	b, err := json.Marshal(list)
-	if err != nil {
-		panic(err)
-	}
-
-	var jarList ConfiguredJarList
-	err = json.Unmarshal(b, &jarList)
-	if err != nil {
-		panic(err)
-	}
-
-	return jarList
-}
-
-// EmptyConfiguredJarList returns an empty jar list.
-func EmptyConfiguredJarList() ConfiguredJarList {
-	return ConfiguredJarList{}
-}
-
-var earlyBootJarsKey = NewOnceKey("earlyBootJars")
 
 func (c *config) BootJars() []string {
 	return c.Once(earlyBootJarsKey, func() interface{} {
@@ -2045,4 +1817,15 @@ func (c *config) RBEWrapper() string {
 // UseHostMusl returns true if the host target has been configured to build against musl libc.
 func (c *config) UseHostMusl() bool {
 	return Bool(c.productVariables.HostMusl)
+}
+
+func (c *config) LogMixedBuild(ctx BaseModuleContext, useBazel bool) {
+	moduleName := ctx.Module().Name()
+	c.mixedBuildsLock.Lock()
+	defer c.mixedBuildsLock.Unlock()
+	if useBazel {
+		c.mixedBuildEnabledModules[moduleName] = struct{}{}
+	} else {
+		c.mixedBuildDisabledModules[moduleName] = struct{}{}
+	}
 }

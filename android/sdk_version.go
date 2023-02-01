@@ -28,6 +28,9 @@ type SdkContext interface {
 	// MinSdkVersion returns SdkSpec that corresponds to the min_sdk_version property of the current module,
 	// or from sdk_version if it is not set.
 	MinSdkVersion(ctx EarlyModuleContext) SdkSpec
+	// ReplaceMaxSdkVersionPlaceholder returns SdkSpec to replace the maxSdkVersion property of permission and
+	// uses-permission tags if it is set.
+	ReplaceMaxSdkVersionPlaceholder(ctx EarlyModuleContext) SdkSpec
 	// TargetSdkVersion returns the SdkSpec that corresponds to the target_sdk_version property of the current module,
 	// or from sdk_version if it is not set.
 	TargetSdkVersion(ctx EarlyModuleContext) SdkSpec
@@ -41,12 +44,14 @@ const (
 	SdkNone
 	SdkCore
 	SdkCorePlatform
+	SdkIntraCore // API surface provided by one core module to another
 	SdkPublic
 	SdkSystem
 	SdkTest
 	SdkModule
 	SdkSystemServer
 	SdkPrivate
+	SdkToolchain // API surface provided by ART to compile other API domains
 )
 
 // String returns the string representation of this SdkKind
@@ -66,10 +71,14 @@ func (k SdkKind) String() string {
 		return "core"
 	case SdkCorePlatform:
 		return "core_platform"
+	case SdkIntraCore:
+		return "intracore"
 	case SdkModule:
 		return "module-lib"
 	case SdkSystemServer:
 		return "system-server"
+	case SdkToolchain:
+		return "toolchain"
 	default:
 		return "invalid"
 	}

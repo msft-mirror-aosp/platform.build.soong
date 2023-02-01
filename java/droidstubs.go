@@ -17,17 +17,20 @@ package java
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
+	"android/soong/bazel"
 	"android/soong/java/config"
 	"android/soong/remoteexec"
 )
 
 // The values allowed for Droidstubs' Api_levels_sdk_type
-var allowedApiLevelSdkTypes = []string{"public", "system", "module-lib"}
+var allowedApiLevelSdkTypes = []string{"public", "system", "module-lib", "system-server"}
 
 func init() {
 	RegisterStubsBuildComponents(android.InitRegistrationContext)
@@ -45,7 +48,6 @@ func RegisterStubsBuildComponents(ctx android.RegistrationContext) {
 // Droidstubs
 type Droidstubs struct {
 	Javadoc
-	android.SdkBase
 
 	properties              DroidstubsProperties
 	apiFile                 android.Path
@@ -127,10 +129,13 @@ type DroidstubsProperties struct {
 	// if set to true, Metalava will allow framework SDK to contain API levels annotations.
 	Api_levels_annotations_enabled *bool
 
+	// Apply the api levels database created by this module rather than generating one in this droidstubs.
+	Api_levels_module *string
+
 	// the dirs which Metalava extracts API levels annotations from.
 	Api_levels_annotations_dirs []string
 
-	// the sdk kind which Metalava extracts API levels annotations from. Supports 'public', 'system' and 'module-lib' for now; defaults to public.
+	// the sdk kind which Metalava extracts API levels annotations from. Supports 'public', 'system', 'module-lib' and 'system-server'; defaults to public.
 	Api_levels_sdk_type *string
 
 	// the filename which Metalava extracts API levels annotations from. Defaults to android.jar.
@@ -139,6 +144,14 @@ type DroidstubsProperties struct {
 	// if set to true, collect the values used by the Dev tools and
 	// write them in files packaged with the SDK. Defaults to false.
 	Write_sdk_values *bool
+
+	// path or filegroup to file defining extension an SDK name <-> numerical ID mapping and
+	// what APIs exist in which SDKs; passed to metalava via --sdk-extensions-info
+	Extensions_info_file *string `android:"path"`
+
+	// API surface of this module. If set, the module contributes to an API surface.
+	// For the full list of available API surfaces, refer to soong/android/sdk_version.go
+	Api_surface *string
 }
 
 // Used by xsd_config
@@ -169,7 +182,10 @@ func DroidstubsFactory() android.Module {
 		&module.Javadoc.properties)
 
 	InitDroiddocModule(module, android.HostAndDeviceSupported)
-	android.InitSdkAwareModule(module)
+
+	module.SetDefaultableHook(func(ctx android.DefaultableHookContext) {
+		module.createApiContribution(ctx)
+	})
 	return module
 }
 
@@ -226,6 +242,7 @@ func (d *Droidstubs) StubsSrcJar() android.Path {
 var metalavaMergeAnnotationsDirTag = dependencyTag{name: "metalava-merge-annotations-dir"}
 var metalavaMergeInclusionAnnotationsDirTag = dependencyTag{name: "metalava-merge-inclusion-annotations-dir"}
 var metalavaAPILevelsAnnotationsDirTag = dependencyTag{name: "metalava-api-levels-annotations-dir"}
+var metalavaAPILevelsModuleTag = dependencyTag{name: "metalava-api-levels-module-tag"}
 
 func (d *Droidstubs) DepsMutator(ctx android.BottomUpMutatorContext) {
 	d.Javadoc.addDeps(ctx)
@@ -246,6 +263,10 @@ func (d *Droidstubs) DepsMutator(ctx android.BottomUpMutatorContext) {
 		for _, apiLevelsAnnotationsDir := range d.properties.Api_levels_annotations_dirs {
 			ctx.AddDependency(ctx.Module(), metalavaAPILevelsAnnotationsDirTag, apiLevelsAnnotationsDir)
 		}
+	}
+
+	if d.properties.Api_levels_module != nil {
+		ctx.AddDependency(ctx.Module(), metalavaAPILevelsModuleTag, proptools.String(d.properties.Api_levels_module))
 	}
 }
 
@@ -357,28 +378,53 @@ func (d *Droidstubs) inclusionAnnotationsFlags(ctx android.ModuleContext, cmd *a
 }
 
 func (d *Droidstubs) apiLevelsAnnotationsFlags(ctx android.ModuleContext, cmd *android.RuleBuilderCommand) {
-	if !Bool(d.properties.Api_levels_annotations_enabled) {
-		return
+	var apiVersions android.Path
+	if proptools.Bool(d.properties.Api_levels_annotations_enabled) {
+		d.apiLevelsGenerationFlags(ctx, cmd)
+		apiVersions = d.apiVersionsXml
+	} else {
+		ctx.VisitDirectDepsWithTag(metalavaAPILevelsModuleTag, func(m android.Module) {
+			if s, ok := m.(*Droidstubs); ok {
+				apiVersions = s.apiVersionsXml
+			} else {
+				ctx.PropertyErrorf("api_levels_module",
+					"module %q is not a droidstubs module", ctx.OtherModuleName(m))
+			}
+		})
 	}
+	if apiVersions != nil {
+		cmd.FlagWithArg("--current-version ", ctx.Config().PlatformSdkVersion().String())
+		cmd.FlagWithArg("--current-codename ", ctx.Config().PlatformSdkCodename())
+		cmd.FlagWithInput("--apply-api-levels ", apiVersions)
+	}
+}
 
-	d.apiVersionsXml = android.PathForModuleOut(ctx, "metalava", "api-versions.xml")
-
+func (d *Droidstubs) apiLevelsGenerationFlags(ctx android.ModuleContext, cmd *android.RuleBuilderCommand) {
 	if len(d.properties.Api_levels_annotations_dirs) == 0 {
 		ctx.PropertyErrorf("api_levels_annotations_dirs",
 			"has to be non-empty if api levels annotations was enabled!")
 	}
 
+	d.apiVersionsXml = android.PathForModuleOut(ctx, "metalava", "api-versions.xml")
 	cmd.FlagWithOutput("--generate-api-levels ", d.apiVersionsXml)
-	cmd.FlagWithInput("--apply-api-levels ", d.apiVersionsXml)
-	cmd.FlagWithArg("--current-version ", ctx.Config().PlatformSdkVersion().String())
-	cmd.FlagWithArg("--current-codename ", ctx.Config().PlatformSdkCodename())
 
 	filename := proptools.StringDefault(d.properties.Api_levels_jar_filename, "android.jar")
 
 	var dirs []string
+	var extensions_dir string
 	ctx.VisitDirectDepsWithTag(metalavaAPILevelsAnnotationsDirTag, func(m android.Module) {
 		if t, ok := m.(*ExportedDroiddocDir); ok {
+			extRegex := regexp.MustCompile(t.dir.String() + `/extensions/[0-9]+/public/.*\.jar`)
+
+			// Grab the first extensions_dir and we find while scanning ExportedDroiddocDir.deps;
+			// ideally this should be read from prebuiltApis.properties.Extensions_*
 			for _, dep := range t.deps {
+				if extRegex.MatchString(dep.String()) && d.properties.Extensions_info_file != nil {
+					if extensions_dir == "" {
+						extensions_dir = t.dir.String() + "/extensions"
+					}
+					cmd.Implicit(dep)
+				}
 				if dep.Base() == filename {
 					cmd.Implicit(dep)
 				}
@@ -407,6 +453,8 @@ func (d *Droidstubs) apiLevelsAnnotationsFlags(ctx android.ModuleContext, cmd *a
 	// for older releases. Similarly, module-lib falls back to system API.
 	var sdkDirs []string
 	switch proptools.StringDefault(d.properties.Api_levels_sdk_type, "public") {
+	case "system-server":
+		sdkDirs = []string{"system-server", "module-lib", "system", "public"}
 	case "module-lib":
 		sdkDirs = []string{"module-lib", "system", "public"}
 	case "system":
@@ -422,6 +470,16 @@ func (d *Droidstubs) apiLevelsAnnotationsFlags(ctx android.ModuleContext, cmd *a
 		for _, dir := range dirs {
 			cmd.FlagWithArg("--android-jar-pattern ", fmt.Sprintf("%s/%%/%s/%s", dir, sdkDir, filename))
 		}
+	}
+
+	if d.properties.Extensions_info_file != nil {
+		if extensions_dir == "" {
+			ctx.ModuleErrorf("extensions_info_file set, but no SDK extension dirs found")
+		}
+		info_file := android.PathForModuleSrc(ctx, *d.properties.Extensions_info_file)
+		cmd.Implicit(info_file)
+		cmd.FlagWithArg("--sdk-extensions-root ", extensions_dir)
+		cmd.FlagWithArg("--sdk-extensions-info ", info_file.String())
 	}
 }
 
@@ -784,6 +842,93 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 }
 
+var _ android.ApiProvider = (*Droidstubs)(nil)
+
+type bazelJavaApiContributionAttributes struct {
+	Api         bazel.LabelAttribute
+	Api_surface *string
+}
+
+func (d *Droidstubs) ConvertWithApiBp2build(ctx android.TopDownMutatorContext) {
+	props := bazel.BazelTargetModuleProperties{
+		Rule_class:        "java_api_contribution",
+		Bzl_load_location: "//build/bazel/rules/apis:java_api_contribution.bzl",
+	}
+	apiFile := d.properties.Check_api.Current.Api_file
+	// Do not generate a target if check_api is not set
+	if apiFile == nil {
+		return
+	}
+	attrs := &bazelJavaApiContributionAttributes{
+		Api: *bazel.MakeLabelAttribute(
+			android.BazelLabelForModuleSrcSingle(ctx, proptools.String(apiFile)).Label,
+		),
+		Api_surface: proptools.StringPtr(bazelApiSurfaceName(d.Name())),
+	}
+	ctx.CreateBazelTargetModule(props, android.CommonAttributes{
+		Name: android.ApiContributionTargetName(ctx.ModuleName()),
+	}, attrs)
+}
+
+func (d *Droidstubs) createApiContribution(ctx android.DefaultableHookContext) {
+	api_file := d.properties.Check_api.Current.Api_file
+	api_surface := d.properties.Api_surface
+
+	props := struct {
+		Name        *string
+		Api_surface *string
+		Api_file    *string
+	}{}
+
+	props.Name = proptools.StringPtr(d.Name() + ".api.contribution")
+	props.Api_surface = api_surface
+	props.Api_file = api_file
+
+	ctx.CreateModule(ApiContributionFactory, &props)
+}
+
+// TODO (b/262014796): Export the API contributions of CorePlatformApi
+// A map to populate the api surface of a droidstub from a substring appearing in its name
+// This map assumes that droidstubs (either checked-in or created by java_sdk_library)
+// use a strict naming convention
+var (
+	droidstubsModuleNamingToSdkKind = map[string]android.SdkKind{
+		//public is commented out since the core libraries use public in their java_sdk_library names
+		"intracore":     android.SdkIntraCore,
+		"intra.core":    android.SdkIntraCore,
+		"system_server": android.SdkSystemServer,
+		"system-server": android.SdkSystemServer,
+		"system":        android.SdkSystem,
+		"module_lib":    android.SdkModule,
+		"module-lib":    android.SdkModule,
+		"platform.api":  android.SdkCorePlatform,
+		"test":          android.SdkTest,
+		"toolchain":     android.SdkToolchain,
+	}
+)
+
+// A helper function that returns the api surface of the corresponding java_api_contribution Bazel target
+// The api_surface is populated using the naming convention of the droidstubs module.
+func bazelApiSurfaceName(name string) string {
+	// Sort the keys so that longer strings appear first
+	// Otherwise substrings like system will match both system and system_server
+	sortedKeys := make([]string, 0)
+	for key := range droidstubsModuleNamingToSdkKind {
+		sortedKeys = append(sortedKeys, key)
+	}
+	sort.Slice(sortedKeys, func(i, j int) bool {
+		return len(sortedKeys[i]) > len(sortedKeys[j])
+	})
+	for _, sortedKey := range sortedKeys {
+		if strings.Contains(name, sortedKey) {
+			sdkKind := droidstubsModuleNamingToSdkKind[sortedKey]
+			return sdkKind.String() + "api"
+		}
+	}
+	// Default is publicapi
+	return android.SdkPublic.String() + "api"
+}
+
 func StubsDefaultsFactory() android.Module {
 	module := &DocDefaults{}
 
@@ -807,7 +952,6 @@ type PrebuiltStubsSources struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
 	prebuilt android.Prebuilt
-	android.SdkBase
 
 	properties PrebuiltStubsSourcesProperties
 
@@ -887,7 +1031,6 @@ func PrebuiltStubsSourcesFactory() android.Module {
 	module.AddProperties(&module.properties)
 
 	android.InitPrebuiltModule(module, &module.properties.Srcs)
-	android.InitSdkAwareModule(module)
 	InitDroiddocModule(module, android.HostAndDeviceSupported)
 	return module
 }

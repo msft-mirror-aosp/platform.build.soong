@@ -26,10 +26,12 @@ import (
 // Codegen is the backend of bp2build. The code generator is responsible for
 // writing .bzl files that are equivalent to Android.bp files that are capable
 // of being built with Bazel.
-func Codegen(ctx *CodegenContext) CodegenMetrics {
+func Codegen(ctx *CodegenContext) *CodegenMetrics {
 	// This directory stores BUILD files that could be eventually checked-in.
 	bp2buildDir := android.PathForOutput(ctx, "bp2build")
-	android.RemoveAllOutputDir(bp2buildDir)
+	if err := android.RemoveAllOutputDir(bp2buildDir); err != nil {
+		fmt.Printf("ERROR: Encountered error while cleaning %s: %s", bp2buildDir, err.Error())
+	}
 
 	res, errs := GenerateBazelTargets(ctx, true)
 	if len(errs) > 0 {
@@ -40,19 +42,38 @@ func Codegen(ctx *CodegenContext) CodegenMetrics {
 		fmt.Printf("ERROR: Encountered %d error(s): \nERROR: %s", len(errs), strings.Join(errMsgs, "\n"))
 		os.Exit(1)
 	}
-	bp2buildFiles := CreateBazelFiles(nil, res.buildFileToTargets, ctx.mode)
+	bp2buildFiles := CreateBazelFiles(ctx.Config(), nil, res.buildFileToTargets, ctx.mode)
 	writeFiles(ctx, bp2buildDir, bp2buildFiles)
 
 	soongInjectionDir := android.PathForOutput(ctx, bazel.SoongInjectionDirName)
-	writeFiles(ctx, soongInjectionDir, CreateSoongInjectionFiles(ctx.Config(), res.metrics))
+	writeFiles(ctx, soongInjectionDir, CreateSoongInjectionDirFiles(ctx, res.metrics))
 
-	return res.metrics
+	return &res.metrics
+}
+
+// Wrapper function that will be responsible for all files in soong_injection directory
+// This includes
+// 1. config value(s) that are hardcoded in Soong
+// 2. product_config variables
+func CreateSoongInjectionDirFiles(ctx *CodegenContext, metrics CodegenMetrics) []BazelFile {
+	var ret []BazelFile
+
+	productConfigFiles, err := CreateProductConfigFiles(ctx)
+	if err != nil {
+		fmt.Printf("ERROR: %s", err.Error())
+		os.Exit(1)
+	}
+	ret = append(ret, productConfigFiles...)
+	ret = append(ret, soongInjectionFiles(ctx.Config(), metrics)...)
+	return ret
 }
 
 // Get the output directory and create it if it doesn't exist.
 func getOrCreateOutputDir(outputDir android.OutputPath, ctx android.PathContext, dir string) android.OutputPath {
 	dirPath := outputDir.Join(ctx, dir)
-	android.CreateOutputDirIfNonexistent(dirPath, os.ModePerm)
+	if err := android.CreateOutputDirIfNonexistent(dirPath, os.ModePerm); err != nil {
+		fmt.Printf("ERROR: path %s: %s", dirPath, err.Error())
+	}
 	return dirPath
 }
 
@@ -60,13 +81,13 @@ func getOrCreateOutputDir(outputDir android.OutputPath, ctx android.PathContext,
 func writeFiles(ctx android.PathContext, outputDir android.OutputPath, files []BazelFile) {
 	for _, f := range files {
 		p := getOrCreateOutputDir(outputDir, ctx, f.Dir).Join(ctx, f.Basename)
-		if err := writeFile(ctx, p, f.Contents); err != nil {
+		if err := writeFile(p, f.Contents); err != nil {
 			panic(fmt.Errorf("Failed to write %q (dir %q) due to %q", f.Basename, f.Dir, err))
 		}
 	}
 }
 
-func writeFile(ctx android.PathContext, pathToFile android.OutputPath, content string) error {
+func writeFile(pathToFile android.OutputPath, content string) error {
 	// These files are made editable to allow users to modify and iterate on them
 	// in the source tree.
 	return android.WriteFileToOutputDir(pathToFile, []byte(content), 0644)

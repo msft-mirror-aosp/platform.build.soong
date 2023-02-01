@@ -368,7 +368,10 @@ func IsForVndkApex(mctx android.BottomUpMutatorContext, m *Module) bool {
 			}
 			return m.ImageVariation().Variation == android.CoreVariation && lib.shared() && m.IsVndkSp() && !m.IsVndkExt()
 		}
-
+		// VNDK APEX doesn't need stub variants
+		if lib.buildStubs() {
+			return false
+		}
 		useCoreVariant := m.VndkVersion() == mctx.DeviceConfig().PlatformVndkVersion() &&
 			mctx.DeviceConfig().VndkUseCoreVariant() && !m.MustUseVendorVariant()
 		return lib.shared() && m.InVendor() && m.IsVndk() && !m.IsVndkExt() && !useCoreVariant
@@ -671,11 +674,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 	snapshotArchDir := filepath.Join(snapshotDir, ctx.DeviceConfig().DeviceArch())
 
 	configsDir := filepath.Join(snapshotArchDir, "configs")
-	noticeDir := filepath.Join(snapshotArchDir, "NOTICE_FILES")
 	includeDir := filepath.Join(snapshotArchDir, "include")
-
-	// set of notice files copied.
-	noticeBuilt := make(map[string]bool)
 
 	// paths of VNDK modules for GPL license checking
 	modulePaths := make(map[string]string)
@@ -761,16 +760,6 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 		stem := m.outputFile.Path().Base()
 		moduleNames[stem] = ctx.ModuleName(m)
 		modulePaths[stem] = ctx.ModuleDir(m)
-
-		if len(m.NoticeFiles()) > 0 {
-			noticeName := stem + ".txt"
-			// skip already copied notice file
-			if _, ok := noticeBuilt[noticeName]; !ok {
-				noticeBuilt[noticeName] = true
-				snapshotOutputs = append(snapshotOutputs, combineNoticesRule(
-					ctx, m.NoticeFiles(), filepath.Join(noticeDir, noticeName)))
-			}
-		}
 
 		if ctx.Config().VndkSnapshotBuildArtifacts() {
 			headers = append(headers, m.SnapshotHeaders()...)

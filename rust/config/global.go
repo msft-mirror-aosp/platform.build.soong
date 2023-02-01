@@ -24,7 +24,7 @@ import (
 var pctx = android.NewPackageContext("android/soong/rust/config")
 
 var (
-	RustDefaultVersion = "1.59.0"
+	RustDefaultVersion = "1.65.0.p1"
 	RustDefaultBase    = "prebuilts/rust/"
 	DefaultEdition     = "2021"
 	Stdlibs            = []string{
@@ -50,6 +50,7 @@ var (
 		"-C force-unwind-tables=yes",
 		// Use v0 mangling to distinguish from C++ symbols
 		"-C symbol-mangling-version=v0",
+		"--color always",
 	}
 
 	deviceGlobalRustFlags = []string{
@@ -77,7 +78,13 @@ var (
 
 func init() {
 	pctx.SourcePathVariable("RustDefaultBase", RustDefaultBase)
-	pctx.VariableConfigMethod("HostPrebuiltTag", android.Config.PrebuiltOS)
+	pctx.VariableConfigMethod("HostPrebuiltTag", func(config android.Config) string {
+		if config.UseHostMusl() {
+			return "linux-musl-x86"
+		} else {
+			return config.PrebuiltOS()
+		}
+	})
 
 	pctx.VariableFunc("RustBase", func(ctx android.PackageVarContext) string {
 		if override := ctx.Config().Getenv("RUST_PREBUILTS_BASE"); override != "" {

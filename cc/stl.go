@@ -25,6 +25,16 @@ func getNdkStlFamily(m LinkableInterface) string {
 	return family
 }
 
+func deduplicateStlInput(stl string) string {
+	switch stl {
+	case "c++_shared":
+		return "libc++"
+	case "c++_static":
+		return "libc++_static"
+	}
+	return stl
+}
+
 func getNdkStlFamilyAndLinkType(m LinkableInterface) (string, string) {
 	stl := m.SelectedStl()
 	switch stl {
@@ -66,18 +76,18 @@ func (stl *stl) begin(ctx BaseModuleContext) {
 		} else if ctx.header() {
 			s = "none"
 		}
+		if s == "none" {
+			return ""
+		}
+		s = deduplicateStlInput(s)
 		if ctx.useSdk() && ctx.Device() {
 			switch s {
 			case "", "system":
 				return "ndk_system"
-			case "c++_shared", "c++_static":
-				return "ndk_lib" + s
 			case "libc++":
 				return "ndk_libc++_shared"
 			case "libc++_static":
 				return "ndk_libc++_static"
-			case "none":
-				return ""
 			default:
 				ctx.ModuleErrorf("stl: %q is not a supported STL with sdk_version set", s)
 				return ""
@@ -87,8 +97,6 @@ func (stl *stl) begin(ctx BaseModuleContext) {
 			case "libc++", "libc++_static", "":
 				// Only use static libc++ for Windows.
 				return "libc++_static"
-			case "none":
-				return ""
 			default:
 				ctx.ModuleErrorf("stl: %q is not a supported STL for windows", s)
 				return ""
@@ -97,12 +105,6 @@ func (stl *stl) begin(ctx BaseModuleContext) {
 			switch s {
 			case "libc++", "libc++_static":
 				return s
-			case "c++_shared":
-				return "libc++"
-			case "c++_static":
-				return "libc++_static"
-			case "none":
-				return ""
 			case "", "system":
 				if ctx.static() {
 					return "libc++_static"
@@ -137,6 +139,8 @@ func staticUnwinder(ctx android.BaseModuleContext) string {
 	return "libunwind"
 }
 
+// Should be kept up to date with
+// https://cs.android.com/android/platform/superproject/+/master:build/bazel/rules/cc/stl.bzl;l=46;drc=21771b671ae08565033768a6d3d151c54f887fa2
 func (stl *stl) deps(ctx BaseModuleContext, deps Deps) Deps {
 	switch stl.Properties.SelectedStl {
 	case "libstdc++":
@@ -192,6 +196,8 @@ func (stl *stl) deps(ctx BaseModuleContext, deps Deps) Deps {
 	return deps
 }
 
+// Should be kept up to date with
+// https://cs.android.com/android/platform/superproject/+/master:build/bazel/rules/cc/stl.bzl;l=94;drc=5bc8e39d2637927dc57dd0850210d43d348a1341
 func (stl *stl) flags(ctx ModuleContext, flags Flags) Flags {
 	switch stl.Properties.SelectedStl {
 	case "libc++", "libc++_static":

@@ -43,6 +43,7 @@ var (
 	InstrumentFrameworkModules = []string{
 		"framework",
 		"framework-minus-apex",
+		"ims-common",
 		"telephony-common",
 		"services",
 		"android.car",
@@ -68,24 +69,38 @@ var (
 		"-J-XX:+TieredCompilation",
 		"-J-XX:TieredStopAtLevel=1",
 	}
+	dexerJavaVmFlagsList = []string{
+		`-JXX:OnError="cat hs_err_pid%p.log"`,
+		"-JXX:CICompilerCount=6",
+		"-JXX:+UseDynamicNumberOfGCThreads",
+	}
 )
 
 func init() {
 	pctx.Import("github.com/google/blueprint/bootstrap")
 
-	exportedVars.ExportStringStaticVariable("JavacHeapSize", "2048M")
+	exportedVars.ExportStringStaticVariable("JavacHeapSize", "4096M")
 	exportedVars.ExportStringStaticVariable("JavacHeapFlags", "-J-Xmx${JavacHeapSize}")
 
 	// ErrorProne can use significantly more memory than javac alone, give it a higher heap
 	// size (b/221480398).
-	exportedVars.ExportStringStaticVariable("ErrorProneHeapSize", "4096M")
+	exportedVars.ExportStringStaticVariable("ErrorProneHeapSize", "8192M")
 	exportedVars.ExportStringStaticVariable("ErrorProneHeapFlags", "-J-Xmx${ErrorProneHeapSize}")
 
-	exportedVars.ExportStringListStaticVariable("DexFlags", []string{
-		`-JXX:OnError="cat hs_err_pid%p.log"`,
-		"-JXX:CICompilerCount=6",
-		"-JXX:+UseDynamicNumberOfGCThreads",
-	})
+	// D8 invocations are shorter lived, so we restrict their JIT tiering relative to R8.
+	// Note that the `-JXX` prefix syntax is specific to the R8/D8 invocation wrappers.
+	exportedVars.ExportStringListStaticVariable("D8Flags", append([]string{
+		"-JXmx4096M",
+		"-JXX:+TieredCompilation",
+		"-JXX:TieredStopAtLevel=1",
+	}, dexerJavaVmFlagsList...))
+	exportedVars.ExportStringListStaticVariable("R8Flags", append([]string{
+		"-JXmx2048M",
+		// Disable this optimization as it can impact weak reference semantics. See b/233432839.
+		"-JDcom.android.tools.r8.disableEnqueuerDeferredTracing=true",
+		// Disable class merging across different files to improve attribution. See b/242881914.
+		"-JDcom.android.tools.r8.enableSameFilePolicy=true",
+	}, dexerJavaVmFlagsList...))
 
 	exportedVars.ExportStringListStaticVariable("CommonJdkFlags", []string{
 		`-Xmaxerrs 9999999`,
@@ -116,12 +131,7 @@ func init() {
 		if override := ctx.Config().Getenv("OVERRIDE_JLINK_VERSION_NUMBER"); override != "" {
 			return override
 		}
-		switch ctx.Config().Getenv("EXPERIMENTAL_USE_OPENJDK17_TOOLCHAIN") {
-		case "true":
-			return "17"
-		default:
-			return "11"
-		}
+		return "17"
 	})
 
 	pctx.SourcePathVariable("JavaToolchain", "${JavaHome}/bin")
@@ -136,7 +146,7 @@ func init() {
 	pctx.SourcePathVariable("JavaKytheExtractorJar", "prebuilts/build-tools/common/framework/javac_extractor.jar")
 	pctx.SourcePathVariable("Ziptime", "prebuilts/build-tools/${hostPrebuiltTag}/bin/ziptime")
 
-	pctx.HostBinToolVariable("GenKotlinBuildFileCmd", "gen-kotlin-build-file.py")
+	pctx.HostBinToolVariable("GenKotlinBuildFileCmd", "gen-kotlin-build-file")
 
 	pctx.SourcePathVariable("JarArgsCmd", "build/soong/scripts/jar-args.sh")
 	pctx.SourcePathVariable("PackageCheckCmd", "build/soong/scripts/package-check.sh")
@@ -147,7 +157,8 @@ func init() {
 	pctx.HostBinToolVariable("ZipSyncCmd", "zipsync")
 	pctx.HostBinToolVariable("ApiCheckCmd", "apicheck")
 	pctx.HostBinToolVariable("D8Cmd", "d8")
-	pctx.HostBinToolVariable("R8Cmd", "r8-compat-proguard")
+	pctx.HostBinToolVariable("R8Cmd", "r8")
+	pctx.HostBinToolVariable("ResourceShrinkerCmd", "resourceshrinker")
 	pctx.HostBinToolVariable("HiddenAPICmd", "hiddenapi")
 	pctx.HostBinToolVariable("ExtractApksCmd", "extract_apks")
 	pctx.VariableFunc("TurbineJar", func(ctx android.PackageVarContext) string {
@@ -165,7 +176,7 @@ func init() {
 	pctx.HostJavaToolVariable("MetalavaJar", "metalava.jar")
 	pctx.HostJavaToolVariable("DokkaJar", "dokka.jar")
 	pctx.HostJavaToolVariable("JetifierJar", "jetifier.jar")
-	pctx.HostJavaToolVariable("R8Jar", "r8-compat-proguard.jar")
+	pctx.HostJavaToolVariable("R8Jar", "r8.jar")
 	pctx.HostJavaToolVariable("D8Jar", "d8.jar")
 
 	pctx.HostBinToolVariable("SoongJavacWrapper", "soong_javac_wrapper")

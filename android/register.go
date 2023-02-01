@@ -35,7 +35,7 @@ type sortableComponent interface {
 	// tests.
 	componentName() string
 
-	// register registers this component in the supplied context.
+	// registers this component in the supplied context.
 	register(ctx *Context)
 }
 
@@ -96,10 +96,11 @@ var singletons sortableComponents
 var preSingletons sortableComponents
 
 type mutator struct {
-	name            string
-	bottomUpMutator blueprint.BottomUpMutator
-	topDownMutator  blueprint.TopDownMutator
-	parallel        bool
+	name              string
+	bottomUpMutator   blueprint.BottomUpMutator
+	topDownMutator    blueprint.TopDownMutator
+	transitionMutator blueprint.TransitionMutator
+	parallel          bool
 }
 
 var _ sortableComponent = &mutator{}
@@ -123,7 +124,7 @@ func SingletonFactoryAdaptor(ctx *Context, factory SingletonFactory) blueprint.S
 	return func() blueprint.Singleton {
 		singleton := factory()
 		if makevars, ok := singleton.(SingletonMakeVarsProvider); ok {
-			registerSingletonMakeVarsProvider(ctx.config, makevars)
+			ctx.registerSingletonMakeVarsProvider(makevars)
 		}
 		return &singletonAdaptor{Singleton: singleton}
 	}
@@ -160,27 +161,35 @@ type Context struct {
 func NewContext(config Config) *Context {
 	ctx := &Context{blueprint.NewContext(), config}
 	ctx.SetSrcDir(absSrcDir)
+	ctx.AddIncludeTags(config.IncludeTags()...)
 	return ctx
 }
 
-func (ctx *Context) SetRunningAsBp2build() {
-	ctx.config.runningAsBp2Build = true
+// Helper function to register the module types used in bp2build and
+// api_bp2build.
+func registerModuleTypes(ctx *Context) {
+	for _, t := range moduleTypes {
+		t.register(ctx)
+	}
+	// Required for SingletonModule types, even though we are not using them.
+	for _, t := range singletons {
+		t.register(ctx)
+	}
 }
 
 // RegisterForBazelConversion registers an alternate shadow pipeline of
 // singletons, module types and mutators to register for converting Blueprint
 // files to semantically equivalent BUILD files.
 func (ctx *Context) RegisterForBazelConversion() {
-	for _, t := range moduleTypes {
-		t.register(ctx)
-	}
-
-	// Required for SingletonModule types, even though we are not using them.
-	for _, t := range singletons {
-		t.register(ctx)
-	}
-
+	registerModuleTypes(ctx)
 	RegisterMutatorsForBazelConversion(ctx, bp2buildPreArchMutators)
+}
+
+// RegisterForApiBazelConversion is similar to RegisterForBazelConversion except that
+// it only generates API targets in the generated  workspace
+func (ctx *Context) RegisterForApiBazelConversion() {
+	registerModuleTypes(ctx)
+	RegisterMutatorsForApiBazelConversion(ctx, bp2buildPreArchMutators)
 }
 
 // Register the pipeline of singletons, module types, and mutators for
@@ -197,6 +206,14 @@ func (ctx *Context) Register() {
 
 	singletons := collateGloballyRegisteredSingletons()
 	singletons.registerAll(ctx)
+}
+
+func (ctx *Context) Config() Config {
+	return ctx.config
+}
+
+func (ctx *Context) registerSingletonMakeVarsProvider(makevars SingletonMakeVarsProvider) {
+	registerSingletonMakeVarsProvider(ctx.config, makevars)
 }
 
 func collateGloballyRegisteredSingletons() sortableComponents {
@@ -326,7 +343,7 @@ func (ctx *initRegistrationContext) PreArchMutators(f RegisterMutatorFunc) {
 	PreArchMutators(f)
 }
 
-func (ctx *initRegistrationContext) HardCodedPreArchMutators(f RegisterMutatorFunc) {
+func (ctx *initRegistrationContext) HardCodedPreArchMutators(_ RegisterMutatorFunc) {
 	// Nothing to do as the mutators are hard code in preArch in mutator.go
 }
 
