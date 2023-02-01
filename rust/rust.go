@@ -15,6 +15,7 @@
 package rust
 
 import (
+	"android/soong/bloaty"
 	"fmt"
 	"strings"
 
@@ -22,7 +23,6 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
-	"android/soong/bloaty"
 	"android/soong/cc"
 	cc_config "android/soong/cc/config"
 	"android/soong/fuzz"
@@ -33,13 +33,6 @@ import (
 var pctx = android.NewPackageContext("android/soong/rust")
 
 func init() {
-	// Only allow rust modules to be defined for certain projects
-
-	android.AddNeverAllowRules(
-		android.NeverAllow().
-			NotIn(append(config.RustAllowedPaths, config.DownstreamRustAllowedPaths...)...).
-			ModuleType(config.RustModuleTypes...))
-
 	android.RegisterModuleType("rust_defaults", defaultsFactory)
 	android.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.BottomUp("rust_libraries", LibraryMutator).Parallel()
@@ -52,6 +45,7 @@ func init() {
 	})
 	pctx.Import("android/soong/rust/config")
 	pctx.ImportAs("cc_config", "android/soong/cc/config")
+	android.InitRegistrationContext.RegisterSingletonType("kythe_rust_extract", kytheExtractRustFactory)
 }
 
 type Flags struct {
@@ -64,6 +58,7 @@ type Flags struct {
 	Toolchain       config.Toolchain
 	Coverage        bool
 	Clippy          bool
+	EmitXrefs       bool // If true, emit rules to aid cross-referencing
 }
 
 type BaseProperties struct {
@@ -160,6 +155,9 @@ type Module struct {
 
 	// Output file to be installed, may be stripped or unstripped.
 	outputFile android.OptionalPath
+
+	// Cross-reference input file
+	kytheFiles android.Paths
 
 	docTimestampFile android.OptionalPath
 
@@ -394,6 +392,10 @@ func (mod *Module) SplitPerApiLevel() bool {
 	return false
 }
 
+func (mod *Module) XrefRustFiles() android.Paths {
+	return mod.kytheFiles
+}
+
 type Deps struct {
 	Dylibs          []string
 	Rlibs           []string
@@ -457,7 +459,7 @@ type compiler interface {
 	cfgFlags(ctx ModuleContext, flags Flags) Flags
 	featureFlags(ctx ModuleContext, flags Flags) Flags
 	compilerProps() []interface{}
-	compile(ctx ModuleContext, flags Flags, deps PathDeps) android.Path
+	compile(ctx ModuleContext, flags Flags, deps PathDeps) buildOutput
 	compilerDeps(ctx DepsContext, deps Deps) Deps
 	crateName() string
 	rustdoc(ctx ModuleContext, flags Flags, deps PathDeps) android.OptionalPath
@@ -491,6 +493,10 @@ type compiler interface {
 type exportedFlagsProducer interface {
 	exportLinkDirs(...string)
 	exportLinkObjects(...string)
+}
+
+type xref interface {
+	XrefRustFiles() android.Paths
 }
 
 type flagExporter struct {
@@ -917,11 +923,14 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 
 	if mod.compiler != nil && !mod.compiler.Disabled() {
 		mod.compiler.initialize(ctx)
-		outputFile := mod.compiler.compile(ctx, flags, deps)
+		buildOutput := mod.compiler.compile(ctx, flags, deps)
 		if ctx.Failed() {
 			return
 		}
-		mod.outputFile = android.OptionalPathForPath(outputFile)
+		mod.outputFile = android.OptionalPathForPath(buildOutput.outputFile)
+		if buildOutput.kytheFile != nil {
+			mod.kytheFiles = append(mod.kytheFiles, buildOutput.kytheFile)
+		}
 		bloaty.MeasureSizeForPaths(ctx, mod.compiler.strippedOutputFilePath(), android.OptionalPathForPath(mod.compiler.unstrippedOutputFilePath()))
 
 		mod.docTimestampFile = mod.compiler.rustdoc(ctx, flags, deps)
@@ -1364,6 +1373,11 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	var commonDepVariations []blueprint.Variation
 	var snapshotInfo *cc.SnapshotInfo
 
+	apiImportInfo := cc.GetApiImports(mod, actx)
+	for idx, lib := range deps.SharedLibs {
+		deps.SharedLibs[idx] = cc.GetReplaceModuleName(lib, apiImportInfo.SharedLibs)
+	}
+
 	if ctx.Os() == android.Android {
 		deps.SharedLibs, _ = cc.RewriteLibs(mod, &snapshotInfo, actx, ctx.Config(), deps.SharedLibs)
 	}
@@ -1384,7 +1398,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	rlibDepVariations = append(rlibDepVariations, blueprint.Variation{Mutator: "rust_libraries", Variation: rlibVariation})
 	for _, lib := range deps.Rlibs {
 		depTag := rlibDepTag
-		lib = cc.RewriteSnapshotLib(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
+		lib = cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
 
 		actx.AddVariationDependencies(rlibDepVariations, depTag, lib)
 	}
@@ -1422,7 +1436,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		if mod.compiler.stdLinkage(ctx) == RlibLinkage {
 			for _, lib := range deps.Stdlibs {
 				depTag := rlibDepTag
-				lib = cc.RewriteSnapshotLib(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
+				lib = cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
 
 				actx.AddVariationDependencies(append(commonDepVariations, []blueprint.Variation{{Mutator: "rust_libraries", Variation: "rlib"}}...),
 					depTag, lib)
@@ -1446,7 +1460,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 	for _, lib := range deps.WholeStaticLibs {
 		depTag := cc.StaticDepTag(true)
-		lib = cc.RewriteSnapshotLib(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).StaticLibs)
+		lib = cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).StaticLibs)
 
 		actx.AddVariationDependencies([]blueprint.Variation{
 			{Mutator: "link", Variation: "static"},
@@ -1455,7 +1469,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 	for _, lib := range deps.StaticLibs {
 		depTag := cc.StaticDepTag(false)
-		lib = cc.RewriteSnapshotLib(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).StaticLibs)
+		lib = cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).StaticLibs)
 
 		actx.AddVariationDependencies([]blueprint.Variation{
 			{Mutator: "link", Variation: "static"},
@@ -1467,11 +1481,11 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	crtVariations := cc.GetCrtVariations(ctx, mod)
 	for _, crt := range deps.CrtBegin {
 		actx.AddVariationDependencies(crtVariations, cc.CrtBeginDepTag,
-			cc.RewriteSnapshotLib(crt, cc.GetSnapshot(mod, &snapshotInfo, actx).Objects))
+			cc.GetReplaceModuleName(crt, cc.GetSnapshot(mod, &snapshotInfo, actx).Objects))
 	}
 	for _, crt := range deps.CrtEnd {
 		actx.AddVariationDependencies(crtVariations, cc.CrtEndDepTag,
-			cc.RewriteSnapshotLib(crt, cc.GetSnapshot(mod, &snapshotInfo, actx).Objects))
+			cc.GetReplaceModuleName(crt, cc.GetSnapshot(mod, &snapshotInfo, actx).Objects))
 	}
 
 	if mod.sourceProvider != nil {
@@ -1494,7 +1508,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 // addRlibDependency will add an rlib dependency, rewriting to the snapshot library if available.
 func addRlibDependency(actx android.BottomUpMutatorContext, lib string, mod *Module, snapshotInfo *cc.SnapshotInfo, variations []blueprint.Variation) {
-	lib = cc.RewriteSnapshotLib(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
+	lib = cc.GetReplaceModuleName(lib, cc.GetSnapshot(mod, &snapshotInfo, actx).Rlibs)
 	actx.AddVariationDependencies(variations, rlibDepTag, lib)
 }
 
@@ -1601,7 +1615,7 @@ func (mod *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Mo
 		}
 	}
 
-	if depTag == procMacroDepTag {
+	if depTag == procMacroDepTag || depTag == customBindgenDepTag {
 		return false
 	}
 
@@ -1629,6 +1643,29 @@ func libNameFromFilePath(filepath android.Path) (string, bool) {
 		return libName, true
 	}
 	return "", false
+}
+
+func kytheExtractRustFactory() android.Singleton {
+	return &kytheExtractRustSingleton{}
+}
+
+type kytheExtractRustSingleton struct {
+}
+
+func (k kytheExtractRustSingleton) GenerateBuildActions(ctx android.SingletonContext) {
+	var xrefTargets android.Paths
+	ctx.VisitAllModules(func(module android.Module) {
+		if rustModule, ok := module.(xref); ok {
+			xrefTargets = append(xrefTargets, rustModule.XrefRustFiles()...)
+		}
+	})
+	if len(xrefTargets) > 0 {
+		ctx.Phony("xref_rust", xrefTargets...)
+	}
+}
+
+func (c *Module) Partition() string {
+	return ""
 }
 
 var Bool = proptools.Bool

@@ -15,12 +15,14 @@
 package cc
 
 import (
+	"android/soong/bazel/cquery"
 	"testing"
 
 	"android/soong/android"
 )
 
 func TestCcBinaryWithBazel(t *testing.T) {
+	t.Parallel()
 	bp := `
 cc_binary {
 	name: "foo",
@@ -30,8 +32,11 @@ cc_binary {
 	config := TestConfig(t.TempDir(), android.Android, nil, bp, nil)
 	config.BazelContext = android.MockBazelContext{
 		OutputBaseDir: "outputbase",
-		LabelToOutputFiles: map[string][]string{
-			"//foo/bar:bar": []string{"foo"},
+		LabelToCcBinary: map[string]cquery.CcUnstrippedInfo{
+			"//foo/bar:bar": cquery.CcUnstrippedInfo{
+				OutputFile:       "foo",
+				UnstrippedOutput: "foo.unstripped",
+			},
 		},
 	}
 	ctx := testCcWithConfig(t, config)
@@ -46,6 +51,27 @@ cc_binary {
 	android.AssertDeepEquals(t, "output files", expectedOutputFiles, outputFiles.Strings())
 
 	unStrippedFilePath := binMod.(*Module).UnstrippedOutputFile()
-	expectedUnStrippedFile := "outputbase/execroot/__main__/foo"
+	expectedUnStrippedFile := "outputbase/execroot/__main__/foo.unstripped"
 	android.AssertStringEquals(t, "Unstripped output file", expectedUnStrippedFile, unStrippedFilePath.String())
+}
+
+func TestBinaryLinkerScripts(t *testing.T) {
+	t.Parallel()
+	result := PrepareForIntegrationTestWithCc.RunTestWithBp(t, `
+		cc_binary {
+			name: "foo",
+			srcs: ["foo.cc"],
+			linker_scripts: ["foo.ld", "bar.ld"],
+		}`)
+
+	binFoo := result.ModuleForTests("foo", "android_arm64_armv8-a").Rule("ld")
+
+	android.AssertStringListContains(t, "missing dependency on linker_scripts",
+		binFoo.Implicits.Strings(), "foo.ld")
+	android.AssertStringListContains(t, "missing dependency on linker_scripts",
+		binFoo.Implicits.Strings(), "bar.ld")
+	android.AssertStringDoesContain(t, "missing flag for linker_scripts",
+		binFoo.Args["ldFlags"], "-Wl,--script,foo.ld")
+	android.AssertStringDoesContain(t, "missing flag for linker_scripts",
+		binFoo.Args["ldFlags"], "-Wl,--script,bar.ld")
 }

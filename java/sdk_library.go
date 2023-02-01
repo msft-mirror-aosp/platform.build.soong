@@ -469,7 +469,7 @@ type sdkLibraryProperties struct {
 	// Determines whether a runtime implementation library is built; defaults to false.
 	//
 	// If true then it also prevents the module from being used as a shared module, i.e.
-	// it is as is shared_library: false, was set.
+	// it is as if shared_library: false, was set.
 	Api_only *bool
 
 	// local files that are used within user customized droiddoc options.
@@ -752,7 +752,7 @@ type commonToSdkLibraryAndImportProperties struct {
 // commonSdkLibraryAndImportModule defines the interface that must be provided by a module that
 // embeds the commonToSdkLibraryAndImport struct.
 type commonSdkLibraryAndImportModule interface {
-	android.SdkAware
+	android.Module
 
 	BaseModuleName() string
 }
@@ -831,18 +831,14 @@ func (c *commonToSdkLibraryAndImport) xmlPermissionsModuleName() string {
 // Name of the java_library module that compiles the stubs source.
 func (c *commonToSdkLibraryAndImport) stubsLibraryModuleName(apiScope *apiScope) string {
 	baseName := c.module.BaseModuleName()
-	return c.module.SdkMemberComponentName(baseName, func(name string) string {
-		return c.namingScheme.stubsLibraryModuleName(apiScope, name)
-	})
+	return c.namingScheme.stubsLibraryModuleName(apiScope, baseName)
 }
 
 // Name of the droidstubs module that generates the stubs source and may also
 // generate/check the API.
 func (c *commonToSdkLibraryAndImport) stubsSourceModuleName(apiScope *apiScope) string {
 	baseName := c.module.BaseModuleName()
-	return c.module.SdkMemberComponentName(baseName, func(name string) string {
-		return c.namingScheme.stubsSourceModuleName(apiScope, name)
-	})
+	return c.namingScheme.stubsSourceModuleName(apiScope, baseName)
 }
 
 // The component names for different outputs of the java_sdk_library.
@@ -1603,6 +1599,7 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 		Srcs                             []string
 		Installable                      *bool
 		Sdk_version                      *string
+		Api_surface                      *string
 		System_modules                   *string
 		Libs                             []string
 		Output_javadoc_comments          *bool
@@ -1642,12 +1639,14 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 	props.Srcs = append(props.Srcs, module.properties.Srcs...)
 	props.Srcs = append(props.Srcs, module.sdkLibraryProperties.Api_srcs...)
 	props.Sdk_version = module.deviceProperties.Sdk_version
+	props.Api_surface = &apiScope.name
 	props.System_modules = module.deviceProperties.System_modules
 	props.Installable = proptools.BoolPtr(false)
 	// A droiddoc module has only one Libs property and doesn't distinguish between
 	// shared libs and static libs. So we need to add both of these libs to Libs property.
 	props.Libs = module.properties.Libs
 	props.Libs = append(props.Libs, module.properties.Static_libs...)
+	props.Libs = append(props.Libs, module.sdkLibraryProperties.Stub_only_libs...)
 	props.Aidl.Include_dirs = module.deviceProperties.Aidl.Include_dirs
 	props.Aidl.Local_include_dirs = module.deviceProperties.Aidl.Local_include_dirs
 	props.Java_version = module.properties.Java_version
@@ -2051,7 +2050,6 @@ func SdkLibraryFactory() android.Module {
 
 	module.InitSdkLibraryProperties()
 	android.InitApexModule(module)
-	android.InitSdkAwareModule(module)
 	InitJavaModule(module, android.HostAndDeviceSupported)
 
 	// Initialize the map from scope to scope specific properties.
@@ -2129,7 +2127,6 @@ type SdkLibraryImport struct {
 	android.DefaultableModuleBase
 	prebuilt android.Prebuilt
 	android.ApexModuleBase
-	android.SdkBase
 
 	hiddenAPI
 	dexpreopter
@@ -2211,7 +2208,6 @@ func sdkLibraryImportFactory() android.Module {
 
 	android.InitPrebuiltModule(module, &[]string{""})
 	android.InitApexModule(module)
-	android.InitSdkAwareModule(module)
 	InitJavaModule(module, android.HostAndDeviceSupported)
 
 	module.SetDefaultableHook(func(mctx android.DefaultableHookContext) {

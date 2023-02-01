@@ -168,7 +168,7 @@ python_test_host {
 }
 
 python_binary_host {
-    name: "gen-kotlin-build-file.py",
+    name: "gen-kotlin-build-file",
     main: "gen-kotlin-build-file.py",
     srcs: [
         "gen-kotlin-build-file.py",
@@ -199,7 +199,24 @@ python_binary_host {
     ],
 }
 
+python_binary_host {
+    name: "build-apex-bundle",
+    main: "build-apex-bundle.py",
+    srcs: [
+        "build-apex-bundle.py",
+    ],
+    required: [
+        "bundletool",
+    ],
+}
+
 sh_binary_host {
     name: "list_image",
     src: "list_image.sh",
+}
+
+filegroup {
+    name: "rustfmt.toml",
+    srcs: ["rustfmt.toml"],
+    visibility: ["//visibility:public"],
 }

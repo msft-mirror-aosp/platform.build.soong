@@ -139,9 +139,9 @@ func dumpMakeVars(ctx Context, config Config, goals, vars []string, write_soong_
 var BannerVars = []string{
 	"PLATFORM_VERSION_CODENAME",
 	"PLATFORM_VERSION",
+	"PRODUCT_INCLUDE_TAGS",
 	"TARGET_PRODUCT",
 	"TARGET_BUILD_VARIANT",
-	"TARGET_BUILD_TYPE",
 	"TARGET_BUILD_APPS",
 	"TARGET_BUILD_UNBUNDLED",
 	"TARGET_ARCH",
@@ -150,18 +150,11 @@ var BannerVars = []string{
 	"TARGET_2ND_ARCH",
 	"TARGET_2ND_ARCH_VARIANT",
 	"TARGET_2ND_CPU_VARIANT",
-	"HOST_ARCH",
-	"HOST_2ND_ARCH",
 	"HOST_OS",
 	"HOST_OS_EXTRA",
 	"HOST_CROSS_OS",
-	"HOST_CROSS_ARCH",
-	"HOST_CROSS_2ND_ARCH",
-	"HOST_BUILD_TYPE",
 	"BUILD_ID",
 	"OUT_DIR",
-	"AUX_OS_VARIANT_LIST",
-	"PRODUCT_SOONG_NAMESPACES",
 	"SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE",
 }
 
@@ -233,6 +226,13 @@ func runMakeProductConfig(ctx Context, config Config) {
 
 		// Not used, but useful to be in the soong.log
 		"BOARD_VNDK_VERSION",
+		"TARGET_BUILD_TYPE",
+		"HOST_ARCH",
+		"HOST_2ND_ARCH",
+		"HOST_CROSS_ARCH",
+		"HOST_CROSS_2ND_ARCH",
+		"HOST_BUILD_TYPE",
+		"PRODUCT_SOONG_NAMESPACES",
 
 		"DEFAULT_WARNING_BUILD_MODULE_TYPES",
 		"DEFAULT_ERROR_BUILD_MODULE_TYPES",
@@ -242,8 +242,6 @@ func runMakeProductConfig(ctx Context, config Config) {
 		"BUILD_BROKEN_USES_BUILD_EXECUTABLE",
 		"BUILD_BROKEN_USES_BUILD_FUZZ_TEST",
 		"BUILD_BROKEN_USES_BUILD_HEADER_LIBRARY",
-		"BUILD_BROKEN_USES_BUILD_HOST_DALVIK_JAVA_LIBRARY",
-		"BUILD_BROKEN_USES_BUILD_HOST_DALVIK_STATIC_JAVA_LIBRARY",
 		"BUILD_BROKEN_USES_BUILD_HOST_EXECUTABLE",
 		"BUILD_BROKEN_USES_BUILD_HOST_JAVA_LIBRARY",
 		"BUILD_BROKEN_USES_BUILD_HOST_PREBUILT",
@@ -292,4 +290,5 @@ func runMakeProductConfig(ctx Context, config Config) {
 	config.SetBuildBrokenDupRules(makeVars["BUILD_BROKEN_DUP_RULES"] == "true")
 	config.SetBuildBrokenUsesNetwork(makeVars["BUILD_BROKEN_USES_NETWORK"] == "true")
 	config.SetBuildBrokenNinjaUsesEnvVars(strings.Fields(makeVars["BUILD_BROKEN_NINJA_USES_ENV_VARS"]))
+	config.SetIncludeTags(strings.Fields(makeVars["PRODUCT_INCLUDE_TAGS"]))
 }

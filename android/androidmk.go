@@ -489,11 +489,11 @@ func (a *AndroidMkEntries) GetDistForGoals(mod blueprint.Module) []string {
 // Write the license variables to Make for AndroidMkData.Custom(..) methods that do not call WriteAndroidMkData(..)
 // It's required to propagate the license metadata even for module types that have non-standard interfaces to Make.
 func (a *AndroidMkEntries) WriteLicenseVariables(w io.Writer) {
-	fmt.Fprintln(w, "LOCAL_LICENSE_KINDS :=", strings.Join(a.EntryMap["LOCAL_LICENSE_KINDS"], " "))
-	fmt.Fprintln(w, "LOCAL_LICENSE_CONDITIONS :=", strings.Join(a.EntryMap["LOCAL_LICENSE_CONDITIONS"], " "))
-	fmt.Fprintln(w, "LOCAL_NOTICE_FILE :=", strings.Join(a.EntryMap["LOCAL_NOTICE_FILE"], " "))
+	AndroidMkEmitAssignList(w, "LOCAL_LICENSE_KINDS", a.EntryMap["LOCAL_LICENSE_KINDS"])
+	AndroidMkEmitAssignList(w, "LOCAL_LICENSE_CONDITIONS", a.EntryMap["LOCAL_LICENSE_CONDITIONS"])
+	AndroidMkEmitAssignList(w, "LOCAL_NOTICE_FILE", a.EntryMap["LOCAL_NOTICE_FILE"])
 	if pn, ok := a.EntryMap["LOCAL_LICENSE_PACKAGE_NAME"]; ok {
-		fmt.Fprintln(w, "LOCAL_LICENSE_PACKAGE_NAME :=", strings.Join(pn, " "))
+		AndroidMkEmitAssignList(w, "LOCAL_LICENSE_PACKAGE_NAME", pn)
 	}
 }
 
@@ -504,6 +504,7 @@ type fillInEntriesContext interface {
 	Config() Config
 	ModuleProvider(module blueprint.Module, provider blueprint.ProviderKey) interface{}
 	ModuleHasProvider(module blueprint.Module, provider blueprint.ProviderKey) bool
+	ModuleType(module blueprint.Module) string
 }
 
 func (a *AndroidMkEntries) fillInEntries(ctx fillInEntriesContext, mod blueprint.Module) {
@@ -527,7 +528,7 @@ func (a *AndroidMkEntries) fillInEntries(ctx fillInEntriesContext, mod blueprint
 		fmt.Fprintf(&a.header, distString)
 	}
 
-	fmt.Fprintln(&a.header, "\ninclude $(CLEAR_VARS)")
+	fmt.Fprintln(&a.header, "\ninclude $(CLEAR_VARS)  # "+ctx.ModuleType(mod))
 
 	// Collect make variable assignment entries.
 	a.SetString("LOCAL_PATH", ctx.ModuleDir(mod))
@@ -608,10 +609,6 @@ func (a *AndroidMkEntries) fillInEntries(ctx fillInEntriesContext, mod blueprint
 		}
 	}
 
-	if len(base.noticeFiles) > 0 {
-		a.AddStrings("LOCAL_NOTICE_FILE", strings.Join(base.noticeFiles.Strings(), " "))
-	}
-
 	if host {
 		makeOs := base.Os().String()
 		if base.Os() == Linux || base.Os() == LinuxBionic || base.Os() == LinuxMusl {
@@ -675,7 +672,7 @@ func (a *AndroidMkEntries) write(w io.Writer) {
 
 	w.Write(a.header.Bytes())
 	for _, name := range a.entryOrder {
-		fmt.Fprintln(w, name+" := "+strings.Join(a.EntryMap[name], " "))
+		AndroidMkEmitAssignList(w, name, a.EntryMap[name])
 	}
 	w.Write(a.footer.Bytes())
 }
@@ -949,7 +946,10 @@ func shouldSkipAndroidMkProcessing(module *ModuleBase) bool {
 	return !module.Enabled() ||
 		module.commonProperties.HideFromMake ||
 		// Make does not understand LinuxBionic
-		module.Os() == LinuxBionic
+		module.Os() == LinuxBionic ||
+		// Make does not understand LinuxMusl, except when we are building with USE_HOST_MUSL=true
+		// and all host binaries are LinuxMusl
+		(module.Os() == LinuxMusl && module.Target().HostCross)
 }
 
 // A utility func to format LOCAL_TEST_DATA outputs. See the comments on DataPath to understand how
@@ -971,4 +971,29 @@ func AndroidMkDataPaths(data []DataPath) []string {
 		testFiles = append(testFiles, testFileString)
 	}
 	return testFiles
+}
+
+// AndroidMkEmitAssignList emits the line
+//
+//	VAR := ITEM ...
+//
+// Items are the elements to the given set of lists
+// If all the passed lists are empty, no line will be emitted
+func AndroidMkEmitAssignList(w io.Writer, varName string, lists ...[]string) {
+	doPrint := false
+	for _, l := range lists {
+		if doPrint = len(l) > 0; doPrint {
+			break
+		}
+	}
+	if !doPrint {
+		return
+	}
+	fmt.Fprint(w, varName, " :=")
+	for _, l := range lists {
+		for _, item := range l {
+			fmt.Fprint(w, " ", item)
+		}
+	}
+	fmt.Fprintln(w)
 }

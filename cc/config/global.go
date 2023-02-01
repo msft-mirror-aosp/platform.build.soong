@@ -59,6 +59,10 @@ var (
 		"-Werror=string-plus-int",
 		"-Werror=unreachable-code-loop-increment",
 
+		// Force deprecation warnings to be warnings for code that compiles with -Werror.
+		// Making deprecated usages an error causes extreme pain when trying to deprecate anything.
+		"-Wno-error=deprecated-declarations",
+
 		"-D__compiler_offsetof=__builtin_offsetof",
 
 		// Emit address-significance table which allows linker to perform safe ICF. Clang does
@@ -72,9 +76,6 @@ var (
 		// Help catch common 32/64-bit errors.
 		"-Werror=int-conversion",
 
-		// Enable the new pass manager.
-		"-fexperimental-new-pass-manager",
-
 		// Disable overly aggressive warning for macros defined with a leading underscore
 		// This happens in AndroidConfig.h, which is included nearly everywhere.
 		// TODO: can we remove this now?
@@ -86,9 +87,6 @@ var (
 
 		// Warnings from clang-7.0
 		"-Wno-sign-compare",
-
-		// Warnings from clang-8.0
-		"-Wno-defaulted-function-deleted",
 
 		// Disable -Winconsistent-missing-override until we can clean up the existing
 		// codebase for it.
@@ -117,6 +115,13 @@ var (
 
 	commonGlobalConlyflags = []string{}
 
+	commonGlobalAsflags = []string{
+		"-D__ASSEMBLY__",
+		// TODO(b/235105792): override global -fdebug-default-version=5, it is causing $TMPDIR to
+		// end up in the dwarf data for crtend_so.S.
+		"-fdebug-default-version=4",
+	}
+
 	deviceGlobalCflags = []string{
 		"-ffunction-sections",
 		"-fdata-sections",
@@ -139,6 +144,11 @@ var (
 		"-fdebug-info-for-profiling",
 	}
 
+	commonGlobalLldflags = []string{
+		"-fuse-ld=lld",
+		"-Wl,--icf=safe",
+	}
+
 	deviceGlobalCppflags = []string{
 		"-fvisibility-inlines-hidden",
 	}
@@ -156,13 +166,9 @@ var (
 		"-Wl,--exclude-libs,libgcc_stripped.a",
 		"-Wl,--exclude-libs,libunwind_llvm.a",
 		"-Wl,--exclude-libs,libunwind.a",
-		"-Wl,--icf=safe",
 	}
 
-	deviceGlobalLldflags = append(deviceGlobalLdflags,
-		[]string{
-			"-fuse-ld=lld",
-		}...)
+	deviceGlobalLldflags = append(deviceGlobalLdflags, commonGlobalLldflags...)
 
 	hostGlobalCflags = []string{}
 
@@ -170,7 +176,7 @@ var (
 
 	hostGlobalLdflags = []string{}
 
-	hostGlobalLldflags = []string{"-fuse-ld=lld"}
+	hostGlobalLldflags = commonGlobalLldflags
 
 	commonGlobalCppflags = []string{
 		"-Wsign-promo",
@@ -191,7 +197,6 @@ var (
 		"-Werror=int-in-bool-context",
 		"-Werror=int-to-pointer-cast",
 		"-Werror=pointer-to-int-cast",
-		"-Werror=string-compare",
 		"-Werror=xor-used-as-pow",
 		// http://b/161386391 for -Wno-void-pointer-to-enum-cast
 		"-Wno-void-pointer-to-enum-cast",
@@ -217,15 +222,12 @@ var (
 		// http://b/145211066
 		"-Wno-implicit-int-float-conversion",
 		// New warnings to be fixed after clang-r377782.
-		"-Wno-sizeof-array-div",             // http://b/148815709
 		"-Wno-tautological-overlap-compare", // http://b/148815696
 		// New warnings to be fixed after clang-r383902.
 		"-Wno-deprecated-copy",                      // http://b/153746672
 		"-Wno-range-loop-construct",                 // http://b/153747076
-		"-Wno-misleading-indentation",               // http://b/153746954
 		"-Wno-zero-as-null-pointer-constant",        // http://b/68236239
 		"-Wno-deprecated-anon-enum-enum-conversion", // http://b/153746485
-		"-Wno-string-compare",                       // http://b/153764102
 		"-Wno-pessimizing-move",                     // http://b/154270751
 		// New warnings to be fixed after clang-r399163
 		"-Wno-non-c-typedef-for-linkage", // http://b/161304145
@@ -234,14 +236,31 @@ var (
 		// New warnings to be fixed after clang-r433403
 		"-Wno-error=unused-but-set-variable",  // http://b/197240255
 		"-Wno-error=unused-but-set-parameter", // http://b/197240255
+		// New warnings to be fixed after clang-r458507
+		"-Wno-error=unqualified-std-cast-call", // http://b/239662094
+		// New warnings to be fixed after clang-r468909
+		"-Wno-error=deprecated-builtins", // http://b/241601211
+		"-Wno-error=deprecated",          // in external/googletest/googletest
+		// New warnings to be fixed after clang-r475365
+		"-Wno-error=single-bit-bitfield-constant-conversion", // http://b/243965903
+		"-Wno-error=incompatible-function-pointer-types",     // http://b/257101299
+		"-Wno-error=enum-constexpr-conversion",               // http://b/243964282
 	}
 
+	noOverride64GlobalCflags = []string{}
+
 	noOverrideExternalGlobalCflags = []string{
+		// http://b/148815709
+		"-Wno-sizeof-array-div",
 		// http://b/197240255
 		"-Wno-unused-but-set-variable",
 		"-Wno-unused-but-set-parameter",
 		// http://b/215753485
 		"-Wno-bitwise-instead-of-logical",
+		// http://b/232926688
+		"-Wno-misleading-indentation",
+		// http://b/241941550
+		"-Wno-array-parameter",
 	}
 
 	// Extra cflags for external third-party projects to disable warnings that
@@ -261,8 +280,6 @@ var (
 		// http://b/145211477
 		"-Wno-pointer-compare",
 		// http://b/145211022
-		"-Wno-xor-used-as-pow",
-		// http://b/145211022
 		"-Wno-final-dtor-non-final-class",
 
 		// http://b/165945989
@@ -273,30 +290,35 @@ var (
 
 		// http://b/175068488
 		"-Wno-string-concatenation",
+
+		// http://b/239661264
+		"-Wno-deprecated-non-prototype",
+	}
+
+	llvmNextExtraCommonGlobalCflags = []string{
+		// Do not report warnings when testing with the top of trunk LLVM.
+		"-Wno-error",
 	}
 
 	IllegalFlags = []string{
 		"-w",
 	}
 
-	CStdVersion               = "gnu99"
+	CStdVersion               = "gnu11"
 	CppStdVersion             = "gnu++17"
-	ExperimentalCStdVersion   = "gnu11"
+	ExperimentalCStdVersion   = "gnu17"
 	ExperimentalCppStdVersion = "gnu++2a"
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r450784d"
-	ClangDefaultShortVersion = "14.0.6"
+	ClangDefaultVersion      = "clang-r475365b"
+	ClangDefaultShortVersion = "16.0.2"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{
 		"device/",
 		"vendor/",
 	}
-
-	// Directories with warnings from Android.mk files.
-	WarningAllowedOldProjects = []string{}
 )
 
 // BazelCcToolchainVars generates bzl file content containing variables for
@@ -315,6 +337,7 @@ func init() {
 	}
 
 	exportedVars.ExportStringListStaticVariable("CommonGlobalConlyflags", commonGlobalConlyflags)
+	exportedVars.ExportStringListStaticVariable("CommonGlobalAsflags", commonGlobalAsflags)
 	exportedVars.ExportStringListStaticVariable("DeviceGlobalCppflags", deviceGlobalCppflags)
 	exportedVars.ExportStringListStaticVariable("DeviceGlobalLdflags", deviceGlobalLdflags)
 	exportedVars.ExportStringListStaticVariable("DeviceGlobalLldflags", deviceGlobalLldflags)
@@ -323,15 +346,7 @@ func init() {
 	exportedVars.ExportStringListStaticVariable("HostGlobalLldflags", hostGlobalLldflags)
 
 	// Export the static default CommonGlobalCflags to Bazel.
-	// TODO(187086342): handle cflags that are set in VariableFuncs.
-	bazelCommonGlobalCflags := append(
-		commonGlobalCflags,
-		[]string{
-			// Default to zero initialization.
-			"-ftrivial-auto-var-init=zero",
-			"-enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang",
-		}...)
-	exportedVars.ExportStringList("CommonGlobalCflags", bazelCommonGlobalCflags)
+	exportedVars.ExportStringList("CommonGlobalCflags", commonGlobalCflags)
 
 	pctx.VariableFunc("CommonGlobalCflags", func(ctx android.PackageVarContext) string {
 		flags := commonGlobalCflags
@@ -340,14 +355,14 @@ func init() {
 		// Automatically initialize any uninitialized stack variables.
 		// Prefer zero-init if multiple options are set.
 		if ctx.Config().IsEnvTrue("AUTO_ZERO_INITIALIZE") {
-			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang")
+			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang -Wno-unused-command-line-argument")
 		} else if ctx.Config().IsEnvTrue("AUTO_PATTERN_INITIALIZE") {
 			flags = append(flags, "-ftrivial-auto-var-init=pattern")
 		} else if ctx.Config().IsEnvTrue("AUTO_UNINITIALIZE") {
 			flags = append(flags, "-ftrivial-auto-var-init=uninitialized")
 		} else {
 			// Default to zero initialization.
-			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang")
+			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang -Wno-unused-command-line-argument")
 		}
 
 		// Workaround for ccache with clang.
@@ -355,6 +370,11 @@ func init() {
 		if ctx.Config().IsEnvTrue("USE_CCACHE") {
 			flags = append(flags, "-Wno-unused-command-line-argument")
 		}
+
+		if ctx.Config().IsEnvTrue("ALLOW_UNKNOWN_WARNING_OPTION") {
+			flags = append(flags, "-Wno-error=unknown-warning-option")
+		}
+
 		return strings.Join(flags, " ")
 	})
 
@@ -366,11 +386,26 @@ func init() {
 		return strings.Join(deviceGlobalCflags, " ")
 	})
 
+	// Export the static default NoOverrideGlobalCflags to Bazel.
+	exportedVars.ExportStringList("NoOverrideGlobalCflags", noOverrideGlobalCflags)
+	pctx.VariableFunc("NoOverrideGlobalCflags", func(ctx android.PackageVarContext) string {
+		flags := noOverrideGlobalCflags
+		if ctx.Config().IsEnvTrue("LLVM_NEXT") {
+			flags = append(noOverrideGlobalCflags, llvmNextExtraCommonGlobalCflags...)
+		}
+		return strings.Join(flags, " ")
+	})
+
+	exportedVars.ExportStringListStaticVariable("NoOverride64GlobalCflags", noOverride64GlobalCflags)
 	exportedVars.ExportStringListStaticVariable("HostGlobalCflags", hostGlobalCflags)
-	exportedVars.ExportStringListStaticVariable("NoOverrideGlobalCflags", noOverrideGlobalCflags)
 	exportedVars.ExportStringListStaticVariable("NoOverrideExternalGlobalCflags", noOverrideExternalGlobalCflags)
 	exportedVars.ExportStringListStaticVariable("CommonGlobalCppflags", commonGlobalCppflags)
 	exportedVars.ExportStringListStaticVariable("ExternalCflags", extraExternalCflags)
+
+	exportedVars.ExportString("CStdVersion", CStdVersion)
+	exportedVars.ExportString("CppStdVersion", CppStdVersion)
+	exportedVars.ExportString("ExperimentalCStdVersion", ExperimentalCStdVersion)
+	exportedVars.ExportString("ExperimentalCppStdVersion", ExperimentalCppStdVersion)
 
 	// Everything in these lists is a crime against abstraction and dependency tracking.
 	// Do not add anything to this list.

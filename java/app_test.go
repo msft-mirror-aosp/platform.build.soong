@@ -1218,7 +1218,7 @@ func TestJNIABI(t *testing.T) {
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
 			app := ctx.ModuleForTests(test.name, "android_common")
-			jniLibZip := app.Output("jnilibs.zip")
+			jniLibZip := app.Output(jniJarOutputPathString)
 			var abis []string
 			args := strings.Fields(jniLibZip.Args["jarArgs"])
 			for i := 0; i < len(args); i++ {
@@ -1351,7 +1351,7 @@ func TestJNIPackaging(t *testing.T) {
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
 			app := ctx.ModuleForTests(test.name, "android_common")
-			jniLibZip := app.MaybeOutput("jnilibs.zip")
+			jniLibZip := app.MaybeOutput(jniJarOutputPathString)
 			if g, w := (jniLibZip.Rule != nil), test.packaged; g != w {
 				t.Errorf("expected jni packaged %v, got %v", w, g)
 			}
@@ -1442,7 +1442,7 @@ func TestJNISDK(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			app := ctx.ModuleForTests(test.name, "android_common")
 
-			jniLibZip := app.MaybeOutput("jnilibs.zip")
+			jniLibZip := app.MaybeOutput(jniJarOutputPathString)
 			if len(jniLibZip.Implicits) != 1 {
 				t.Fatalf("expected exactly one jni library, got %q", jniLibZip.Implicits.Strings())
 			}
@@ -1490,6 +1490,7 @@ func TestCertificates(t *testing.T) {
 	testCases := []struct {
 		name                     string
 		bp                       string
+		allowMissingDependencies bool
 		certificateOverride      string
 		expectedCertSigningFlags string
 		expectedCertificate      string
@@ -1505,7 +1506,7 @@ func TestCertificates(t *testing.T) {
 			`,
 			certificateOverride:      "",
 			expectedCertSigningFlags: "",
-			expectedCertificate:      "build/make/target/product/security/testkey.x509.pem build/make/target/product/security/testkey.pk8",
+			expectedCertificate:      "build/make/target/product/security/testkey",
 		},
 		{
 			name: "module certificate property",
@@ -1524,7 +1525,7 @@ func TestCertificates(t *testing.T) {
 			`,
 			certificateOverride:      "",
 			expectedCertSigningFlags: "",
-			expectedCertificate:      "cert/new_cert.x509.pem cert/new_cert.pk8",
+			expectedCertificate:      "cert/new_cert",
 		},
 		{
 			name: "path certificate property",
@@ -1538,7 +1539,7 @@ func TestCertificates(t *testing.T) {
 			`,
 			certificateOverride:      "",
 			expectedCertSigningFlags: "",
-			expectedCertificate:      "build/make/target/product/security/expiredkey.x509.pem build/make/target/product/security/expiredkey.pk8",
+			expectedCertificate:      "build/make/target/product/security/expiredkey",
 		},
 		{
 			name: "certificate overrides",
@@ -1557,7 +1558,7 @@ func TestCertificates(t *testing.T) {
 			`,
 			certificateOverride:      "foo:new_certificate",
 			expectedCertSigningFlags: "",
-			expectedCertificate:      "cert/new_cert.x509.pem cert/new_cert.pk8",
+			expectedCertificate:      "cert/new_cert",
 		},
 		{
 			name: "certificate signing flags",
@@ -1578,7 +1579,7 @@ func TestCertificates(t *testing.T) {
 			`,
 			certificateOverride:      "",
 			expectedCertSigningFlags: "--lineage lineage.bin --rotation-min-sdk-version 32",
-			expectedCertificate:      "cert/new_cert.x509.pem cert/new_cert.pk8",
+			expectedCertificate:      "cert/new_cert",
 		},
 		{
 			name: "cert signing flags from filegroup",
@@ -1604,7 +1605,20 @@ func TestCertificates(t *testing.T) {
 			`,
 			certificateOverride:      "",
 			expectedCertSigningFlags: "--lineage lineage.bin --rotation-min-sdk-version 32",
-			expectedCertificate:      "cert/new_cert.x509.pem cert/new_cert.pk8",
+			expectedCertificate:      "cert/new_cert",
+		},
+		{
+			name: "missing with AllowMissingDependencies",
+			bp: `
+				android_app {
+					name: "foo",
+					srcs: ["a.java"],
+					certificate: ":new_certificate",
+					sdk_version: "current",
+				}
+			`,
+			expectedCertificate:      "out/soong/.intermediates/foo/android_common/missing",
+			allowMissingDependencies: true,
 		},
 	}
 
@@ -1616,17 +1630,32 @@ func TestCertificates(t *testing.T) {
 					if test.certificateOverride != "" {
 						variables.CertificateOverrides = []string{test.certificateOverride}
 					}
+					if test.allowMissingDependencies {
+						variables.Allow_missing_dependencies = proptools.BoolPtr(true)
+					}
+				}),
+				android.FixtureModifyContext(func(ctx *android.TestContext) {
+					ctx.SetAllowMissingDependencies(test.allowMissingDependencies)
 				}),
 			).RunTestWithBp(t, test.bp)
 
 			foo := result.ModuleForTests("foo", "android_common")
 
-			signapk := foo.Output("foo.apk")
-			signCertificateFlags := signapk.Args["certificates"]
-			android.AssertStringEquals(t, "certificates flags", test.expectedCertificate, signCertificateFlags)
+			certificate := foo.Module().(*AndroidApp).certificate
+			android.AssertPathRelativeToTopEquals(t, "certificates key", test.expectedCertificate+".pk8", certificate.Key)
+			// The sign_target_files_apks and check_target_files_signatures
+			// tools require that certificates have a .x509.pem extension.
+			android.AssertPathRelativeToTopEquals(t, "certificates pem", test.expectedCertificate+".x509.pem", certificate.Pem)
 
-			certSigningFlags := signapk.Args["flags"]
-			android.AssertStringEquals(t, "cert signing flags", test.expectedCertSigningFlags, certSigningFlags)
+			signapk := foo.Output("foo.apk")
+			if signapk.Rule != android.ErrorRule {
+				signCertificateFlags := signapk.Args["certificates"]
+				expectedFlags := certificate.Pem.String() + " " + certificate.Key.String()
+				android.AssertStringEquals(t, "certificates flags", expectedFlags, signCertificateFlags)
+
+				certSigningFlags := signapk.Args["flags"]
+				android.AssertStringEquals(t, "cert signing flags", test.expectedCertSigningFlags, certSigningFlags)
+			}
 		})
 	}
 }
@@ -2428,7 +2457,7 @@ func TestStl(t *testing.T) {
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
 			app := ctx.ModuleForTests(test.name, "android_common")
-			jniLibZip := app.Output("jnilibs.zip")
+			jniLibZip := app.Output(jniJarOutputPathString)
 			var jnis []string
 			args := strings.Fields(jniLibZip.Args["jarArgs"])
 			for i := 0; i < len(args); i++ {
@@ -2605,12 +2634,20 @@ func TestUsesLibraries(t *testing.T) {
 	prebuilt := result.ModuleForTests("prebuilt", "android_common")
 
 	// Test that implicit dependencies on java_sdk_library instances are passed to the manifest.
-	// This should not include explicit `uses_libs`/`optional_uses_libs` entries.
+	// These also include explicit `uses_libs`/`optional_uses_libs` entries, as they may be
+	// propagated from dependencies.
 	actualManifestFixerArgs := app.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
 	expectManifestFixerArgs := `--extract-native-libs=true ` +
 		`--uses-library qux ` +
 		`--uses-library quuz ` +
-		`--uses-library runtime-library`
+		`--uses-library foo ` +
+		`--uses-library com.non.sdk.lib ` +
+		`--uses-library runtime-library ` +
+		`--uses-library runtime-required-x ` +
+		`--uses-library runtime-required-y ` +
+		`--optional-uses-library bar ` +
+		`--optional-uses-library runtime-optional-x ` +
+		`--optional-uses-library runtime-optional-y`
 	android.AssertStringDoesContain(t, "manifest_fixer args", actualManifestFixerArgs, expectManifestFixerArgs)
 
 	// Test that all libraries are verified (library order matters).
@@ -3126,6 +3163,7 @@ func TestDefaultAppTargetSdkVersionForUpdatableModules(t *testing.T) {
 				variables.Platform_sdk_version = &platform_sdk_version
 				variables.Platform_sdk_codename = &platform_sdk_codename
 				variables.Platform_version_active_codenames = []string{platform_sdk_codename}
+				variables.Unbundled_build = proptools.BoolPtr(true)
 				variables.Unbundled_build_apps = []string{"sampleModule"}
 			}),
 		)
@@ -3204,6 +3242,7 @@ func TestEnforceDefaultAppTargetSdkVersionFlag(t *testing.T) {
 				variables.Platform_sdk_final = &testCase.platform_sdk_final
 				variables.Platform_sdk_version = &platform_sdk_version
 				variables.Platform_sdk_codename = &platform_sdk_codename
+				variables.Unbundled_build = proptools.BoolPtr(true)
 				variables.Unbundled_build_apps = []string{"sampleModule"}
 			}),
 		)
@@ -3274,6 +3313,7 @@ func TestEnforceDefaultAppTargetSdkVersionFlagForTests(t *testing.T) {
 				variables.Platform_sdk_final = &testCase.platform_sdk_final
 				variables.Platform_sdk_version = &platform_sdk_version
 				variables.Platform_sdk_codename = &platform_sdk_codename
+				variables.Unbundled_build = proptools.BoolPtr(true)
 				variables.Unbundled_build_apps = []string{"sampleModule"}
 			}),
 		)
@@ -3311,6 +3351,92 @@ func TestAppMissingCertificateAllowMissingDependencies(t *testing.T) {
 		t.Fatalf("expected ErrorRule for foo.apk, got %s", fooApk.Rule.String())
 	}
 	android.AssertStringDoesContain(t, "expected error rule message", fooApk.Args["error"], "missing dependencies: missing_certificate\n")
+}
+
+func TestAppIncludesJniPackages(t *testing.T) {
+	ctx := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+	).RunTestWithBp(t, `
+		android_library_import {
+			name: "aary-nodeps",
+			aars: ["aary.aar"],
+			extract_jni: true,
+		}
+
+		android_library {
+			name: "aary-lib",
+			sdk_version: "current",
+			min_sdk_version: "21",
+			static_libs: ["aary-nodeps"],
+		}
+
+		android_app {
+			name: "aary-lib-dep",
+			sdk_version: "current",
+			min_sdk_version: "21",
+			manifest: "AndroidManifest.xml",
+			static_libs: ["aary-lib"],
+			use_embedded_native_libs: true,
+		}
+
+		android_app {
+			name: "aary-import-dep",
+			sdk_version: "current",
+			min_sdk_version: "21",
+			manifest: "AndroidManifest.xml",
+			static_libs: ["aary-nodeps"],
+			use_embedded_native_libs: true,
+		}
+
+		android_app {
+			name: "aary-no-use-embedded",
+			sdk_version: "current",
+			min_sdk_version: "21",
+			manifest: "AndroidManifest.xml",
+			static_libs: ["aary-nodeps"],
+		}`)
+
+	testCases := []struct {
+		name       string
+		hasPackage bool
+	}{
+		{
+			name:       "aary-import-dep",
+			hasPackage: true,
+		},
+		{
+			name:       "aary-lib-dep",
+			hasPackage: true,
+		},
+		{
+			name:       "aary-no-use-embedded",
+			hasPackage: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := ctx.ModuleForTests(tc.name, "android_common")
+
+			outputFile := "jnilibs.zip"
+			jniOutputLibZip := app.MaybeOutput(outputFile)
+			if jniOutputLibZip.Rule == nil && !tc.hasPackage {
+				return
+			}
+
+			jniPackage := "arm64-v8a_jni.zip"
+			inputs := jniOutputLibZip.Inputs
+			foundPackage := false
+			for i := 0; i < len(inputs); i++ {
+				if strings.Contains(inputs[i].String(), jniPackage) {
+					foundPackage = true
+				}
+			}
+			if foundPackage != tc.hasPackage {
+				t.Errorf("expected to find %v in %v inputs; inputs = %v", jniPackage, outputFile, inputs)
+			}
+		})
+	}
 }
 
 func TestTargetSdkVersionMtsTests(t *testing.T) {

@@ -40,6 +40,8 @@ func init() {
 	pctx.Import("android/soong/java")
 	pctx.HostBinToolVariable("apexer", "apexer")
 	pctx.HostBinToolVariable("apexer_with_DCLA_preprocessing", "apexer_with_DCLA_preprocessing")
+	pctx.HostBinToolVariable("apexer_with_trim_preprocessing", "apexer_with_trim_preprocessing")
+
 	// ART minimal builds (using the master-art manifest) do not have the "frameworks/base"
 	// projects, and hence cannot build 'aapt2'. Use the SDK prebuilt instead.
 	hostBinToolVariableWithPrebuilt := func(name, prebuiltDir, tool string) {
@@ -146,6 +148,34 @@ var (
 	}, "tool_path", "image_dir", "copy_commands", "file_contexts", "canned_fs_config", "key",
 		"opt_flags", "manifest", "is_DCLA")
 
+	TrimmedApexRule = pctx.StaticRule("TrimmedApexRule", blueprint.RuleParams{
+		Command: `rm -rf ${image_dir} && mkdir -p ${image_dir} && ` +
+			`(. ${out}.copy_commands) && ` +
+			`APEXER_TOOL_PATH=${tool_path} ` +
+			`${apexer_with_trim_preprocessing} ` +
+			`--apexer ${apexer} ` +
+			`--canned_fs_config ${canned_fs_config} ` +
+			`--manifest ${manifest} ` +
+			`--libs_to_trim ${libs_to_trim} ` +
+			`${image_dir} ` +
+			`${out} ` +
+			`-- ` +
+			`--include_build_info ` +
+			`--force ` +
+			`--payload_type image ` +
+			`--key ${key} ` +
+			`--file_contexts ${file_contexts} ` +
+			`${opt_flags} `,
+		CommandDeps: []string{"${apexer_with_trim_preprocessing}", "${apexer}", "${avbtool}", "${e2fsdroid}",
+			"${merge_zips}", "${mke2fs}", "${resize2fs}", "${sefcontext_compile}", "${make_f2fs}",
+			"${sload_f2fs}", "${make_erofs}", "${soong_zip}", "${zipalign}", "${aapt2}",
+			"prebuilts/sdk/current/public/android.jar"},
+		Rspfile:        "${out}.copy_commands",
+		RspfileContent: "${copy_commands}",
+		Description:    "APEX ${image_dir} => ${out}",
+	}, "tool_path", "image_dir", "copy_commands", "file_contexts", "canned_fs_config", "key",
+		"opt_flags", "manifest", "libs_to_trim")
+
 	zipApexRule = pctx.StaticRule("zipApexRule", blueprint.RuleParams{
 		Command: `rm -rf ${image_dir} && mkdir -p ${image_dir} && ` +
 			`(. ${out}.copy_commands) && ` +
@@ -178,13 +208,6 @@ var (
 		CommandDeps: []string{"${zip2zip}", "${soong_zip}", "${merge_zips}"},
 		Description: "app bundle",
 	}, "abi", "config")
-
-	emitApexContentRule = pctx.StaticRule("emitApexContentRule", blueprint.RuleParams{
-		Command:        `rm -f ${out} && touch ${out} && (. ${out}.emit_commands)`,
-		Rspfile:        "${out}.emit_commands",
-		RspfileContent: "${emit_commands}",
-		Description:    "Emit APEX image content",
-	}, "emit_commands")
 
 	diffApexContentRule = pctx.StaticRule("diffApexContentRule", blueprint.RuleParams{
 		Command: `diff --unchanged-group-format='' \` +
@@ -235,8 +258,14 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 		optCommands = append(optCommands, "-a jniLibs "+strings.Join(jniLibs, " "))
 	}
 
+	if android.InList(":vndk", requireNativeLibs) {
+		if _, vndkVersion := a.getImageVariationPair(ctx.DeviceConfig()); vndkVersion != "" {
+			optCommands = append(optCommands, "-v vndkVersion "+vndkVersion)
+		}
+	}
+
 	manifestJsonFullOut := android.PathForModuleOut(ctx, "apex_manifest_full.json")
-	defaultVersion := defaultManifestVersion
+	defaultVersion := android.DefaultUpdatableModuleVersion
 	if override := ctx.Config().Getenv("OVERRIDE_APEX_MANIFEST_DEFAULT_VERSION"); override != "" {
 		defaultVersion = override
 	}
@@ -463,8 +492,13 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			pathOnDevice := filepath.Join("/system", fi.path())
 			copyCommands = append(copyCommands, "ln -sfn "+pathOnDevice+" "+destPath)
 		} else {
+			// Copy the file into APEX
+			copyCommands = append(copyCommands, "cp -f "+fi.builtFile.String()+" "+destPath)
+
 			var installedPath android.InstallPath
 			if fi.class == appSet {
+				// In case of AppSet, we need to copy additional APKs as well. They
+				// are zipped. So we need to unzip them.
 				copyCommands = append(copyCommands,
 					fmt.Sprintf("unzip -qDD -d %s %s", destPathDir,
 						fi.module.(*java.AndroidAppSet).PackedAdditionalOutputs().String()))
@@ -473,7 +507,6 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 						fi.stem(), fi.builtFile, fi.module.(*java.AndroidAppSet).PackedAdditionalOutputs())
 				}
 			} else {
-				copyCommands = append(copyCommands, "cp -f "+fi.builtFile.String()+" "+destPath)
 				if installSymbolFiles {
 					installedPath = ctx.InstallFile(pathWhenActivated.Join(ctx, fi.installDir), fi.stem(), fi.builtFile)
 				}
@@ -536,29 +569,20 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	// to be using this at this moment. Furthermore, this looks very similar to what
 	// buildInstalledFilesFile does. At least, move this to somewhere else so that this doesn't
 	// hurt readability.
-	// TODO(jiyong): use RuleBuilder
 	if a.overridableProperties.Allowed_files != nil {
 		// Build content.txt
-		var emitCommands []string
+		var contentLines []string
 		imageContentFile := android.PathForModuleOut(ctx, "content.txt")
-		emitCommands = append(emitCommands, "echo ./apex_manifest.pb >> "+imageContentFile.String())
+		contentLines = append(contentLines, "./apex_manifest.pb")
 		minSdkVersion := a.minSdkVersion(ctx)
 		if minSdkVersion.EqualTo(android.SdkVersion_Android10) {
-			emitCommands = append(emitCommands, "echo ./apex_manifest.json >> "+imageContentFile.String())
+			contentLines = append(contentLines, "./apex_manifest.json")
 		}
 		for _, fi := range a.filesInfo {
-			emitCommands = append(emitCommands, "echo './"+fi.path()+"' >> "+imageContentFile.String())
+			contentLines = append(contentLines, "./"+fi.path())
 		}
-		emitCommands = append(emitCommands, "sort -o "+imageContentFile.String()+" "+imageContentFile.String())
-		ctx.Build(pctx, android.BuildParams{
-			Rule:        emitApexContentRule,
-			Implicits:   implicitInputs,
-			Output:      imageContentFile,
-			Description: "emit apex image content",
-			Args: map[string]string{
-				"emit_commands": strings.Join(emitCommands, " && "),
-			},
-		})
+		sort.Strings(contentLines)
+		android.WriteFileRule(ctx, imageContentFile, strings.Join(contentLines, "\n"))
 		implicitInputs = append(implicitInputs, imageContentFile)
 
 		// Compare content.txt against allowed_files.
@@ -582,8 +606,6 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	outHostBinDir := ctx.Config().HostToolPath(ctx, "").String()
 	prebuiltSdkToolsBinDir := filepath.Join("prebuilts", "sdk", "tools", runtime.GOOS, "bin")
 
-	// Figure out if we need to compress the apex.
-	compressionEnabled := ctx.Config().CompressedApex() && proptools.BoolDefault(a.overridableProperties.Compressible, false) && !a.testApex && !ctx.Config().UnbundledBuildApps()
 	if apexType == imageApex {
 
 		////////////////////////////////////////////////////////////////////////////////////
@@ -652,9 +674,9 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		}
 
 		// Create a NOTICE file, and embed it as an asset file in the APEX.
-		a.htmlGzNotice = android.PathForModuleOut(ctx, "NOTICE.html.gz")
+		htmlGzNotice := android.PathForModuleOut(ctx, "NOTICE.html.gz")
 		android.BuildNoticeHtmlOutputFromLicenseMetadata(
-			ctx, a.htmlGzNotice, "", "",
+			ctx, htmlGzNotice, "", "",
 			[]string{
 				android.PathForModuleInstall(ctx).String() + "/",
 				android.PathForModuleInPartitionInstall(ctx, "apex").String() + "/",
@@ -662,16 +684,21 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		noticeAssetPath := android.PathForModuleOut(ctx, "NOTICE", "NOTICE.html.gz")
 		builder := android.NewRuleBuilder(pctx, ctx)
 		builder.Command().Text("cp").
-			Input(a.htmlGzNotice).
+			Input(htmlGzNotice).
 			Output(noticeAssetPath)
 		builder.Build("notice_dir", "Building notice dir")
 		implicitInputs = append(implicitInputs, noticeAssetPath)
 		optFlags = append(optFlags, "--assets_dir "+filepath.Dir(noticeAssetPath.String()))
 
-		if (moduleMinSdkVersion.GreaterThan(android.SdkVersion_Android10) && !a.shouldGenerateHashtree()) && !compressionEnabled {
-			// Apexes which are supposed to be installed in builtin dirs(/system, etc)
-			// don't need hashtree for activation. Therefore, by removing hashtree from
-			// apex bundle (filesystem image in it, to be specific), we can save storage.
+		// Apexes which are supposed to be installed in builtin dirs(/system, etc)
+		// don't need hashtree for activation. Therefore, by removing hashtree from
+		// apex bundle (filesystem image in it, to be specific), we can save storage.
+		needHashTree := moduleMinSdkVersion.LessThanOrEqualTo(android.SdkVersion_Android10) ||
+			a.shouldGenerateHashtree()
+		if ctx.Config().ApexCompressionEnabled() && a.isCompressable() {
+			needHashTree = true
+		}
+		if !needHashTree {
 			optFlags = append(optFlags, "--no_hashtree")
 		}
 
@@ -707,6 +734,24 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 					"canned_fs_config": cannedFsConfig.String(),
 					"key":              a.privateKeyFile.String(),
 					"opt_flags":        strings.Join(optFlags, " "),
+				},
+			})
+		} else if ctx.Config().ApexTrimEnabled() && len(a.libs_to_trim(ctx)) > 0 {
+			ctx.Build(pctx, android.BuildParams{
+				Rule:        TrimmedApexRule,
+				Implicits:   implicitInputs,
+				Output:      unsignedOutputFile,
+				Description: "apex (" + apexType.name() + ")",
+				Args: map[string]string{
+					"tool_path":        outHostBinDir + ":" + prebuiltSdkToolsBinDir,
+					"image_dir":        imageDir.String(),
+					"copy_commands":    strings.Join(copyCommands, " && "),
+					"manifest":         a.manifestPbOut.String(),
+					"file_contexts":    fileContexts.String(),
+					"canned_fs_config": cannedFsConfig.String(),
+					"key":              a.privateKeyFile.String(),
+					"opt_flags":        strings.Join(optFlags, " "),
+					"libs_to_trim":     strings.Join(a.libs_to_trim(ctx), ","),
 				},
 			})
 		} else {
@@ -858,8 +903,9 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		return
 	}
 
-	if apexType == imageApex && (compressionEnabled || a.testOnlyShouldForceCompression()) {
-		a.isCompressed = true
+	installSuffix := suffix
+	a.setCompression(ctx)
+	if a.isCompressed {
 		unsignedCompressedOutputFile := android.PathForModuleOut(ctx, a.Name()+imageCapexSuffix+".unsigned")
 
 		compressRule := android.NewRuleBuilder(pctx, ctx)
@@ -887,10 +933,6 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 			Args:        args,
 		})
 		a.outputFile = signedCompressedOutputFile
-	}
-
-	installSuffix := suffix
-	if a.isCompressed {
 		installSuffix = imageCapexSuffix
 	}
 
@@ -922,10 +964,16 @@ func (a *apexBundle) buildFlattenedApex(ctx android.ModuleContext) {
 				installedSymlinks = append(installedSymlinks,
 					ctx.InstallAbsoluteSymlink(installDir, fi.stem(), pathOnDevice))
 			} else {
-				target := ctx.InstallFile(installDir, fi.stem(), fi.builtFile)
-				for _, sym := range fi.symlinks {
-					installedSymlinks = append(installedSymlinks,
-						ctx.InstallSymlink(installDir, sym, target))
+				if fi.class == appSet {
+					as := fi.module.(*java.AndroidAppSet)
+					ctx.InstallFileWithExtraFilesZip(installDir, as.BaseModuleName()+".apk",
+						as.OutputFile(), as.PackedAdditionalOutputs())
+				} else {
+					target := ctx.InstallFile(installDir, fi.stem(), fi.builtFile)
+					for _, sym := range fi.symlinks {
+						installedSymlinks = append(installedSymlinks,
+							ctx.InstallSymlink(installDir, sym, target))
+					}
 				}
 			}
 		}
@@ -1090,8 +1138,11 @@ func (a *apexBundle) buildCannedFsConfig(ctx android.ModuleContext) android.Outp
 				executablePaths = append(executablePaths, filepath.Join(f.installDir, s))
 			}
 		} else if f.class == appSet {
+			// base APK
+			readOnlyPaths = append(readOnlyPaths, pathInApex)
+			// Additional APKs
 			appSetDirs = append(appSetDirs, f.installDir)
-			appSetFiles[f.installDir] = f.builtFile
+			appSetFiles[f.installDir] = f.module.(*java.AndroidAppSet).PackedAdditionalOutputs()
 		} else {
 			readOnlyPaths = append(readOnlyPaths, pathInApex)
 		}
@@ -1130,7 +1181,7 @@ func (a *apexBundle) buildCannedFsConfig(ctx android.ModuleContext) android.Outp
 	if a.properties.Canned_fs_config != nil {
 		cmd.Text("cat").Input(android.PathForModuleSrc(ctx, *a.properties.Canned_fs_config))
 	}
-	cmd.Text(")").FlagWithOutput("> ", cannedFsConfig)
+	cmd.Text(") | LC_ALL=C sort ").FlagWithOutput("> ", cannedFsConfig)
 	builder.Build("generateFsConfig", fmt.Sprintf("Generating canned fs config for %s", a.BaseModuleName()))
 
 	return cannedFsConfig.OutputPath

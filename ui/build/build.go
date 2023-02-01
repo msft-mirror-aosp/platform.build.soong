@@ -90,7 +90,7 @@ func createCombinedBuildNinjaFile(ctx Context, config Config) {
 	}
 }
 
-// These are bitmasks which can be used to check whether various flags are set e.g. whether to use Bazel.
+// These are bitmasks which can be used to check whether various flags are set
 const (
 	_ = iota
 	// Whether to run the kati config step.
@@ -102,13 +102,29 @@ const (
 	// Whether to include the kati-generated ninja file in the combined ninja.
 	RunKatiNinja = 1 << iota
 	// Whether to run ninja on the combined ninja.
-	RunNinja = 1 << iota
-	// Whether to run bazel on the combined ninja.
-	RunBazel        = 1 << iota
-	RunBuildTests   = 1 << iota
-	RunAll          = RunProductConfig | RunSoong | RunKati | RunKatiNinja | RunNinja
-	RunAllWithBazel = RunProductConfig | RunSoong | RunKati | RunKatiNinja | RunBazel
+	RunNinja      = 1 << iota
+	RunBuildTests = 1 << iota
+	RunAll        = RunProductConfig | RunSoong | RunKati | RunKatiNinja | RunNinja
 )
+
+// checkBazelMode fails the build if there are conflicting arguments for which bazel
+// build mode to use.
+func checkBazelMode(ctx Context, config Config) {
+	count := 0
+	if config.bazelProdMode {
+		count++
+	}
+	if config.bazelDevMode {
+		count++
+	}
+	if config.bazelStagingMode {
+		count++
+	}
+	if count > 1 {
+		ctx.Fatalln("Conflicting bazel mode.\n" +
+			"Do not specify more than one of --bazel-mode and --bazel-mode-dev and --bazel-mode-staging ")
+	}
+}
 
 // checkProblematicFiles fails the build if existing Android.mk or CleanSpec.mk files are found at the root of the tree.
 func checkProblematicFiles(ctx Context) {
@@ -183,8 +199,8 @@ func checkRAM(ctx Context, config Config) {
 	}
 }
 
-// Build the tree. The 'what' argument can be used to chose which components of
-// the build to run, via checking various bitmasks.
+// Build the tree. Various flags in `config` govern which components of
+// the build to run.
 func Build(ctx Context, config Config) {
 	ctx.Verboseln("Starting build with args:", config.Arguments())
 	ctx.Verboseln("Environment:", config.Environment().Environ())
@@ -201,12 +217,27 @@ func Build(ctx Context, config Config) {
 	buildLock := BecomeSingletonOrFail(ctx, config)
 	defer buildLock.Unlock()
 
+	logArgsOtherThan := func(specialTargets ...string) {
+		var ignored []string
+		for _, a := range config.Arguments() {
+			if !inList(a, specialTargets) {
+				ignored = append(ignored, a)
+			}
+		}
+		if len(ignored) > 0 {
+			ctx.Printf("ignoring arguments %q", ignored)
+		}
+	}
+
 	if inList("clean", config.Arguments()) || inList("clobber", config.Arguments()) {
+		logArgsOtherThan("clean", "clobber")
 		clean(ctx, config)
 		return
 	}
 
 	defer waitForDist(ctx)
+
+	checkBazelMode(ctx, config)
 
 	// checkProblematicFiles aborts the build if Android.mk or CleanSpec.mk are found at the root of the tree.
 	checkProblematicFiles(ctx)
@@ -222,50 +253,14 @@ func Build(ctx Context, config Config) {
 
 	SetupPath(ctx, config)
 
-	what := RunAll
-	if config.UseBazel() {
-		what = RunAllWithBazel
-	}
-	if config.Checkbuild() {
-		what |= RunBuildTests
-	}
-	if config.SkipConfig() {
-		ctx.Verboseln("Skipping Config as requested")
-		what = what &^ RunProductConfig
-	}
-	if config.SkipKati() {
-		ctx.Verboseln("Skipping Kati as requested")
-		what = what &^ RunKati
-	}
-	if config.SkipKatiNinja() {
-		ctx.Verboseln("Skipping use of Kati ninja as requested")
-		what = what &^ RunKatiNinja
-	}
-	if config.SkipSoong() {
-		ctx.Verboseln("Skipping use of Soong as requested")
-		what = what &^ RunSoong
-	}
-
-	if config.SkipNinja() {
-		ctx.Verboseln("Skipping Ninja as requested")
-		what = what &^ RunNinja
-	}
-
-	if !config.SoongBuildInvocationNeeded() {
-		// This means that the output of soong_build is not needed and thus it would
-		// run unnecessarily. In addition, if this code wasn't there invocations
-		// with only special-cased target names like "m bp2build" would result in
-		// passing Ninja the empty target list and it would then build the default
-		// targets which is not what the user asked for.
-		what = what &^ RunNinja
-		what = what &^ RunKati
-	}
+	what := evaluateWhatToRun(config, ctx.Verboseln)
 
 	if config.StartGoma() {
 		startGoma(ctx, config)
 	}
 
 	if config.StartRBE() {
+		cleanupRBELogsDir(ctx, config)
 		startRBE(ctx, config)
 		defer DumpRBEMetrics(ctx, config, filepath.Join(config.LogsDir(), "rbe_metrics.pb"))
 	}
@@ -278,6 +273,7 @@ func Build(ctx Context, config Config) {
 
 	if inList("installclean", config.Arguments()) ||
 		inList("install-clean", config.Arguments()) {
+		logArgsOtherThan("installclean", "install-clean")
 		installClean(ctx, config)
 		ctx.Println("Deleted images and staging directories.")
 		return
@@ -285,6 +281,7 @@ func Build(ctx Context, config Config) {
 
 	if inList("dataclean", config.Arguments()) ||
 		inList("data-clean", config.Arguments()) {
+		logArgsOtherThan("dataclean", "data-clean")
 		dataClean(ctx, config)
 		ctx.Println("Deleted data files.")
 		return
@@ -325,11 +322,46 @@ func Build(ctx Context, config Config) {
 
 		runNinjaForBuild(ctx, config)
 	}
+}
 
-	// Currently, using Bazel requires Kati and Soong to run first, so check whether to run Bazel last.
-	if what&RunBazel != 0 {
-		runBazel(ctx, config)
+func evaluateWhatToRun(config Config, verboseln func(v ...interface{})) int {
+	//evaluate what to run
+	what := RunAll
+	if config.Checkbuild() {
+		what |= RunBuildTests
 	}
+	if config.SkipConfig() {
+		verboseln("Skipping Config as requested")
+		what = what &^ RunProductConfig
+	}
+	if config.SkipKati() {
+		verboseln("Skipping Kati as requested")
+		what = what &^ RunKati
+	}
+	if config.SkipKatiNinja() {
+		verboseln("Skipping use of Kati ninja as requested")
+		what = what &^ RunKatiNinja
+	}
+	if config.SkipSoong() {
+		verboseln("Skipping use of Soong as requested")
+		what = what &^ RunSoong
+	}
+
+	if config.SkipNinja() {
+		verboseln("Skipping Ninja as requested")
+		what = what &^ RunNinja
+	}
+
+	if !config.SoongBuildInvocationNeeded() {
+		// This means that the output of soong_build is not needed and thus it would
+		// run unnecessarily. In addition, if this code wasn't there invocations
+		// with only special-cased target names like "m bp2build" would result in
+		// passing Ninja the empty target list and it would then build the default
+		// targets which is not what the user asked for.
+		what = what &^ RunNinja
+		what = what &^ RunKati
+	}
+	return what
 }
 
 var distWaitGroup sync.WaitGroup

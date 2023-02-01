@@ -107,8 +107,8 @@ func ManifestFixer(ctx android.ModuleContext, manifest android.Path,
 		if minSdkVersion.FinalOrFutureInt() >= 23 {
 			args = append(args, fmt.Sprintf("--extract-native-libs=%v", !params.UseEmbeddedNativeLibs))
 		} else if params.UseEmbeddedNativeLibs {
-			ctx.ModuleErrorf("module attempted to store uncompressed native libraries, but minSdkVersion=%d doesn't support it",
-				minSdkVersion)
+			ctx.ModuleErrorf("module attempted to store uncompressed native libraries, but minSdkVersion=%s doesn't support it",
+				minSdkVersion.String())
 		}
 	}
 
@@ -121,9 +121,9 @@ func ManifestFixer(ctx android.ModuleContext, manifest android.Path,
 	}
 
 	if params.ClassLoaderContexts != nil {
-		// manifest_fixer should add only the implicit SDK libraries inferred by Soong, not those added
-		// explicitly via `uses_libs`/`optional_uses_libs`.
-		requiredUsesLibs, optionalUsesLibs := params.ClassLoaderContexts.ImplicitUsesLibs()
+		// Libraries propagated via `uses_libs`/`optional_uses_libs` are also added (they may be
+		// propagated from dependencies).
+		requiredUsesLibs, optionalUsesLibs := params.ClassLoaderContexts.UsesLibs()
 
 		for _, usesLib := range requiredUsesLibs {
 			args = append(args, "--uses-library", usesLib)
@@ -149,16 +149,22 @@ func ManifestFixer(ctx android.ModuleContext, manifest android.Path,
 
 	if params.SdkContext != nil {
 		targetSdkVersion := targetSdkVersionForManifestFixer(ctx, params)
-		args = append(args, "--targetSdkVersion ", targetSdkVersion)
 
 		if UseApiFingerprint(ctx) && ctx.ModuleName() != "framework-res" {
 			targetSdkVersion = ctx.Config().PlatformSdkCodename() + fmt.Sprintf(".$$(cat %s)", ApiFingerprintPath(ctx).String())
 			deps = append(deps, ApiFingerprintPath(ctx))
 		}
 
+		args = append(args, "--targetSdkVersion ", targetSdkVersion)
+
 		minSdkVersion, err := params.SdkContext.MinSdkVersion(ctx).EffectiveVersionString(ctx)
 		if err != nil {
 			ctx.ModuleErrorf("invalid minSdkVersion: %s", err)
+		}
+
+		replaceMaxSdkVersionPlaceholder, err := params.SdkContext.ReplaceMaxSdkVersionPlaceholder(ctx).EffectiveVersion(ctx)
+		if err != nil {
+			ctx.ModuleErrorf("invalid ReplaceMaxSdkVersionPlaceholder: %s", err)
 		}
 
 		if UseApiFingerprint(ctx) && ctx.ModuleName() != "framework-res" {
@@ -170,7 +176,11 @@ func ManifestFixer(ctx android.ModuleContext, manifest android.Path,
 			ctx.ModuleErrorf("invalid minSdkVersion: %s", err)
 		}
 		args = append(args, "--minSdkVersion ", minSdkVersion)
+		args = append(args, "--replaceMaxSdkVersionPlaceholder ", strconv.Itoa(replaceMaxSdkVersionPlaceholder.FinalOrFutureInt()))
 		args = append(args, "--raise-min-sdk-version")
+	}
+	if params.DefaultManifestVersion != "" {
+		args = append(args, "--override-placeholder-version", params.DefaultManifestVersion)
 	}
 
 	fixedManifest := android.PathForModuleOut(ctx, "manifest_fixer", "AndroidManifest.xml")

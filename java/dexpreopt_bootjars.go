@@ -213,12 +213,6 @@ import (
 // writes out a few DEXPREOPT_IMAGE_* variables for Make; these variables contain boot image names,
 // paths and so on.
 //
-// 2.5. JIT-Zygote configuration
-// -----------------------------
-//
-// One special configuration is JIT-Zygote build, when the primary ART image is used for compiling
-// apps instead of the Framework boot image extension (see DEXPREOPT_USE_ART_IMAGE and UseArtImage).
-//
 
 var artApexNames = []string{
 	"com.android.art",
@@ -758,6 +752,10 @@ func buildBootImageVariant(ctx android.ModuleContext, image *bootImageVariant, p
 		cmd.FlagWithArg("--instruction-set-features=", global.InstructionSetFeatures[arch])
 	}
 
+	if global.EnableUffdGc {
+		cmd.Flag("--runtime-arg").Flag("-Xgc:CMC")
+	}
+
 	if global.BootFlags != "" {
 		cmd.Flag(global.BootFlags)
 	}
@@ -838,24 +836,26 @@ func bootImageProfileRule(ctx android.ModuleContext, image *bootImageConfig) and
 	}
 
 	defaultProfile := "frameworks/base/config/boot-image-profile.txt"
+	extraProfile := "frameworks/base/config/boot-image-profile-extra.txt"
 
 	rule := android.NewRuleBuilder(pctx, ctx)
 
-	var bootImageProfile android.Path
-	if len(global.BootImageProfiles) > 1 {
-		combinedBootImageProfile := image.dir.Join(ctx, "boot-image-profile.txt")
-		rule.Command().Text("cat").Inputs(global.BootImageProfiles).Text(">").Output(combinedBootImageProfile)
-		bootImageProfile = combinedBootImageProfile
-	} else if len(global.BootImageProfiles) == 1 {
-		bootImageProfile = global.BootImageProfiles[0]
+	var profiles android.Paths
+	if len(global.BootImageProfiles) > 0 {
+		profiles = append(profiles, global.BootImageProfiles...)
 	} else if path := android.ExistentPathForSource(ctx, defaultProfile); path.Valid() {
-		bootImageProfile = path.Path()
+		profiles = append(profiles, path.Path())
 	} else {
 		// No profile (not even a default one, which is the case on some branches
 		// like master-art-host that don't have frameworks/base).
 		// Return nil and continue without profile.
 		return nil
 	}
+	if path := android.ExistentPathForSource(ctx, extraProfile); path.Valid() {
+		profiles = append(profiles, path.Path())
+	}
+	bootImageProfile := image.dir.Join(ctx, "boot-image-profile.txt")
+	rule.Command().Text("cat").Inputs(profiles).Text(">").Output(bootImageProfile)
 
 	profile := image.dir.Join(ctx, "boot.prof")
 
@@ -983,11 +983,8 @@ func (d *dexpreoptBootJars) MakeVars(ctx android.MakeVarsContext) {
 		ctx.Strict("DEXPREOPT_BOOTCLASSPATH_DEX_LOCATIONS", strings.Join(dexLocations, " "))
 
 		var imageNames []string
-		// TODO: the primary ART boot image should not be exposed to Make, as it is installed in a
-		// different way as a part of the ART APEX. However, there is a special JIT-Zygote build
-		// configuration which uses the primary ART image instead of the Framework boot image
-		// extension, and it relies on the ART image being exposed to Make. To fix this, it is
-		// necessary to rework the logic in makefiles.
+		// The primary ART boot image is exposed to Make for testing (gtests) and benchmarking
+		// (golem) purposes.
 		for _, current := range append(d.otherImages, image) {
 			imageNames = append(imageNames, current.name)
 			for _, variant := range current.variants {

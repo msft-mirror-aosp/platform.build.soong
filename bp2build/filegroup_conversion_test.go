@@ -15,44 +15,150 @@
 package bp2build
 
 import (
-	"android/soong/android"
 	"fmt"
-
 	"testing"
+
+	"android/soong/android"
 )
 
-func runFilegroupTestCase(t *testing.T, tc bp2buildTestCase) {
+func runFilegroupTestCase(t *testing.T, tc Bp2buildTestCase) {
 	t.Helper()
-	(&tc).moduleTypeUnderTest = "filegroup"
-	(&tc).moduleTypeUnderTestFactory = android.FileGroupFactory
-	runBp2BuildTestCase(t, registerFilegroupModuleTypes, tc)
+	(&tc).ModuleTypeUnderTest = "filegroup"
+	(&tc).ModuleTypeUnderTestFactory = android.FileGroupFactory
+	RunBp2BuildTestCase(t, registerFilegroupModuleTypes, tc)
 }
 
 func registerFilegroupModuleTypes(ctx android.RegistrationContext) {}
 
 func TestFilegroupSameNameAsFile_OneFile(t *testing.T) {
-	runFilegroupTestCase(t, bp2buildTestCase{
-		description: "filegroup - same name as file, with one file",
-		filesystem:  map[string]string{},
-		blueprint: `
+	runFilegroupTestCase(t, Bp2buildTestCase{
+		Description: "filegroup - same name as file, with one file",
+		Filesystem:  map[string]string{},
+		Blueprint: `
 filegroup {
     name: "foo",
     srcs: ["foo"],
 }
 `,
-		expectedBazelTargets: []string{}})
+		ExpectedBazelTargets: []string{}})
 }
 
 func TestFilegroupSameNameAsFile_MultipleFiles(t *testing.T) {
-	runFilegroupTestCase(t, bp2buildTestCase{
-		description: "filegroup - same name as file, with multiple files",
-		filesystem:  map[string]string{},
-		blueprint: `
+	runFilegroupTestCase(t, Bp2buildTestCase{
+		Description: "filegroup - same name as file, with multiple files",
+		Filesystem:  map[string]string{},
+		Blueprint: `
 filegroup {
 	name: "foo",
 	srcs: ["foo", "bar"],
 }
 `,
-		expectedErr: fmt.Errorf("filegroup 'foo' cannot contain a file with the same name"),
+		ExpectedErr: fmt.Errorf("filegroup 'foo' cannot contain a file with the same name"),
 	})
+}
+
+func TestFilegroupWithAidlSrcs(t *testing.T) {
+	testcases := []struct {
+		name               string
+		bp                 string
+		expectedBazelAttrs AttrNameToString
+	}{
+		{
+			name: "filegroup with only aidl srcs",
+			bp: `
+	filegroup {
+		name: "foo",
+		srcs: ["aidl/foo.aidl"],
+		path: "aidl",
+	}`,
+			expectedBazelAttrs: AttrNameToString{
+				"srcs":                `["aidl/foo.aidl"]`,
+				"strip_import_prefix": `"aidl"`,
+			},
+		},
+		{
+			name: "filegroup without path",
+			bp: `
+	filegroup {
+		name: "foo",
+		srcs: ["aidl/foo.aidl"],
+	}`,
+			expectedBazelAttrs: AttrNameToString{
+				"srcs": `["aidl/foo.aidl"]`,
+			},
+		},
+	}
+
+	for _, test := range testcases {
+		expectedBazelTargets := []string{
+			MakeBazelTargetNoRestrictions("aidl_library", "foo", test.expectedBazelAttrs),
+		}
+		runFilegroupTestCase(t, Bp2buildTestCase{
+			Description:          test.name,
+			Blueprint:            test.bp,
+			ExpectedBazelTargets: expectedBazelTargets,
+		})
+	}
+}
+
+func TestFilegroupWithAidlAndNonAidlSrcs(t *testing.T) {
+	runFilegroupTestCase(t, Bp2buildTestCase{
+		Description: "filegroup with aidl and non-aidl srcs",
+		Filesystem:  map[string]string{},
+		Blueprint: `
+filegroup {
+    name: "foo",
+    srcs: [
+		"aidl/foo.aidl",
+		"buf.proto",
+	],
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTargetNoRestrictions("filegroup", "foo", AttrNameToString{
+				"srcs": `[
+        "aidl/foo.aidl",
+        "buf.proto",
+    ]`}),
+		}})
+}
+
+func TestFilegroupWithProtoSrcs(t *testing.T) {
+	runFilegroupTestCase(t, Bp2buildTestCase{
+		Description: "filegroup with proto and non-proto srcs",
+		Filesystem:  map[string]string{},
+		Blueprint: `
+filegroup {
+		name: "foo",
+		srcs: ["proto/foo.proto"],
+		path: "proto",
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTargetNoRestrictions("proto_library", "foo_bp2build_converted", AttrNameToString{
+				"srcs":                `["proto/foo.proto"]`,
+				"strip_import_prefix": `"proto"`,
+				"tags":                `["manual"]`}),
+			MakeBazelTargetNoRestrictions("filegroup", "foo", AttrNameToString{
+				"srcs": `["proto/foo.proto"]`}),
+		}})
+}
+
+func TestFilegroupWithProtoAndNonProtoSrcs(t *testing.T) {
+	runFilegroupTestCase(t, Bp2buildTestCase{
+		Description: "filegroup with proto and non-proto srcs",
+		Filesystem:  map[string]string{},
+		Blueprint: `
+filegroup {
+    name: "foo",
+    srcs: [
+		"foo.proto",
+		"buf.cpp",
+	],
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTargetNoRestrictions("filegroup", "foo", AttrNameToString{
+				"srcs": `[
+        "foo.proto",
+        "buf.cpp",
+    ]`}),
+		}})
 }
