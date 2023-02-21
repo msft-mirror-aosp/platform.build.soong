@@ -514,6 +514,7 @@ type apexFile struct {
 	// buildFile is put in the installDir inside the APEX.
 	builtFile  android.Path
 	installDir string
+	partition  string
 	customStem string
 	symlinks   []string // additional symlinks
 
@@ -553,6 +554,7 @@ func newApexFile(ctx android.BaseModuleContext, builtFile android.Path, androidM
 	}
 	if module != nil {
 		ret.moduleDir = ctx.OtherModuleDir(module)
+		ret.partition = module.PartitionTag(ctx.DeviceConfig())
 		ret.requiredModuleNames = module.RequiredModuleNames()
 		ret.targetRequiredModuleNames = module.TargetRequiredModuleNames()
 		ret.hostRequiredModuleNames = module.HostRequiredModuleNames()
@@ -1769,7 +1771,7 @@ func apexFileForJavaModuleWithFile(ctx android.BaseModuleContext, module javaMod
 
 func apexFileForJavaModuleProfile(ctx android.BaseModuleContext, module javaModule) *apexFile {
 	if dexpreopter, ok := module.(java.DexpreopterInterface); ok {
-		if profilePathOnHost := dexpreopter.ProfilePathOnHost(); profilePathOnHost != nil {
+		if profilePathOnHost := dexpreopter.OutputProfilePathOnHost(); profilePathOnHost != nil {
 			dirInApex := "javalib"
 			af := newApexFile(ctx, profilePathOnHost, module.BaseModuleName()+"-profile", dirInApex, etc, nil)
 			af.customStem = module.Stem() + ".jar.prof"
