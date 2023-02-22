@@ -141,6 +141,9 @@ type apexBundleProperties struct {
 	// Default: true.
 	Installable *bool
 
+	// Whether this APEX ignores the apex_available list defined in its dependencies.
+	Override_apex_available *bool
+
 	// If set true, VNDK libs are considered as stable libs and are not included in this APEX.
 	// Should be only used in non-system apexes (e.g. vendor: true). Default is false.
 	Use_vndk_as_stable *bool
@@ -514,6 +517,7 @@ type apexFile struct {
 	// buildFile is put in the installDir inside the APEX.
 	builtFile  android.Path
 	installDir string
+	partition  string
 	customStem string
 	symlinks   []string // additional symlinks
 
@@ -553,6 +557,7 @@ func newApexFile(ctx android.BaseModuleContext, builtFile android.Path, androidM
 	}
 	if module != nil {
 		ret.moduleDir = ctx.OtherModuleDir(module)
+		ret.partition = module.PartitionTag(ctx.DeviceConfig())
 		ret.requiredModuleNames = module.RequiredModuleNames()
 		ret.targetRequiredModuleNames = module.TargetRequiredModuleNames()
 		ret.hostRequiredModuleNames = module.HostRequiredModuleNames()
@@ -1511,6 +1516,10 @@ func (a *apexBundle) UsePlatformApis() bool {
 	return proptools.BoolDefault(a.properties.Platform_apis, false)
 }
 
+func (a *apexBundle) OverrideApexAvailable() bool {
+	return proptools.BoolDefault(a.properties.Override_apex_available, false)
+}
+
 // getCertString returns the name of the cert that should be used to sign this APEX. This is
 // basically from the "certificate" property, but could be overridden by the device config.
 func (a *apexBundle) getCertString(ctx android.BaseModuleContext) string {
@@ -1769,7 +1778,7 @@ func apexFileForJavaModuleWithFile(ctx android.BaseModuleContext, module javaMod
 
 func apexFileForJavaModuleProfile(ctx android.BaseModuleContext, module javaModule) *apexFile {
 	if dexpreopter, ok := module.(java.DexpreopterInterface); ok {
-		if profilePathOnHost := dexpreopter.ProfilePathOnHost(); profilePathOnHost != nil {
+		if profilePathOnHost := dexpreopter.OutputProfilePathOnHost(); profilePathOnHost != nil {
 			dirInApex := "javalib"
 			af := newApexFile(ctx, profilePathOnHost, module.BaseModuleName()+"-profile", dirInApex, etc, nil)
 			af.customStem = module.Stem() + ".jar.prof"
@@ -3035,6 +3044,11 @@ func (a *apexBundle) checkApexAvailability(ctx android.ModuleContext) {
 	// Requiring them and their transitive depencies with apex_available is not right
 	// because they just add noise.
 	if ctx.Config().IsEnvTrue("EMMA_INSTRUMENT") || a.IsNativeCoverageNeeded(ctx) {
+		return
+	}
+
+	// Ignore availability when `override_apex_available` is true.
+	if a.OverrideApexAvailable() {
 		return
 	}
 
