@@ -207,10 +207,7 @@ var (
 		"-Werror=fortify-source",
 
 		"-Werror=address-of-temporary",
-		// Bug: http://b/29823425 Disable -Wnull-dereference until the
-		// new cases detected by this warning in Clang r271374 are
-		// fixed.
-		//"-Werror=null-dereference",
+		"-Werror=null-dereference",
 		"-Werror=return-type",
 
 		// http://b/72331526 Disable -Wtautological-* until the instances detected by these
@@ -250,16 +247,11 @@ var (
 	noOverride64GlobalCflags = []string{}
 
 	noOverrideExternalGlobalCflags = []string{
-		// http://b/148815709
 		"-Wno-sizeof-array-div",
-		// http://b/197240255
 		"-Wno-unused-but-set-variable",
 		"-Wno-unused-but-set-parameter",
-		// http://b/215753485
 		"-Wno-bitwise-instead-of-logical",
-		// http://b/232926688
 		"-Wno-misleading-indentation",
-		// http://b/241941550
 		"-Wno-array-parameter",
 	}
 
@@ -434,7 +426,7 @@ func init() {
 	pctx.StaticVariable("ClangBin", "${ClangPath}/bin")
 
 	pctx.StaticVariableWithEnvOverride("ClangShortVersion", "LLVM_RELEASE_VERSION", ClangDefaultShortVersion)
-	pctx.StaticVariable("ClangAsanLibDir", "${ClangBase}/linux-x86/${ClangVersion}/lib64/clang/${ClangShortVersion}/lib/linux")
+	pctx.StaticVariable("ClangAsanLibDir", "${ClangBase}/linux-x86/${ClangVersion}/lib/clang/${ClangShortVersion}/lib/linux")
 
 	// These are tied to the version of LLVM directly in external/llvm, so they might trail the host prebuilts
 	// being used for the rest of the build process.

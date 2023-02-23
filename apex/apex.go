@@ -94,10 +94,6 @@ type apexBundleProperties struct {
 	// a default one is automatically generated.
 	AndroidManifest *string `android:"path"`
 
-	// Canonical name of this APEX bundle. Used to determine the path to the activated APEX on
-	// device (/apex/<apex_name>). If unspecified, follows the name property.
-	Apex_name *string
-
 	// Determines the file contexts file for setting the security contexts to files in this APEX
 	// bundle. For platform APEXes, this should points to a file under /system/sepolicy Default:
 	// /system/sepolicy/apex/<module_name>_file_contexts.
@@ -518,6 +514,7 @@ type apexFile struct {
 	// buildFile is put in the installDir inside the APEX.
 	builtFile  android.Path
 	installDir string
+	partition  string
 	customStem string
 	symlinks   []string // additional symlinks
 
@@ -557,6 +554,7 @@ func newApexFile(ctx android.BaseModuleContext, builtFile android.Path, androidM
 	}
 	if module != nil {
 		ret.moduleDir = ctx.OtherModuleDir(module)
+		ret.partition = module.PartitionTag(ctx.DeviceConfig())
 		ret.requiredModuleNames = module.RequiredModuleNames()
 		ret.targetRequiredModuleNames = module.TargetRequiredModuleNames()
 		ret.hostRequiredModuleNames = module.HostRequiredModuleNames()
@@ -1037,7 +1035,7 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 	// This is the main part of this mutator. Mark the collected dependencies that they need to
 	// be built for this apexBundle.
 
-	apexVariationName := proptools.StringDefault(a.properties.Apex_name, mctx.ModuleName()) // could be com.android.foo
+	apexVariationName := mctx.ModuleName() // could be com.android.foo
 	a.properties.ApexVariationName = apexVariationName
 	apexInfo := android.ApexInfo{
 		ApexVariationName: apexVariationName,
@@ -1771,6 +1769,18 @@ func apexFileForJavaModuleWithFile(ctx android.BaseModuleContext, module javaMod
 	return af
 }
 
+func apexFileForJavaModuleProfile(ctx android.BaseModuleContext, module javaModule) *apexFile {
+	if dexpreopter, ok := module.(java.DexpreopterInterface); ok {
+		if profilePathOnHost := dexpreopter.OutputProfilePathOnHost(); profilePathOnHost != nil {
+			dirInApex := "javalib"
+			af := newApexFile(ctx, profilePathOnHost, module.BaseModuleName()+"-profile", dirInApex, etc, nil)
+			af.customStem = module.Stem() + ".jar.prof"
+			return &af
+		}
+	}
+	return nil
+}
+
 // androidApp is an interface to handle all app modules (android_app, android_app_import, etc.) in
 // the same way.
 type androidApp interface {
@@ -1954,6 +1964,11 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 	}
 	a.outputFile = a.outputApexFile
 
+	if len(outputs.TidyFiles) > 0 {
+		tidyFiles := android.PathsForBazelOut(ctx, outputs.TidyFiles)
+		a.outputFile = android.AttachValidationActions(ctx, a.outputFile, tidyFiles)
+	}
+
 	// TODO(b/257829940): These are used by the apex_keys_text singleton; would probably be a clearer
 	// interface if these were set in a provider rather than the module itself
 	a.publicKeyFile = android.PathForBazelOut(ctx, outputs.BundleKeyInfo[0])
@@ -1981,21 +1996,17 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 		a.installedFile = ctx.InstallFile(a.installDir, a.Name()+installSuffix, a.outputFile,
 			a.compatSymlinks.Paths()...)
 	default:
-		panic(fmt.Errorf("unexpected apex_type for the ProcessBazelQuery: %v", a.properties.ApexType))
+		panic(fmt.Errorf("internal error: unexpected apex_type for the ProcessBazelQueryResponse: %v", a.properties.ApexType))
 	}
 
-	/*
-			TODO(asmundak): compared to building an APEX with Soong, building it with Bazel does not
-			return filesInfo and requiredDeps fields (in the Soong build the latter is updated).
-			Fix this, as these fields are subsequently used in apex/androidmk.go and in apex/builder/go
-			To find out what Soong build puts there, run:
-			vctx := visitorContext{handleSpecialLibs: !android.Bool(a.properties.Ignore_system_library_special_case)}
-			ctx.WalkDepsBlueprint(func(child, parent blueprint.Module) bool {
-		      return a.depVisitor(&vctx, ctx, child, parent)
-		    })
-			vctx.normalizeFileInfo()
-	*/
-
+	// filesInfo is not set in mixed mode, because all information about the
+	// apex's contents should completely come from the Starlark providers.
+	//
+	// Prevent accidental writes to filesInfo in the earlier parts Soong by
+	// asserting it to be nil.
+	if a.filesInfo != nil {
+		panic(fmt.Errorf("internal error: filesInfo must be nil for an apex handled by Bazel."))
+	}
 }
 
 func (a *apexBundle) setCompression(ctx android.ModuleContext) {
@@ -2465,6 +2476,9 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 		case *java.Library, *java.SdkLibrary:
 			af := apexFileForJavaModule(ctx, child.(javaModule))
 			vctx.filesInfo = append(vctx.filesInfo, af)
+			if profileAf := apexFileForJavaModuleProfile(ctx, child.(javaModule)); profileAf != nil {
+				vctx.filesInfo = append(vctx.filesInfo, *profileAf)
+			}
 			return true // track transitive dependencies
 		default:
 			ctx.PropertyErrorf("systemserverclasspath_fragments",

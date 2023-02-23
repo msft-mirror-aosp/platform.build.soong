@@ -3484,14 +3484,14 @@ func getFiles(t *testing.T, ctx *android.TestContext, moduleName, variant string
 	return ret
 }
 
-func ensureExactContents(t *testing.T, ctx *android.TestContext, moduleName, variant string, files []string) {
+func assertFileListEquals(t *testing.T, expectedFiles []string, actualFiles []fileInApex) {
 	t.Helper()
 	var failed bool
 	var surplus []string
 	filesMatched := make(map[string]bool)
-	for _, file := range getFiles(t, ctx, moduleName, variant) {
+	for _, file := range actualFiles {
 		matchFound := false
-		for _, expected := range files {
+		for _, expected := range expectedFiles {
 			if file.match(expected) {
 				matchFound = true
 				filesMatched[expected] = true
@@ -3509,9 +3509,9 @@ func ensureExactContents(t *testing.T, ctx *android.TestContext, moduleName, var
 		failed = true
 	}
 
-	if len(files) > len(filesMatched) {
+	if len(expectedFiles) > len(filesMatched) {
 		var missing []string
-		for _, expected := range files {
+		for _, expected := range expectedFiles {
 			if !filesMatched[expected] {
 				missing = append(missing, expected)
 			}
@@ -3523,6 +3523,32 @@ func ensureExactContents(t *testing.T, ctx *android.TestContext, moduleName, var
 	if failed {
 		t.Fail()
 	}
+}
+
+func ensureExactContents(t *testing.T, ctx *android.TestContext, moduleName, variant string, files []string) {
+	assertFileListEquals(t, files, getFiles(t, ctx, moduleName, variant))
+}
+
+func ensureExactDeapexedContents(t *testing.T, ctx *android.TestContext, moduleName string, variant string, files []string) {
+	deapexer := ctx.ModuleForTests(moduleName+".deapexer", variant).Rule("deapexer")
+	outputs := make([]string, 0, len(deapexer.ImplicitOutputs)+1)
+	if deapexer.Output != nil {
+		outputs = append(outputs, deapexer.Output.String())
+	}
+	for _, output := range deapexer.ImplicitOutputs {
+		outputs = append(outputs, output.String())
+	}
+	actualFiles := make([]fileInApex, 0, len(outputs))
+	for _, output := range outputs {
+		dir := "/deapexer/"
+		pos := strings.LastIndex(output, dir)
+		if pos == -1 {
+			t.Fatal("Unknown deapexer output ", output)
+		}
+		path := output[pos+len(dir):]
+		actualFiles = append(actualFiles, fileInApex{path: path, src: "", isLink: false})
+	}
+	assertFileListEquals(t, files, actualFiles)
 }
 
 func TestVndkApexCurrent(t *testing.T) {
@@ -4105,52 +4131,11 @@ func TestDependenciesInApexManifest(t *testing.T) {
 	ensureListEmpty(t, requireNativeLibs)
 }
 
-func TestApexName(t *testing.T) {
-	ctx := testApex(t, `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			apex_name: "com.android.myapex",
-			native_shared_libs: ["mylib"],
-			updatable: false,
-		}
-
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-
-		cc_library {
-			name: "mylib",
-			srcs: ["mylib.cpp"],
-			system_shared_libs: [],
-			stl: "none",
-			apex_available: [
-				"//apex_available:platform",
-				"myapex",
-			],
-		}
-	`)
-
-	module := ctx.ModuleForTests("myapex", "android_common_com.android.myapex_image")
-	apexBundle := module.Module().(*apexBundle)
-	data := android.AndroidMkDataForTest(t, ctx, apexBundle)
-	name := apexBundle.BaseModuleName()
-	prefix := "TARGET_"
-	var builder strings.Builder
-	data.Custom(&builder, name, prefix, "", data)
-	androidMk := builder.String()
-	ensureContains(t, androidMk, "LOCAL_MODULE := mylib.myapex\n")
-	ensureNotContains(t, androidMk, "LOCAL_MODULE := mylib.com.android.myapex\n")
-}
-
 func TestOverrideApexManifestDefaultVersion(t *testing.T) {
 	ctx := testApex(t, `
 		apex {
 			name: "myapex",
 			key: "myapex.key",
-			apex_name: "com.android.myapex",
 			native_shared_libs: ["mylib"],
 			updatable: false,
 		}
@@ -4175,7 +4160,7 @@ func TestOverrideApexManifestDefaultVersion(t *testing.T) {
 		"OVERRIDE_APEX_MANIFEST_DEFAULT_VERSION": "1234",
 	}))
 
-	module := ctx.ModuleForTests("myapex", "android_common_com.android.myapex_image")
+	module := ctx.ModuleForTests("myapex", "android_common_myapex_image")
 	apexManifestRule := module.Rule("apexManifestRule")
 	ensureContains(t, apexManifestRule.Args["default_version"], "1234")
 }
@@ -7137,7 +7122,10 @@ func TestSymlinksFromApexToSystem(t *testing.T) {
 		cc_library {
 			name: "mylib",
 			srcs: ["mylib.cpp"],
-			shared_libs: ["myotherlib"],
+			shared_libs: [
+				"myotherlib",
+				"myotherlib_ext",
+			],
 			system_shared_libs: [],
 			stl: "none",
 			apex_available: [
@@ -7152,6 +7140,20 @@ func TestSymlinksFromApexToSystem(t *testing.T) {
 			name: "myotherlib",
 			srcs: ["mylib.cpp"],
 			system_shared_libs: [],
+			stl: "none",
+			apex_available: [
+				"myapex",
+				"myapex.updatable",
+				"//apex_available:platform",
+			],
+			min_sdk_version: "current",
+		}
+
+		cc_library {
+			name: "myotherlib_ext",
+			srcs: ["mylib.cpp"],
+			system_shared_libs: [],
+			system_ext_specific: true,
 			stl: "none",
 			apex_available: [
 				"myapex",
@@ -7201,11 +7203,14 @@ func TestSymlinksFromApexToSystem(t *testing.T) {
 		t.Errorf("%q is not found", file)
 	}
 
-	ensureSymlinkExists := func(t *testing.T, files []fileInApex, file string) {
+	ensureSymlinkExists := func(t *testing.T, files []fileInApex, file string, target string) {
 		for _, f := range files {
 			if f.path == file {
 				if !f.isLink {
 					t.Errorf("%q is not a symlink", file)
+				}
+				if f.src != target {
+					t.Errorf("expected symlink target to be %q, got %q", target, f.src)
 				}
 				return
 			}
@@ -7220,23 +7225,27 @@ func TestSymlinksFromApexToSystem(t *testing.T) {
 	ensureRealfileExists(t, files, "javalib/myjar.jar")
 	ensureRealfileExists(t, files, "lib64/mylib.so")
 	ensureRealfileExists(t, files, "lib64/myotherlib.so")
+	ensureRealfileExists(t, files, "lib64/myotherlib_ext.so")
 
 	files = getFiles(t, ctx, "myapex.updatable", "android_common_myapex.updatable_image")
 	ensureRealfileExists(t, files, "javalib/myjar.jar")
 	ensureRealfileExists(t, files, "lib64/mylib.so")
 	ensureRealfileExists(t, files, "lib64/myotherlib.so")
+	ensureRealfileExists(t, files, "lib64/myotherlib_ext.so")
 
 	// For bundled build, symlink to the system for the non-updatable APEXes only
 	ctx = testApex(t, bp)
 	files = getFiles(t, ctx, "myapex", "android_common_myapex_image")
 	ensureRealfileExists(t, files, "javalib/myjar.jar")
 	ensureRealfileExists(t, files, "lib64/mylib.so")
-	ensureSymlinkExists(t, files, "lib64/myotherlib.so") // this is symlink
+	ensureSymlinkExists(t, files, "lib64/myotherlib.so", "/system/lib64/myotherlib.so")             // this is symlink
+	ensureSymlinkExists(t, files, "lib64/myotherlib_ext.so", "/system_ext/lib64/myotherlib_ext.so") // this is symlink
 
 	files = getFiles(t, ctx, "myapex.updatable", "android_common_myapex.updatable_image")
 	ensureRealfileExists(t, files, "javalib/myjar.jar")
 	ensureRealfileExists(t, files, "lib64/mylib.so")
-	ensureRealfileExists(t, files, "lib64/myotherlib.so") // this is a real file
+	ensureRealfileExists(t, files, "lib64/myotherlib.so")     // this is a real file
+	ensureRealfileExists(t, files, "lib64/myotherlib_ext.so") // this is a real file
 }
 
 func TestSymlinksFromApexToSystemRequiredModuleNames(t *testing.T) {
