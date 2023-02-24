@@ -157,7 +157,7 @@ var (
 	platformOsMap = map[string]string{
 		OsAndroid:                  "//build/bazel/platforms/os:android",
 		osDarwin:                   "//build/bazel/platforms/os:darwin",
-		osLinux:                    "//build/bazel/platforms/os:linux",
+		osLinux:                    "//build/bazel/platforms/os:linux_glibc",
 		osLinuxMusl:                "//build/bazel/platforms/os:linux_musl",
 		osLinuxBionic:              "//build/bazel/platforms/os:linux_bionic",
 		osWindows:                  "//build/bazel/platforms/os:windows",
@@ -204,7 +204,7 @@ var (
 		AndroidAndInApex:           "//build/bazel/rules/apex:android-in_apex",
 		AndroidAndNonApex:          "//build/bazel/rules/apex:android-non_apex",
 		osDarwin:                   "//build/bazel/platforms/os:darwin",
-		osLinux:                    "//build/bazel/platforms/os:linux",
+		osLinux:                    "//build/bazel/platforms/os:linux_glibc",
 		osLinuxMusl:                "//build/bazel/platforms/os:linux_musl",
 		osLinuxBionic:              "//build/bazel/platforms/os:linux_bionic",
 		osWindows:                  "//build/bazel/platforms/os:windows",
@@ -343,8 +343,8 @@ type ConfigurationAxis struct {
 }
 
 func (ca *ConfigurationAxis) less(other ConfigurationAxis) bool {
-	if ca.configurationType < other.configurationType {
-		return true
+	if ca.configurationType == other.configurationType {
+		return ca.subType < other.subType
 	}
-	return ca.subType < other.subType
+	return ca.configurationType < other.configurationType
 }

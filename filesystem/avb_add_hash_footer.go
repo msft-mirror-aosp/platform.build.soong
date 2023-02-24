@@ -67,6 +67,9 @@ type avbAddHashFooterProperties struct {
 
 	// List of properties to add to the footer
 	Props []avbProp
+
+	// Include descriptors from images
+	Include_descriptors_from_images []string `android:"path,arch_variant"`
 }
 
 // The AVB footer adds verification information to the image.
@@ -116,6 +119,11 @@ func (a *avbAddHashFooter) GenerateAndroidBuildActions(ctx android.ModuleContext
 	}
 	cmd.FlagWithArg("--salt ", proptools.String(a.properties.Salt))
 
+	imagePaths := android.PathsForModuleSrc(ctx, a.properties.Include_descriptors_from_images)
+	for _, imagePath := range imagePaths {
+		cmd.FlagWithInput("--include_descriptors_from_image ", imagePath)
+	}
+
 	for _, prop := range a.properties.Props {
 		addAvbProp(ctx, cmd, prop)
 	}
@@ -149,7 +157,7 @@ func addAvbProp(ctx android.ModuleContext, cmd *android.RuleBuilderCommand, prop
 		cmd.FlagWithArg("--prop ", proptools.ShellEscape(fmt.Sprintf("%s:%s", name, value)))
 	} else {
 		p := android.PathForModuleSrc(ctx, file)
-		cmd.Input(p)
+		cmd.Implicit(p)
 		cmd.FlagWithArg("--prop_from_file ", proptools.ShellEscape(fmt.Sprintf("%s:%s", name, cmd.PathForInput(p))))
 	}
 }

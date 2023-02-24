@@ -207,10 +207,7 @@ var (
 		"-Werror=fortify-source",
 
 		"-Werror=address-of-temporary",
-		// Bug: http://b/29823425 Disable -Wnull-dereference until the
-		// new cases detected by this warning in Clang r271374 are
-		// fixed.
-		//"-Werror=null-dereference",
+		"-Werror=null-dereference",
 		"-Werror=return-type",
 
 		// http://b/72331526 Disable -Wtautological-* until the instances detected by these
@@ -247,17 +244,14 @@ var (
 		"-Wno-error=enum-constexpr-conversion",               // http://b/243964282
 	}
 
+	noOverride64GlobalCflags = []string{}
+
 	noOverrideExternalGlobalCflags = []string{
-		// http://b/148815709
 		"-Wno-sizeof-array-div",
-		// http://b/197240255
 		"-Wno-unused-but-set-variable",
 		"-Wno-unused-but-set-parameter",
-		// http://b/215753485
 		"-Wno-bitwise-instead-of-logical",
-		// http://b/232926688
 		"-Wno-misleading-indentation",
-		// http://b/241941550
 		"-Wno-array-parameter",
 	}
 
@@ -277,9 +271,6 @@ var (
 
 		// http://b/145211477
 		"-Wno-pointer-compare",
-		// http://b/145211022
-		"-Wno-xor-used-as-pow",
-		// http://b/145211022
 		"-Wno-final-dtor-non-final-class",
 
 		// http://b/165945989
@@ -293,11 +284,14 @@ var (
 
 		// http://b/239661264
 		"-Wno-deprecated-non-prototype",
+
+		// http://b/191699019
+		"-Wno-format-insufficient-args",
 	}
 
 	llvmNextExtraCommonGlobalCflags = []string{
-		// New warnings to be fixed after clang-r475365
-		"-Wno-error=single-bit-bitfield-constant-conversion", // http://b/243965903
+		// Do not report warnings when testing with the top of trunk LLVM.
+		"-Wno-error",
 	}
 
 	IllegalFlags = []string{
@@ -311,8 +305,8 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r475365"
-	ClangDefaultShortVersion = "16.0.1"
+	ClangDefaultVersion      = "clang-r475365b"
+	ClangDefaultShortVersion = "16.0.2"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{
@@ -346,16 +340,7 @@ func init() {
 	exportedVars.ExportStringListStaticVariable("HostGlobalLldflags", hostGlobalLldflags)
 
 	// Export the static default CommonGlobalCflags to Bazel.
-	// TODO(187086342): handle cflags that are set in VariableFuncs.
-	bazelCommonGlobalCflags := append(
-		commonGlobalCflags,
-		[]string{
-			// Default to zero initialization.
-			"-ftrivial-auto-var-init=zero",
-			"-enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang",
-			"-Wno-unused-command-line-argument",
-		}...)
-	exportedVars.ExportStringList("CommonGlobalCflags", bazelCommonGlobalCflags)
+	exportedVars.ExportStringList("CommonGlobalCflags", commonGlobalCflags)
 
 	pctx.VariableFunc("CommonGlobalCflags", func(ctx android.PackageVarContext) string {
 		flags := commonGlobalCflags
@@ -380,10 +365,6 @@ func init() {
 			flags = append(flags, "-Wno-unused-command-line-argument")
 		}
 
-		if ctx.Config().IsEnvTrue("LLVM_NEXT") {
-			flags = append(flags, llvmNextExtraCommonGlobalCflags...)
-		}
-
 		if ctx.Config().IsEnvTrue("ALLOW_UNKNOWN_WARNING_OPTION") {
 			flags = append(flags, "-Wno-error=unknown-warning-option")
 		}
@@ -399,8 +380,18 @@ func init() {
 		return strings.Join(deviceGlobalCflags, " ")
 	})
 
+	// Export the static default NoOverrideGlobalCflags to Bazel.
+	exportedVars.ExportStringList("NoOverrideGlobalCflags", noOverrideGlobalCflags)
+	pctx.VariableFunc("NoOverrideGlobalCflags", func(ctx android.PackageVarContext) string {
+		flags := noOverrideGlobalCflags
+		if ctx.Config().IsEnvTrue("LLVM_NEXT") {
+			flags = append(noOverrideGlobalCflags, llvmNextExtraCommonGlobalCflags...)
+		}
+		return strings.Join(flags, " ")
+	})
+
+	exportedVars.ExportStringListStaticVariable("NoOverride64GlobalCflags", noOverride64GlobalCflags)
 	exportedVars.ExportStringListStaticVariable("HostGlobalCflags", hostGlobalCflags)
-	exportedVars.ExportStringListStaticVariable("NoOverrideGlobalCflags", noOverrideGlobalCflags)
 	exportedVars.ExportStringListStaticVariable("NoOverrideExternalGlobalCflags", noOverrideExternalGlobalCflags)
 	exportedVars.ExportStringListStaticVariable("CommonGlobalCppflags", commonGlobalCppflags)
 	exportedVars.ExportStringListStaticVariable("ExternalCflags", extraExternalCflags)
@@ -435,7 +426,7 @@ func init() {
 	pctx.StaticVariable("ClangBin", "${ClangPath}/bin")
 
 	pctx.StaticVariableWithEnvOverride("ClangShortVersion", "LLVM_RELEASE_VERSION", ClangDefaultShortVersion)
-	pctx.StaticVariable("ClangAsanLibDir", "${ClangBase}/linux-x86/${ClangVersion}/lib64/clang/${ClangShortVersion}/lib/linux")
+	pctx.StaticVariable("ClangAsanLibDir", "${ClangBase}/linux-x86/${ClangVersion}/lib/clang/${ClangShortVersion}/lib/linux")
 
 	// These are tied to the version of LLVM directly in external/llvm, so they might trail the host prebuilts
 	// being used for the rest of the build process.

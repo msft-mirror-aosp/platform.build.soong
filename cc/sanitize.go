@@ -76,8 +76,11 @@ var (
 	minimalRuntimeFlags = []string{"-fsanitize-minimal-runtime", "-fno-sanitize-trap=integer,undefined",
 		"-fno-sanitize-recover=integer,undefined"}
 	hwasanGlobalOptions = []string{"heap_history_size=1023", "stack_history_size=512",
-		"export_memory_stats=0", "max_malloc_fill_size=4096", "malloc_fill_byte=0"}
+		"export_memory_stats=0", "max_malloc_fill_size=131072", "malloc_fill_byte=0"}
 	memtagStackCommonFlags = []string{"-march=armv8-a+memtag"}
+
+	hostOnlySanitizeFlags   = []string{"-fno-sanitize-recover=all"}
+	deviceOnlySanitizeFlags = []string{"-fsanitize-trap=all", "-ftrap-function=abort"}
 )
 
 type SanitizerType int
@@ -379,7 +382,12 @@ func (t libraryDependencyTag) SkipApexAllowedDependenciesCheck() bool {
 
 var _ android.SkipApexAllowedDependenciesCheck = (*libraryDependencyTag)(nil)
 
+var exportedVars = android.NewExportedVariables(pctx)
+
 func init() {
+	exportedVars.ExportStringListStaticVariable("HostOnlySanitizeFlags", hostOnlySanitizeFlags)
+	exportedVars.ExportStringList("DeviceOnlySanitizeFlags", deviceOnlySanitizeFlags)
+
 	android.RegisterMakeVarsProvider(pctx, cfiMakeVarsProvider)
 	android.RegisterMakeVarsProvider(pctx, hwasanMakeVarsProvider)
 }
@@ -630,15 +638,8 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 
 	// Also disable CFI for VNDK variants of components
 	if ctx.isVndk() && ctx.useVndk() {
-		if ctx.static() {
-			// Cfi variant for static vndk should be captured as vendor snapshot,
-			// so don't strictly disable Cfi.
-			s.Cfi = nil
-			s.Diag.Cfi = nil
-		} else {
-			s.Cfi = nil
-			s.Diag.Cfi = nil
-		}
+		s.Cfi = nil
+		s.Diag.Cfi = nil
 	}
 
 	// HWASan ramdisk (which is built from recovery) goes over some bootloader limit.
@@ -876,9 +877,9 @@ func (s *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 			// When fuzzing, we wish to crash with diagnostics on any bug.
 			flags.Local.CFlags = append(flags.Local.CFlags, "-fno-sanitize-trap=all", "-fno-sanitize-recover=all")
 		} else if ctx.Host() {
-			flags.Local.CFlags = append(flags.Local.CFlags, "-fno-sanitize-recover=all")
+			flags.Local.CFlags = append(flags.Local.CFlags, hostOnlySanitizeFlags...)
 		} else {
-			flags.Local.CFlags = append(flags.Local.CFlags, "-fsanitize-trap=all", "-ftrap-function=abort")
+			flags.Local.CFlags = append(flags.Local.CFlags, deviceOnlySanitizeFlags...)
 		}
 
 		if enableMinimalRuntime(s) {
@@ -1067,6 +1068,11 @@ func (m *Module) SanitizableDepTagChecker() SantizableDependencyTagChecker {
 // as vendor snapshot. Such modules must create both cfi and non-cfi variants,
 // except for ones which explicitly disable cfi.
 func needsCfiForVendorSnapshot(mctx android.BaseModuleContext) bool {
+	if inList("hwaddress", mctx.Config().SanitizeDevice()) {
+		// cfi will not be built if SANITIZE_TARGET=hwaddress is set
+		return false
+	}
+
 	if snapshot.IsVendorProprietaryModule(mctx) {
 		return false
 	}
@@ -1163,10 +1169,12 @@ func (s *sanitizerSplitMutator) Split(ctx android.BaseModuleContext) []string {
 		//TODO: When Rust modules have vendor support, enable this path for PlatformSanitizeable
 
 		// Check if it's a snapshot module supporting sanitizer
-		if ss, ok := c.linker.(snapshotSanitizer); ok && ss.isSanitizerAvailable(s.sanitizer) {
-			return []string{"", s.sanitizer.variationName()}
-		} else {
-			return []string{""}
+		if ss, ok := c.linker.(snapshotSanitizer); ok {
+			if ss.isSanitizerAvailable(s.sanitizer) {
+				return []string{"", s.sanitizer.variationName()}
+			} else {
+				return []string{""}
+			}
 		}
 	}
 
@@ -1786,4 +1794,8 @@ func cfiMakeVarsProvider(ctx android.MakeVarsContext) {
 
 func hwasanMakeVarsProvider(ctx android.MakeVarsContext) {
 	hwasanStaticLibs(ctx.Config()).exportToMake(ctx)
+}
+
+func BazelCcSanitizerToolchainVars(config android.Config) string {
+	return android.BazelToolchainVars(config, exportedVars)
 }

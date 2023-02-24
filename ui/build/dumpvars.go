@@ -84,6 +84,14 @@ func dumpMakeVars(ctx Context, config Config, goals, vars []string, write_soong_
 	ctx.BeginTrace(metrics.RunKati, "dumpvars")
 	defer ctx.EndTrace()
 
+	tool := ctx.Status.StartTool()
+	if write_soong_vars {
+		// only print this when write_soong_vars is true so that it's not printed when using
+		// the get_build_var command.
+		tool.Status("Running product configuration...")
+	}
+	defer tool.Finish()
+
 	cmd := Command(ctx, config, "dumpvars",
 		config.PrebuiltBuildTool("ckati"),
 		"-f", "build/make/core/config.mk",
@@ -108,7 +116,7 @@ func dumpMakeVars(ctx Context, config Config, goals, vars []string, write_soong_
 	}
 	cmd.StartOrFatal()
 	// TODO: error out when Stderr contains any content
-	status.KatiReader(ctx.Status.StartTool(), pipe)
+	status.KatiReader(tool, pipe)
 	cmd.WaitOrFatal()
 
 	ret := make(map[string]string, len(vars))
@@ -139,6 +147,7 @@ func dumpMakeVars(ctx Context, config Config, goals, vars []string, write_soong_
 var BannerVars = []string{
 	"PLATFORM_VERSION_CODENAME",
 	"PLATFORM_VERSION",
+	"PRODUCT_INCLUDE_TAGS",
 	"TARGET_PRODUCT",
 	"TARGET_BUILD_VARIANT",
 	"TARGET_BUILD_APPS",
@@ -289,4 +298,5 @@ func runMakeProductConfig(ctx Context, config Config) {
 	config.SetBuildBrokenDupRules(makeVars["BUILD_BROKEN_DUP_RULES"] == "true")
 	config.SetBuildBrokenUsesNetwork(makeVars["BUILD_BROKEN_USES_NETWORK"] == "true")
 	config.SetBuildBrokenNinjaUsesEnvVars(strings.Fields(makeVars["BUILD_BROKEN_NINJA_USES_ENV_VARS"]))
+	config.SetIncludeTags(strings.Fields(makeVars["PRODUCT_INCLUDE_TAGS"]))
 }

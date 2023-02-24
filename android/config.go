@@ -21,7 +21,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -69,6 +68,26 @@ type Config struct {
 }
 
 type SoongBuildMode int
+
+type CmdArgs struct {
+	bootstrap.Args
+	RunGoTests  bool
+	OutDir      string
+	SoongOutDir string
+
+	SymlinkForestMarker string
+	Bp2buildMarker      string
+	BazelQueryViewDir   string
+	BazelApiBp2buildDir string
+	ModuleGraphFile     string
+	ModuleActionsFile   string
+	DocFile             string
+
+	BazelMode                bool
+	BazelModeDev             bool
+	BazelModeStaging         bool
+	BazelForceEnabledModules string
+}
 
 // Build modes that soong_build can run as.
 const (
@@ -227,6 +246,11 @@ type config struct {
 	mixedBuildsLock           sync.Mutex
 	mixedBuildEnabledModules  map[string]struct{}
 	mixedBuildDisabledModules map[string]struct{}
+
+	// These are modules to be built with Bazel beyond the allowlisted/build-mode
+	// specified modules. They are passed via the command-line flag
+	// "--bazel-force-enabled-modules"
+	bazelForceEnabledModules map[string]struct{}
 }
 
 type deviceConfig struct {
@@ -302,7 +326,7 @@ func saveToConfigFile(config *productVariables, filename string) error {
 		return fmt.Errorf("cannot marshal config data: %s", err.Error())
 	}
 
-	f, err := ioutil.TempFile(filepath.Dir(filename), "config")
+	f, err := os.CreateTemp(filepath.Dir(filename), "config")
 	if err != nil {
 		return fmt.Errorf("cannot create empty config file %s: %s", filename, err.Error())
 	}
@@ -373,11 +397,13 @@ product_var_constraints = _product_var_constraints
 arch_variant_product_var_constraints = _arch_variant_product_var_constraints
 `,
 	}
-	err = os.WriteFile(filepath.Join(dir, "product_variables.bzl"), []byte(strings.Join(bzl, "\n")), 0644)
+	err = pathtools.WriteFileIfChanged(filepath.Join(dir, "product_variables.bzl"),
+		[]byte(strings.Join(bzl, "\n")), 0644)
 	if err != nil {
 		return fmt.Errorf("Could not write .bzl config file %s", err)
 	}
-	err = os.WriteFile(filepath.Join(dir, "BUILD"), []byte(bazel.GeneratedBazelFileWarning), 0644)
+	err = pathtools.WriteFileIfChanged(filepath.Join(dir, "BUILD"),
+		[]byte(bazel.GeneratedBazelFileWarning), 0644)
 	if err != nil {
 		return fmt.Errorf("Could not write BUILD config file %s", err)
 	}
@@ -399,22 +425,23 @@ func NullConfig(outDir, soongOutDir string) Config {
 
 // NewConfig creates a new Config object. The srcDir argument specifies the path
 // to the root source directory. It also loads the config file, if found.
-func NewConfig(moduleListFile string, buildMode SoongBuildMode, runGoTests bool, outDir, soongOutDir string, availableEnv map[string]string) (Config, error) {
+func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) {
 	// Make a config with default options.
 	config := &config{
-		ProductVariablesFileName: filepath.Join(soongOutDir, productVariablesFileName),
+		ProductVariablesFileName: filepath.Join(cmdArgs.SoongOutDir, productVariablesFileName),
 
 		env: availableEnv,
 
-		outDir:            outDir,
-		soongOutDir:       soongOutDir,
-		runGoTests:        runGoTests,
+		outDir:            cmdArgs.OutDir,
+		soongOutDir:       cmdArgs.SoongOutDir,
+		runGoTests:        cmdArgs.RunGoTests,
 		multilibConflicts: make(map[ArchType]bool),
 
-		moduleListFile:            moduleListFile,
+		moduleListFile:            cmdArgs.ModuleListFile,
 		fs:                        pathtools.NewOsFs(absSrcDir),
 		mixedBuildDisabledModules: make(map[string]struct{}),
 		mixedBuildEnabledModules:  make(map[string]struct{}),
+		bazelForceEnabledModules:  make(map[string]struct{}),
 	}
 
 	config.deviceConfig = &deviceConfig{
@@ -423,7 +450,7 @@ func NewConfig(moduleListFile string, buildMode SoongBuildMode, runGoTests bool,
 
 	// Soundness check of the build and source directories. This won't catch strange
 	// configurations with symlinks, but at least checks the obvious case.
-	absBuildDir, err := filepath.Abs(soongOutDir)
+	absBuildDir, err := filepath.Abs(cmdArgs.SoongOutDir)
 	if err != nil {
 		return Config{}, err
 	}
@@ -443,7 +470,7 @@ func NewConfig(moduleListFile string, buildMode SoongBuildMode, runGoTests bool,
 		return Config{}, err
 	}
 
-	KatiEnabledMarkerFile := filepath.Join(soongOutDir, ".soong.kati_enabled")
+	KatiEnabledMarkerFile := filepath.Join(cmdArgs.SoongOutDir, ".soong.kati_enabled")
 	if _, err := os.Stat(absolutePath(KatiEnabledMarkerFile)); err == nil {
 		config.katiEnabled = true
 	}
@@ -496,9 +523,40 @@ func NewConfig(moduleListFile string, buildMode SoongBuildMode, runGoTests bool,
 		config.AndroidFirstDeviceTarget = FirstTarget(config.Targets[Android], "lib64", "lib32")[0]
 	}
 
-	config.BuildMode = buildMode
+	setBuildMode := func(arg string, mode SoongBuildMode) {
+		if arg != "" {
+			if config.BuildMode != AnalysisNoBazel {
+				fmt.Fprintf(os.Stderr, "buildMode is already set, illegal argument: %s", arg)
+				os.Exit(1)
+			}
+			config.BuildMode = mode
+		}
+	}
+	setBazelMode := func(arg bool, argName string, mode SoongBuildMode) {
+		if arg {
+			if config.BuildMode != AnalysisNoBazel {
+				fmt.Fprintf(os.Stderr, "buildMode is already set, illegal argument: %s", argName)
+				os.Exit(1)
+			}
+			config.BuildMode = mode
+		}
+	}
+	setBuildMode(cmdArgs.SymlinkForestMarker, SymlinkForest)
+	setBuildMode(cmdArgs.Bp2buildMarker, Bp2build)
+	setBuildMode(cmdArgs.BazelQueryViewDir, GenerateQueryView)
+	setBuildMode(cmdArgs.BazelApiBp2buildDir, ApiBp2build)
+	setBuildMode(cmdArgs.ModuleGraphFile, GenerateModuleGraph)
+	setBuildMode(cmdArgs.DocFile, GenerateDocFile)
+	setBazelMode(cmdArgs.BazelModeDev, "--bazel-mode-dev", BazelDevMode)
+	setBazelMode(cmdArgs.BazelMode, "--bazel-mode", BazelProdMode)
+	setBazelMode(cmdArgs.BazelModeStaging, "--bazel-mode-staging", BazelStagingMode)
+
 	config.BazelContext, err = NewBazelContext(config)
 	config.Bp2buildPackageConfig = GetBp2BuildAllowList()
+
+	for _, module := range strings.Split(cmdArgs.BazelForceEnabledModules, ",") {
+		config.bazelForceEnabledModules[module] = struct{}{}
+	}
 
 	return Config{config}, err
 }
@@ -533,36 +591,28 @@ func (c *config) mockFileSystem(bp string, fs map[string][]byte) {
 	c.mockBpList = blueprint.MockModuleListFile
 }
 
+// TODO(b/265062549): Add a field to our collected (and uploaded) metrics which
+// describes a reason that we fell back to non-mixed builds.
 // Returns true if "Bazel builds" is enabled. In this mode, part of build
 // analysis is handled by Bazel.
 func (c *config) IsMixedBuildsEnabled() bool {
 	globalMixedBuildsSupport := c.Once(OnceKey{"globalMixedBuildsSupport"}, func() interface{} {
 		if c.productVariables.DeviceArch != nil && *c.productVariables.DeviceArch == "riscv64" {
-			fmt.Fprintln(os.Stderr, "unsupported device arch 'riscv64' for Bazel: falling back to non-mixed build")
 			return false
 		}
 		if c.IsEnvTrue("GLOBAL_THINLTO") {
-			fmt.Fprintln(os.Stderr, "unsupported env var GLOBAL_THINLTO for Bazel: falling back to non-mixed build")
-			return false
-		}
-		if c.IsEnvTrue("CLANG_COVERAGE") {
-			fmt.Fprintln(os.Stderr, "unsupported env var CLANG_COVERAGE for Bazel: falling back to non-mixed build")
 			return false
 		}
 		if len(c.productVariables.SanitizeHost) > 0 {
-			fmt.Fprintln(os.Stderr, "unsupported product var SanitizeHost for Bazel: falling back to non-mixed build")
 			return false
 		}
 		if len(c.productVariables.SanitizeDevice) > 0 {
-			fmt.Fprintln(os.Stderr, "unsupported product var SanitizeDevice for Bazel: falling back to non-mixed build")
 			return false
 		}
 		if len(c.productVariables.SanitizeDeviceDiag) > 0 {
-			fmt.Fprintln(os.Stderr, "unsupported product var SanitizeDeviceDiag for Bazel: falling back to non-mixed build")
 			return false
 		}
 		if len(c.productVariables.SanitizeDeviceArch) > 0 {
-			fmt.Fprintln(os.Stderr, "unsupported product var SanitizeDeviceArch for Bazel: falling back to non-mixed build")
 			return false
 		}
 		return true
@@ -721,6 +771,13 @@ func (c *config) DeviceName() string {
 // NOTE: Do not base conditional logic on this value. It may break product inheritance.
 func (c *config) DeviceProduct() string {
 	return *c.productVariables.DeviceProduct
+}
+
+// HasDeviceProduct returns if the build has a product. A build will not
+// necessarily have a product when --skip-config is passed to soong, like it is
+// in prebuilts/build-tools/build-prebuilts.sh
+func (c *config) HasDeviceProduct() bool {
+	return c.productVariables.DeviceProduct != nil
 }
 
 func (c *config) DeviceResourceOverlays() []string {
@@ -1100,6 +1157,10 @@ func (c *config) ExportedNamespaces() []string {
 	return append([]string(nil), c.productVariables.NamespacesToExport...)
 }
 
+func (c *config) IncludeTags() []string {
+	return c.productVariables.IncludeTags
+}
+
 func (c *config) HostStaticBinaries() bool {
 	return Bool(c.productVariables.HostStaticBinaries)
 }
@@ -1135,7 +1196,7 @@ func (c *config) DexpreoptGlobalConfig(ctx PathContext) ([]byte, error) {
 		return nil, nil
 	}
 	ctx.AddNinjaFileDeps(path.String())
-	return ioutil.ReadFile(absolutePath(path.String()))
+	return os.ReadFile(absolutePath(path.String()))
 }
 
 func (c *deviceConfig) WithDexpreopt() bool {
@@ -1154,8 +1215,12 @@ func (c *config) HasMultilibConflict(arch ArchType) bool {
 	return c.multilibConflicts[arch]
 }
 
-func (c *config) PrebuiltHiddenApiDir(ctx PathContext) string {
+func (c *config) PrebuiltHiddenApiDir(_ PathContext) string {
 	return String(c.productVariables.PrebuiltHiddenApiDir)
+}
+
+func (c *config) BazelModulesForceEnabledByFlag() map[string]struct{} {
+	return c.bazelForceEnabledModules
 }
 
 func (c *deviceConfig) Arches() []Arch {
@@ -1435,6 +1500,10 @@ func (c *config) ForceApexSymlinkOptimization() bool {
 
 func (c *config) ApexCompressionEnabled() bool {
 	return Bool(c.productVariables.CompressedApex) && !c.UnbundledBuildApps()
+}
+
+func (c *config) ApexTrimEnabled() bool {
+	return Bool(c.productVariables.TrimmedApex)
 }
 
 func (c *config) EnforceSystemCertificate() bool {

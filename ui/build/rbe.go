@@ -100,6 +100,8 @@ func startRBE(ctx Context, config Config) {
 	ctx.BeginTrace(metrics.RunSetupTool, "rbe_bootstrap")
 	defer ctx.EndTrace()
 
+	ctx.Status.Status("Starting rbe...")
+
 	if u := ulimitOrFatal(ctx, config, "-u"); u < rbeLeastNProcs {
 		ctx.Fatalf("max user processes is insufficient: %d; want >= %d.\n", u, rbeLeastNProcs)
 	}
@@ -148,7 +150,7 @@ func CheckProdCreds(ctx Context, config Config) {
 	}
 	if !config.StubbyExists() && prodCredsAuthType(config) {
 		fmt.Fprintln(ctx.Writer, "")
-		fmt.Fprintln(ctx.Writer, fmt.Sprintf("\033[33mWARNING: %q binary not found in $PATH, follow go/build-fast#opting-out-of-loas-credentials instead for authenticating with RBE.\033[0m", "stubby"))
+		fmt.Fprintln(ctx.Writer, fmt.Sprintf("\033[33mWARNING: %q binary not found in $PATH, follow go/build-fast-without-stubby instead for authenticating with RBE.\033[0m", "stubby"))
 		fmt.Fprintln(ctx.Writer, "")
 		return
 	}
@@ -179,6 +181,8 @@ func DumpRBEMetrics(ctx Context, config Config, filename string) {
 	if !config.StartRBE() {
 		return
 	}
+
+	ctx.Status.Status("Dumping rbe metrics...")
 
 	outputDir := config.rbeProxyLogsDir()
 	if outputDir == "" {

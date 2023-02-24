@@ -15,7 +15,6 @@
 package bp2build
 
 import (
-	"fmt"
 	"testing"
 
 	"android/soong/android"
@@ -405,7 +404,7 @@ cc_library_shared {
 
 func TestCcLibrarySharedNoCrtTrue(t *testing.T) {
 	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_shared - nocrt: true emits attribute",
+		Description: "cc_library_shared - nocrt: true disables feature",
 		Filesystem: map[string]string{
 			"impl.cpp": "",
 		},
@@ -419,7 +418,7 @@ cc_library_shared {
 `,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_shared", "foo_shared", AttrNameToString{
-				"link_crt": `False`,
+				"features": `["-link_crt"]`,
 				"srcs":     `["impl.cpp"]`,
 			}),
 		},
@@ -428,7 +427,7 @@ cc_library_shared {
 
 func TestCcLibrarySharedNoCrtFalse(t *testing.T) {
 	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_shared - nocrt: false doesn't emit attribute",
+		Description: "cc_library_shared - nocrt: false doesn't disable feature",
 		Filesystem: map[string]string{
 			"impl.cpp": "",
 		},
@@ -469,7 +468,15 @@ cc_library_shared {
     include_build_directory: false,
 }
 `,
-		ExpectedErr: fmt.Errorf("module \"foo_shared\": nocrt is not supported for arch variants"),
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "foo_shared", AttrNameToString{
+				"features": `select({
+        "//build/bazel/platforms/arch:arm": ["-link_crt"],
+        "//conditions:default": [],
+    })`,
+				"srcs": `["impl.cpp"]`,
+			}),
+		},
 	})
 }
 
@@ -543,7 +550,6 @@ cc_library_shared {
     ]`,
 		}),
 			MakeBazelTarget("cc_library_shared", "a", AttrNameToString{
-				"has_stubs":         `True`,
 				"stubs_symbol_file": `"a.map.txt"`,
 			}),
 		},
@@ -882,6 +888,88 @@ func TestCcLibrarySharedHeaderAbiChecker(t *testing.T) {
     ]`,
 				"abi_checker_check_all_apis": `True`,
 				"abi_checker_diff_flags":     `["-allow-adding-removing-weak-symbols"]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibrarySharedWithIntegerOverflowProperty(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_shared has correct features when integer_overflow property is provided",
+		Blueprint: `
+cc_library_shared {
+		name: "foo",
+		sanitize: {
+				integer_overflow: true,
+		},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features":       `["ubsan_integer_overflow"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibrarySharedWithMiscUndefinedProperty(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_shared has correct features when misc_undefined property is provided",
+		Blueprint: `
+cc_library_shared {
+		name: "foo",
+		sanitize: {
+				misc_undefined: ["undefined", "nullability"],
+		},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features": `[
+        "ubsan_undefined",
+        "ubsan_nullability",
+    ]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibrarySharedWithUBSanPropertiesArchSpecific(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_shared has correct feature select when UBSan props are specified in arch specific blocks",
+		Blueprint: `
+cc_library_shared {
+		name: "foo",
+		sanitize: {
+				misc_undefined: ["undefined", "nullability"],
+		},
+		target: {
+				android: {
+						sanitize: {
+								misc_undefined: ["alignment"],
+						},
+				},
+				linux_glibc: {
+						sanitize: {
+								integer_overflow: true,
+						},
+				},
+		},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features": `[
+        "ubsan_undefined",
+        "ubsan_nullability",
+    ] + select({
+        "//build/bazel/platforms/os:android": ["ubsan_alignment"],
+        "//build/bazel/platforms/os:linux_glibc": ["ubsan_integer_overflow"],
+        "//conditions:default": [],
+    })`,
+				"local_includes": `["."]`,
 			}),
 		},
 	})

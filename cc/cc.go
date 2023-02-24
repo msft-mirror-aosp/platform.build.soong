@@ -28,6 +28,7 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
+	"android/soong/bazel/cquery"
 	"android/soong/cc/config"
 	"android/soong/fuzz"
 	"android/soong/genrule"
@@ -818,7 +819,6 @@ type BazelHandler interface {
 type Module struct {
 	fuzz.FuzzModule
 
-	android.SdkBase
 	android.BazelModuleBase
 
 	VendorProperties VendorProperties
@@ -1066,6 +1066,31 @@ func (c *Module) CcLibraryInterface() bool {
 	return false
 }
 
+func (c *Module) IsFuzzModule() bool {
+	if _, ok := c.compiler.(*fuzzBinary); ok {
+		return true
+	}
+	return false
+}
+
+func (c *Module) FuzzModuleStruct() fuzz.FuzzModule {
+	return c.FuzzModule
+}
+
+func (c *Module) FuzzPackagedModule() fuzz.FuzzPackagedModule {
+	if fuzzer, ok := c.compiler.(*fuzzBinary); ok {
+		return fuzzer.fuzzPackagedModule
+	}
+	panic(fmt.Errorf("FuzzPackagedModule called on non-fuzz module: %q", c.BaseModuleName()))
+}
+
+func (c *Module) FuzzSharedLibraries() android.Paths {
+	if fuzzer, ok := c.compiler.(*fuzzBinary); ok {
+		return fuzzer.sharedLibraries
+	}
+	panic(fmt.Errorf("FuzzSharedLibraries called on non-fuzz module: %q", c.BaseModuleName()))
+}
+
 func (c *Module) NonCcVariants() bool {
 	return false
 }
@@ -1199,7 +1224,6 @@ func (c *Module) Init() android.Module {
 		android.InitBazelModule(c)
 	}
 	android.InitApexModule(c)
-	android.InitSdkAwareModule(c)
 	android.InitDefaultableModule(c)
 
 	return c
@@ -1440,13 +1464,15 @@ func (c *Module) ExcludeFromRecoverySnapshot() bool {
 
 func isBionic(name string) bool {
 	switch name {
-	case "libc", "libm", "libdl", "libdl_android", "linker", "linkerconfig":
+	case "libc", "libm", "libdl", "libdl_android", "linker":
 		return true
 	}
 	return false
 }
 
 func InstallToBootstrap(name string, config android.Config) bool {
+	// NOTE: also update //build/bazel/rules/apex/cc.bzl#_installed_to_bootstrap
+	// if this list is updated.
 	if name == "libclang_rt.hwasan" {
 		return true
 	}
@@ -1858,18 +1884,57 @@ func (c *Module) QueueBazelCall(ctx android.BaseModuleContext) {
 	c.bazelHandler.QueueBazelCall(ctx, c.getBazelModuleLabel(ctx))
 }
 
+var (
+	mixedBuildSupportedCcTest = []string{
+		"adbd_test",
+		"adb_crypto_test",
+		"adb_pairing_auth_test",
+		"adb_pairing_connection_test",
+		"adb_tls_connection_test",
+	}
+)
+
+// IsMixedBuildSupported returns true if the module should be analyzed by Bazel
+// in any of the --bazel-mode(s). This filters at the module level and takes
+// precedence over the allowlists in allowlists/allowlists.go.
 func (c *Module) IsMixedBuildSupported(ctx android.BaseModuleContext) bool {
-	return c.bazelHandler != nil
+	_, isForTesting := ctx.Config().BazelContext.(android.MockBazelContext)
+	if c.testBinary() && !android.InList(c.Name(), mixedBuildSupportedCcTest) && !isForTesting {
+		// Per-module rollout of mixed-builds for cc_test modules.
+		return false
+	}
+
+	// TODO(b/261058727): Remove this (enable mixed builds for modules with UBSan)
+	// Currently we can only support ubsan when minimum runtime is used.
+	return c.bazelHandler != nil && (!isUbsanEnabled(c) || c.MinimalRuntimeNeeded())
+}
+
+func isUbsanEnabled(c *Module) bool {
+	if c.sanitize == nil {
+		return false
+	}
+	sanitizeProps := &c.sanitize.Properties.SanitizeMutated
+	return Bool(sanitizeProps.Integer_overflow) || len(sanitizeProps.Misc_undefined) > 0
+}
+
+func GetApexConfigKey(ctx android.BaseModuleContext) *android.ApexConfigKey {
+	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	if !apexInfo.IsForPlatform() {
+		if !ctx.Config().BazelContext.IsModuleDclaAllowed(ctx.Module().Name()) {
+			return nil
+		}
+		apexKey := android.ApexConfigKey{
+			WithinApex:     true,
+			ApexSdkVersion: findApexSdkVersion(ctx, apexInfo).String(),
+		}
+		return &apexKey
+	}
+
+	return nil
 }
 
 func (c *Module) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 	bazelModuleLabel := c.getBazelModuleLabel(ctx)
-
-	bazelCtx := ctx.Config().BazelContext
-	if ccInfo, err := bazelCtx.GetCcInfo(bazelModuleLabel, android.GetConfigKey(ctx)); err == nil {
-		c.tidyFiles = android.PathsForBazelOut(ctx, ccInfo.TidyFiles)
-	}
-
 	c.bazelHandler.ProcessBazelQueryResponse(ctx, bazelModuleLabel)
 
 	c.Properties.SubName = GetSubnameProperty(ctx, c)
@@ -1888,6 +1953,8 @@ func (c *Module) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 	}
 	mctx.ctx = mctx
 
+	// TODO(b/244432500): Get the tradefed config from the bazel target instead
+	// of generating it with Soong.
 	c.maybeInstall(mctx, apexInfo)
 }
 
@@ -2038,6 +2105,9 @@ func (c *Module) maybeUnhideFromMake() {
 	}
 }
 
+// maybeInstall is called at the end of both GenerateAndroidBuildActions and
+// ProcessBazelQueryResponse to run the install hooks for installable modules,
+// like binaries and tests.
 func (c *Module) maybeInstall(ctx ModuleContext, apexInfo android.ApexInfo) {
 	if !proptools.BoolDefault(c.Installable(), true) {
 		// If the module has been specifically configure to not be installed then
@@ -2058,6 +2128,12 @@ func (c *Module) maybeInstall(ctx ModuleContext, apexInfo android.ApexInfo) {
 			return
 		}
 	}
+}
+
+func (c *Module) setAndroidMkVariablesFromCquery(info cquery.CcAndroidMkInfo) {
+	c.Properties.AndroidMkSharedLibs = info.LocalSharedLibs
+	c.Properties.AndroidMkStaticLibs = info.LocalStaticLibs
+	c.Properties.AndroidMkWholeStaticLibs = info.LocalWholeStaticLibs
 }
 
 func (c *Module) toolchain(ctx android.BaseModuleContext) config.Toolchain {
@@ -2191,6 +2267,13 @@ func GetCrtVariations(ctx android.BottomUpMutatorContext,
 		if err != nil {
 			ctx.PropertyErrorf("min_sdk_version", err.Error())
 		}
+
+		// Raise the minSdkVersion to the minimum supported for the architecture.
+		minApiForArch := MinApiForArch(ctx, m.Target().Arch.ArchType)
+		if apiLevel.LessThan(minApiForArch) {
+			apiLevel = minApiForArch
+		}
+
 		return []blueprint.Variation{
 			{Mutator: "sdk", Variation: "sdk"},
 			{Mutator: "version", Variation: apiLevel.String()},
@@ -2780,6 +2863,23 @@ func checkDoubleLoadableLibraries(ctx android.TopDownMutatorContext) {
 	}
 }
 
+func findApexSdkVersion(ctx android.BaseModuleContext, apexInfo android.ApexInfo) android.ApiLevel {
+	// For the dependency from platform to apex, use the latest stubs
+	apexSdkVersion := android.FutureApiLevel
+	if !apexInfo.IsForPlatform() {
+		apexSdkVersion = apexInfo.MinSdkVersion
+	}
+
+	if android.InList("hwaddress", ctx.Config().SanitizeDevice()) {
+		// In hwasan build, we override apexSdkVersion to the FutureApiLevel(10000)
+		// so that even Q(29/Android10) apexes could use the dynamic unwinder by linking the newer stubs(e.g libc(R+)).
+		// (b/144430859)
+		apexSdkVersion = android.FutureApiLevel
+	}
+
+	return apexSdkVersion
+}
+
 // Convert dependencies to paths.  Returns a PathDeps containing paths
 func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	var depPaths PathDeps
@@ -2795,19 +2895,8 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		depPaths.ReexportedGeneratedHeaders = append(depPaths.ReexportedGeneratedHeaders, exporter.GeneratedHeaders...)
 	}
 
-	// For the dependency from platform to apex, use the latest stubs
-	c.apexSdkVersion = android.FutureApiLevel
 	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
-	if !apexInfo.IsForPlatform() {
-		c.apexSdkVersion = apexInfo.MinSdkVersion
-	}
-
-	if android.InList("hwaddress", ctx.Config().SanitizeDevice()) {
-		// In hwasan build, we override apexSdkVersion to the FutureApiLevel(10000)
-		// so that even Q(29/Android10) apexes could use the dynamic unwinder by linking the newer stubs(e.g libc(R+)).
-		// (b/144430859)
-		c.apexSdkVersion = android.FutureApiLevel
-	}
+	c.apexSdkVersion = findApexSdkVersion(ctx, apexInfo)
 
 	ctx.VisitDirectDeps(func(dep android.Module) {
 		depName := ctx.OtherModuleName(dep)
@@ -3516,7 +3605,7 @@ func (c *Module) IsInstallableToApex() bool {
 	if lib := c.library; lib != nil {
 		// Stub libs and prebuilt libs in a versioned SDK are not
 		// installable to APEX even though they are shared libs.
-		return lib.shared() && !lib.buildStubs() && c.ContainingSdk().Unversioned()
+		return lib.shared() && !lib.buildStubs()
 	} else if _, ok := c.linker.(testPerSrc); ok {
 		return true
 	}
@@ -3672,7 +3761,7 @@ func (c *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 	// This allows introducing new architectures in the platform that
 	// need to be included in apexes that normally require an older
 	// min_sdk_version.
-	minApiForArch := minApiForArch(ctx, c.Target().Arch.ArchType)
+	minApiForArch := MinApiForArch(ctx, c.Target().Arch.ArchType)
 	if sdkVersion.LessThan(minApiForArch) {
 		sdkVersion = minApiForArch
 	}
@@ -3775,7 +3864,9 @@ func (c *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 			testBinaryBp2build(ctx, c)
 		}
 	case object:
-		if !prebuilt {
+		if prebuilt {
+			prebuiltObjectBp2Build(ctx, c)
+		} else {
 			objectBp2Build(ctx, c)
 		}
 	case fullLibrary:

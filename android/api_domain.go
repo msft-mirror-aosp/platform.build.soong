@@ -32,17 +32,18 @@ type ApiSurface int
 
 // TODO(b/246656800): Reconcile with android.SdkKind
 const (
-	PublicApi ApiSurface = iota
-	SystemApi
-	VendorApi
+	// API surface provided by platform and mainline modules to other mainline modules
+	ModuleLibApi ApiSurface = iota
+	PublicApi               // Aka NDK
+	VendorApi               // Aka LLNDK
 )
 
 func (a ApiSurface) String() string {
 	switch a {
+	case ModuleLibApi:
+		return "module-libapi"
 	case PublicApi:
 		return "publicapi"
-	case SystemApi:
-		return "systemapi"
 	case VendorApi:
 		return "vendorapi"
 	default:
@@ -59,8 +60,14 @@ type apiDomain struct {
 
 type apiDomainProperties struct {
 	// cc library contributions (.h files/.map.txt) of this API domain
-	// This dependency is a no-op in Soong, but the corresponding Bazel target in the bp2build workspace will provide a `CcApiContributionInfo` provider
+	// This dependency is a no-op in Soong, but the corresponding Bazel target in the api_bp2build workspace
+	// will provide a `CcApiContributionInfo` provider
 	Cc_api_contributions []string
+
+	// java library contributions (as .txt) of this API domain
+	// This dependency is a no-op in Soong, but the corresponding Bazel target in the api_bp2build workspace
+	// will provide a `JavaApiContributionInfo` provider
+	Java_api_contributions []string
 }
 
 func ApiDomainFactory() Module {
@@ -102,7 +109,8 @@ func contributionBazelAttributes(ctx TopDownMutatorContext, contributions []stri
 }
 
 type bazelApiDomainAttributes struct {
-	Cc_api_contributions bazel.LabelListAttribute
+	Cc_api_contributions   bazel.LabelListAttribute
+	Java_api_contributions bazel.LabelListAttribute
 }
 
 var _ ApiProvider = (*apiDomain)(nil)
@@ -113,7 +121,8 @@ func (a *apiDomain) ConvertWithApiBp2build(ctx TopDownMutatorContext) {
 		Bzl_load_location: "//build/bazel/rules/apis:api_domain.bzl",
 	}
 	attrs := &bazelApiDomainAttributes{
-		Cc_api_contributions: contributionBazelAttributes(ctx, a.properties.Cc_api_contributions),
+		Cc_api_contributions:   contributionBazelAttributes(ctx, a.properties.Cc_api_contributions),
+		Java_api_contributions: contributionBazelAttributes(ctx, a.properties.Java_api_contributions),
 	}
 	ctx.CreateBazelTargetModule(props, CommonAttributes{
 		Name: ctx.ModuleName(),

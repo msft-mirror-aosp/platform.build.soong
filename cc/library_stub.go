@@ -148,8 +148,9 @@ func (d *apiLibraryDecorator) link(ctx ModuleContext, flags Flags, deps PathDeps
 
 	var in android.Path
 
+	// src might not exist during the beginning of soong analysis in Multi-tree
 	if src := String(d.properties.Src); src != "" {
-		in = android.PathForModuleSrc(ctx, src)
+		in = android.MaybeExistentPathForSource(ctx, ctx.ModuleDir(), src)
 	}
 
 	// LLNDK variant
@@ -204,6 +205,14 @@ func (d *apiLibraryDecorator) link(ctx ModuleContext, flags Flags, deps PathDeps
 				d.libraryDecorator.flagExporter.Properties.Export_include_dirs = append(
 					d.libraryDecorator.flagExporter.Properties.Export_include_dirs,
 					variantMod.exportProperties.Export_include_dirs...)
+
+				// Export headers as system include dirs if specified. Mostly for libc
+				if Bool(variantMod.exportProperties.Export_headers_as_system) {
+					d.libraryDecorator.flagExporter.Properties.Export_system_include_dirs = append(
+						d.libraryDecorator.flagExporter.Properties.Export_system_include_dirs,
+						d.libraryDecorator.flagExporter.Properties.Export_include_dirs...)
+					d.libraryDecorator.flagExporter.Properties.Export_include_dirs = nil
+				}
 			}
 		}
 	}

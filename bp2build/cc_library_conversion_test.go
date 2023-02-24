@@ -149,8 +149,8 @@ cc_library {
             "android.cpp",
         ],
         "//build/bazel/platforms/os:darwin": ["darwin.cpp"],
-        "//build/bazel/platforms/os:linux": ["linux.cpp"],
         "//build/bazel/platforms/os:linux_bionic": ["bionic.cpp"],
+        "//build/bazel/platforms/os:linux_glibc": ["linux.cpp"],
         "//conditions:default": [],
     })`,
 			"sdk_version":                       `"current"`,
@@ -1031,19 +1031,20 @@ func TestCcLibraryFeatures(t *testing.T) {
 		"features": `[
         "disable_pack_relocations",
         "-no_undefined_symbols",
-        "-coverage",
     ]`,
-		"srcs": `["a.cpp"]`,
+		"native_coverage": `False`,
+		"srcs":            `["a.cpp"]`,
 	})...)
 	expected_targets = append(expected_targets, makeCcLibraryTargets("b", AttrNameToString{
-		"features": `["-coverage"] + select({
+		"features": `select({
         "//build/bazel/platforms/arch:x86_64": [
             "disable_pack_relocations",
             "-no_undefined_symbols",
         ],
         "//conditions:default": [],
     })`,
-		"srcs": `["b.cpp"]`,
+		"native_coverage": `False`,
+		"srcs":            `["b.cpp"]`,
 	})...)
 	expected_targets = append(expected_targets, makeCcLibraryTargets("c", AttrNameToString{
 		"features": `select({
@@ -1307,7 +1308,7 @@ cc_library {
 
 func TestCCLibraryNoCrtTrue(t *testing.T) {
 	runCcLibraryTestCase(t, Bp2buildTestCase{
-		Description:                "cc_library - nocrt: true emits attribute",
+		Description:                "cc_library - nocrt: true disables feature",
 		ModuleTypeUnderTest:        "cc_library",
 		ModuleTypeUnderTestFactory: cc.LibraryFactory,
 		Filesystem: map[string]string{
@@ -1322,7 +1323,7 @@ cc_library {
 }
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("foo-lib", AttrNameToString{
-			"link_crt": `False`,
+			"features": `["-link_crt"]`,
 			"srcs":     `["impl.cpp"]`,
 		}),
 	},
@@ -1374,7 +1375,13 @@ cc_library {
     include_build_directory: false,
 }
 `,
-		ExpectedErr: fmt.Errorf("module \"foo-lib\": nocrt is not supported for arch variants"),
+		ExpectedBazelTargets: makeCcLibraryTargets("foo-lib", AttrNameToString{
+			"features": `select({
+        "//build/bazel/platforms/arch:arm": ["-link_crt"],
+        "//conditions:default": [],
+    })`,
+			"srcs": `["impl.cpp"]`,
+		}),
 	})
 }
 
@@ -1394,8 +1401,8 @@ cc_library {
 }
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("foo-lib", AttrNameToString{
-			"srcs":       `["impl.cpp"]`,
-			"use_libcrt": `False`,
+			"features": `["-use_libcrt"]`,
+			"srcs":     `["impl.cpp"]`,
 		}),
 	})
 }
@@ -1408,7 +1415,6 @@ func makeCcLibraryTargets(name string, attrs AttrNameToString) []string {
 		"linkopts":                 true,
 		"strip":                    true,
 		"inject_bssl_hash":         true,
-		"has_stubs":                true,
 		"stubs_symbol_file":        true,
 		"use_version_lib":          true,
 	}
@@ -1445,8 +1451,7 @@ cc_library {
 }
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("foo-lib", AttrNameToString{
-			"srcs":       `["impl.cpp"]`,
-			"use_libcrt": `True`,
+			"srcs": `["impl.cpp"]`,
 		}),
 	})
 }
@@ -1475,10 +1480,10 @@ cc_library {
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("foo-lib", AttrNameToString{
 			"srcs": `["impl.cpp"]`,
-			"use_libcrt": `select({
-        "//build/bazel/platforms/arch:arm": False,
-        "//build/bazel/platforms/arch:x86": False,
-        "//conditions:default": None,
+			"features": `select({
+        "//build/bazel/platforms/arch:arm": ["-use_libcrt"],
+        "//build/bazel/platforms/arch:x86": ["-use_libcrt"],
+        "//conditions:default": [],
     })`,
 		}),
 	})
@@ -1512,17 +1517,15 @@ cc_library {
 }
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("foo-lib", AttrNameToString{
-			"srcs": `["impl.cpp"]`,
-			"use_libcrt": `select({
-        "//build/bazel/platforms/os_arch:android_arm": False,
-        "//build/bazel/platforms/os_arch:android_x86": False,
-        "//build/bazel/platforms/os_arch:darwin_arm64": False,
-        "//build/bazel/platforms/os_arch:darwin_x86_64": False,
-        "//build/bazel/platforms/os_arch:linux_glibc_x86": False,
-        "//build/bazel/platforms/os_arch:linux_musl_x86": False,
-        "//build/bazel/platforms/os_arch:windows_x86": False,
-        "//conditions:default": None,
+			"features": `select({
+        "//build/bazel/platforms/arch:arm": ["-use_libcrt"],
+        "//build/bazel/platforms/arch:x86": ["-use_libcrt"],
+        "//conditions:default": [],
+    }) + select({
+        "//build/bazel/platforms/os:darwin": ["-use_libcrt"],
+        "//conditions:default": [],
     })`,
+			"srcs": `["impl.cpp"]`,
 		}),
 	})
 }
@@ -1557,16 +1560,10 @@ cc_library {
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("foo-lib", AttrNameToString{
 			"srcs": `["impl.cpp"]`,
-			"use_libcrt": `select({
-        "//build/bazel/platforms/os_arch:android_arm": False,
-        "//build/bazel/platforms/os_arch:android_x86_64": False,
-        "//build/bazel/platforms/os_arch:darwin_arm64": True,
-        "//build/bazel/platforms/os_arch:darwin_x86_64": False,
-        "//build/bazel/platforms/os_arch:linux_bionic_x86_64": False,
-        "//build/bazel/platforms/os_arch:linux_glibc_x86_64": False,
-        "//build/bazel/platforms/os_arch:linux_musl_x86_64": False,
-        "//build/bazel/platforms/os_arch:windows_x86_64": False,
-        "//conditions:default": None,
+			"features": `select({
+        "//build/bazel/platforms/arch:arm": ["-use_libcrt"],
+        "//build/bazel/platforms/arch:x86_64": ["-use_libcrt"],
+        "//conditions:default": [],
     })`,
 		}),
 	})
@@ -1806,6 +1803,11 @@ func TestCcLibrary_SystemSharedLibsLinuxBionicEmpty(t *testing.T) {
 		ModuleTypeUnderTestFactory: cc.LibraryFactory,
 		Blueprint: soongCcLibraryPreamble + `
 cc_library {
+	name: "libc_musl",
+	bazel_module: { bp2build_available: false },
+}
+
+cc_library {
     name: "target_linux_bionic_empty",
     target: {
         linux_bionic: {
@@ -1816,7 +1818,10 @@ cc_library {
 }
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("target_linux_bionic_empty", AttrNameToString{
-			"system_dynamic_deps": `[]`,
+			"system_dynamic_deps": `select({
+        "//build/bazel/platforms/os:linux_musl": [":libc_musl"],
+        "//conditions:default": [],
+    })`,
 		}),
 	},
 	)
@@ -1829,6 +1834,11 @@ func TestCcLibrary_SystemSharedLibsBionicEmpty(t *testing.T) {
 		ModuleTypeUnderTestFactory: cc.LibraryFactory,
 		Blueprint: soongCcLibraryPreamble + `
 cc_library {
+	name: "libc_musl",
+	bazel_module: { bp2build_available: false },
+}
+
+cc_library {
     name: "target_bionic_empty",
     target: {
         bionic: {
@@ -1839,12 +1849,68 @@ cc_library {
 }
 `,
 		ExpectedBazelTargets: makeCcLibraryTargets("target_bionic_empty", AttrNameToString{
-			"system_dynamic_deps": `[]`,
+			"system_dynamic_deps": `select({
+        "//build/bazel/platforms/os:linux_musl": [":libc_musl"],
+        "//conditions:default": [],
+    })`,
 		}),
 	},
 	)
 }
 
+func TestCcLibrary_SystemSharedLibsMuslEmpty(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library system_shared_lib empty for musl variant",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: soongCcLibraryPreamble + `
+cc_library {
+		name: "libc_musl",
+		bazel_module: { bp2build_available: false },
+}
+
+cc_library {
+    name: "target_musl_empty",
+    target: {
+        musl: {
+            system_shared_libs: [],
+        },
+    },
+    include_build_directory: false,
+}
+`,
+		ExpectedBazelTargets: makeCcLibraryTargets("target_musl_empty", AttrNameToString{
+			"system_dynamic_deps": `[]`,
+		}),
+	})
+}
+
+func TestCcLibrary_SystemSharedLibsLinuxMuslEmpty(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library system_shared_lib empty for linux_musl variant",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: soongCcLibraryPreamble + `
+cc_library {
+		name: "libc_musl",
+		bazel_module: { bp2build_available: false },
+}
+
+cc_library {
+    name: "target_linux_musl_empty",
+    target: {
+        linux_musl: {
+            system_shared_libs: [],
+        },
+    },
+    include_build_directory: false,
+}
+`,
+		ExpectedBazelTargets: makeCcLibraryTargets("target_linux_musl_empty", AttrNameToString{
+			"system_dynamic_deps": `[]`,
+		}),
+	})
+}
 func TestCcLibrary_SystemSharedLibsSharedAndRoot(t *testing.T) {
 	runCcLibraryTestCase(t, Bp2buildTestCase{
 		Description:                "cc_library system_shared_libs set for shared and root",
@@ -1927,13 +1993,13 @@ cc_library {
             "android.cpp",
         ],
         "//build/bazel/platforms/os:darwin": ["darwin.cpp"],
-        "//build/bazel/platforms/os:linux": [
-            "linux.cpp",
-            "linux_glibc.cpp",
-        ],
         "//build/bazel/platforms/os:linux_bionic": [
             "linux.cpp",
             "bionic.cpp",
+        ],
+        "//build/bazel/platforms/os:linux_glibc": [
+            "linux.cpp",
+            "linux_glibc.cpp",
         ],
         "//build/bazel/platforms/os:linux_musl": [
             "linux.cpp",
@@ -2711,7 +2777,6 @@ func TestCcLibraryStaticDisabledForSomeArch(t *testing.T) {
 
 func TestCcLibraryStubs(t *testing.T) {
 	expectedBazelTargets := makeCcLibraryTargets("a", AttrNameToString{
-		"has_stubs":         `True`,
 		"stubs_symbol_file": `"a.map.txt"`,
 	})
 	expectedBazelTargets = append(expectedBazelTargets, makeCcStubSuiteTargets("a", AttrNameToString{
@@ -2757,7 +2822,7 @@ func TestCcApiContributionsWithHdrs(t *testing.T) {
 	expectedBazelTargets := []string{
 		MakeBazelTarget(
 			"cc_api_library_headers",
-			"libfoo.systemapi.headers",
+			"libfoo.module-libapi.headers",
 			AttrNameToString{
 				"export_includes": `["dir1"]`,
 			}),
@@ -2774,18 +2839,18 @@ func TestCcApiContributionsWithHdrs(t *testing.T) {
 				"api":          `"libfoo.map.txt"`,
 				"library_name": `"libfoo"`,
 				"api_surfaces": `[
-        "systemapi",
+        "module-libapi",
         "vendorapi",
     ]`,
 				"hdrs": `[
-        ":libfoo.systemapi.headers",
+        ":libfoo.module-libapi.headers",
         ":libfoo.vendorapi.headers",
     ]`,
 			}),
 	}
 	RunApiBp2BuildTestCase(t, cc.RegisterLibraryBuildComponents, Bp2buildTestCase{
 		Blueprint:            bp,
-		Description:          "cc API contributions to systemapi and vendorapi",
+		Description:          "cc API contributions to module-libapi and vendorapi",
 		ExpectedBazelTargets: expectedBazelTargets,
 	})
 }
@@ -2804,8 +2869,8 @@ func TestCcApiSurfaceCombinations(t *testing.T) {
 				stubs: {symbol_file: "a.map.txt"},
 			}`,
 			expectedApi:         `"a.map.txt"`,
-			expectedApiSurfaces: `["systemapi"]`,
-			description:         "Library that contributes to systemapi",
+			expectedApiSurfaces: `["module-libapi"]`,
+			description:         "Library that contributes to module-libapi",
 		},
 		{
 			bp: `
@@ -2826,10 +2891,10 @@ func TestCcApiSurfaceCombinations(t *testing.T) {
 			}`,
 			expectedApi: `"a.map.txt"`,
 			expectedApiSurfaces: `[
-        "systemapi",
+        "module-libapi",
         "vendorapi",
     ]`,
-			description: "Library that contributes to systemapi and vendorapi",
+			description: "Library that contributes to module-libapi and vendorapi",
 		},
 	}
 	for _, testCase := range testCases {
@@ -3011,15 +3076,15 @@ cc_library {
 		ExpectedBazelTargets: makeCcLibraryTargets("foolib", AttrNameToString{
 			"implementation_dynamic_deps": `select({
         "//build/bazel/platforms/os:darwin": [":bazlib"],
-        "//build/bazel/platforms/os:linux": [":bazlib"],
         "//build/bazel/platforms/os:linux_bionic": [":bazlib"],
+        "//build/bazel/platforms/os:linux_glibc": [":bazlib"],
         "//build/bazel/platforms/os:linux_musl": [":bazlib"],
         "//build/bazel/platforms/os:windows": [":bazlib"],
         "//conditions:default": [],
     }) + select({
         "//build/bazel/platforms/os:darwin": [":quxlib"],
-        "//build/bazel/platforms/os:linux": [":quxlib"],
         "//build/bazel/platforms/os:linux_bionic": [":quxlib"],
+        "//build/bazel/platforms/os:linux_glibc": [":quxlib"],
         "//build/bazel/platforms/os:linux_musl": [":quxlib"],
         "//build/bazel/platforms/os:windows": [":quxlib"],
         "//build/bazel/rules/apex:android-in_apex": [
@@ -3369,23 +3434,23 @@ cc_library {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
 				"implementation_deps": `[":baz__BP2BUILD__MISSING__DEP"] + select({
-        "//build/bazel/rules/apex:non_apex": [":buh__BP2BUILD__MISSING__DEP"],
-        "//conditions:default": [],
+        "//build/bazel/rules/apex:in_apex": [],
+        "//conditions:default": [":buh__BP2BUILD__MISSING__DEP"],
     })`,
 				"implementation_dynamic_deps": `[":baz__BP2BUILD__MISSING__DEP"] + select({
-        "//build/bazel/rules/apex:non_apex": [":bar__BP2BUILD__MISSING__DEP"],
-        "//conditions:default": [],
+        "//build/bazel/rules/apex:in_apex": [],
+        "//conditions:default": [":bar__BP2BUILD__MISSING__DEP"],
     })`,
 				"local_includes": `["."]`,
 			}),
 			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
 				"implementation_deps": `[":baz__BP2BUILD__MISSING__DEP"] + select({
-        "//build/bazel/rules/apex:non_apex": [":buh__BP2BUILD__MISSING__DEP"],
-        "//conditions:default": [],
+        "//build/bazel/rules/apex:in_apex": [],
+        "//conditions:default": [":buh__BP2BUILD__MISSING__DEP"],
     })`,
 				"implementation_dynamic_deps": `[":baz__BP2BUILD__MISSING__DEP"] + select({
-        "//build/bazel/rules/apex:non_apex": [":bar__BP2BUILD__MISSING__DEP"],
-        "//conditions:default": [],
+        "//build/bazel/rules/apex:in_apex": [],
+        "//conditions:default": [":bar__BP2BUILD__MISSING__DEP"],
     })`,
 				"local_includes": `["."]`,
 			}),
@@ -3415,16 +3480,16 @@ cc_library_static {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
 				"implementation_dynamic_deps": `select({
-        "//build/bazel/rules/apex:non_apex": [":bar__BP2BUILD__MISSING__DEP"],
-        "//conditions:default": [],
+        "//build/bazel/rules/apex:in_apex": [],
+        "//conditions:default": [":bar__BP2BUILD__MISSING__DEP"],
     })`,
 				"dynamic_deps": `select({
-        "//build/bazel/rules/apex:non_apex": [":baz__BP2BUILD__MISSING__DEP"],
-        "//conditions:default": [],
+        "//build/bazel/rules/apex:in_apex": [],
+        "//conditions:default": [":baz__BP2BUILD__MISSING__DEP"],
     })`,
 				"deps": `select({
-        "//build/bazel/rules/apex:non_apex": [":abc__BP2BUILD__MISSING__DEP"],
-        "//conditions:default": [],
+        "//build/bazel/rules/apex:in_apex": [],
+        "//conditions:default": [":abc__BP2BUILD__MISSING__DEP"],
     })`,
 				"local_includes": `["."]`,
 			}),
@@ -3603,6 +3668,89 @@ cc_library_static {
 	})
 }
 
+func TestCcLibraryWithAfdoEnabled(t *testing.T) {
+	bp := `
+cc_library {
+	name: "foo",
+	afdo: true,
+	include_build_directory: false,
+}`
+
+	// TODO(b/260714900): Add test case for arch-specific afdo profile
+	testCases := []struct {
+		description          string
+		filesystem           map[string]string
+		expectedBazelTargets []string
+	}{
+		{
+			description: "cc_library with afdo enabled and existing profile",
+			filesystem: map[string]string{
+				"vendor/google_data/pgo_profile/sampling/BUILD":    "",
+				"vendor/google_data/pgo_profile/sampling/foo.afdo": "",
+			},
+			expectedBazelTargets: []string{
+				MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{}),
+				MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+					"fdo_profile": `"//vendor/google_data/pgo_profile/sampling:foo"`,
+				}),
+			},
+		},
+		{
+			description: "cc_library with afdo enabled and existing profile in AOSP",
+			filesystem: map[string]string{
+				"toolchain/pgo-profiles/sampling/BUILD":    "",
+				"toolchain/pgo-profiles/sampling/foo.afdo": "",
+			},
+			expectedBazelTargets: []string{
+				MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{}),
+				MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+					"fdo_profile": `"//toolchain/pgo-profiles/sampling:foo"`,
+				}),
+			},
+		},
+		{
+			description: "cc_library with afdo enabled but profile filename doesn't match with module name",
+			filesystem: map[string]string{
+				"toolchain/pgo-profiles/sampling/BUILD":    "",
+				"toolchain/pgo-profiles/sampling/bar.afdo": "",
+			},
+			expectedBazelTargets: []string{
+				MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{}),
+				MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{}),
+			},
+		},
+		{
+			description: "cc_library with afdo enabled but profile doesn't exist",
+			expectedBazelTargets: []string{
+				MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{}),
+				MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{}),
+			},
+		},
+		{
+			description: "cc_library with afdo enabled and existing profile but BUILD file doesn't exist",
+			filesystem: map[string]string{
+				"vendor/google_data/pgo_profile/sampling/foo.afdo": "",
+			},
+			expectedBazelTargets: []string{
+				MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{}),
+				MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{}),
+			},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.description, func(t *testing.T) {
+			runCcLibraryTestCase(t, Bp2buildTestCase{
+				ExpectedBazelTargets:       testCase.expectedBazelTargets,
+				ModuleTypeUnderTest:        "cc_library",
+				ModuleTypeUnderTestFactory: cc.LibraryFactory,
+				Description:                testCase.description,
+				Blueprint:                  binaryReplacer.Replace(bp),
+				Filesystem:                 testCase.filesystem,
+			})
+		})
+	}
+}
+
 func TestCcLibraryHeaderAbiChecker(t *testing.T) {
 	runCcLibraryTestCase(t, Bp2buildTestCase{
 		Description:                "cc_library with header abi checker",
@@ -3690,4 +3838,302 @@ cc_library {
 		}),
 	},
 	)
+}
+
+// Export_include_dirs and Export_system_include_dirs have "variant_prepend" tag.
+// In bp2build output, variant info(select) should go before general info.
+// Internal order of the property should be unchanged. (e.g. ["eid1", "eid2"])
+func TestCcLibraryVariantPrependPropOrder(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library variant prepend properties order",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: soongCcLibraryPreamble + `
+cc_library {
+  name: "a",
+  srcs: ["a.cpp"],
+  export_include_dirs: ["eid1", "eid2"],
+  export_system_include_dirs: ["esid1", "esid2"],
+    target: {
+      android: {
+        export_include_dirs: ["android_eid1", "android_eid2"],
+        export_system_include_dirs: ["android_esid1", "android_esid2"],
+      },
+      android_arm: {
+        export_include_dirs: ["android_arm_eid1", "android_arm_eid2"],
+        export_system_include_dirs: ["android_arm_esid1", "android_arm_esid2"],
+      },
+      linux: {
+        export_include_dirs: ["linux_eid1", "linux_eid2"],
+        export_system_include_dirs: ["linux_esid1", "linux_esid2"],
+      },
+    },
+    multilib: {
+      lib32: {
+        export_include_dirs: ["lib32_eid1", "lib32_eid2"],
+        export_system_include_dirs: ["lib32_esid1", "lib32_esid2"],
+      },
+    },
+    arch: {
+      arm: {
+        export_include_dirs: ["arm_eid1", "arm_eid2"],
+        export_system_include_dirs: ["arm_esid1", "arm_esid2"],
+      },
+    }
+}
+`,
+		ExpectedBazelTargets: makeCcLibraryTargets("a", AttrNameToString{
+			"export_includes": `select({
+        "//build/bazel/platforms/os_arch:android_arm": [
+            "android_arm_eid1",
+            "android_arm_eid2",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "//build/bazel/platforms/os:android": [
+            "android_eid1",
+            "android_eid2",
+            "linux_eid1",
+            "linux_eid2",
+        ],
+        "//build/bazel/platforms/os:linux_bionic": [
+            "linux_eid1",
+            "linux_eid2",
+        ],
+        "//build/bazel/platforms/os:linux_glibc": [
+            "linux_eid1",
+            "linux_eid2",
+        ],
+        "//build/bazel/platforms/os:linux_musl": [
+            "linux_eid1",
+            "linux_eid2",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "//build/bazel/platforms/arch:arm": [
+            "lib32_eid1",
+            "lib32_eid2",
+            "arm_eid1",
+            "arm_eid2",
+        ],
+        "//build/bazel/platforms/arch:x86": [
+            "lib32_eid1",
+            "lib32_eid2",
+        ],
+        "//conditions:default": [],
+    }) + [
+        "eid1",
+        "eid2",
+    ]`,
+			"export_system_includes": `select({
+        "//build/bazel/platforms/os_arch:android_arm": [
+            "android_arm_esid1",
+            "android_arm_esid2",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "//build/bazel/platforms/os:android": [
+            "android_esid1",
+            "android_esid2",
+            "linux_esid1",
+            "linux_esid2",
+        ],
+        "//build/bazel/platforms/os:linux_bionic": [
+            "linux_esid1",
+            "linux_esid2",
+        ],
+        "//build/bazel/platforms/os:linux_glibc": [
+            "linux_esid1",
+            "linux_esid2",
+        ],
+        "//build/bazel/platforms/os:linux_musl": [
+            "linux_esid1",
+            "linux_esid2",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "//build/bazel/platforms/arch:arm": [
+            "lib32_esid1",
+            "lib32_esid2",
+            "arm_esid1",
+            "arm_esid2",
+        ],
+        "//build/bazel/platforms/arch:x86": [
+            "lib32_esid1",
+            "lib32_esid2",
+        ],
+        "//conditions:default": [],
+    }) + [
+        "esid1",
+        "esid2",
+    ]`,
+			"srcs":                   `["a.cpp"]`,
+			"local_includes":         `["."]`,
+			"target_compatible_with": `["//build/bazel/platforms/os:android"]`,
+		}),
+	},
+	)
+}
+
+func TestCcLibraryWithIntegerOverflowProperty(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library has correct features when integer_overflow property is provided",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+		name: "foo",
+		sanitize: {
+				integer_overflow: true,
+		},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"features":       `["ubsan_integer_overflow"]`,
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features":       `["ubsan_integer_overflow"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryWithMiscUndefinedProperty(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library has correct features when misc_undefined property is provided",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+		name: "foo",
+		sanitize: {
+				misc_undefined: ["undefined", "nullability"],
+		},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"features": `[
+        "ubsan_undefined",
+        "ubsan_nullability",
+    ]`,
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features": `[
+        "ubsan_undefined",
+        "ubsan_nullability",
+    ]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryWithUBSanPropertiesArchSpecific(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library has correct feature select when UBSan props are specified in arch specific blocks",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+		name: "foo",
+		sanitize: {
+				misc_undefined: ["undefined", "nullability"],
+		},
+		target: {
+				android: {
+						sanitize: {
+								misc_undefined: ["alignment"],
+						},
+				},
+				linux_glibc: {
+						sanitize: {
+								integer_overflow: true,
+						},
+				},
+		},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"features": `[
+        "ubsan_undefined",
+        "ubsan_nullability",
+    ] + select({
+        "//build/bazel/platforms/os:android": ["ubsan_alignment"],
+        "//build/bazel/platforms/os:linux_glibc": ["ubsan_integer_overflow"],
+        "//conditions:default": [],
+    })`,
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features": `[
+        "ubsan_undefined",
+        "ubsan_nullability",
+    ] + select({
+        "//build/bazel/platforms/os:android": ["ubsan_alignment"],
+        "//build/bazel/platforms/os:linux_glibc": ["ubsan_integer_overflow"],
+        "//conditions:default": [],
+    })`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryInApexWithStubSharedLibs(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library with in apex with stub shared_libs and export_shared_lib_headers",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "barlib",
+	stubs: { symbol_file: "bar.map.txt", versions: ["28", "29", "current"] },
+	bazel_module: { bp2build_available: false },
+}
+cc_library {
+	name: "bazlib",
+	stubs: { symbol_file: "bar.map.txt", versions: ["28", "29", "current"] },
+	bazel_module: { bp2build_available: false },
+}
+cc_library {
+    name: "foo",
+	  shared_libs: ["barlib", "bazlib"],
+    export_shared_lib_headers: ["bazlib"],
+    apex_available: [
+        "apex_available:platform",
+    ],
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"implementation_dynamic_deps": `select({
+        "//build/bazel/rules/apex:android-in_apex": [":barlib_stub_libs_current"],
+        "//conditions:default": [":barlib"],
+    })`,
+				"dynamic_deps": `select({
+        "//build/bazel/rules/apex:android-in_apex": [":bazlib_stub_libs_current"],
+        "//conditions:default": [":bazlib"],
+    })`,
+				"local_includes": `["."]`,
+				"tags":           `["apex_available=apex_available:platform"]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"implementation_dynamic_deps": `select({
+        "//build/bazel/rules/apex:android-in_apex": [":barlib_stub_libs_current"],
+        "//conditions:default": [":barlib"],
+    })`,
+				"dynamic_deps": `select({
+        "//build/bazel/rules/apex:android-in_apex": [":bazlib_stub_libs_current"],
+        "//conditions:default": [":bazlib"],
+    })`,
+				"local_includes": `["."]`,
+				"tags":           `["apex_available=apex_available:platform"]`,
+			}),
+		},
+	})
 }

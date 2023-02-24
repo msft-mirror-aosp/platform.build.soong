@@ -63,26 +63,29 @@ type configImpl struct {
 	environ       *Environment
 	distDir       string
 	buildDateTime string
+	logsPrefix    string
 
 	// From the arguments
-	parallel        int
-	keepGoing       int
-	verbose         bool
-	checkbuild      bool
-	dist            bool
-	jsonModuleGraph bool
-	apiBp2build     bool // Generate BUILD files for Soong modules that contribute APIs
-	bp2build        bool
-	queryview       bool
-	reportMkMetrics bool // Collect and report mk2bp migration progress metrics.
-	soongDocs       bool
-	skipConfig      bool
-	skipKati        bool
-	skipKatiNinja   bool
-	skipSoong       bool
-	skipNinja       bool
-	skipSoongTests  bool
-	searchApiDir    bool // Scan the Android.bp files generated in out/api_surfaces
+	parallel          int
+	keepGoing         int
+	verbose           bool
+	checkbuild        bool
+	dist              bool
+	jsonModuleGraph   bool
+	apiBp2build       bool // Generate BUILD files for Soong modules that contribute APIs
+	bp2build          bool
+	queryview         bool
+	reportMkMetrics   bool // Collect and report mk2bp migration progress metrics.
+	soongDocs         bool
+	skipConfig        bool
+	skipKati          bool
+	skipKatiNinja     bool
+	skipSoong         bool
+	skipNinja         bool
+	skipSoongTests    bool
+	searchApiDir      bool // Scan the Android.bp files generated in out/api_surfaces
+	skipMetricsUpload bool
+	buildStartedTime  int64 // For metrics-upload-only - manually specify a build-started time
 
 	// From the product config
 	katiArgs        []string
@@ -109,6 +112,10 @@ type configImpl struct {
 	emptyNinjaFile bool
 
 	metricsUploader string
+
+	bazelForceEnabledModules string
+
+	includeTags []string
 }
 
 const srcDirFileCheck = "build/soong/root.bp"
@@ -140,8 +147,10 @@ func checkTopDir(ctx Context) {
 	}
 }
 
-// fetchEnvConfig optionally fetches environment config from an
-// experiments system to control Soong features dynamically.
+// fetchEnvConfig optionally fetches a configuration file that can then subsequently be
+// loaded into Soong environment to control certain aspects of build behavior (e.g., enabling RBE).
+// If a configuration file already exists on disk, the fetch is run in the background
+// so as to NOT block the rest of the build execution.
 func fetchEnvConfig(ctx Context, config *configImpl, envConfigName string) error {
 	configName := envConfigName + "." + jsonSuffix
 	expConfigFetcher := &smpb.ExpConfigFetcher{Filename: &configName}
@@ -167,8 +176,13 @@ func fetchEnvConfig(ctx Context, config *configImpl, envConfigName string) error
 		return fmt.Errorf("configuration fetcher binary %v is not executable: %v", configFetcher, s.Mode())
 	}
 
+	configExists := false
+	outConfigFilePath := filepath.Join(config.OutDir(), configName)
+	if _, err := os.Stat(outConfigFilePath); err == nil {
+		configExists = true
+	}
+
 	tCtx, cancel := context.WithTimeout(ctx, envConfigFetchTimeout)
-	defer cancel()
 	fetchStart := time.Now()
 	cmd := exec.CommandContext(tCtx, configFetcher, "-output_config_dir", config.OutDir(),
 		"-output_config_name", configName)
@@ -178,33 +192,45 @@ func fetchEnvConfig(ctx Context, config *configImpl, envConfigName string) error
 		return err
 	}
 
-	if err := cmd.Wait(); err != nil {
-		status := smpb.ExpConfigFetcher_ERROR
-		expConfigFetcher.Status = &status
-		return err
-	}
-	fetchEnd := time.Now()
-	expConfigFetcher.Micros = proto.Uint64(uint64(fetchEnd.Sub(fetchStart).Microseconds()))
-	outConfigFilePath := filepath.Join(config.OutDir(), configName)
-	expConfigFetcher.Filename = proto.String(outConfigFilePath)
-	if _, err := os.Stat(outConfigFilePath); err == nil {
+	fetchCfg := func() error {
+		if err := cmd.Wait(); err != nil {
+			status := smpb.ExpConfigFetcher_ERROR
+			expConfigFetcher.Status = &status
+			return err
+		}
+		fetchEnd := time.Now()
+		expConfigFetcher.Micros = proto.Uint64(uint64(fetchEnd.Sub(fetchStart).Microseconds()))
+		expConfigFetcher.Filename = proto.String(outConfigFilePath)
+
+		if _, err := os.Stat(outConfigFilePath); err != nil {
+			status := smpb.ExpConfigFetcher_NO_CONFIG
+			expConfigFetcher.Status = &status
+			return err
+		}
 		status := smpb.ExpConfigFetcher_CONFIG
 		expConfigFetcher.Status = &status
-	} else {
-		status := smpb.ExpConfigFetcher_NO_CONFIG
-		expConfigFetcher.Status = &status
-	}
-	return nil
-}
-
-func loadEnvConfig(ctx Context, config *configImpl) error {
-	bc := os.Getenv("ANDROID_BUILD_ENVIRONMENT_CONFIG")
-	if bc == "" {
 		return nil
 	}
 
-	if err := fetchEnvConfig(ctx, config, bc); err != nil {
-		ctx.Verbosef("Failed to fetch config file: %v\n", err)
+	// If a config file does not exist, wait for the config file to be fetched. Otherwise
+	// fetch the config file in the background and return immediately.
+	if !configExists {
+		defer cancel()
+		return fetchCfg()
+	}
+
+	go func() {
+		defer cancel()
+		if err := fetchCfg(); err != nil {
+			ctx.Verbosef("Failed to fetch config file %v: %v\n", configName, err)
+		}
+	}()
+	return nil
+}
+
+func loadEnvConfig(ctx Context, config *configImpl, bc string) error {
+	if bc == "" {
+		return nil
 	}
 
 	configDirs := []string{
@@ -238,7 +264,7 @@ func loadEnvConfig(ctx Context, config *configImpl) error {
 }
 
 func defaultBazelProdMode(cfg *configImpl) bool {
-	// Envirnoment flag to disable Bazel for users which experience
+	// Environment flag to disable Bazel for users which experience
 	// broken bazel-handled builds, or significant performance regressions.
 	if cfg.IsBazelMixedBuildForceDisabled() {
 		return false
@@ -248,6 +274,20 @@ func defaultBazelProdMode(cfg *configImpl) bool {
 		return false
 	}
 	return true
+}
+
+func UploadOnlyConfig(ctx Context, _ ...string) Config {
+	ret := &configImpl{
+		environ:       OsEnvironment(),
+		sandboxConfig: &SandboxConfig{},
+	}
+	srcDir := absPath(ctx, ".")
+	bc := os.Getenv("ANDROID_BUILD_ENVIRONMENT_CONFIG")
+	if err := loadEnvConfig(ctx, ret, bc); err != nil {
+		ctx.Fatalln("Failed to parse env config files: %v", err)
+	}
+	ret.metricsUploader = GetMetricsUploader(srcDir, ret.environ)
+	return Config{ret}
 }
 
 func NewConfig(ctx Context, args ...string) Config {
@@ -261,9 +301,7 @@ func NewConfig(ctx Context, args ...string) Config {
 	ret.keepGoing = 1
 
 	ret.totalRAM = detectTotalRAM(ctx)
-
 	ret.parseArgs(ctx, args)
-
 	// Make sure OUT_DIR is set appropriately
 	if outDir, ok := ret.environ.Get("OUT_DIR"); ok {
 		ret.environ.Set("OUT_DIR", filepath.Clean(outDir))
@@ -281,8 +319,15 @@ func NewConfig(ctx Context, args ...string) Config {
 
 	// loadEnvConfig needs to know what the OUT_DIR is, so it should
 	// be called after we determine the appropriate out directory.
-	if err := loadEnvConfig(ctx, ret); err != nil {
-		ctx.Fatalln("Failed to parse env config files: %v", err)
+	bc := os.Getenv("ANDROID_BUILD_ENVIRONMENT_CONFIG")
+
+	if bc != "" {
+		if err := fetchEnvConfig(ctx, ret, bc); err != nil {
+			ctx.Verbosef("Failed to fetch config file: %v\n", err)
+		}
+		if err := loadEnvConfig(ctx, ret, bc); err != nil {
+			ctx.Fatalln("Failed to parse env config files: %v", err)
+		}
 	}
 
 	if distDir, ok := ret.environ.Get("DIST_DIR"); ok {
@@ -324,6 +369,7 @@ func NewConfig(ctx Context, args ...string) Config {
 		"CDPATH",
 		"DISPLAY",
 		"GREP_OPTIONS",
+		"JAVAC",
 		"NDK_ROOT",
 		"POSIXLY_CORRECT",
 
@@ -731,6 +777,8 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			c.skipConfig = true
 		} else if arg == "--skip-soong-tests" {
 			c.skipSoongTests = true
+		} else if arg == "--skip-metrics-upload" {
+			c.skipMetricsUpload = true
 		} else if arg == "--mk-metrics" {
 			c.reportMkMetrics = true
 		} else if arg == "--bazel-mode" {
@@ -747,6 +795,16 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			buildCmd = strings.TrimPrefix(buildCmd, "\"")
 			buildCmd = strings.TrimSuffix(buildCmd, "\"")
 			ctx.Metrics.SetBuildCommand([]string{buildCmd})
+		} else if strings.HasPrefix(arg, "--bazel-force-enabled-modules=") {
+			c.bazelForceEnabledModules = strings.TrimPrefix(arg, "--bazel-force-enabled-modules=")
+		} else if strings.HasPrefix(arg, "--build-started-time-unix-millis=") {
+			buildTimeStr := strings.TrimPrefix(arg, "--build-started-time-unix-millis=")
+			val, err := strconv.ParseInt(buildTimeStr, 10, 64)
+			if err == nil {
+				c.buildStartedTime = val
+			} else {
+				ctx.Fatalf("Error parsing build-time-started-unix-millis", err)
+			}
 		} else if len(arg) > 0 && arg[0] == '-' {
 			parseArgNum := func(def int) int {
 				if len(arg) > 2 {
@@ -1073,6 +1131,22 @@ func (c *configImpl) KatiArgs() []string {
 
 func (c *configImpl) Parallel() int {
 	return c.parallel
+}
+
+func (c *configImpl) GetIncludeTags() []string {
+	return c.includeTags
+}
+
+func (c *configImpl) SetIncludeTags(i []string) {
+	c.includeTags = i
+}
+
+func (c *configImpl) GetLogsPrefix() string {
+	return c.logsPrefix
+}
+
+func (c *configImpl) SetLogsPrefix(prefix string) {
+	c.logsPrefix = prefix
 }
 
 func (c *configImpl) HighmemParallel() int {
@@ -1492,6 +1566,23 @@ func (c *configImpl) EmptyNinjaFile() bool {
 
 func (c *configImpl) IsBazelMixedBuildForceDisabled() bool {
 	return c.Environment().IsEnvTrue("BUILD_BROKEN_DISABLE_BAZEL")
+}
+
+func (c *configImpl) BazelModulesForceEnabledByFlag() string {
+	return c.bazelForceEnabledModules
+}
+
+func (c *configImpl) SkipMetricsUpload() bool {
+	return c.skipMetricsUpload
+}
+
+// Returns a Time object if one was passed via a command-line flag.
+// Otherwise returns the passed default.
+func (c *configImpl) BuildStartedTimeOrDefault(defaultTime time.Time) time.Time {
+	if c.buildStartedTime == 0 {
+		return defaultTime
+	}
+	return time.UnixMilli(c.buildStartedTime)
 }
 
 func GetMetricsUploader(topDir string, env *Environment) string {

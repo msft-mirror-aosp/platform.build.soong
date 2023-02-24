@@ -304,3 +304,102 @@ func TestDroidstubsWithSdkExtensions(t *testing.T) {
 	android.AssertStringDoesContain(t, "sdk-extensions-root present", cmdline, "--sdk-extensions-root sdk/extensions")
 	android.AssertStringDoesContain(t, "sdk-extensions-info present", cmdline, "--sdk-extensions-info sdk/extensions/info.txt")
 }
+
+func TestApiSurfaceFromDroidStubsName(t *testing.T) {
+	testCases := []struct {
+		desc               string
+		name               string
+		expectedApiSurface string
+	}{
+		{
+			desc:               "Default is publicapi",
+			name:               "mydroidstubs",
+			expectedApiSurface: "publicapi",
+		},
+		{
+			desc:               "name contains system substring",
+			name:               "mydroidstubs.system.suffix",
+			expectedApiSurface: "systemapi",
+		},
+		{
+			desc:               "name contains system_server substring",
+			name:               "mydroidstubs.system_server.suffix",
+			expectedApiSurface: "system-serverapi",
+		},
+		{
+			desc:               "name contains module_lib substring",
+			name:               "mydroidstubs.module_lib.suffix",
+			expectedApiSurface: "module-libapi",
+		},
+		{
+			desc:               "name contains test substring",
+			name:               "mydroidstubs.test.suffix",
+			expectedApiSurface: "testapi",
+		},
+		{
+			desc:               "name contains intra.core substring",
+			name:               "mydroidstubs.intra.core.suffix",
+			expectedApiSurface: "intracoreapi",
+		},
+	}
+	for _, tc := range testCases {
+		android.AssertStringEquals(t, tc.desc, tc.expectedApiSurface, bazelApiSurfaceName(tc.name))
+	}
+}
+
+func TestDroidStubsApiContributionGeneration(t *testing.T) {
+	ctx, _ := testJavaWithFS(t, `
+		droidstubs {
+			name: "foo",
+			srcs: ["A/a.java"],
+			api_surface: "public",
+			check_api: {
+				current: {
+					api_file: "A/current.txt",
+					removed_api_file: "A/removed.txt",
+				}
+			}
+		}
+		`,
+		map[string][]byte{
+			"A/a.java":      nil,
+			"A/current.txt": nil,
+			"A/removed.txt": nil,
+		},
+	)
+
+	ctx.ModuleForTests("foo.api.contribution", "")
+}
+
+func TestGeneratedApiContributionVisibilityTest(t *testing.T) {
+	library_bp := `
+		java_api_library {
+			name: "bar",
+			api_surface: "public",
+			api_contributions: ["foo.api.contribution"],
+		}
+	`
+	ctx, _ := testJavaWithFS(t, `
+			droidstubs {
+				name: "foo",
+				srcs: ["A/a.java"],
+				api_surface: "public",
+				check_api: {
+					current: {
+						api_file: "A/current.txt",
+						removed_api_file: "A/removed.txt",
+					}
+				},
+				visibility: ["//a"],
+			}
+		`,
+		map[string][]byte{
+			"a/a.java":      nil,
+			"a/current.txt": nil,
+			"a/removed.txt": nil,
+			"b/Android.bp":  []byte(library_bp),
+		},
+	)
+
+	ctx.ModuleForTests("bar", "android_common")
+}

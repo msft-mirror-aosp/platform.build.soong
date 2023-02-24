@@ -131,9 +131,14 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 	r.forceOSType = ctx.Config().BuildOS
 	r.forceArchType = ctx.Config().BuildArch
 
-	r.testConfig = tradefed.AutoGenRobolectricTestConfig(ctx, r.testProperties.Test_config,
-		r.testProperties.Test_config_template, r.testProperties.Test_suites,
-		r.testProperties.Auto_gen_config)
+	r.testConfig = tradefed.AutoGenTestConfig(ctx, tradefed.AutoGenTestConfigOptions{
+		TestConfigProp:         r.testProperties.Test_config,
+		TestConfigTemplateProp: r.testProperties.Test_config_template,
+		TestSuites:             r.testProperties.Test_suites,
+		AutoGenConfig:          r.testProperties.Auto_gen_config,
+		DeviceTemplate:         "${RobolectricTestConfigTemplate}",
+		HostTemplate:           "${RobolectricTestConfigTemplate}",
+	})
 	r.data = android.PathsForModuleSrc(ctx, r.testProperties.Data)
 
 	roboTestConfig := android.PathForModuleGen(ctx, "robolectric").
@@ -296,6 +301,10 @@ func (r *robolectricTest) AndroidMkEntries() []android.AndroidMkEntries {
 	entries.ExtraEntries = append(entries.ExtraEntries,
 		func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 			entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", true)
+			entries.AddStrings("LOCAL_COMPATIBILITY_SUITE", "robolectric-tests")
+			if r.testConfig != nil {
+				entries.SetPath("LOCAL_FULL_TEST_CONFIG", r.testConfig)
+			}
 		})
 
 	entries.ExtraFooters = []android.AndroidMkExtraFootersFunc{
@@ -329,11 +338,10 @@ func (r *robolectricTest) writeTestRunner(w io.Writer, module, name string, test
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "include $(CLEAR_VARS)", " # java.robolectricTest")
 	fmt.Fprintln(w, "LOCAL_MODULE :=", name)
-	fmt.Fprintln(w, "LOCAL_JAVA_LIBRARIES :=", module)
-	fmt.Fprintln(w, "LOCAL_JAVA_LIBRARIES += ", strings.Join(r.libs, " "))
+	android.AndroidMkEmitAssignList(w, "LOCAL_JAVA_LIBRARIES", []string{module}, r.libs)
 	fmt.Fprintln(w, "LOCAL_TEST_PACKAGE :=", String(r.robolectricProperties.Instrumentation_for))
 	fmt.Fprintln(w, "LOCAL_INSTRUMENT_SRCJARS :=", r.roboSrcJar.String())
-	fmt.Fprintln(w, "LOCAL_ROBOTEST_FILES :=", strings.Join(tests, " "))
+	android.AndroidMkEmitAssignList(w, "LOCAL_ROBOTEST_FILES", tests)
 	if t := r.robolectricProperties.Test_options.Timeout; t != nil {
 		fmt.Fprintln(w, "LOCAL_ROBOTEST_TIMEOUT :=", *t)
 	}

@@ -365,7 +365,7 @@ func TestCcBinaryNocrtTests(t *testing.T) {
 		{
 			description:   "nocrt: true",
 			soongProperty: `nocrt: true,`,
-			bazelAttr:     AttrNameToString{"link_crt": `False`},
+			bazelAttr:     AttrNameToString{"features": `["-link_crt"]`},
 		},
 		{
 			description:   "nocrt: false",
@@ -408,12 +408,12 @@ func TestCcBinaryNo_libcrtTests(t *testing.T) {
 		{
 			description:   "no_libcrt: true",
 			soongProperty: `no_libcrt: true,`,
-			bazelAttr:     AttrNameToString{"use_libcrt": `False`},
+			bazelAttr:     AttrNameToString{"features": `["-use_libcrt"]`},
 		},
 		{
 			description:   "no_libcrt: false",
 			soongProperty: `no_libcrt: false,`,
-			bazelAttr:     AttrNameToString{"use_libcrt": `True`},
+			bazelAttr:     AttrNameToString{},
 		},
 		{
 			description: "no_libcrt: not set",
@@ -783,6 +783,85 @@ func TestCcBinaryWithSyspropSrcsSomeConfigs(t *testing.T) {
 				"min_sdk_version": `"5"`,
 				"whole_archive_deps": `select({
         "//build/bazel/platforms/os:android": [":foo_cc_sysprop_library_static"],
+        "//conditions:default": [],
+    })`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryWithIntegerOverflowProperty(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary with integer overflow property specified",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	sanitize: {
+		integer_overflow: true,
+	},
+}`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features":       `["ubsan_integer_overflow"]`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryWithMiscUndefinedProperty(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary with miscellaneous properties specified",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	sanitize: {
+		misc_undefined: ["undefined", "nullability"],
+	},
+}`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `[
+        "ubsan_undefined",
+        "ubsan_nullability",
+    ]`,
+			}},
+		},
+	})
+}
+
+func TestCcBinaryWithUBSanPropertiesArchSpecific(t *testing.T) {
+	runCcBinaryTestCase(t, ccBinaryBp2buildTestCase{
+		description: "cc_binary has correct feature select when UBSan props are specified in arch specific blocks",
+		blueprint: `
+{rule_name} {
+	name: "foo",
+	sanitize: {
+		misc_undefined: ["undefined", "nullability"],
+	},
+	target: {
+			android: {
+					sanitize: {
+							misc_undefined: ["alignment"],
+					},
+			},
+			linux_glibc: {
+					sanitize: {
+							integer_overflow: true,
+					},
+			},
+	},
+}`,
+		targets: []testBazelTarget{
+			{"cc_binary", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `[
+        "ubsan_undefined",
+        "ubsan_nullability",
+    ] + select({
+        "//build/bazel/platforms/os:android": ["ubsan_alignment"],
+        "//build/bazel/platforms/os:linux_glibc": ["ubsan_integer_overflow"],
         "//conditions:default": [],
     })`,
 			}},

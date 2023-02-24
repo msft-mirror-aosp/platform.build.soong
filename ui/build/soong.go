@@ -15,16 +15,13 @@
 package build
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"android/soong/ui/metrics"
-	soong_metrics_proto "android/soong/ui/metrics/metrics_proto"
 	"android/soong/ui/status"
 
 	"android/soong/shared"
@@ -32,8 +29,6 @@ import (
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/bootstrap"
 	"github.com/google/blueprint/microfactory"
-
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -273,6 +268,10 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	if config.bazelStagingMode {
 		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--bazel-mode-staging")
 	}
+	if len(config.bazelForceEnabledModules) > 0 {
+		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--bazel-force-enabled-modules="+config.bazelForceEnabledModules)
+	}
+
 	queryviewDir := filepath.Join(config.SoongOutDir(), "queryview")
 	// The BUILD files will be generated in out/soong/.api_bp2build (no symlinks to src files)
 	// The final workspace will be generated in out/soong/api_bp2build
@@ -399,6 +398,7 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	}
 
 	blueprintCtx := blueprint.NewContext()
+	blueprintCtx.AddIncludeTags(config.GetIncludeTags()...)
 	blueprintCtx.SetIgnoreUnknownModuleTypes(true)
 	blueprintConfig := BlueprintConfig{
 		soongOutDir: config.SoongOutDir(),
@@ -561,21 +561,6 @@ func runSoong(ctx Context, config Config) {
 		targets = append(targets, config.SoongNinjaFile())
 	}
 
-	if shouldCollectBuildSoongMetrics(config) {
-		soongBuildMetricsFile := filepath.Join(config.LogsDir(), "soong_build_metrics.pb")
-		if err := os.Remove(soongBuildMetricsFile); err != nil && !os.IsNotExist(err) {
-			ctx.Verbosef("Failed to remove %s", soongBuildMetricsFile)
-		}
-		defer func() {
-			soongBuildMetrics := loadSoongBuildMetrics(ctx, soongBuildMetricsFile)
-			if soongBuildMetrics != nil {
-				logSoongBuildMetrics(ctx, soongBuildMetrics)
-				if ctx.Metrics != nil {
-					ctx.Metrics.SetSoongBuildMetrics(soongBuildMetrics)
-				}
-			}
-		}()
-	}
 	ninja("bootstrap", "bootstrap.ninja", targets...)
 
 	distGzipFile(ctx, config, config.SoongNinjaFile(), "soong")
@@ -607,37 +592,4 @@ func runMicrofactory(ctx Context, config Config, name string, pkg string, mappin
 	if _, err := microfactory.Build(&cfg, exePath, pkg); err != nil {
 		ctx.Fatalf("failed to build %s: %s", name, err)
 	}
-}
-
-func shouldCollectBuildSoongMetrics(config Config) bool {
-	// Do not collect metrics protobuf if the soong_build binary ran as the
-	// bp2build converter or the JSON graph dump.
-	return config.SoongBuildInvocationNeeded()
-}
-
-func loadSoongBuildMetrics(ctx Context, soongBuildMetricsFile string) *soong_metrics_proto.SoongBuildMetrics {
-	buf, err := os.ReadFile(soongBuildMetricsFile)
-	if errors.Is(err, fs.ErrNotExist) {
-		// Soong may not have run during this invocation
-		ctx.Verbosef("Failed to read metrics file, %s: %s", soongBuildMetricsFile, err)
-		return nil
-	} else if err != nil {
-		ctx.Fatalf("Failed to load %s: %s", soongBuildMetricsFile, err)
-	}
-	soongBuildMetrics := &soong_metrics_proto.SoongBuildMetrics{}
-	err = proto.Unmarshal(buf, soongBuildMetrics)
-	if err != nil {
-		ctx.Fatalf("Failed to unmarshal %s: %s", soongBuildMetricsFile, err)
-	}
-	return soongBuildMetrics
-}
-
-func logSoongBuildMetrics(ctx Context, metrics *soong_metrics_proto.SoongBuildMetrics) {
-	ctx.Verbosef("soong_build metrics:")
-	ctx.Verbosef(" modules: %v", metrics.GetModules())
-	ctx.Verbosef(" variants: %v", metrics.GetVariants())
-	ctx.Verbosef(" max heap size: %v MB", metrics.GetMaxHeapSize()/1e6)
-	ctx.Verbosef(" total allocation count: %v", metrics.GetTotalAllocCount())
-	ctx.Verbosef(" total allocation size: %v MB", metrics.GetTotalAllocSize()/1e6)
-
 }

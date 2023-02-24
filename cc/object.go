@@ -54,12 +54,12 @@ var _ BazelHandler = (*objectBazelHandler)(nil)
 
 func (handler *objectBazelHandler) QueueBazelCall(ctx android.BaseModuleContext, label string) {
 	bazelCtx := ctx.Config().BazelContext
-	bazelCtx.QueueBazelRequest(label, cquery.GetOutputFiles, android.GetConfigKey(ctx))
+	bazelCtx.QueueBazelRequest(label, cquery.GetOutputFiles, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
 }
 
 func (handler *objectBazelHandler) ProcessBazelQueryResponse(ctx android.ModuleContext, label string) {
 	bazelCtx := ctx.Config().BazelContext
-	objPaths, err := bazelCtx.GetOutputFiles(label, android.GetConfigKey(ctx))
+	objPaths, err := bazelCtx.GetOutputFiles(label, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
 	if err != nil {
 		ctx.ModuleErrorf(err.Error())
 		return
@@ -78,7 +78,7 @@ type ObjectLinkerProperties struct {
 	Static_libs []string `android:"arch_variant,variant_prepend"`
 
 	// list of shared library modules should only provide headers for this module.
-	Shared_libs []string `android:"arch_variant"`
+	Shared_libs []string `android:"arch_variant,variant_prepend"`
 
 	// list of modules that should only provide headers for this module.
 	Header_libs []string `android:"arch_variant,variant_prepend"`
@@ -133,6 +133,7 @@ type bazelObjectAttributes struct {
 	Srcs                bazel.LabelListAttribute
 	Srcs_as             bazel.LabelListAttribute
 	Hdrs                bazel.LabelListAttribute
+	Objs                bazel.LabelListAttribute
 	Deps                bazel.LabelListAttribute
 	System_dynamic_deps bazel.LabelListAttribute
 	Copts               bazel.StringListAttribute
@@ -141,6 +142,7 @@ type bazelObjectAttributes struct {
 	Absolute_includes   bazel.StringListAttribute
 	Stl                 *string
 	Linker_script       bazel.LabelAttribute
+	Crt                 *bool
 	sdkAttributes
 }
 
@@ -155,6 +157,7 @@ func objectBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 	// Set arch-specific configurable attributes
 	baseAttributes := bp2BuildParseBaseProps(ctx, m)
 	compilerAttrs := baseAttributes.compilerAttributes
+	var objs bazel.LabelListAttribute
 	var deps bazel.LabelListAttribute
 	systemDynamicDeps := bazel.LabelListAttribute{ForceSpecifyEmptyList: true}
 
@@ -167,16 +170,21 @@ func objectBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 					label := android.BazelLabelForModuleSrcSingle(ctx, *objectLinkerProps.Linker_script)
 					linkerScript.SetSelectValue(axis, config, label)
 				}
-				deps.SetSelectValue(axis, config, android.BazelLabelForModuleDeps(ctx, objectLinkerProps.Objs))
+				objs.SetSelectValue(axis, config, android.BazelLabelForModuleDeps(ctx, objectLinkerProps.Objs))
 				systemSharedLibs := objectLinkerProps.System_shared_libs
 				if len(systemSharedLibs) > 0 {
 					systemSharedLibs = android.FirstUniqueStrings(systemSharedLibs)
 				}
 				systemDynamicDeps.SetSelectValue(axis, config, bazelLabelForSharedDeps(ctx, systemSharedLibs))
+				deps.SetSelectValue(axis, config, android.BazelLabelForModuleDeps(ctx, objectLinkerProps.Static_libs))
+				deps.SetSelectValue(axis, config, android.BazelLabelForModuleDeps(ctx, objectLinkerProps.Shared_libs))
+				deps.SetSelectValue(axis, config, android.BazelLabelForModuleDeps(ctx, objectLinkerProps.Header_libs))
+				// static_libs, shared_libs, and header_libs have variant_prepend tag
+				deps.Prepend = true
 			}
 		}
 	}
-	deps.ResolveExcludes()
+	objs.ResolveExcludes()
 
 	// Don't split cc_object srcs across languages. Doing so would add complexity,
 	// and this isn't typically done for cc_object.
@@ -192,6 +200,7 @@ func objectBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 	attrs := &bazelObjectAttributes{
 		Srcs:                srcs,
 		Srcs_as:             compilerAttrs.asSrcs,
+		Objs:                objs,
 		Deps:                deps,
 		System_dynamic_deps: systemDynamicDeps,
 		Copts:               compilerAttrs.copts,
@@ -200,6 +209,7 @@ func objectBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Absolute_includes:   compilerAttrs.absoluteIncludes,
 		Stl:                 compilerAttrs.stl,
 		Linker_script:       linkerScript,
+		Crt:                 m.linker.(*objectLinker).Properties.Crt,
 		sdkAttributes:       bp2BuildParseSdkAttributes(m),
 	}
 
@@ -208,7 +218,12 @@ func objectBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Bzl_load_location: "//build/bazel/rules/cc:cc_object.bzl",
 	}
 
-	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: m.Name()}, attrs)
+	tags := android.ApexAvailableTags(m)
+
+	ctx.CreateBazelTargetModule(props, android.CommonAttributes{
+		Name: m.Name(),
+		Tags: tags,
+	}, attrs)
 }
 
 func (object *objectLinker) appendLdflags(flags []string) {
