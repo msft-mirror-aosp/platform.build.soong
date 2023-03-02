@@ -62,11 +62,11 @@ type Flags struct {
 }
 
 type BaseProperties struct {
-	AndroidMkRlibs         []string
-	AndroidMkDylibs        []string
-	AndroidMkProcMacroLibs []string
-	AndroidMkSharedLibs    []string
-	AndroidMkStaticLibs    []string
+	AndroidMkRlibs         []string `blueprint:"mutated"`
+	AndroidMkDylibs        []string `blueprint:"mutated"`
+	AndroidMkProcMacroLibs []string `blueprint:"mutated"`
+	AndroidMkSharedLibs    []string `blueprint:"mutated"`
+	AndroidMkStaticLibs    []string `blueprint:"mutated"`
 
 	ImageVariationPrefix string `blueprint:"mutated"`
 	VndkVersion          string `blueprint:"mutated"`
@@ -208,6 +208,11 @@ func (mod *Module) OutputFiles(tag string) (android.Paths, error) {
 			}
 			return android.Paths{}, nil
 		}
+	case "unstripped":
+		if mod.compiler != nil {
+			return android.PathsIfNonNil(mod.compiler.unstrippedOutputFilePath()), nil
+		}
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
 	}
@@ -485,6 +490,7 @@ type compiler interface {
 	SetDisabled()
 
 	stdLinkage(ctx *depsContext) RustLinkage
+	noStdlibs() bool
 
 	unstrippedOutputFilePath() android.Path
 	strippedOutputFilePath() android.OptionalPath
@@ -617,6 +623,31 @@ func (mod *Module) CcLibraryInterface() bool {
 		}
 	}
 	return false
+}
+
+func (mod *Module) IsFuzzModule() bool {
+	if _, ok := mod.compiler.(*fuzzDecorator); ok {
+		return true
+	}
+	return false
+}
+
+func (mod *Module) FuzzModuleStruct() fuzz.FuzzModule {
+	return mod.FuzzModule
+}
+
+func (mod *Module) FuzzPackagedModule() fuzz.FuzzPackagedModule {
+	if fuzzer, ok := mod.compiler.(*fuzzDecorator); ok {
+		return fuzzer.fuzzPackagedModule
+	}
+	panic(fmt.Errorf("FuzzPackagedModule called on non-fuzz module: %q", mod.BaseModuleName()))
+}
+
+func (mod *Module) FuzzSharedLibraries() android.Paths {
+	if fuzzer, ok := mod.compiler.(*fuzzDecorator); ok {
+		return fuzzer.sharedLibraries
+	}
+	panic(fmt.Errorf("FuzzSharedLibraries called on non-fuzz module: %q", mod.BaseModuleName()))
 }
 
 func (mod *Module) UnstrippedOutputFile() android.Path {

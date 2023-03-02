@@ -52,7 +52,7 @@ var (
 		if ctx.Config().UseHostMusl() {
 			return "musl/lib/"
 		} else {
-			return "lib64/"
+			return "lib/"
 		}
 	})
 	_ = pctx.SourcePathVariable("bindgenClang",
@@ -313,7 +313,7 @@ func NewRustBindgen(hod android.HostOrDeviceSupported) (*Module, *bindgenDecorat
 
 func (b *bindgenDecorator) SourceProviderDeps(ctx DepsContext, deps Deps) Deps {
 	deps = b.BaseSourceProvider.SourceProviderDeps(ctx, deps)
-	if ctx.toolchain().Bionic() {
+	if ctx.toolchain().Bionic() && !ctx.RustModule().compiler.noStdlibs() {
 		deps = bionicDeps(ctx, deps, false)
 	} else if ctx.Os() == android.LinuxMusl {
 		deps = muslDeps(ctx, deps, false)
