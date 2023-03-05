@@ -17,11 +17,50 @@ package bp2build
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"android/soong/android"
 	"android/soong/bazel"
+	"android/soong/shared"
 )
+
+func deleteFilesExcept(ctx *CodegenContext, rootOutputPath android.OutputPath, except []BazelFile) {
+	// Delete files that should no longer be present.
+	bp2buildDirAbs := shared.JoinPath(ctx.topDir, rootOutputPath.String())
+
+	filesToDelete := make(map[string]struct{})
+	err := filepath.Walk(bp2buildDirAbs,
+		func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() {
+				relPath, err := filepath.Rel(bp2buildDirAbs, path)
+				if err != nil {
+					return err
+				}
+				filesToDelete[relPath] = struct{}{}
+			}
+			return nil
+		})
+	if err != nil {
+		fmt.Printf("ERROR reading %s: %s", bp2buildDirAbs, err)
+		os.Exit(1)
+	}
+
+	for _, bazelFile := range except {
+		filePath := filepath.Join(bazelFile.Dir, bazelFile.Basename)
+		delete(filesToDelete, filePath)
+	}
+	for f, _ := range filesToDelete {
+		absPath := shared.JoinPath(bp2buildDirAbs, f)
+		if err := os.RemoveAll(absPath); err != nil {
+			fmt.Printf("ERROR deleting %s: %s", absPath, err)
+			os.Exit(1)
+		}
+	}
+}
 
 // Codegen is the backend of bp2build. The code generator is responsible for
 // writing .bzl files that are equivalent to Android.bp files that are capable
@@ -29,9 +68,6 @@ import (
 func Codegen(ctx *CodegenContext) *CodegenMetrics {
 	// This directory stores BUILD files that could be eventually checked-in.
 	bp2buildDir := android.PathForOutput(ctx, "bp2build")
-	if err := android.RemoveAllOutputDir(bp2buildDir); err != nil {
-		fmt.Printf("ERROR: Encountered error while cleaning %s: %s", bp2buildDir, err.Error())
-	}
 
 	res, errs := GenerateBazelTargets(ctx, true)
 	if len(errs) > 0 {
@@ -44,10 +80,19 @@ func Codegen(ctx *CodegenContext) *CodegenMetrics {
 	}
 	bp2buildFiles := CreateBazelFiles(ctx.Config(), nil, res.buildFileToTargets, ctx.mode)
 	writeFiles(ctx, bp2buildDir, bp2buildFiles)
+	// Delete files under the bp2build root which weren't just written. An
+	// alternative would have been to delete the whole directory and write these
+	// files. However, this would regenerate files which were otherwise unchanged
+	// since the last bp2build run, which would have negative incremental
+	// performance implications.
+	deleteFilesExcept(ctx, bp2buildDir, bp2buildFiles)
 
-	soongInjectionDir := android.PathForOutput(ctx, bazel.SoongInjectionDirName)
-	writeFiles(ctx, soongInjectionDir, CreateSoongInjectionDirFiles(ctx, res.metrics))
-
+	injectionFiles, err := CreateSoongInjectionDirFiles(ctx, res.metrics)
+	if err != nil {
+		fmt.Printf("%s\n", err.Error())
+		os.Exit(1)
+	}
+	writeFiles(ctx, android.PathForOutput(ctx, bazel.SoongInjectionDirName), injectionFiles)
 	return &res.metrics
 }
 
@@ -55,17 +100,20 @@ func Codegen(ctx *CodegenContext) *CodegenMetrics {
 // This includes
 // 1. config value(s) that are hardcoded in Soong
 // 2. product_config variables
-func CreateSoongInjectionDirFiles(ctx *CodegenContext, metrics CodegenMetrics) []BazelFile {
+func CreateSoongInjectionDirFiles(ctx *CodegenContext, metrics CodegenMetrics) ([]BazelFile, error) {
 	var ret []BazelFile
 
 	productConfigFiles, err := CreateProductConfigFiles(ctx)
 	if err != nil {
-		fmt.Printf("ERROR: %s", err.Error())
-		os.Exit(1)
+		return nil, err
 	}
 	ret = append(ret, productConfigFiles...)
-	ret = append(ret, soongInjectionFiles(ctx.Config(), metrics)...)
-	return ret
+	injectionFiles, err := soongInjectionFiles(ctx.Config(), metrics)
+	if err != nil {
+		return nil, err
+	}
+	ret = append(ret, injectionFiles...)
+	return ret, nil
 }
 
 // Get the output directory and create it if it doesn't exist.
