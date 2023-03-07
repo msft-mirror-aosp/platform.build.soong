@@ -120,10 +120,6 @@ type apexBundleProperties struct {
 	// List of filesystem images that are embedded inside this APEX bundle.
 	Filesystems []string
 
-	// The minimum SDK version that this APEX must support at minimum. This is usually set to
-	// the SDK version that the APEX was first introduced.
-	Min_sdk_version *string
-
 	// Whether this APEX is considered updatable or not. When set to true, this will enforce
 	// additional rules for making sure that the APEX is truly updatable. To be updatable,
 	// min_sdk_version should be set as well. This will also disable the size optimizations like
@@ -222,7 +218,7 @@ type ApexNativeDependencies struct {
 	// List of JNI libraries that are embedded inside this APEX.
 	Jni_libs []string
 
-	// List of rust dyn libraries
+	// List of rust dyn libraries that are embedded inside this APEX.
 	Rust_dyn_libs []string
 
 	// List of native executables that are embedded inside this APEX.
@@ -233,6 +229,41 @@ type ApexNativeDependencies struct {
 
 	// List of filesystem images that are embedded inside this APEX bundle.
 	Filesystems []string
+
+	// List of native libraries to exclude from this APEX.
+	Exclude_native_shared_libs []string
+
+	// List of JNI libraries to exclude from this APEX.
+	Exclude_jni_libs []string
+
+	// List of rust dyn libraries to exclude from this APEX.
+	Exclude_rust_dyn_libs []string
+
+	// List of native executables to exclude from this APEX.
+	Exclude_binaries []string
+
+	// List of native tests to exclude from this APEX.
+	Exclude_tests []string
+
+	// List of filesystem images to exclude from this APEX bundle.
+	Exclude_filesystems []string
+}
+
+// Merge combines another ApexNativeDependencies into this one
+func (a *ApexNativeDependencies) Merge(b ApexNativeDependencies) {
+	a.Native_shared_libs = append(a.Native_shared_libs, b.Native_shared_libs...)
+	a.Jni_libs = append(a.Jni_libs, b.Jni_libs...)
+	a.Rust_dyn_libs = append(a.Rust_dyn_libs, b.Rust_dyn_libs...)
+	a.Binaries = append(a.Binaries, b.Binaries...)
+	a.Tests = append(a.Tests, b.Tests...)
+	a.Filesystems = append(a.Filesystems, b.Filesystems...)
+
+	a.Exclude_native_shared_libs = append(a.Exclude_native_shared_libs, b.Exclude_native_shared_libs...)
+	a.Exclude_jni_libs = append(a.Exclude_jni_libs, b.Exclude_jni_libs...)
+	a.Exclude_rust_dyn_libs = append(a.Exclude_rust_dyn_libs, b.Exclude_rust_dyn_libs...)
+	a.Exclude_binaries = append(a.Exclude_binaries, b.Exclude_binaries...)
+	a.Exclude_tests = append(a.Exclude_tests, b.Exclude_tests...)
+	a.Exclude_filesystems = append(a.Exclude_filesystems, b.Exclude_filesystems...)
 }
 
 type apexMultilibProperties struct {
@@ -282,6 +313,9 @@ type apexArchBundleProperties struct {
 			ApexNativeDependencies
 		}
 		Arm64 struct {
+			ApexNativeDependencies
+		}
+		Riscv64 struct {
 			ApexNativeDependencies
 		}
 		X86 struct {
@@ -348,6 +382,10 @@ type overridableProperties struct {
 	// conditions, e.g., target device needs to support APEX compression, are also fulfilled.
 	// Default: false.
 	Compressible *bool
+
+	// The minimum SDK version that this APEX must support at minimum. This is usually set to
+	// the SDK version that the APEX was first introduced.
+	Min_sdk_version *string
 }
 
 type apexBundle struct {
@@ -668,12 +706,18 @@ func addDependenciesForNativeModules(ctx android.BottomUpMutatorContext, nativeM
 	// Use *FarVariation* to be able to depend on modules having conflicting variations with
 	// this module. This is required since arch variant of an APEX bundle is 'common' but it is
 	// 'arm' or 'arm64' for native shared libs.
-	ctx.AddFarVariationDependencies(binVariations, executableTag, nativeModules.Binaries...)
-	ctx.AddFarVariationDependencies(binVariations, testTag, nativeModules.Tests...)
-	ctx.AddFarVariationDependencies(libVariations, jniLibTag, nativeModules.Jni_libs...)
-	ctx.AddFarVariationDependencies(libVariations, sharedLibTag, nativeModules.Native_shared_libs...)
-	ctx.AddFarVariationDependencies(rustLibVariations, sharedLibTag, nativeModules.Rust_dyn_libs...)
-	ctx.AddFarVariationDependencies(target.Variations(), fsTag, nativeModules.Filesystems...)
+	ctx.AddFarVariationDependencies(binVariations, executableTag,
+		android.RemoveListFromList(nativeModules.Binaries, nativeModules.Exclude_binaries)...)
+	ctx.AddFarVariationDependencies(binVariations, testTag,
+		android.RemoveListFromList(nativeModules.Tests, nativeModules.Exclude_tests)...)
+	ctx.AddFarVariationDependencies(libVariations, jniLibTag,
+		android.RemoveListFromList(nativeModules.Jni_libs, nativeModules.Exclude_jni_libs)...)
+	ctx.AddFarVariationDependencies(libVariations, sharedLibTag,
+		android.RemoveListFromList(nativeModules.Native_shared_libs, nativeModules.Exclude_native_shared_libs)...)
+	ctx.AddFarVariationDependencies(rustLibVariations, sharedLibTag,
+		android.RemoveListFromList(nativeModules.Rust_dyn_libs, nativeModules.Exclude_rust_dyn_libs)...)
+	ctx.AddFarVariationDependencies(target.Variations(), fsTag,
+		android.RemoveListFromList(nativeModules.Filesystems, nativeModules.Exclude_filesystems)...)
 }
 
 func (a *apexBundle) combineProperties(ctx android.BottomUpMutatorContext) {
@@ -741,12 +785,12 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 			continue
 		}
 
-		var depsList []ApexNativeDependencies
+		var deps ApexNativeDependencies
 
 		// Add native modules targeting both ABIs. When multilib.* is omitted for
 		// native_shared_libs/jni_libs/tests, it implies multilib.both
-		depsList = append(depsList, a.properties.Multilib.Both)
-		depsList = append(depsList, ApexNativeDependencies{
+		deps.Merge(a.properties.Multilib.Both)
+		deps.Merge(ApexNativeDependencies{
 			Native_shared_libs: a.properties.Native_shared_libs,
 			Tests:              a.properties.Tests,
 			Jni_libs:           a.properties.Jni_libs,
@@ -757,8 +801,8 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 		// binaries, it implies multilib.first
 		isPrimaryAbi := i == 0
 		if isPrimaryAbi {
-			depsList = append(depsList, a.properties.Multilib.First)
-			depsList = append(depsList, ApexNativeDependencies{
+			deps.Merge(a.properties.Multilib.First)
+			deps.Merge(ApexNativeDependencies{
 				Native_shared_libs: nil,
 				Tests:              nil,
 				Jni_libs:           nil,
@@ -769,32 +813,32 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 		// Add native modules targeting either 32-bit or 64-bit ABI
 		switch target.Arch.ArchType.Multilib {
 		case "lib32":
-			depsList = append(depsList, a.properties.Multilib.Lib32)
-			depsList = append(depsList, a.properties.Multilib.Prefer32)
+			deps.Merge(a.properties.Multilib.Lib32)
+			deps.Merge(a.properties.Multilib.Prefer32)
 		case "lib64":
-			depsList = append(depsList, a.properties.Multilib.Lib64)
+			deps.Merge(a.properties.Multilib.Lib64)
 			if !has32BitTarget {
-				depsList = append(depsList, a.properties.Multilib.Prefer32)
+				deps.Merge(a.properties.Multilib.Prefer32)
 			}
 		}
 
 		// Add native modules targeting a specific arch variant
 		switch target.Arch.ArchType {
 		case android.Arm:
-			depsList = append(depsList, a.archProperties.Arch.Arm.ApexNativeDependencies)
+			deps.Merge(a.archProperties.Arch.Arm.ApexNativeDependencies)
 		case android.Arm64:
-			depsList = append(depsList, a.archProperties.Arch.Arm64.ApexNativeDependencies)
+			deps.Merge(a.archProperties.Arch.Arm64.ApexNativeDependencies)
+		case android.Riscv64:
+			deps.Merge(a.archProperties.Arch.Riscv64.ApexNativeDependencies)
 		case android.X86:
-			depsList = append(depsList, a.archProperties.Arch.X86.ApexNativeDependencies)
+			deps.Merge(a.archProperties.Arch.X86.ApexNativeDependencies)
 		case android.X86_64:
-			depsList = append(depsList, a.archProperties.Arch.X86_64.ApexNativeDependencies)
+			deps.Merge(a.archProperties.Arch.X86_64.ApexNativeDependencies)
 		default:
 			panic(fmt.Errorf("unsupported arch %v\n", ctx.Arch().ArchType))
 		}
 
-		for _, d := range depsList {
-			addDependenciesForNativeModules(ctx, d, target, imageVariation)
-		}
+		addDependenciesForNativeModules(ctx, deps, target, imageVariation)
 		ctx.AddFarVariationDependencies([]blueprint.Variation{
 			{Mutator: "os", Variation: target.OsVariation()},
 			{Mutator: "arch", Variation: target.ArchVariation()},
@@ -2449,6 +2493,7 @@ func DefaultsFactory(props ...interface{}) android.Module {
 	module.AddProperties(
 		&apexBundleProperties{},
 		&apexTargetBundleProperties{},
+		&apexArchBundleProperties{},
 		&overridableProperties{},
 	)
 
@@ -2505,14 +2550,14 @@ func (a *apexBundle) minSdkVersionValue(ctx android.EarlyModuleContext) string {
 	// min_sdk_version value is lower than the one to override with.
 	overrideMinSdkValue := ctx.DeviceConfig().ApexGlobalMinSdkVersionOverride()
 	overrideApiLevel := minSdkVersionFromValue(ctx, overrideMinSdkValue)
-	originalMinApiLevel := minSdkVersionFromValue(ctx, proptools.String(a.properties.Min_sdk_version))
-	isMinSdkSet := a.properties.Min_sdk_version != nil
+	originalMinApiLevel := minSdkVersionFromValue(ctx, proptools.String(a.overridableProperties.Min_sdk_version))
+	isMinSdkSet := a.overridableProperties.Min_sdk_version != nil
 	isOverrideValueHigher := overrideApiLevel.CompareTo(originalMinApiLevel) > 0
 	if overrideMinSdkValue != "" && isMinSdkSet && isOverrideValueHigher {
 		return overrideMinSdkValue
 	}
 
-	return proptools.String(a.properties.Min_sdk_version)
+	return proptools.String(a.overridableProperties.Min_sdk_version)
 }
 
 // Returns apex's min_sdk_version SdkSpec, honoring overrides
@@ -3210,8 +3255,8 @@ func (a *apexBundle) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	// TODO(b/219503907) this would need to be set to a.MinSdkVersionValue(ctx) but
 	// given it's coming via config, we probably don't want to put it in here.
 	var minSdkVersion *string
-	if a.properties.Min_sdk_version != nil {
-		minSdkVersion = a.properties.Min_sdk_version
+	if a.overridableProperties.Min_sdk_version != nil {
+		minSdkVersion = a.overridableProperties.Min_sdk_version
 	}
 
 	var keyLabelAttribute bazel.LabelAttribute
