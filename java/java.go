@@ -517,14 +517,8 @@ func getJavaVersion(ctx android.ModuleContext, javaVersion string, sdkContext an
 		return normalizeJavaVersion(ctx, javaVersion)
 	} else if ctx.Device() {
 		return defaultJavaLanguageVersion(ctx, sdkContext.SdkVersion(ctx))
-	} else if ctx.Config().TargetsJava17() {
-		// Temporary experimental flag to be able to try and build with
-		// java version 17 options.  The flag, if used, just sets Java
-		// 17 as the default version, leaving any components that
-		// target an older version intact.
-		return JAVA_VERSION_17
 	} else {
-		return JAVA_VERSION_11
+		return JAVA_VERSION_17
 	}
 }
 
@@ -1782,7 +1776,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	rule.Build("metalava", "metalava merged")
 	compiledStubs := android.PathForModuleOut(ctx, ctx.ModuleName(), "stubs.jar")
-	al.stubsJar = android.PathForModuleOut(ctx, ctx.ModuleName(), "android.jar")
+	al.stubsJar = android.PathForModuleOut(ctx, ctx.ModuleName(), fmt.Sprintf("%s.jar", ctx.ModuleName()))
 
 	var flags javaBuilderFlags
 	flags.javaVersion = getStubsJavaVersion()
@@ -2166,15 +2160,18 @@ func (j *Import) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Modu
 // Implements android.ApexModule
 func (j *Import) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 	sdkVersion android.ApiLevel) error {
-	sdkSpec := j.MinSdkVersion(ctx)
-	if !sdkSpec.Specified() {
+	sdkVersionSpec := j.SdkVersion(ctx)
+	minSdkVersionSpec := j.MinSdkVersion(ctx)
+	if !minSdkVersionSpec.Specified() {
 		return fmt.Errorf("min_sdk_version is not specified")
 	}
-	if sdkSpec.Kind == android.SdkCore {
+	// If the module is compiling against core (via sdk_version), skip comparison check.
+	if sdkVersionSpec.Kind == android.SdkCore {
 		return nil
 	}
-	if sdkSpec.ApiLevel.GreaterThan(sdkVersion) {
-		return fmt.Errorf("newer SDK(%v)", sdkSpec.ApiLevel)
+	minSdkVersion := minSdkVersionSpec.ApiLevel
+	if minSdkVersion.GreaterThan(sdkVersion) {
+		return fmt.Errorf("newer SDK(%v)", minSdkVersion)
 	}
 	return nil
 }
@@ -2610,10 +2607,10 @@ func (m *Library) convertJavaResourcesAttributes(ctx android.TopDownMutatorConte
 
 type javaCommonAttributes struct {
 	*javaResourcesAttributes
-	Srcs        bazel.LabelListAttribute
-	Plugins     bazel.LabelListAttribute
-	Javacopts   bazel.StringListAttribute
-	Common_srcs bazel.LabelListAttribute
+	*kotlinAttributes
+	Srcs      bazel.LabelListAttribute
+	Plugins   bazel.LabelListAttribute
+	Javacopts bazel.StringListAttribute
 }
 
 type javaDependencyLabels struct {
@@ -2640,8 +2637,8 @@ type javaAidlLibraryAttributes struct {
 // depending on the module type.
 type bp2BuildJavaInfo struct {
 	// separates dependencies into dynamic dependencies and static dependencies.
-	DepLabels     *javaDependencyLabels
-	hasKotlinSrcs bool
+	DepLabels *javaDependencyLabels
+	hasKotlin bool
 }
 
 // convertLibraryAttrsBp2Build returns a javaCommonAttributes struct with
@@ -2788,9 +2785,17 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext)
 	depLabels.Deps = deps
 	depLabels.StaticDeps = bazel.MakeLabelListAttribute(staticDeps)
 
+	hasKotlin := !kotlinSrcs.IsEmpty()
+	if len(m.properties.Common_srcs) != 0 {
+		hasKotlin = true
+		commonAttrs.kotlinAttributes = &kotlinAttributes{
+			bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrc(ctx, m.properties.Common_srcs)),
+		}
+	}
+
 	bp2BuildInfo := &bp2BuildJavaInfo{
-		DepLabels:     depLabels,
-		hasKotlinSrcs: !kotlinSrcs.IsEmpty(),
+		DepLabels: depLabels,
+		hasKotlin: hasKotlin,
 	}
 
 	return commonAttrs, bp2BuildInfo
@@ -2801,6 +2806,10 @@ type javaLibraryAttributes struct {
 	Deps      bazel.LabelListAttribute
 	Exports   bazel.LabelListAttribute
 	Neverlink bazel.BoolAttribute
+}
+
+type kotlinAttributes struct {
+	Common_srcs bazel.LabelListAttribute
 }
 
 func javaLibraryBp2Build(ctx android.TopDownMutatorContext, m *Library) {
@@ -2831,17 +2840,15 @@ func javaLibraryBp2Build(ctx android.TopDownMutatorContext, m *Library) {
 	}
 	name := m.Name()
 
-	if !bp2BuildInfo.hasKotlinSrcs && len(m.properties.Common_srcs) == 0 {
+	if !bp2BuildInfo.hasKotlin {
 		props = bazel.BazelTargetModuleProperties{
 			Rule_class:        "java_library",
 			Bzl_load_location: "//build/bazel/rules/java:library.bzl",
 		}
 	} else {
-		attrs.javaCommonAttributes.Common_srcs = bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrc(ctx, m.properties.Common_srcs))
-
 		props = bazel.BazelTargetModuleProperties{
 			Rule_class:        "kt_jvm_library",
-			Bzl_load_location: "@rules_kotlin//kotlin:jvm_library.bzl",
+			Bzl_load_location: "//build/bazel/rules/kotlin:kt_jvm_library.bzl",
 		}
 	}
 
@@ -2929,39 +2936,19 @@ func javaBinaryHostBp2Build(ctx android.TopDownMutatorContext, m *Binary) {
 		Jvm_flags:    jvmFlags,
 	}
 
-	if !bp2BuildInfo.hasKotlinSrcs && len(m.properties.Common_srcs) == 0 {
+	if !bp2BuildInfo.hasKotlin {
 		attrs.javaCommonAttributes = commonAttrs
 		attrs.Deps = deps
 	} else {
 		ktName := m.Name() + "_kt"
 		ktProps := bazel.BazelTargetModuleProperties{
 			Rule_class:        "kt_jvm_library",
-			Bzl_load_location: "@rules_kotlin//kotlin:jvm_library.bzl",
+			Bzl_load_location: "//build/bazel/rules/kotlin:kt_jvm_library.bzl",
 		}
+
 		ktAttrs := &javaLibraryAttributes{
-			Deps: deps,
-			javaCommonAttributes: &javaCommonAttributes{
-				Srcs:      commonAttrs.Srcs,
-				Plugins:   commonAttrs.Plugins,
-				Javacopts: commonAttrs.Javacopts,
-			},
-		}
-
-		if len(m.properties.Common_srcs) != 0 {
-			ktAttrs.javaCommonAttributes.Common_srcs = bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrc(ctx, m.properties.Common_srcs))
-		}
-
-		// kt_jvm_library does not support resource_strip_prefix, if this attribute
-		// is set, than javaResourcesAttributes needs to be set in the
-		// javaCommonAttributes of the java_binary target
-		if commonAttrs.javaResourcesAttributes != nil {
-			if commonAttrs.javaResourcesAttributes.Resource_strip_prefix != nil {
-				attrs.javaCommonAttributes = &javaCommonAttributes{
-					javaResourcesAttributes: commonAttrs.javaResourcesAttributes,
-				}
-			} else {
-				ktAttrs.javaCommonAttributes.javaResourcesAttributes = commonAttrs.javaResourcesAttributes
-			}
+			Deps:                 deps,
+			javaCommonAttributes: commonAttrs,
 		}
 
 		ctx.CreateBazelTargetModule(ktProps, android.CommonAttributes{Name: ktName}, ktAttrs)

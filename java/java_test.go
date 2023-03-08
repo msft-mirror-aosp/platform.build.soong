@@ -615,6 +615,13 @@ func TestPrebuilts(t *testing.T) {
 	android.AssertPathRelativeToTopEquals(t, "baz dex jar build path", expectedDexJar, bazDexJar)
 
 	ctx.ModuleForTests("qux", "android_common").Rule("Cp")
+
+	entries := android.AndroidMkEntriesForTest(t, ctx, fooModule.Module())[0]
+	android.AssertStringEquals(t, "unexpected LOCAL_SOONG_MODULE_TYPE", "java_library", entries.EntryMap["LOCAL_SOONG_MODULE_TYPE"][0])
+	entries = android.AndroidMkEntriesForTest(t, ctx, barModule.Module())[0]
+	android.AssertStringEquals(t, "unexpected LOCAL_SOONG_MODULE_TYPE", "java_import", entries.EntryMap["LOCAL_SOONG_MODULE_TYPE"][0])
+	entries = android.AndroidMkEntriesForTest(t, ctx, ctx.ModuleForTests("sdklib", "android_common").Module())[0]
+	android.AssertStringEquals(t, "unexpected LOCAL_SOONG_MODULE_TYPE", "java_sdk_library_import", entries.EntryMap["LOCAL_SOONG_MODULE_TYPE"][0])
 }
 
 func assertDeepEquals(t *testing.T, message string, expected interface{}, actual interface{}) {
@@ -2037,11 +2044,11 @@ func TestJavaApiLibraryJarGeneration(t *testing.T) {
 	}{
 		{
 			moduleName:    "bar1",
-			outputJarName: "bar1/android.jar",
+			outputJarName: "bar1/bar1.jar",
 		},
 		{
 			moduleName:    "bar2",
-			outputJarName: "bar2/android.jar",
+			outputJarName: "bar2/bar2.jar",
 		},
 	}
 	for _, c := range testcases {
@@ -2113,7 +2120,7 @@ func TestJavaApiLibraryLibsLink(t *testing.T) {
 		},
 		{
 			moduleName:        "bar2",
-			classPathJarNames: []string{"lib1.jar", "lib2.jar", "bar1/android.jar"},
+			classPathJarNames: []string{"lib1.jar", "lib2.jar", "bar1/bar1.jar"},
 		},
 	}
 	for _, c := range testcases {
@@ -2188,7 +2195,7 @@ func TestJavaApiLibraryStaticLibsLink(t *testing.T) {
 		},
 		{
 			moduleName:        "bar2",
-			staticLibJarNames: []string{"lib1.jar", "lib2.jar", "bar1/android.jar"},
+			staticLibJarNames: []string{"lib1.jar", "lib2.jar", "bar1/bar1.jar"},
 		},
 	}
 	for _, c := range testcases {
