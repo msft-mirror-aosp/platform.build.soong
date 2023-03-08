@@ -16,7 +16,6 @@ package android
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1710,10 +1709,10 @@ func makePathForInstall(ctx ModuleInstallPathContext, os OsType, arch ArchType, 
 func pathForInstall(ctx PathContext, os OsType, arch ArchType, partition string, debug bool,
 	pathComponents ...string) InstallPath {
 
-	var partionPaths []string
+	var partitionPaths []string
 
 	if os.Class == Device {
-		partionPaths = []string{"target", "product", ctx.Config().DeviceName(), partition}
+		partitionPaths = []string{"target", "product", ctx.Config().DeviceName(), partition}
 	} else {
 		osName := os.String()
 		if os == Linux {
@@ -1735,21 +1734,21 @@ func pathForInstall(ctx PathContext, os OsType, arch ArchType, partition string,
 		if os.Class == Host && (arch == X86_64 || arch == Common) {
 			archName = "x86"
 		}
-		partionPaths = []string{"host", osName + "-" + archName, partition}
+		partitionPaths = []string{"host", osName + "-" + archName, partition}
 	}
 	if debug {
-		partionPaths = append([]string{"debug"}, partionPaths...)
+		partitionPaths = append([]string{"debug"}, partitionPaths...)
 	}
 
-	partionPath, err := validatePath(partionPaths...)
+	partitionPath, err := validatePath(partitionPaths...)
 	if err != nil {
 		reportPathError(ctx, err)
 	}
 
 	base := InstallPath{
-		basePath:     basePath{partionPath, ""},
+		basePath:     basePath{partitionPath, ""},
 		soongOutDir:  ctx.Config().soongOutDir,
-		partitionDir: partionPath,
+		partitionDir: partitionPath,
 		partition:    partition,
 	}
 
@@ -1868,10 +1867,14 @@ func (p InstallPaths) Strings() []string {
 	return ret
 }
 
-// validateSafePath validates a path that we trust (may contain ninja variables).
-// Ensures that each path component does not attempt to leave its component.
-func validateSafePath(pathComponents ...string) (string, error) {
+// validatePathInternal ensures that a path does not leave its component, and
+// optionally doesn't contain Ninja variables.
+func validatePathInternal(allowNinjaVariables bool, pathComponents ...string) (string, error) {
 	for _, path := range pathComponents {
+		if !allowNinjaVariables && strings.Contains(path, "$") {
+			return "", fmt.Errorf("Path contains invalid character($): %s", path)
+		}
+
 		path := filepath.Clean(path)
 		if path == ".." || strings.HasPrefix(path, "../") || strings.HasPrefix(path, "/") {
 			return "", fmt.Errorf("Path is outside directory: %s", path)
@@ -1883,16 +1886,18 @@ func validateSafePath(pathComponents ...string) (string, error) {
 	return filepath.Join(pathComponents...), nil
 }
 
+// validateSafePath validates a path that we trust (may contain ninja
+// variables).  Ensures that each path component does not attempt to leave its
+// component. Returns a joined version of each path component.
+func validateSafePath(pathComponents ...string) (string, error) {
+	return validatePathInternal(true, pathComponents...)
+}
+
 // validatePath validates that a path does not include ninja variables, and that
 // each path component does not attempt to leave its component. Returns a joined
 // version of each path component.
 func validatePath(pathComponents ...string) (string, error) {
-	for _, path := range pathComponents {
-		if strings.Contains(path, "$") {
-			return "", fmt.Errorf("Path contains invalid character($): %s", path)
-		}
-	}
-	return validateSafePath(pathComponents...)
+	return validatePathInternal(false, pathComponents...)
 }
 
 func PathForPhony(ctx PathContext, phony string) WritablePath {
@@ -2093,13 +2098,16 @@ func maybeRelErr(basePath string, targetPath string) (string, bool, error) {
 
 // Writes a file to the output directory.  Attempting to write directly to the output directory
 // will fail due to the sandbox of the soong_build process.
+// Only writes the file if the file doesn't exist or if it has different contents, to prevent
+// updating the timestamp if no changes would be made. (This is better for incremental
+// performance.)
 func WriteFileToOutputDir(path WritablePath, data []byte, perm os.FileMode) error {
 	absPath := absolutePath(path.String())
 	err := os.MkdirAll(filepath.Dir(absPath), 0777)
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(absPath, data, perm)
+	return pathtools.WriteFileIfChanged(absPath, data, perm)
 }
 
 func RemoveAllOutputDir(path WritablePath) error {

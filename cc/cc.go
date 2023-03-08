@@ -28,6 +28,7 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
+	"android/soong/bazel/cquery"
 	"android/soong/cc/config"
 	"android/soong/fuzz"
 	"android/soong/genrule"
@@ -1065,6 +1066,31 @@ func (c *Module) CcLibraryInterface() bool {
 	return false
 }
 
+func (c *Module) IsFuzzModule() bool {
+	if _, ok := c.compiler.(*fuzzBinary); ok {
+		return true
+	}
+	return false
+}
+
+func (c *Module) FuzzModuleStruct() fuzz.FuzzModule {
+	return c.FuzzModule
+}
+
+func (c *Module) FuzzPackagedModule() fuzz.FuzzPackagedModule {
+	if fuzzer, ok := c.compiler.(*fuzzBinary); ok {
+		return fuzzer.fuzzPackagedModule
+	}
+	panic(fmt.Errorf("FuzzPackagedModule called on non-fuzz module: %q", c.BaseModuleName()))
+}
+
+func (c *Module) FuzzSharedLibraries() android.Paths {
+	if fuzzer, ok := c.compiler.(*fuzzBinary); ok {
+		return fuzzer.sharedLibraries
+	}
+	panic(fmt.Errorf("FuzzSharedLibraries called on non-fuzz module: %q", c.BaseModuleName()))
+}
+
 func (c *Module) NonCcVariants() bool {
 	return false
 }
@@ -1879,28 +1905,36 @@ func (c *Module) IsMixedBuildSupported(ctx android.BaseModuleContext) bool {
 	}
 
 	// TODO(b/261058727): Remove this (enable mixed builds for modules with UBSan)
-	ubsanEnabled := c.sanitize != nil &&
-		((c.sanitize.Properties.Sanitize.Integer_overflow != nil && *c.sanitize.Properties.Sanitize.Integer_overflow) ||
-			c.sanitize.Properties.Sanitize.Misc_undefined != nil)
-	return c.bazelHandler != nil && !ubsanEnabled
+	// Currently we can only support ubsan when minimum runtime is used.
+	return c.bazelHandler != nil && (!isUbsanEnabled(c) || c.MinimalRuntimeNeeded())
+}
+
+func isUbsanEnabled(c *Module) bool {
+	if c.sanitize == nil {
+		return false
+	}
+	sanitizeProps := &c.sanitize.Properties.SanitizeMutated
+	return Bool(sanitizeProps.Integer_overflow) || len(sanitizeProps.Misc_undefined) > 0
+}
+
+func GetApexConfigKey(ctx android.BaseModuleContext) *android.ApexConfigKey {
+	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	if !apexInfo.IsForPlatform() {
+		if !ctx.Config().BazelContext.IsModuleDclaAllowed(ctx.Module().Name()) {
+			return nil
+		}
+		apexKey := android.ApexConfigKey{
+			WithinApex:     true,
+			ApexSdkVersion: findApexSdkVersion(ctx, apexInfo).String(),
+		}
+		return &apexKey
+	}
+
+	return nil
 }
 
 func (c *Module) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 	bazelModuleLabel := c.getBazelModuleLabel(ctx)
-
-	bazelCtx := ctx.Config().BazelContext
-	if ccInfo, err := bazelCtx.GetCcInfo(bazelModuleLabel, android.GetConfigKey(ctx)); err == nil {
-		c.tidyFiles = android.PathsForBazelOut(ctx, ccInfo.TidyFiles)
-		c.Properties.AndroidMkSharedLibs = ccInfo.LocalSharedLibs
-		c.Properties.AndroidMkStaticLibs = ccInfo.LocalStaticLibs
-		c.Properties.AndroidMkWholeStaticLibs = ccInfo.LocalWholeStaticLibs
-	}
-	if unstrippedInfo, err := bazelCtx.GetCcUnstrippedInfo(bazelModuleLabel, android.GetConfigKey(ctx)); err == nil {
-		c.Properties.AndroidMkSharedLibs = unstrippedInfo.LocalSharedLibs
-		c.Properties.AndroidMkStaticLibs = unstrippedInfo.LocalStaticLibs
-		c.Properties.AndroidMkWholeStaticLibs = unstrippedInfo.LocalWholeStaticLibs
-	}
-
 	c.bazelHandler.ProcessBazelQueryResponse(ctx, bazelModuleLabel)
 
 	c.Properties.SubName = GetSubnameProperty(ctx, c)
@@ -2094,6 +2128,12 @@ func (c *Module) maybeInstall(ctx ModuleContext, apexInfo android.ApexInfo) {
 			return
 		}
 	}
+}
+
+func (c *Module) setAndroidMkVariablesFromCquery(info cquery.CcAndroidMkInfo) {
+	c.Properties.AndroidMkSharedLibs = info.LocalSharedLibs
+	c.Properties.AndroidMkStaticLibs = info.LocalStaticLibs
+	c.Properties.AndroidMkWholeStaticLibs = info.LocalWholeStaticLibs
 }
 
 func (c *Module) toolchain(ctx android.BaseModuleContext) config.Toolchain {
@@ -2376,6 +2416,27 @@ func rewriteLibsForApiImports(c LinkableInterface, libs []string, replaceList ma
 	return nonVariantLibs, variantLibs
 }
 
+func (c *Module) shouldUseApiSurface() bool {
+	if c.Os() == android.Android && c.Target().NativeBridge != android.NativeBridgeEnabled {
+		if GetImageVariantType(c) == vendorImageVariant || GetImageVariantType(c) == productImageVariant {
+			// LLNDK Variant
+			return true
+		}
+
+		if c.Properties.IsSdkVariant {
+			// NDK Variant
+			return true
+		}
+
+		if c.isImportedApiLibrary() {
+			// API Library should depend on API headers
+			return true
+		}
+	}
+
+	return false
+}
+
 func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	if !c.Enabled() {
 		return
@@ -2395,7 +2456,7 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	apiNdkLibs := []string{}
 	apiLateNdkLibs := []string{}
 
-	if ctx.Os() == android.Android && c.Target().NativeBridge != android.NativeBridgeEnabled {
+	if c.shouldUseApiSurface() {
 		deps.SharedLibs, apiNdkLibs = rewriteLibsForApiImports(c, deps.SharedLibs, apiImportInfo.SharedLibs, ctx.Config())
 		deps.LateSharedLibs, apiLateNdkLibs = rewriteLibsForApiImports(c, deps.LateSharedLibs, apiImportInfo.SharedLibs, ctx.Config())
 		deps.SystemSharedLibs, _ = rewriteLibsForApiImports(c, deps.SystemSharedLibs, apiImportInfo.SharedLibs, ctx.Config())
@@ -2426,7 +2487,7 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		}
 
 		// Check header lib replacement from API surface first, and then check again with VSDK
-		if ctx.Os() == android.Android && c.Target().NativeBridge != android.NativeBridgeEnabled {
+		if c.shouldUseApiSurface() {
 			lib = GetReplaceModuleName(lib, apiImportInfo.HeaderLibs)
 		}
 		lib = GetReplaceModuleName(lib, GetSnapshot(c, &snapshotInfo, actx).HeaderLibs)
@@ -2510,12 +2571,22 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		}
 
 		name, version := StubsLibNameAndVersion(lib)
+		if apiLibraryName, ok := apiImportInfo.SharedLibs[name]; ok && !ctx.OtherModuleExists(name) {
+			name = apiLibraryName
+		}
 		sharedLibNames = append(sharedLibNames, name)
 
 		variations := []blueprint.Variation{
 			{Mutator: "link", Variation: "shared"},
 		}
-		AddSharedLibDependenciesWithVersions(ctx, c, variations, depTag, name, version, false)
+
+		if _, ok := apiImportInfo.ApexSharedLibs[name]; !ok || ctx.OtherModuleExists(name) {
+			AddSharedLibDependenciesWithVersions(ctx, c, variations, depTag, name, version, false)
+		}
+
+		if apiLibraryName, ok := apiImportInfo.ApexSharedLibs[name]; ok {
+			AddSharedLibDependenciesWithVersions(ctx, c, variations, depTag, apiLibraryName, version, false)
+		}
 	}
 
 	for _, lib := range deps.LateStaticLibs {
@@ -2823,6 +2894,23 @@ func checkDoubleLoadableLibraries(ctx android.TopDownMutatorContext) {
 	}
 }
 
+func findApexSdkVersion(ctx android.BaseModuleContext, apexInfo android.ApexInfo) android.ApiLevel {
+	// For the dependency from platform to apex, use the latest stubs
+	apexSdkVersion := android.FutureApiLevel
+	if !apexInfo.IsForPlatform() {
+		apexSdkVersion = apexInfo.MinSdkVersion
+	}
+
+	if android.InList("hwaddress", ctx.Config().SanitizeDevice()) {
+		// In hwasan build, we override apexSdkVersion to the FutureApiLevel(10000)
+		// so that even Q(29/Android10) apexes could use the dynamic unwinder by linking the newer stubs(e.g libc(R+)).
+		// (b/144430859)
+		apexSdkVersion = android.FutureApiLevel
+	}
+
+	return apexSdkVersion
+}
+
 // Convert dependencies to paths.  Returns a PathDeps containing paths
 func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	var depPaths PathDeps
@@ -2838,23 +2926,60 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		depPaths.ReexportedGeneratedHeaders = append(depPaths.ReexportedGeneratedHeaders, exporter.GeneratedHeaders...)
 	}
 
-	// For the dependency from platform to apex, use the latest stubs
-	c.apexSdkVersion = android.FutureApiLevel
 	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
-	if !apexInfo.IsForPlatform() {
-		c.apexSdkVersion = apexInfo.MinSdkVersion
-	}
+	c.apexSdkVersion = findApexSdkVersion(ctx, apexInfo)
 
-	if android.InList("hwaddress", ctx.Config().SanitizeDevice()) {
-		// In hwasan build, we override apexSdkVersion to the FutureApiLevel(10000)
-		// so that even Q(29/Android10) apexes could use the dynamic unwinder by linking the newer stubs(e.g libc(R+)).
-		// (b/144430859)
-		c.apexSdkVersion = android.FutureApiLevel
+	skipModuleList := map[string]bool{}
+
+	var apiImportInfo multitree.ApiImportInfo
+	hasApiImportInfo := false
+
+	ctx.VisitDirectDeps(func(dep android.Module) {
+		if dep.Name() == "api_imports" {
+			apiImportInfo = ctx.OtherModuleProvider(dep, multitree.ApiImportsProvider).(multitree.ApiImportInfo)
+			hasApiImportInfo = true
+		}
+	})
+
+	if hasApiImportInfo {
+		targetStubModuleList := map[string]string{}
+		targetOrigModuleList := map[string]string{}
+
+		// Search for dependency which both original module and API imported library with APEX stub exists
+		ctx.VisitDirectDeps(func(dep android.Module) {
+			depName := ctx.OtherModuleName(dep)
+			if apiLibrary, ok := apiImportInfo.ApexSharedLibs[depName]; ok {
+				targetStubModuleList[apiLibrary] = depName
+			}
+		})
+		ctx.VisitDirectDeps(func(dep android.Module) {
+			depName := ctx.OtherModuleName(dep)
+			if origLibrary, ok := targetStubModuleList[depName]; ok {
+				targetOrigModuleList[origLibrary] = depName
+			}
+		})
+
+		// Decide which library should be used between original and API imported library
+		ctx.VisitDirectDeps(func(dep android.Module) {
+			depName := ctx.OtherModuleName(dep)
+			if apiLibrary, ok := targetOrigModuleList[depName]; ok {
+				if shouldUseStubForApex(ctx, dep) {
+					skipModuleList[depName] = true
+				} else {
+					skipModuleList[apiLibrary] = true
+				}
+			}
+		})
 	}
 
 	ctx.VisitDirectDeps(func(dep android.Module) {
 		depName := ctx.OtherModuleName(dep)
 		depTag := ctx.OtherModuleDependencyTag(dep)
+
+		if _, ok := skipModuleList[depName]; ok {
+			// skip this module because original module or API imported module matching with this should be used instead.
+			return
+		}
 
 		if depTag == android.DarwinUniversalVariantTag {
 			depPaths.DarwinSecondArchOutput = dep.(*Module).OutputFile()
@@ -3191,21 +3316,8 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	return depPaths
 }
 
-// ChooseStubOrImpl determines whether a given dependency should be redirected to the stub variant
-// of the dependency or not, and returns the SharedLibraryInfo and FlagExporterInfo for the right
-// dependency. The stub variant is selected when the dependency crosses a boundary where each side
-// has different level of updatability. For example, if a library foo in an APEX depends on a
-// library bar which provides stable interface and exists in the platform, foo uses the stub variant
-// of bar. If bar doesn't provide a stable interface (i.e. buildStubs() == false) or is in the
-// same APEX as foo, the non-stub variant of bar is used.
-func ChooseStubOrImpl(ctx android.ModuleContext, dep android.Module) (SharedLibraryInfo, FlagExporterInfo) {
+func shouldUseStubForApex(ctx android.ModuleContext, dep android.Module) bool {
 	depName := ctx.OtherModuleName(dep)
-	depTag := ctx.OtherModuleDependencyTag(dep)
-	libDepTag, ok := depTag.(libraryDependencyTag)
-	if !ok || !libDepTag.shared() {
-		panic(fmt.Errorf("Unexpected dependency tag: %T", depTag))
-	}
-
 	thisModule, ok := ctx.Module().(android.ApexModule)
 	if !ok {
 		panic(fmt.Errorf("Not an APEX module: %q", ctx.ModuleName()))
@@ -3220,62 +3332,93 @@ func ChooseStubOrImpl(ctx android.ModuleContext, dep android.Module) (SharedLibr
 		bootstrap = linkable.Bootstrap()
 	}
 
+	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+
+	useStubs := false
+
+	if lib := moduleLibraryInterface(dep); lib.buildStubs() && useVndk { // LLNDK
+		if !apexInfo.IsForPlatform() {
+			// For platform libraries, use current version of LLNDK
+			// If this is for use_vendor apex we will apply the same rules
+			// of apex sdk enforcement below to choose right version.
+			useStubs = true
+		}
+	} else if apexInfo.IsForPlatform() || apexInfo.UsePlatformApis {
+		// If not building for APEX or the containing APEX allows the use of
+		// platform APIs, use stubs only when it is from an APEX (and not from
+		// platform) However, for host, ramdisk, vendor_ramdisk, recovery or
+		// bootstrap modules, always link to non-stub variant
+		isNotInPlatform := dep.(android.ApexModule).NotInPlatform()
+
+		isApexImportedApiLibrary := false
+
+		if cc, ok := dep.(*Module); ok {
+			if apiLibrary, ok := cc.linker.(*apiLibraryDecorator); ok {
+				if apiLibrary.hasApexStubs() {
+					isApexImportedApiLibrary = true
+				}
+			}
+		}
+
+		useStubs = (isNotInPlatform || isApexImportedApiLibrary) && !bootstrap
+
+		if useStubs {
+			// Another exception: if this module is a test for an APEX, then
+			// it is linked with the non-stub variant of a module in the APEX
+			// as if this is part of the APEX.
+			testFor := ctx.Provider(android.ApexTestForInfoProvider).(android.ApexTestForInfo)
+			for _, apexContents := range testFor.ApexContents {
+				if apexContents.DirectlyInApex(depName) {
+					useStubs = false
+					break
+				}
+			}
+		}
+		if useStubs {
+			// Yet another exception: If this module and the dependency are
+			// available to the same APEXes then skip stubs between their
+			// platform variants. This complements the test_for case above,
+			// which avoids the stubs on a direct APEX library dependency, by
+			// avoiding stubs for indirect test dependencies as well.
+			//
+			// TODO(b/183882457): This doesn't work if the two libraries have
+			// only partially overlapping apex_available. For that test_for
+			// modules would need to be split into APEX variants and resolved
+			// separately for each APEX they have access to.
+			if !isApexImportedApiLibrary && android.AvailableToSameApexes(thisModule, dep.(android.ApexModule)) {
+				useStubs = false
+			}
+		}
+	} else {
+		// If building for APEX, use stubs when the parent is in any APEX that
+		// the child is not in.
+		useStubs = !android.DirectlyInAllApexes(apexInfo, depName)
+	}
+
+	return useStubs
+}
+
+// ChooseStubOrImpl determines whether a given dependency should be redirected to the stub variant
+// of the dependency or not, and returns the SharedLibraryInfo and FlagExporterInfo for the right
+// dependency. The stub variant is selected when the dependency crosses a boundary where each side
+// has different level of updatability. For example, if a library foo in an APEX depends on a
+// library bar which provides stable interface and exists in the platform, foo uses the stub variant
+// of bar. If bar doesn't provide a stable interface (i.e. buildStubs() == false) or is in the
+// same APEX as foo, the non-stub variant of bar is used.
+func ChooseStubOrImpl(ctx android.ModuleContext, dep android.Module) (SharedLibraryInfo, FlagExporterInfo) {
+	depTag := ctx.OtherModuleDependencyTag(dep)
+	libDepTag, ok := depTag.(libraryDependencyTag)
+	if !ok || !libDepTag.shared() {
+		panic(fmt.Errorf("Unexpected dependency tag: %T", depTag))
+	}
+
 	sharedLibraryInfo := ctx.OtherModuleProvider(dep, SharedLibraryInfoProvider).(SharedLibraryInfo)
 	depExporterInfo := ctx.OtherModuleProvider(dep, FlagExporterInfoProvider).(FlagExporterInfo)
 	sharedLibraryStubsInfo := ctx.OtherModuleProvider(dep, SharedLibraryStubsProvider).(SharedLibraryStubsInfo)
-	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
 
 	if !libDepTag.explicitlyVersioned && len(sharedLibraryStubsInfo.SharedStubLibraries) > 0 {
-		useStubs := false
-
-		if lib := moduleLibraryInterface(dep); lib.buildStubs() && useVndk { // LLNDK
-			if !apexInfo.IsForPlatform() {
-				// For platform libraries, use current version of LLNDK
-				// If this is for use_vendor apex we will apply the same rules
-				// of apex sdk enforcement below to choose right version.
-				useStubs = true
-			}
-		} else if apexInfo.IsForPlatform() || apexInfo.UsePlatformApis {
-			// If not building for APEX or the containing APEX allows the use of
-			// platform APIs, use stubs only when it is from an APEX (and not from
-			// platform) However, for host, ramdisk, vendor_ramdisk, recovery or
-			// bootstrap modules, always link to non-stub variant
-			useStubs = dep.(android.ApexModule).NotInPlatform() && !bootstrap
-			if useStubs {
-				// Another exception: if this module is a test for an APEX, then
-				// it is linked with the non-stub variant of a module in the APEX
-				// as if this is part of the APEX.
-				testFor := ctx.Provider(android.ApexTestForInfoProvider).(android.ApexTestForInfo)
-				for _, apexContents := range testFor.ApexContents {
-					if apexContents.DirectlyInApex(depName) {
-						useStubs = false
-						break
-					}
-				}
-			}
-			if useStubs {
-				// Yet another exception: If this module and the dependency are
-				// available to the same APEXes then skip stubs between their
-				// platform variants. This complements the test_for case above,
-				// which avoids the stubs on a direct APEX library dependency, by
-				// avoiding stubs for indirect test dependencies as well.
-				//
-				// TODO(b/183882457): This doesn't work if the two libraries have
-				// only partially overlapping apex_available. For that test_for
-				// modules would need to be split into APEX variants and resolved
-				// separately for each APEX they have access to.
-				if android.AvailableToSameApexes(thisModule, dep.(android.ApexModule)) {
-					useStubs = false
-				}
-			}
-		} else {
-			// If building for APEX, use stubs when the parent is in any APEX that
-			// the child is not in.
-			useStubs = !android.DirectlyInAllApexes(apexInfo, depName)
-		}
-
 		// when to use (unspecified) stubs, use the latest one.
-		if useStubs {
+		if shouldUseStubForApex(ctx, dep) {
 			stubs := sharedLibraryStubsInfo.SharedStubLibraries
 			toUse := stubs[len(stubs)-1]
 			sharedLibraryInfo = toUse.SharedLibraryInfo

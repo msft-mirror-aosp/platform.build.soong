@@ -241,10 +241,11 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 	provideNativeLibs = android.SortedUniqueStrings(provideNativeLibs)
 	requireNativeLibs = android.SortedUniqueStrings(android.RemoveListFromList(requireNativeLibs, provideNativeLibs))
 
-	// APEX name can be overridden
+	// VNDK APEX name is determined at runtime, so update "name" in apex_manifest
 	optCommands := []string{}
-	if a.properties.Apex_name != nil {
-		optCommands = append(optCommands, "-v name "+*a.properties.Apex_name)
+	if a.vndkApex {
+		apexName := vndkApexNamePrefix + a.vndkVersion(ctx.DeviceConfig())
+		optCommands = append(optCommands, "-v name "+apexName)
 	}
 
 	// Collect jniLibs. Notice that a.filesInfo is already sorted
@@ -332,6 +333,8 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Output
 		ctx.PropertyErrorf("file_contexts", "cannot find file_contexts file: %q", fileContexts.String())
 	}
 
+	useFileContextsAsIs := proptools.Bool(a.properties.Use_file_contexts_as_is)
+
 	output := android.PathForModuleOut(ctx, "file_contexts")
 	rule := android.NewRuleBuilder(pctx, ctx)
 
@@ -343,9 +346,11 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Output
 		rule.Command().Text("cat").Input(fileContexts).Text(">>").Output(output)
 		// new line
 		rule.Command().Text("echo").Text(">>").Output(output)
-		// force-label /apex_manifest.pb and / as system_file so that apexd can read them
-		rule.Command().Text("echo").Flag("/apex_manifest\\\\.pb u:object_r:system_file:s0").Text(">>").Output(output)
-		rule.Command().Text("echo").Flag("/ u:object_r:system_file:s0").Text(">>").Output(output)
+		if !useFileContextsAsIs {
+			// force-label /apex_manifest.pb and / as system_file so that apexd can read them
+			rule.Command().Text("echo").Flag("/apex_manifest\\\\.pb u:object_r:system_file:s0").Text(">>").Output(output)
+			rule.Command().Text("echo").Flag("/ u:object_r:system_file:s0").Text(">>").Output(output)
+		}
 	case flattenedApex:
 		// For flattened apexes, install path should be prepended.
 		// File_contexts file should be emiited to make via LOCAL_FILE_CONTEXTS
@@ -358,9 +363,11 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Output
 		rule.Command().Text("awk").Text(`'/object_r/{printf("` + apexPath + `%s\n", $0)}'`).Input(fileContexts).Text(">").Output(output)
 		// new line
 		rule.Command().Text("echo").Text(">>").Output(output)
-		// force-label /apex_manifest.pb and / as system_file so that apexd can read them
-		rule.Command().Text("echo").Flag(apexPath + `/apex_manifest\\.pb u:object_r:system_file:s0`).Text(">>").Output(output)
-		rule.Command().Text("echo").Flag(apexPath + "/ u:object_r:system_file:s0").Text(">>").Output(output)
+		if !useFileContextsAsIs {
+			// force-label /apex_manifest.pb and / as system_file so that apexd can read them
+			rule.Command().Text("echo").Flag(apexPath + `/apex_manifest\\.pb u:object_r:system_file:s0`).Text(">>").Output(output)
+			rule.Command().Text("echo").Flag(apexPath + "/ u:object_r:system_file:s0").Text(">>").Output(output)
+		}
 	default:
 		panic(fmt.Errorf("unsupported type %v", a.properties.ApexType))
 	}
@@ -445,7 +452,7 @@ func markManifestTestOnly(ctx android.ModuleContext, androidManifestFile android
 func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	apexType := a.properties.ApexType
 	suffix := apexType.suffix()
-	apexName := proptools.StringDefault(a.properties.Apex_name, a.BaseModuleName())
+	apexName := a.BaseModuleName()
 
 	////////////////////////////////////////////////////////////////////////////////////////////
 	// Step 1: copy built files to appropriate directories under the image directory
@@ -454,26 +461,13 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 
 	installSymbolFiles := (!ctx.Config().KatiEnabled() || a.ExportedToMake()) && a.installable()
 
-	// b/140136207. When there are overriding APEXes for a VNDK APEX, the symbols file for the overridden
-	// APEX and the overriding APEX will have the same installation paths at /apex/com.android.vndk.v<ver>
-	// as their apexName will be the same. To avoid the path conflicts, skip installing the symbol files
-	// for the overriding VNDK APEXes.
-	if a.vndkApex && len(a.overridableProperties.Overrides) > 0 {
-		installSymbolFiles = false
-	}
-
-	// Avoid creating duplicate build rules for multi-installed APEXes.
-	if proptools.BoolDefault(a.properties.Multi_install_skip_symbol_files, false) {
-		installSymbolFiles = false
-
-	}
 	// set of dependency module:location mappings
 	installMapSet := make(map[string]bool)
 
 	// TODO(jiyong): use the RuleBuilder
 	var copyCommands []string
 	var implicitInputs []android.Path
-	pathWhenActivated := android.PathForModuleInPartitionInstall(ctx, "apex", apexName)
+	apexDir := android.PathForModuleInPartitionInstall(ctx, "apex", apexName)
 	for _, fi := range a.filesInfo {
 		destPath := imageDir.Join(ctx, fi.path()).String()
 		// Prepare the destination path
@@ -488,8 +482,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		// Copy the built file to the directory. But if the symlink optimization is turned
 		// on, place a symlink to the corresponding file in /system partition instead.
 		if a.linkToSystemLib && fi.transitiveDep && fi.availableToPlatform() {
-			// TODO(jiyong): pathOnDevice should come from fi.module, not being calculated here
-			pathOnDevice := filepath.Join("/system", fi.path())
+			pathOnDevice := filepath.Join("/", fi.partition, fi.path())
 			copyCommands = append(copyCommands, "ln -sfn "+pathOnDevice+" "+destPath)
 		} else {
 			// Copy the file into APEX
@@ -503,12 +496,12 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 					fmt.Sprintf("unzip -qDD -d %s %s", destPathDir,
 						fi.module.(*java.AndroidAppSet).PackedAdditionalOutputs().String()))
 				if installSymbolFiles {
-					installedPath = ctx.InstallFileWithExtraFilesZip(pathWhenActivated.Join(ctx, fi.installDir),
+					installedPath = ctx.InstallFileWithExtraFilesZip(apexDir.Join(ctx, fi.installDir),
 						fi.stem(), fi.builtFile, fi.module.(*java.AndroidAppSet).PackedAdditionalOutputs())
 				}
 			} else {
 				if installSymbolFiles {
-					installedPath = ctx.InstallFile(pathWhenActivated.Join(ctx, fi.installDir), fi.stem(), fi.builtFile)
+					installedPath = ctx.InstallFile(apexDir.Join(ctx, fi.installDir), fi.stem(), fi.builtFile)
 				}
 			}
 			implicitInputs = append(implicitInputs, fi.builtFile)
@@ -522,7 +515,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 				symlinkDest := imageDir.Join(ctx, symlinkPath).String()
 				copyCommands = append(copyCommands, "ln -sfn "+filepath.Base(destPath)+" "+symlinkDest)
 				if installSymbolFiles {
-					installedSymlink := ctx.InstallSymlink(pathWhenActivated.Join(ctx, filepath.Dir(symlinkPath)), filepath.Base(symlinkPath), installedPath)
+					installedSymlink := ctx.InstallSymlink(apexDir.Join(ctx, filepath.Dir(symlinkPath)), filepath.Base(symlinkPath), installedPath)
 					implicitInputs = append(implicitInputs, installedSymlink)
 				}
 			}
@@ -549,14 +542,14 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	}
 	implicitInputs = append(implicitInputs, a.manifestPbOut)
 	if installSymbolFiles {
-		installedManifest := ctx.InstallFile(pathWhenActivated, "apex_manifest.pb", a.manifestPbOut)
-		installedKey := ctx.InstallFile(pathWhenActivated, "apex_pubkey", a.publicKeyFile)
+		installedManifest := ctx.InstallFile(apexDir, "apex_manifest.pb", a.manifestPbOut)
+		installedKey := ctx.InstallFile(apexDir, "apex_pubkey", a.publicKeyFile)
 		implicitInputs = append(implicitInputs, installedManifest, installedKey)
 	}
 
 	if len(installMapSet) > 0 {
 		var installs []string
-		installs = append(installs, android.SortedStringKeys(installMapSet)...)
+		installs = append(installs, android.SortedKeys(installMapSet)...)
 		a.SetLicenseInstallMap(installs)
 	}
 
@@ -704,12 +697,6 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 
 		if a.testOnlyShouldSkipPayloadSign() {
 			optFlags = append(optFlags, "--unsigned_payload")
-		}
-
-		if a.properties.Apex_name != nil {
-			// If apex_name is set, apexer can skip checking if key name matches with
-			// apex name.  Note that apex_manifest is also mended.
-			optFlags = append(optFlags, "--do_not_check_keyname")
 		}
 
 		if moduleMinSdkVersion == android.SdkVersion_Android10 {
@@ -959,8 +946,7 @@ func (a *apexBundle) buildFlattenedApex(ctx android.ModuleContext) {
 			dir := filepath.Join("apex", bundleName, fi.installDir)
 			installDir := android.PathForModuleInstall(ctx, dir)
 			if a.linkToSystemLib && fi.transitiveDep && fi.availableToPlatform() {
-				// TODO(jiyong): pathOnDevice should come from fi.module, not being calculated here
-				pathOnDevice := filepath.Join("/system", fi.path())
+				pathOnDevice := filepath.Join("/", fi.partition, fi.path())
 				installedSymlinks = append(installedSymlinks,
 					ctx.InstallAbsoluteSymlink(installDir, fi.stem(), pathOnDevice))
 			} else {
@@ -1018,7 +1004,7 @@ func (a *apexBundle) getOverrideManifestPackageName(ctx android.ModuleContext) s
 	if a.vndkApex {
 		overrideName, overridden := ctx.DeviceConfig().OverrideManifestPackageNameFor(vndkApexName)
 		if overridden {
-			return strings.Replace(*a.properties.Apex_name, vndkApexName, overrideName, 1)
+			return overrideName + ".v" + a.vndkVersion(ctx.DeviceConfig())
 		}
 		return ""
 	}

@@ -243,7 +243,6 @@ type bazelCcLibraryAttributes struct {
 	Local_includes         bazel.StringListAttribute
 	Absolute_includes      bazel.StringListAttribute
 	Linkopts               bazel.StringListAttribute
-	Use_libcrt             bazel.BoolAttribute
 	Rtti                   bazel.BoolAttribute
 
 	Stl     *string
@@ -251,7 +250,6 @@ type bazelCcLibraryAttributes struct {
 	C_std   *string
 
 	// This is shared only.
-	Link_crt                 bazel.BoolAttribute
 	Additional_linker_inputs bazel.LabelListAttribute
 
 	// Common properties shared between both shared and static variants.
@@ -360,7 +358,6 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Export_system_includes:   exportedIncludes.SystemIncludes,
 		Local_includes:           compilerAttrs.localIncludes,
 		Absolute_includes:        compilerAttrs.absoluteIncludes,
-		Use_libcrt:               linkerAttrs.useLibcrt,
 		Rtti:                     compilerAttrs.rtti,
 		Stl:                      compilerAttrs.stl,
 		Cpp_std:                  compilerAttrs.cppStd,
@@ -381,8 +378,6 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Local_includes:           compilerAttrs.localIncludes,
 		Absolute_includes:        compilerAttrs.absoluteIncludes,
 		Linkopts:                 linkerAttrs.linkopts,
-		Link_crt:                 linkerAttrs.linkCrt,
-		Use_libcrt:               linkerAttrs.useLibcrt,
 		Rtti:                     compilerAttrs.rtti,
 		Stl:                      compilerAttrs.stl,
 		Cpp_std:                  compilerAttrs.cppStd,
@@ -845,7 +840,11 @@ func (handler *ccLibraryBazelHandler) generateStaticBazelBuildActions(ctx androi
 		ctx.ModuleErrorf("expected exactly one root archive file for '%s', but got %s", label, rootStaticArchives)
 		return
 	}
-	outputFilePath := android.PathForBazelOut(ctx, rootStaticArchives[0])
+	var outputFilePath android.Path = android.PathForBazelOut(ctx, rootStaticArchives[0])
+	if len(ccInfo.TidyFiles) > 0 {
+		handler.module.tidyFiles = android.PathsForBazelOut(ctx, ccInfo.TidyFiles)
+		outputFilePath = android.AttachValidationActions(ctx, outputFilePath, handler.module.tidyFiles)
+	}
 	handler.module.outputFile = android.OptionalPathForPath(outputFilePath)
 
 	objPaths := ccInfo.CcObjectFiles
@@ -881,9 +880,13 @@ func (handler *ccLibraryBazelHandler) generateSharedBazelBuildActions(ctx androi
 		ctx.ModuleErrorf("expected exactly one root dynamic library file for '%s', but got %s", label, rootDynamicLibraries)
 		return
 	}
-	outputFilePath := android.PathForBazelOut(ctx, rootDynamicLibraries[0])
-	handler.module.outputFile = android.OptionalPathForPath(outputFilePath)
+	var outputFilePath android.Path = android.PathForBazelOut(ctx, rootDynamicLibraries[0])
+	if len(ccInfo.TidyFiles) > 0 {
+		handler.module.tidyFiles = android.PathsForBazelOut(ctx, ccInfo.TidyFiles)
+		outputFilePath = android.AttachValidationActions(ctx, outputFilePath, handler.module.tidyFiles)
+	}
 
+	handler.module.outputFile = android.OptionalPathForPath(outputFilePath)
 	handler.module.linker.(*libraryDecorator).unstrippedOutputFile = android.PathForBazelOut(ctx, ccInfo.UnstrippedOutput)
 
 	var tocFile android.OptionalPath
@@ -907,12 +910,12 @@ func (handler *ccLibraryBazelHandler) generateSharedBazelBuildActions(ctx androi
 
 func (handler *ccLibraryBazelHandler) QueueBazelCall(ctx android.BaseModuleContext, label string) {
 	bazelCtx := ctx.Config().BazelContext
-	bazelCtx.QueueBazelRequest(label, cquery.GetCcInfo, android.GetConfigKey(ctx))
+	bazelCtx.QueueBazelRequest(label, cquery.GetCcInfo, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
 }
 
 func (handler *ccLibraryBazelHandler) ProcessBazelQueryResponse(ctx android.ModuleContext, label string) {
 	bazelCtx := ctx.Config().BazelContext
-	ccInfo, err := bazelCtx.GetCcInfo(label, android.GetConfigKey(ctx))
+	ccInfo, err := bazelCtx.GetCcInfo(label, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
 	if err != nil {
 		ctx.ModuleErrorf("Error getting Bazel CcInfo: %s", err)
 		return
@@ -937,6 +940,8 @@ func (handler *ccLibraryBazelHandler) ProcessBazelQueryResponse(ctx android.Modu
 		// implementation.
 		i.(*libraryDecorator).collectedSnapshotHeaders = android.Paths{}
 	}
+
+	handler.module.setAndroidMkVariablesFromCquery(ccInfo.CcAndroidMkInfo)
 }
 
 func (library *libraryDecorator) setFlagExporterInfoFromCcInfo(ctx android.ModuleContext, ccInfo cquery.CcInfo) {
@@ -1490,7 +1495,7 @@ func (library *libraryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 		deps.ReexportSharedLibHeaders = append(deps.ReexportSharedLibHeaders, library.StaticProperties.Static.Export_shared_lib_headers...)
 		deps.ReexportStaticLibHeaders = append(deps.ReexportStaticLibHeaders, library.StaticProperties.Static.Export_static_lib_headers...)
 	} else if library.shared() {
-		if !Bool(library.baseLinker.Properties.Nocrt) {
+		if library.baseLinker.Properties.crt() {
 			deps.CrtBegin = append(deps.CrtBegin, ctx.toolchain().CrtBeginSharedLibrary()...)
 			deps.CrtEnd = append(deps.CrtEnd, ctx.toolchain().CrtEndSharedLibrary()...)
 		}
@@ -2874,13 +2879,10 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 		commonAttrs.Deps.Add(baseAttributes.protoDependency)
 		attrs = &bazelCcLibraryStaticAttributes{
 			staticOrSharedAttributes: commonAttrs,
-
-			Use_libcrt: linkerAttrs.useLibcrt,
-
-			Rtti:    compilerAttrs.rtti,
-			Stl:     compilerAttrs.stl,
-			Cpp_std: compilerAttrs.cppStd,
-			C_std:   compilerAttrs.cStd,
+			Rtti:                     compilerAttrs.rtti,
+			Stl:                      compilerAttrs.stl,
+			Cpp_std:                  compilerAttrs.cppStd,
+			C_std:                    compilerAttrs.cStd,
 
 			Export_includes:          exportedIncludes.Includes,
 			Export_absolute_includes: exportedIncludes.AbsoluteIncludes,
@@ -2905,8 +2907,6 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 			Asflags:    asFlags,
 
 			Linkopts:        linkerAttrs.linkopts,
-			Link_crt:        linkerAttrs.linkCrt,
-			Use_libcrt:      linkerAttrs.useLibcrt,
 			Use_version_lib: linkerAttrs.useVersionLib,
 
 			Rtti:    compilerAttrs.rtti,
@@ -2951,12 +2951,6 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 
 	tags := android.ApexAvailableTags(module)
 
-	// This lib needs some special handling in bazel, so add this tag to the build
-	// file.
-	if module.Name() == "libprofile-clang-extras" {
-		tags.Append(bazel.MakeStringListAttribute([]string{"NO_EXPORTING"}))
-	}
-
 	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: module.Name(), Tags: tags}, attrs)
 }
 
@@ -2964,13 +2958,11 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 type bazelCcLibraryStaticAttributes struct {
 	staticOrSharedAttributes
 
-	Use_libcrt      bazel.BoolAttribute
 	Use_version_lib bazel.BoolAttribute
-
-	Rtti    bazel.BoolAttribute
-	Stl     *string
-	Cpp_std *string
-	C_std   *string
+	Rtti            bazel.BoolAttribute
+	Stl             *string
+	Cpp_std         *string
+	C_std           *string
 
 	Export_includes          bazel.StringListAttribute
 	Export_absolute_includes bazel.StringListAttribute
@@ -2990,10 +2982,7 @@ type bazelCcLibraryStaticAttributes struct {
 type bazelCcLibrarySharedAttributes struct {
 	staticOrSharedAttributes
 
-	Linkopts bazel.StringListAttribute
-	Link_crt bazel.BoolAttribute // Only for linking shared library (and cc_binary)
-
-	Use_libcrt      bazel.BoolAttribute
+	Linkopts        bazel.StringListAttribute
 	Use_version_lib bazel.BoolAttribute
 
 	Rtti    bazel.BoolAttribute

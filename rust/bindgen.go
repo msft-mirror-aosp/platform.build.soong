@@ -29,7 +29,7 @@ var (
 	defaultBindgenFlags = []string{""}
 
 	// bindgen should specify its own Clang revision so updating Clang isn't potentially blocked on bindgen failures.
-	bindgenClangVersion = "clang-r468909b"
+	bindgenClangVersion = "clang-r475365b"
 
 	_ = pctx.VariableFunc("bindgenClangVersion", func(ctx android.PackageVarContext) string {
 		if override := ctx.Config().Getenv("LLVM_BINDGEN_PREBUILTS_VERSION"); override != "" {
@@ -52,7 +52,7 @@ var (
 		if ctx.Config().UseHostMusl() {
 			return "musl/lib/"
 		} else {
-			return "lib64/"
+			return "lib/"
 		}
 	})
 	_ = pctx.SourcePathVariable("bindgenClang",
@@ -313,7 +313,7 @@ func NewRustBindgen(hod android.HostOrDeviceSupported) (*Module, *bindgenDecorat
 
 func (b *bindgenDecorator) SourceProviderDeps(ctx DepsContext, deps Deps) Deps {
 	deps = b.BaseSourceProvider.SourceProviderDeps(ctx, deps)
-	if ctx.toolchain().Bionic() {
+	if ctx.toolchain().Bionic() && !ctx.RustModule().compiler.noStdlibs() {
 		deps = bionicDeps(ctx, deps, false)
 	} else if ctx.Os() == android.LinuxMusl {
 		deps = muslDeps(ctx, deps, false)

@@ -59,12 +59,12 @@ var _ BazelHandler = (*libraryHeaderBazelHandler)(nil)
 
 func (handler *libraryHeaderBazelHandler) QueueBazelCall(ctx android.BaseModuleContext, label string) {
 	bazelCtx := ctx.Config().BazelContext
-	bazelCtx.QueueBazelRequest(label, cquery.GetCcInfo, android.GetConfigKey(ctx))
+	bazelCtx.QueueBazelRequest(label, cquery.GetCcInfo, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
 }
 
 func (h *libraryHeaderBazelHandler) ProcessBazelQueryResponse(ctx android.ModuleContext, label string) {
 	bazelCtx := ctx.Config().BazelContext
-	ccInfo, err := bazelCtx.GetCcInfo(label, android.GetConfigKey(ctx))
+	ccInfo, err := bazelCtx.GetCcInfo(label, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
 	if err != nil {
 		ctx.ModuleErrorf(err.Error())
 		return
@@ -76,7 +76,11 @@ func (h *libraryHeaderBazelHandler) ProcessBazelQueryResponse(ctx android.Module
 		return
 	}
 
-	outputPath := android.PathForBazelOut(ctx, outputPaths[0])
+	var outputPath android.Path = android.PathForBazelOut(ctx, outputPaths[0])
+	if len(ccInfo.TidyFiles) > 0 {
+		h.module.tidyFiles = android.PathsForBazelOut(ctx, ccInfo.TidyFiles)
+		outputPath = android.AttachValidationActions(ctx, outputPath, h.module.tidyFiles)
+	}
 	h.module.outputFile = android.OptionalPathForPath(outputPath)
 
 	// HeaderLibraryInfo is an empty struct to indicate to dependencies that this is a header library
@@ -88,6 +92,8 @@ func (h *libraryHeaderBazelHandler) ProcessBazelQueryResponse(ctx android.Module
 	// validation will fail. For now, set this to an empty list.
 	// TODO(cparsons): More closely mirror the collectHeadersForSnapshot implementation.
 	h.library.collectedSnapshotHeaders = android.Paths{}
+
+	h.module.setAndroidMkVariablesFromCquery(ccInfo.CcAndroidMkInfo)
 }
 
 // cc_library_headers contains a set of c/c++ headers which are imported by
