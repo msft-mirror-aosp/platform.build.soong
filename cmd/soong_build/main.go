@@ -81,6 +81,7 @@ func init() {
 	flag.BoolVar(&cmdlineArgs.BazelMode, "bazel-mode", false, "use bazel for analysis of certain modules")
 	flag.BoolVar(&cmdlineArgs.BazelModeStaging, "bazel-mode-staging", false, "use bazel for analysis of certain near-ready modules")
 	flag.BoolVar(&cmdlineArgs.BazelModeDev, "bazel-mode-dev", false, "use bazel for analysis of a large number of modules (less stable)")
+	flag.BoolVar(&cmdlineArgs.UseBazelProxy, "use-bazel-proxy", false, "communicate with bazel using unix socket proxy instead of spawning subprocesses")
 
 	// Flags that probably shouldn't be flags of soong_build, but we haven't found
 	// the time to remove them yet
@@ -135,7 +136,7 @@ func runQueryView(queryviewDir, queryviewMarker string, ctx *android.Context) {
 	ctx.EventHandler.Begin("queryview")
 	defer ctx.EventHandler.End("queryview")
 	codegenContext := bp2build.NewCodegenContext(ctx.Config(), ctx, bp2build.QueryView, topDir)
-	err := createBazelWorkspace(codegenContext, shared.JoinPath(topDir, queryviewDir))
+	err := createBazelWorkspace(codegenContext, shared.JoinPath(topDir, queryviewDir), false)
 	maybeQuit(err, "")
 	touch(shared.JoinPath(topDir, queryviewMarker))
 }
@@ -173,7 +174,28 @@ func runApiBp2build(ctx *android.Context, extraNinjaDeps []string) string {
 	// Run codegen to generate BUILD files
 	codegenContext := bp2build.NewCodegenContext(ctx.Config(), ctx, bp2build.ApiBp2build, topDir)
 	absoluteApiBp2buildDir := shared.JoinPath(topDir, cmdlineArgs.BazelApiBp2buildDir)
-	err := createBazelWorkspace(codegenContext, absoluteApiBp2buildDir)
+	// Always generate bp2build_all_srcs filegroups in api_bp2build.
+	// This is necessary to force each Android.bp file to create an equivalent BUILD file
+	// and prevent package boundray issues.
+	// e.g.
+	// Source
+	// f/b/Android.bp
+	// java_library{
+	//   name: "foo",
+	//   api: "api/current.txt",
+	// }
+	//
+	// f/b/api/Android.bp <- will cause package boundary issues
+	//
+	// Gen
+	// f/b/BUILD
+	// java_contribution{
+	//   name: "foo.contribution",
+	//   api: "//f/b/api:current.txt",
+	// }
+	//
+	// If we don't generate f/b/api/BUILD, foo.contribution will be unbuildable.
+	err := createBazelWorkspace(codegenContext, absoluteApiBp2buildDir, true)
 	maybeQuit(err, "")
 	ninjaDeps = append(ninjaDeps, codegenContext.AdditionalNinjaDeps()...)
 

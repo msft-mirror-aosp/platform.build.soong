@@ -21,6 +21,7 @@ specific-but-shared functionality among tests in package
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -230,11 +231,11 @@ func (b BazelTestResult) CompareAllBazelTargets(t *testing.T, description string
 	actualTargets := b.buildFileToTargets
 
 	// Generate the sorted set of directories to check.
-	dirsToCheck := android.SortedStringKeys(expectedTargets)
+	dirsToCheck := android.SortedKeys(expectedTargets)
 	if !ignoreUnexpected {
 		// This needs to perform an exact match so add the directories in which targets were
 		// produced to the list of directories to check.
-		dirsToCheck = append(dirsToCheck, android.SortedStringKeys(actualTargets)...)
+		dirsToCheck = append(dirsToCheck, android.SortedKeys(actualTargets)...)
 		dirsToCheck = android.SortedUniqueStrings(dirsToCheck)
 	}
 
@@ -263,6 +264,12 @@ func (b BazelTestResult) CompareBazelTargets(t *testing.T, description string, e
 		t.Errorf("%s: Expected %d bazel target (%s), got %d (%s)",
 			description, expectedCount, expectedContents, actualCount, actualTargets)
 	} else {
+		sort.SliceStable(actualTargets, func(i, j int) bool {
+			return actualTargets[i].name < actualTargets[j].name
+		})
+		sort.SliceStable(expectedContents, func(i, j int) bool {
+			return getTargetName(expectedContents[i]) < getTargetName(expectedContents[j])
+		})
 		for i, actualTarget := range actualTargets {
 			if w, g := expectedContents[i], actualTarget.content; w != g {
 				t.Errorf(
@@ -454,7 +461,7 @@ func (m *customModule) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 			}
 		}
 	}
-	productVariableProps := android.ProductVariableProperties(ctx)
+	productVariableProps := android.ProductVariableProperties(ctx, ctx.Module())
 	if props, ok := productVariableProps["String_literal_prop"]; ok {
 		for c, p := range props {
 			if val, ok := p.(*string); ok {
@@ -579,7 +586,7 @@ func makeBazelTargetHostOrDevice(typ, name string, attrs AttrNameToString, hod a
 	if name != "" {
 		attrStrings = append(attrStrings, fmt.Sprintf(`    name = "%s",`, name))
 	}
-	for _, k := range android.SortedStringKeys(attrs) {
+	for _, k := range android.SortedKeys(attrs) {
 		attrStrings = append(attrStrings, fmt.Sprintf("    %s = %s,", k, attrs[k]))
 	}
 	return fmt.Sprintf(`%s(
@@ -636,4 +643,14 @@ func MakeNeverlinkDuplicateTarget(moduleType string, name string) string {
 		"neverlink": `True`,
 		"exports":   `[":` + name + `"]`,
 	})
+}
+
+func getTargetName(targetContent string) string {
+	data := strings.Split(targetContent, "name = \"")
+	if len(data) < 2 {
+		return ""
+	} else {
+		endIndex := strings.Index(data[1], "\"")
+		return data[1][:endIndex]
+	}
 }

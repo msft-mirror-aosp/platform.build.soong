@@ -198,6 +198,7 @@ var (
 		"frameworks/base/startop/apps/test":                  Bp2BuildDefaultTrue,
 		"frameworks/base/tests/appwidgets/AppWidgetHostTest": Bp2BuildDefaultTrueRecursively,
 		"frameworks/base/tools/aapt2":                        Bp2BuildDefaultTrue,
+		"frameworks/base/tools/codegen":                      Bp2BuildDefaultTrueRecursively,
 		"frameworks/base/tools/streaming_proto":              Bp2BuildDefaultTrueRecursively,
 		"frameworks/hardware/interfaces/stats/aidl":          Bp2BuildDefaultTrue,
 		"frameworks/native/libs/adbd_auth":                   Bp2BuildDefaultTrueRecursively,
@@ -217,6 +218,7 @@ var (
 
 		"hardware/interfaces":                          Bp2BuildDefaultTrue,
 		"hardware/interfaces/audio/aidl":               Bp2BuildDefaultTrue,
+		"hardware/interfaces/audio/aidl/common":        Bp2BuildDefaultTrue,
 		"hardware/interfaces/common/aidl":              Bp2BuildDefaultTrue,
 		"hardware/interfaces/common/fmq/aidl":          Bp2BuildDefaultTrue,
 		"hardware/interfaces/configstore/1.0":          Bp2BuildDefaultTrue,
@@ -383,7 +385,6 @@ var (
 		// this BUILD file is globbed by //external/icu/icu4c/source:icu4c_test_data's "data/**/*".
 		"external/icu/icu4c/source/data/unidata/norm2":/* recursive = */ false,
 
-		"frameworks/base/tools/codegen":/* recursive = */ true,
 		"frameworks/ex/common":/* recursive = */ true,
 
 		// Building manually due to b/179889880: resource files cross package boundary
@@ -689,11 +690,21 @@ var (
 
 		//kotlin srcs in android_binary
 		"MusicKotlin",
+
+		// checked in current.txt for merged_txts
+		"non-updatable-current.txt",
+		"non-updatable-system-current.txt",
+		"non-updatable-module-lib-current.txt",
+		"non-updatable-system-server-current.txt",
+
+		// for api_fingerprint.txt generation
+		"api_fingerprint",
 	}
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
 		"aidl_interface_headers",
 		"bpf",
+		"combined_apis",
 		"license",
 		"linker_config",
 		"java_import",
@@ -1429,7 +1440,9 @@ var (
 	// which will soon be added to the prod allowlist.
 	// It is implicit that all modules in ProdMixedBuildsEnabledList will
 	// also be built - do not add them to this list.
-	StagingMixedBuildsEnabledList = []string{}
+	StagingMixedBuildsEnabledList = []string{
+		"api_fingerprint",
+	}
 
 	// These should be the libs that are included by the apexes in the ProdMixedBuildsEnabledList
 	ProdDclaMixedBuildsEnabledList = []string{}
