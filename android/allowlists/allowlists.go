@@ -218,6 +218,7 @@ var (
 
 		"hardware/interfaces":                          Bp2BuildDefaultTrue,
 		"hardware/interfaces/audio/aidl":               Bp2BuildDefaultTrue,
+		"hardware/interfaces/audio/aidl/common":        Bp2BuildDefaultTrue,
 		"hardware/interfaces/common/aidl":              Bp2BuildDefaultTrue,
 		"hardware/interfaces/common/fmq/aidl":          Bp2BuildDefaultTrue,
 		"hardware/interfaces/configstore/1.0":          Bp2BuildDefaultTrue,
@@ -698,6 +699,11 @@ var (
 
 		// for api_fingerprint.txt generation
 		"api_fingerprint",
+
+		// allowlisting for kotlinx_coroutines
+		"kotlinx_coroutines",
+		"annotations",
+		"kotlinx-coroutines-android-annotation-stubs",
 	}
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{

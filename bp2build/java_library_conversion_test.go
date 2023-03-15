@@ -673,7 +673,7 @@ android_library {
 
 func TestJavaLibraryKotlinSrcs(t *testing.T) {
 	runJavaLibraryTestCase(t, Bp2buildTestCase{
-		Description: "java_library with kotlin  srcs",
+		Description: "java_library with kotlin srcs",
 		Blueprint: `java_library {
     name: "java-lib-1",
     srcs: ["a.java", "b.java", "c.kt"],
@@ -693,9 +693,32 @@ func TestJavaLibraryKotlinSrcs(t *testing.T) {
 	})
 }
 
+func TestJavaLibraryKotlincflags(t *testing.T) {
+	runJavaLibraryTestCase(t, Bp2buildTestCase{
+		Description: "java_library with kotlincfalgs",
+		Blueprint: `java_library {
+    name: "java-lib-1",
+    srcs: [ "a.kt"],
+    kotlincflags: ["-flag1", "-flag2"],
+    bazel_module: { bp2build_available: true },
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("kt_jvm_library", "java-lib-1", AttrNameToString{
+				"srcs": `["a.kt"]`,
+				"kotlincflags": `[
+        "-flag1",
+        "-flag2",
+    ]`,
+			}),
+			MakeNeverlinkDuplicateTarget("kt_jvm_library", "java-lib-1"),
+		},
+	})
+}
+
 func TestJavaLibraryKotlinCommonSrcs(t *testing.T) {
 	runJavaLibraryTestCase(t, Bp2buildTestCase{
-		Description: "java_library with kotlin  common_srcs",
+		Description: "java_library with kotlin common_srcs",
 		Blueprint: `java_library {
     name: "java-lib-1",
     srcs: ["a.java", "b.java"],
@@ -752,6 +775,32 @@ func TestJavaLibraryArchVariantLibs(t *testing.T) {
 			MakeNeverlinkDuplicateTarget("java_library", "java-lib-2"),
 			MakeBazelTarget("java_library", "java-lib-3", AttrNameToString{}),
 			MakeNeverlinkDuplicateTarget("java_library", "java-lib-3"),
+		},
+	})
+}
+
+func TestJavaLibraryArchVariantSrcsWithExcludes(t *testing.T) {
+	runJavaLibraryTestCase(t, Bp2buildTestCase{
+		Description: "java_library with arch variant libs",
+		Blueprint: `java_library {
+    name: "java-lib-1",
+    srcs: ["a.java", "b.java"],
+    target: {
+        android: {
+            exclude_srcs: ["a.java"],
+        },
+    },
+    bazel_module: { bp2build_available: true },
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("java_library", "java-lib-1", AttrNameToString{
+				"srcs": `["b.java"] + select({
+        "//build/bazel/platforms/os:android": [],
+        "//conditions:default": ["a.java"],
+    })`,
+			}),
+			MakeNeverlinkDuplicateTarget("java_library", "java-lib-1"),
 		},
 	})
 }

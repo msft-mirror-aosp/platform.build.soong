@@ -2660,6 +2660,7 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext)
 			}
 		}
 	}
+	srcs.ResolveExcludes()
 
 	javaSrcPartition := "java"
 	protoSrcPartition := "proto"
@@ -2786,11 +2787,12 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext)
 	depLabels.StaticDeps = bazel.MakeLabelListAttribute(staticDeps)
 
 	hasKotlin := !kotlinSrcs.IsEmpty()
+	commonAttrs.kotlinAttributes = &kotlinAttributes{
+		Kotlincflags: &m.properties.Kotlincflags,
+	}
 	if len(m.properties.Common_srcs) != 0 {
 		hasKotlin = true
-		commonAttrs.kotlinAttributes = &kotlinAttributes{
-			bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrc(ctx, m.properties.Common_srcs)),
-		}
+		commonAttrs.kotlinAttributes.Common_srcs = bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrc(ctx, m.properties.Common_srcs))
 	}
 
 	bp2BuildInfo := &bp2BuildJavaInfo{
@@ -2809,7 +2811,8 @@ type javaLibraryAttributes struct {
 }
 
 type kotlinAttributes struct {
-	Common_srcs bazel.LabelListAttribute
+	Common_srcs  bazel.LabelListAttribute
+	Kotlincflags *[]string
 }
 
 func javaLibraryBp2Build(ctx android.TopDownMutatorContext, m *Library) {
@@ -2843,12 +2846,12 @@ func javaLibraryBp2Build(ctx android.TopDownMutatorContext, m *Library) {
 	if !bp2BuildInfo.hasKotlin {
 		props = bazel.BazelTargetModuleProperties{
 			Rule_class:        "java_library",
-			Bzl_load_location: "//build/bazel/rules/java:library.bzl",
+			Bzl_load_location: "//build/bazel/rules/java:rules.bzl",
 		}
 	} else {
 		props = bazel.BazelTargetModuleProperties{
 			Rule_class:        "kt_jvm_library",
-			Bzl_load_location: "//build/bazel/rules/kotlin:kt_jvm_library.bzl",
+			Bzl_load_location: "//build/bazel/rules/kotlin:rules.bzl",
 		}
 	}
 
@@ -2928,7 +2931,8 @@ func javaBinaryHostBp2Build(ctx android.TopDownMutatorContext, m *Binary) {
 	}
 
 	props := bazel.BazelTargetModuleProperties{
-		Rule_class: "java_binary",
+		Rule_class:        "java_binary",
+		Bzl_load_location: "//build/bazel/rules/java:rules.bzl",
 	}
 	attrs := &javaBinaryHostAttributes{
 		Runtime_deps: runtimeDeps,
@@ -2943,7 +2947,7 @@ func javaBinaryHostBp2Build(ctx android.TopDownMutatorContext, m *Binary) {
 		ktName := m.Name() + "_kt"
 		ktProps := bazel.BazelTargetModuleProperties{
 			Rule_class:        "kt_jvm_library",
-			Bzl_load_location: "//build/bazel/rules/kotlin:kt_jvm_library.bzl",
+			Bzl_load_location: "//build/bazel/rules/kotlin:rules.bzl",
 		}
 
 		ktAttrs := &javaLibraryAttributes{
@@ -2980,7 +2984,10 @@ func (i *Import) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	attrs := &bazelJavaImportAttributes{
 		Jars: jars,
 	}
-	props := bazel.BazelTargetModuleProperties{Rule_class: "java_import"}
+	props := bazel.BazelTargetModuleProperties{
+		Rule_class:        "java_import",
+		Bzl_load_location: "//build/bazel/rules/java:rules.bzl",
+	}
 
 	name := android.RemoveOptionalPrebuiltPrefix(i.Name())
 
@@ -2991,7 +2998,13 @@ func (i *Import) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 		Neverlink: bazel.BoolAttribute{Value: &neverlink},
 		Exports:   bazel.MakeSingleLabelListAttribute(bazel.Label{Label: ":" + name}),
 	}
-	ctx.CreateBazelTargetModule(bazel.BazelTargetModuleProperties{Rule_class: "java_library"}, android.CommonAttributes{Name: name + "-neverlink"}, neverlinkAttrs)
+	ctx.CreateBazelTargetModule(
+		bazel.BazelTargetModuleProperties{
+			Rule_class:        "java_library",
+			Bzl_load_location: "//build/bazel/rules/java:rules.bzl",
+		},
+		android.CommonAttributes{Name: name + "-neverlink"},
+		neverlinkAttrs)
 
 }
 
