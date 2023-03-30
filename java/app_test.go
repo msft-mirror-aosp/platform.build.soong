@@ -3077,17 +3077,13 @@ func TestTargetSdkVersionManifestFixer(t *testing.T) {
 		},
 	}
 	for _, testCase := range testCases {
-		targetSdkVersionTemplate := ""
-		if testCase.targetSdkVersionInBp != "" {
-			targetSdkVersionTemplate = fmt.Sprintf(`target_sdk_version: "%s",`, testCase.targetSdkVersionInBp)
-		}
 		bp := fmt.Sprintf(`
 			android_app {
 				name: "foo",
 				sdk_version: "current",
-				%s
+				target_sdk_version: "%v",
 			}
-			`, targetSdkVersionTemplate)
+			`, testCase.targetSdkVersionInBp)
 		fixture := android.GroupFixturePreparers(
 			prepareForJavaTest,
 			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
@@ -3165,20 +3161,16 @@ func TestDefaultAppTargetSdkVersionForUpdatableModules(t *testing.T) {
 		},
 	}
 	for _, testCase := range testCases {
-		targetSdkVersionTemplate := ""
-		if testCase.targetSdkVersionInBp != nil {
-			targetSdkVersionTemplate = fmt.Sprintf(`target_sdk_version: "%s",`, *testCase.targetSdkVersionInBp)
-		}
 		bp := fmt.Sprintf(`
 			android_app {
 				name: "foo",
 				sdk_version: "current",
 				min_sdk_version: "29",
-				%s
+				target_sdk_version: "%v",
 				updatable: %t,
 				enforce_default_target_sdk_version: %t
 			}
-			`, targetSdkVersionTemplate, testCase.updatable, testCase.updatable) // enforce default target sdk version if app is updatable
+			`, proptools.String(testCase.targetSdkVersionInBp), testCase.updatable, testCase.updatable) // enforce default target sdk version if app is updatable
 
 		fixture := android.GroupFixturePreparers(
 			PrepareForTestWithJavaDefaultModules,

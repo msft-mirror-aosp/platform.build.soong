@@ -16,7 +16,6 @@ package android
 
 import (
 	"fmt"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -379,12 +378,6 @@ func FixtureModifyProductVariables(mutator func(variables FixtureProductVariable
 		mutator(productVariables)
 	})
 }
-
-var PrepareForSkipTestOnMac = newSimpleFixturePreparer(func(fixture *fixture) {
-	if runtime.GOOS != "linux" {
-		fixture.t.Skip("Test is only supported on linux.")
-	}
-})
 
 // PrepareForDebug_DO_NOT_SUBMIT puts the fixture into debug which will cause it to output its
 // state before running the test.

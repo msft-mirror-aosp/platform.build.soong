@@ -65,8 +65,6 @@ type staticOrSharedAttributes struct {
 
 	Native_coverage *bool
 
-	Apex_available []string
-
 	sdkAttributes
 
 	tidyAttributes
@@ -222,7 +220,7 @@ func bp2BuildPropParseHelper(ctx android.ArchVariantContext, module *Module, pro
 }
 
 // Parses properties common to static and shared libraries. Also used for prebuilt libraries.
-func bp2buildParseStaticOrSharedProps(ctx android.BazelConversionPathContext, module *Module, lib *libraryDecorator, isStatic bool) staticOrSharedAttributes {
+func bp2buildParseStaticOrSharedProps(ctx android.BazelConversionPathContext, module *Module, _ *libraryDecorator, isStatic bool) staticOrSharedAttributes {
 	attrs := staticOrSharedAttributes{}
 
 	setAttrs := func(axis bazel.ConfigurationAxis, config string, props StaticOrSharedProperties) {
@@ -246,16 +244,13 @@ func bp2buildParseStaticOrSharedProps(ctx android.BazelConversionPathContext, mo
 	//    empty list -> no values specified
 	attrs.System_dynamic_deps.ForceSpecifyEmptyList = true
 
-	var apexAvailable []string
 	if isStatic {
-		apexAvailable = lib.StaticProperties.Static.Apex_available
 		bp2BuildPropParseHelper(ctx, module, &StaticProperties{}, func(axis bazel.ConfigurationAxis, config string, props interface{}) {
 			if staticOrSharedProps, ok := props.(*StaticProperties); ok {
 				setAttrs(axis, config, staticOrSharedProps.Static)
 			}
 		})
 	} else {
-		apexAvailable = lib.SharedProperties.Shared.Apex_available
 		bp2BuildPropParseHelper(ctx, module, &SharedProperties{}, func(axis bazel.ConfigurationAxis, config string, props interface{}) {
 			if staticOrSharedProps, ok := props.(*SharedProperties); ok {
 				setAttrs(axis, config, staticOrSharedProps.Shared)
@@ -267,8 +262,6 @@ func bp2buildParseStaticOrSharedProps(ctx android.BazelConversionPathContext, mo
 	attrs.Srcs = partitionedSrcs[cppSrcPartition]
 	attrs.Srcs_c = partitionedSrcs[cSrcPartition]
 	attrs.Srcs_as = partitionedSrcs[asSrcPartition]
-
-	attrs.Apex_available = android.ConvertApexAvailableToTags(apexAvailable)
 
 	if !partitionedSrcs[protoSrcPartition].IsEmpty() {
 		// TODO(b/208815215): determine whether this is used and add support if necessary
@@ -739,7 +732,7 @@ func bp2BuildParseBaseProps(ctx android.Bp2buildMutatorContext, module *Module) 
 			if baseLinkerProps, ok := archVariantLinkerProps[axis][cfg].(*BaseLinkerProperties); ok {
 				exportHdrs = baseLinkerProps.Export_generated_headers
 
-				(&linkerAttrs).bp2buildForAxisAndConfig(ctx, module, axis, cfg, baseLinkerProps)
+				(&linkerAttrs).bp2buildForAxisAndConfig(ctx, module.Binary(), axis, cfg, baseLinkerProps)
 			}
 			headers := maybePartitionExportedAndImplementationsDeps(ctx, !module.Binary(), allHdrs, exportHdrs, android.BazelLabelForModuleDeps)
 			implementationHdrs.SetSelectValue(axis, cfg, headers.implementation)
@@ -907,9 +900,6 @@ func bp2buildCcAidlLibrary(
 			return false
 		})
 
-		apexAvailableTags := android.ApexAvailableTags(ctx.Module())
-		sdkAttrs := bp2BuildParseSdkAttributes(m)
-
 		if !aidlSrcs.IsEmpty() {
 			aidlLibName := m.Name() + "_aidl_library"
 			ctx.CreateBazelTargetModule(
@@ -920,7 +910,6 @@ func bp2buildCcAidlLibrary(
 				android.CommonAttributes{Name: aidlLibName},
 				&aidlLibraryAttributes{
 					Srcs: aidlSrcs,
-					Tags: apexAvailableTags,
 				},
 			)
 			aidlLibs.Add(&bazel.LabelAttribute{Value: &bazel.Label{Label: ":" + aidlLibName}})
@@ -945,8 +934,6 @@ func bp2buildCcAidlLibrary(
 					Deps:                        aidlLibs,
 					Implementation_deps:         *implementationDeps,
 					Implementation_dynamic_deps: *implementationDynamicDeps,
-					Tags:                        apexAvailableTags,
-					sdkAttributes:               sdkAttrs,
 				},
 			)
 			label := &bazel.LabelAttribute{
@@ -1021,8 +1008,7 @@ func (la *linkerAttributes) resolveTargetApexProp(ctx android.BazelConversionPat
 	la.implementationDeps.Append(staticExcludesLabelList)
 }
 
-func (la *linkerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversionPathContext, module *Module, axis bazel.ConfigurationAxis, config string, props *BaseLinkerProperties) {
-	isBinary := module.Binary()
+func (la *linkerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversionPathContext, isBinary bool, axis bazel.ConfigurationAxis, config string, props *BaseLinkerProperties) {
 	// Use a single variable to capture usage of nocrt in arch variants, so there's only 1 error message for this module
 	var axisFeatures []string
 
@@ -1106,9 +1092,8 @@ func (la *linkerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversion
 		// dependencies in NoConfigAxis and OsConfigurationAxis/OsAndroid are grouped by
 		// having stubs or not, so Bazel select() statement can be used to choose
 		// source/stub variants of them.
-		apexAvailable := module.ApexAvailable()
-		setStubsForDynamicDeps(ctx, axis, config, apexAvailable, sharedDeps.export, &la.dynamicDeps, 0)
-		setStubsForDynamicDeps(ctx, axis, config, apexAvailable, sharedDeps.implementation, &la.implementationDynamicDeps, 1)
+		setStubsForDynamicDeps(ctx, axis, config, sharedDeps.export, &la.dynamicDeps, 0)
+		setStubsForDynamicDeps(ctx, axis, config, sharedDeps.implementation, &la.implementationDynamicDeps, 1)
 	}
 
 	if !BoolDefault(props.Pack_relocations, packRelocationsDefault) {
@@ -1169,25 +1154,13 @@ var (
 	apiSurfaceModuleLibCurrentPackage = "@api_surfaces//" + android.ModuleLibApi.String() + "/current:"
 )
 
-func availableToSameApexes(a, b []string) bool {
-	if len(a) == 0 && len(b) == 0 {
-		return true
-	}
-	differ, _, _ := android.ListSetDifference(a, b)
-	return !differ
-}
-
 func setStubsForDynamicDeps(ctx android.BazelConversionPathContext, axis bazel.ConfigurationAxis,
-	config string, apexAvailable []string, dynamicLibs bazel.LabelList, dynamicDeps *bazel.LabelListAttribute, ind int) {
-
+	config string, dynamicLibs bazel.LabelList, dynamicDeps *bazel.LabelListAttribute, ind int) {
 	depsWithStubs := []bazel.Label{}
 	for _, l := range dynamicLibs.Includes {
 		dep, _ := ctx.ModuleFromName(l.OriginalModuleName)
-		if d, ok := dep.(*Module); ok && d.HasStubsVariants() {
-			depApexAvailable := d.ApexAvailable()
-			if !availableToSameApexes(apexAvailable, depApexAvailable) {
-				depsWithStubs = append(depsWithStubs, l)
-			}
+		if m, ok := dep.(*Module); ok && m.HasStubsVariants() {
+			depsWithStubs = append(depsWithStubs, l)
 		}
 	}
 	if len(depsWithStubs) > 0 {
@@ -1197,7 +1170,7 @@ func setStubsForDynamicDeps(ctx android.BazelConversionPathContext, axis bazel.C
 		stubLibLabels := []bazel.Label{}
 		for _, l := range depsWithStubs {
 			stubLabelInApiSurfaces := bazel.Label{
-				Label: apiSurfaceModuleLibCurrentPackage + strings.TrimPrefix(l.OriginalModuleName, ":"),
+				Label: apiSurfaceModuleLibCurrentPackage + l.OriginalModuleName,
 			}
 			stubLibLabels = append(stubLibLabels, stubLabelInApiSurfaces)
 		}

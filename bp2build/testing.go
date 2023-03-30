@@ -228,7 +228,6 @@ type BazelTestResult struct {
 //
 // If ignoreUnexpected=true then it will ignore directories for which there are no expected targets.
 func (b BazelTestResult) CompareAllBazelTargets(t *testing.T, description string, expectedTargets map[string][]string, ignoreUnexpected bool) {
-	t.Helper()
 	actualTargets := b.buildFileToTargets
 
 	// Generate the sorted set of directories to check.

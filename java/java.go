@@ -811,7 +811,7 @@ func (p *librarySdkMemberProperties) PopulateFromVariant(ctx android.SdkMemberCo
 	// If the min_sdk_version was set then add the canonical representation of the API level to the
 	// snapshot.
 	if j.deviceProperties.Min_sdk_version != nil {
-		canonical := android.ReplaceFinalizedCodenames(ctx.SdkModuleContext().Config(), j.minSdkVersion.String())
+		canonical := android.ReplaceFinalizedCodenames(ctx.SdkModuleContext().Config(), j.minSdkVersion.ApiLevel.String())
 		p.MinSdkVersion = proptools.StringPtr(canonical)
 	}
 
@@ -1873,7 +1873,7 @@ type Import struct {
 	hideApexVariantFromMake bool
 
 	sdkVersion    android.SdkSpec
-	minSdkVersion android.ApiLevel
+	minSdkVersion android.SdkSpec
 }
 
 var _ PermittedPackagesForUpdatableBootJars = (*Import)(nil)
@@ -1890,11 +1890,11 @@ func (j *Import) SystemModules() string {
 	return "none"
 }
 
-func (j *Import) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
+func (j *Import) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
 	if j.properties.Min_sdk_version != nil {
-		return android.ApiLevelFrom(ctx, *j.properties.Min_sdk_version)
+		return android.SdkSpecFrom(ctx, *j.properties.Min_sdk_version)
 	}
-	return j.SdkVersion(ctx).ApiLevel
+	return j.SdkVersion(ctx)
 }
 
 func (j *Import) ReplaceMaxSdkVersionPlaceholder(ctx android.EarlyModuleContext) android.SdkSpec {
@@ -1904,8 +1904,8 @@ func (j *Import) ReplaceMaxSdkVersionPlaceholder(ctx android.EarlyModuleContext)
 	return android.SdkSpecFrom(ctx, "")
 }
 
-func (j *Import) TargetSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
-	return j.SdkVersion(ctx).ApiLevel
+func (j *Import) TargetSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
+	return j.SdkVersion(ctx)
 }
 
 func (j *Import) Prebuilt() *android.Prebuilt {
@@ -2160,14 +2160,15 @@ func (j *Import) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Modu
 func (j *Import) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 	sdkVersion android.ApiLevel) error {
 	sdkVersionSpec := j.SdkVersion(ctx)
-	minSdkVersion := j.MinSdkVersion(ctx)
-	if !minSdkVersion.Specified() {
+	minSdkVersionSpec := j.MinSdkVersion(ctx)
+	if !minSdkVersionSpec.Specified() {
 		return fmt.Errorf("min_sdk_version is not specified")
 	}
 	// If the module is compiling against core (via sdk_version), skip comparison check.
 	if sdkVersionSpec.Kind == android.SdkCore {
 		return nil
 	}
+	minSdkVersion := minSdkVersionSpec.ApiLevel
 	if minSdkVersion.GreaterThan(sdkVersion) {
 		return fmt.Errorf("newer SDK(%v)", minSdkVersion)
 	}
@@ -2624,12 +2625,10 @@ type eventLogTagsAttributes struct {
 
 type aidlLibraryAttributes struct {
 	Srcs bazel.LabelListAttribute
-	Tags bazel.StringListAttribute
 }
 
 type javaAidlLibraryAttributes struct {
 	Deps bazel.LabelListAttribute
-	Tags bazel.StringListAttribute
 }
 
 // bp2BuildJavaInfo has information needed for the conversion of  java*_modules
@@ -2701,8 +2700,6 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext)
 			return android.IsConvertedToAidlLibrary(ctx, src.OriginalModuleName)
 		})
 
-		apexAvailableTags := android.ApexAvailableTags(ctx.Module())
-
 		if !aidlSrcs.IsEmpty() {
 			aidlLibName := m.Name() + "_aidl_library"
 			ctx.CreateBazelTargetModule(
@@ -2713,7 +2710,6 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext)
 				android.CommonAttributes{Name: aidlLibName},
 				&aidlLibraryAttributes{
 					Srcs: aidlSrcs,
-					Tags: apexAvailableTags,
 				},
 			)
 			aidlLibs.Add(&bazel.LabelAttribute{Value: &bazel.Label{Label: ":" + aidlLibName}})
@@ -2728,7 +2724,6 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext)
 			android.CommonAttributes{Name: javaAidlLibName},
 			&javaAidlLibraryAttributes{
 				Deps: aidlLibs,
-				Tags: apexAvailableTags,
 			},
 		)
 

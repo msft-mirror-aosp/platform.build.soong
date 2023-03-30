@@ -109,8 +109,7 @@ func modifyTestConfigToSupportArchMutator(testConfig Config) {
 	config.TestProductVariables.DeviceSecondaryArchVariant = proptools.StringPtr("armv7-a-neon")
 }
 
-// ModifyTestConfigForMusl takes a Config returned by TestConfig and changes the host targets from glibc to musl.
-func ModifyTestConfigForMusl(config Config) {
+func modifyTestConfigForMusl(config Config) {
 	delete(config.Targets, config.BuildOS)
 	config.productVariables.HostMusl = boolPtr(true)
 	determineBuildOS(config.config)

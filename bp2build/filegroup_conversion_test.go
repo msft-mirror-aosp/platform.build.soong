@@ -74,7 +74,6 @@ func TestFilegroupWithAidlSrcs(t *testing.T) {
 			expectedBazelAttrs: AttrNameToString{
 				"srcs":                `["aidl/foo.aidl"]`,
 				"strip_import_prefix": `"aidl"`,
-				"tags":                `["apex_available=//apex_available:anyapex"]`,
 			},
 		},
 		{
@@ -86,21 +85,18 @@ func TestFilegroupWithAidlSrcs(t *testing.T) {
 	}`,
 			expectedBazelAttrs: AttrNameToString{
 				"srcs": `["aidl/foo.aidl"]`,
-				"tags": `["apex_available=//apex_available:anyapex"]`,
 			},
 		},
 	}
 
 	for _, test := range testcases {
-		t.Run(test.name, func(t *testing.T) {
-			expectedBazelTargets := []string{
-				MakeBazelTargetNoRestrictions("aidl_library", "foo", test.expectedBazelAttrs),
-			}
-			runFilegroupTestCase(t, Bp2buildTestCase{
-				Description:          test.name,
-				Blueprint:            test.bp,
-				ExpectedBazelTargets: expectedBazelTargets,
-			})
+		expectedBazelTargets := []string{
+			MakeBazelTargetNoRestrictions("aidl_library", "foo", test.expectedBazelAttrs),
+		}
+		runFilegroupTestCase(t, Bp2buildTestCase{
+			Description:          test.name,
+			Blueprint:            test.bp,
+			ExpectedBazelTargets: expectedBazelTargets,
 		})
 	}
 }
@@ -140,11 +136,7 @@ filegroup {
 			MakeBazelTargetNoRestrictions("proto_library", "foo_bp2build_converted", AttrNameToString{
 				"srcs":                `["proto/foo.proto"]`,
 				"strip_import_prefix": `"proto"`,
-				"tags": `[
-        "apex_available=//apex_available:anyapex",
-        "manual",
-    ]`,
-			}),
+				"tags":                `["manual"]`}),
 			MakeBazelTargetNoRestrictions("filegroup", "foo", AttrNameToString{
 				"srcs": `["proto/foo.proto"]`}),
 		}})

@@ -105,35 +105,31 @@ Android.bp files can contain C-style multiline `/* */` and C++ style single-line
 
 ### Types
 
-Variables and properties are strongly typed. Variables are dynamically typed
-based on the first assignment, and properties are statically typed by the
-module type.  The supported types are:
+Variables and properties are strongly typed, variables dynamically based on the
+first assignment, and properties statically by the module type.  The supported
+types are:
 * Bool (`true` or `false`)
 * Integers (`int`)
 * Strings (`"string"`)
 * Lists of strings (`["string1", "string2"]`)
 * Maps (`{key1: "value1", key2: ["value2"]}`)
 
-Maps may contain values of any type, including nested maps. Lists and maps may
-have trailing commas after the last value.
+Maps may values of any type, including nested maps.  Lists and maps may have
+trailing commas after the last value.
 
 Strings can contain double quotes using `\"`, for example `"cat \"a b\""`.
 
 ### Operators
 
-The `+` operator:
-* Sums integers.
-* Concatenates strings and lists.
-* Produces the union of maps.
-
-Concatenating maps produces a map whose keys are the union of the given maps'
-keys, and whose mapped values are the union of the given maps' corresponding
-mapped values.
+Strings, lists of strings, and maps can be appended using the `+` operator.
+Integers can be summed up using the `+` operator. Appending a map produces the
+union of keys in both maps, appending the values of any keys that are present
+in both maps.
 
 ### Defaults modules
 
-A `defaults` module can be used to repeat the same properties in multiple
-modules. For example:
+A defaults module can be used to repeat the same properties in multiple modules.
+For example:
 
 ```
 cc_defaults {
@@ -188,7 +184,7 @@ the same `.bp` file as the `package` module) to be visible to all the subpackage
 
 ```
 package {
-    default_visibility: [":__subpackages__"]
+    default_visibility: [":__subpackages"]
 }
 ```
 

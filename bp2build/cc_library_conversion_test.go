@@ -2425,10 +2425,7 @@ cc_library {
 				"whole_archive_deps": `[":a_cc_proto_lite"]`,
 			}), MakeBazelTargetNoRestrictions("proto_library", "a_fg_proto_bp2build_converted", AttrNameToString{
 				"srcs": `["a_fg.proto"]`,
-				"tags": `[
-        "apex_available=//apex_available:anyapex",
-        "manual",
-    ]`,
+				"tags": `["manual"]`,
 			}), MakeBazelTargetNoRestrictions("filegroup", "a_fg_proto", AttrNameToString{
 				"srcs": `["a_fg.proto"]`,
 			}),
@@ -2467,10 +2464,7 @@ cc_library {
 				"whole_archive_deps": `[":a_cc_proto_lite"]`,
 			}), MakeBazelTargetNoRestrictions("proto_library", "a_fg_proto_bp2build_converted", AttrNameToString{
 				"srcs": `["a_fg.proto"]`,
-				"tags": `[
-        "apex_available=//apex_available:anyapex",
-        "manual",
-    ]`,
+				"tags": `["manual"]`,
 			}), MakeBazelTargetNoRestrictions("filegroup", "a_fg_proto", AttrNameToString{
 				"srcs": `["a_fg.proto"]`,
 			}),
@@ -3038,7 +3032,6 @@ cc_library {
 		},
 	},
 	bazel_module: { bp2build_available: true },
-	apex_available: ["foo"],
 }`,
 		ExpectedBazelTargets: makeCcLibraryTargets("foolib", AttrNameToString{
 			"implementation_dynamic_deps": `select({
@@ -3046,7 +3039,6 @@ cc_library {
         "//conditions:default": [":barlib"],
     })`,
 			"local_includes": `["."]`,
-			"tags":           `["apex_available=foo"]`,
 		}),
 	})
 }
@@ -3080,7 +3072,6 @@ cc_library {
 	},
 	include_build_directory: false,
 	bazel_module: { bp2build_available: true },
-	apex_available: ["foo"],
 }`,
 		ExpectedBazelTargets: makeCcLibraryTargets("foolib", AttrNameToString{
 			"implementation_dynamic_deps": `select({
@@ -3105,7 +3096,6 @@ cc_library {
             ":quxlib",
         ],
     })`,
-			"tags": `["apex_available=foo"]`,
 		}),
 	})
 }
@@ -3332,7 +3322,6 @@ cc_library {
 			MakeBazelTargetNoRestrictions("aidl_library", "A_aidl", AttrNameToString{
 				"srcs":                `["aidl/A.aidl"]`,
 				"strip_import_prefix": `"aidl"`,
-				"tags":                `["apex_available=//apex_available:anyapex"]`,
 			}),
 			MakeBazelTarget("aidl_library", "foo_aidl_library", AttrNameToString{
 				"srcs": `["B.aidl"]`,
