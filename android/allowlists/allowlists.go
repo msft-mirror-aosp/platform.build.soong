@@ -132,6 +132,7 @@ var (
 		"external/f2fs-tools":                    Bp2BuildDefaultTrue,
 		"external/flac":                          Bp2BuildDefaultTrueRecursively,
 		"external/fmtlib":                        Bp2BuildDefaultTrueRecursively,
+		"external/guava":                         Bp2BuildDefaultTrueRecursively,
 		"external/google-benchmark":              Bp2BuildDefaultTrueRecursively,
 		"external/googletest":                    Bp2BuildDefaultTrueRecursively,
 		"external/gwp_asan":                      Bp2BuildDefaultTrueRecursively,
@@ -364,8 +365,6 @@ var (
 		"system/testing/gtest_extras":                            Bp2BuildDefaultTrueRecursively,
 		"system/timezone/apex":                                   Bp2BuildDefaultTrueRecursively,
 		"system/timezone/output_data":                            Bp2BuildDefaultTrueRecursively,
-		"system/timezone/testdata":                               Bp2BuildDefaultTrueRecursively,
-		"system/timezone/testing":                                Bp2BuildDefaultTrueRecursively,
 		"system/tools/aidl/build/tests_bp2build":                 Bp2BuildDefaultTrue,
 		"system/tools/aidl/metadata":                             Bp2BuildDefaultTrue,
 		"system/tools/hidl/metadata":                             Bp2BuildDefaultTrue,
@@ -387,6 +386,7 @@ var (
 		"build/bazel":/* recursive = */ true,
 		"build/make/core":/* recursive = */ false,
 		"build/bazel_common_rules":/* recursive = */ true,
+		"build/make/target/product/security":/* recursive = */ false,
 		// build/make/tools/signapk BUILD file is generated, so build/make/tools is not recursive.
 		"build/make/tools":/* recursive = */ false,
 		"build/pesto":/* recursive = */ true,
@@ -398,7 +398,6 @@ var (
 		"external/bazelbuild-rules_license":/* recursive = */ true,
 		"external/bazelbuild-kotlin-rules":/* recursive = */ true,
 		"external/bazel-skylib":/* recursive = */ true,
-		"external/guava":/* recursive = */ true,
 		"external/protobuf":/* recursive = */ false,
 		"external/python/absl-py":/* recursive = */ true,
 
@@ -712,6 +711,8 @@ var (
 
 		// allowlisting for kotlinx_coroutines
 		"kotlinx_coroutines",
+		"kotlinx_coroutines-device",
+		"kotlinx_coroutines-host",
 		"annotations",
 		"kotlinx-coroutines-android-annotation-stubs",
 
