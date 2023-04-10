@@ -28,6 +28,7 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
+	"android/soong/bazel"
 	"android/soong/dexpreopt"
 )
 
@@ -546,14 +547,14 @@ type sdkLibraryProperties struct {
 
 	// The properties specific to the module-lib api scope
 	//
-	// Unless explicitly specified by using test.enabled the module-lib api scope is
-	// disabled by default.
+	// Unless explicitly specified by using module_lib.enabled the module_lib api
+	// scope is disabled by default.
 	Module_lib ApiScopeProperties
 
 	// The properties specific to the system-server api scope
 	//
-	// Unless explicitly specified by using test.enabled the module-lib api scope is
-	// disabled by default.
+	// Unless explicitly specified by using system_server.enabled the
+	// system_server api scope is disabled by default.
 	System_server ApiScopeProperties
 
 	// Determines if the stubs are preferred over the implementation library
@@ -1163,6 +1164,8 @@ type SdkLibraryDependency interface {
 type SdkLibrary struct {
 	Library
 
+	android.BazelModuleBase
+
 	sdkLibraryProperties sdkLibraryProperties
 
 	// Map from api scope to the scope specific property structure.
@@ -1228,7 +1231,7 @@ func (module *SdkLibrary) getGeneratedApiScopes(ctx android.EarlyModuleContext) 
 var _ android.ModuleWithMinSdkVersionCheck = (*SdkLibrary)(nil)
 
 func (module *SdkLibrary) CheckMinSdkVersion(ctx android.ModuleContext) {
-	android.CheckMinSdkVersion(ctx, module.MinSdkVersion(ctx).ApiLevel, func(c android.ModuleContext, do android.PayloadDepsCallback) {
+	android.CheckMinSdkVersion(ctx, module.MinSdkVersion(ctx), func(c android.ModuleContext, do android.PayloadDepsCallback) {
 		ctx.WalkDeps(func(child android.Module, parent android.Module) bool {
 			isExternal := !module.depIsInSameApex(ctx, child)
 			if am, ok := child.(android.ApexModule); ok {
@@ -1264,7 +1267,10 @@ var implLibraryTag = sdkLibraryComponentTag{name: "impl-library"}
 func (module *SdkLibrary) ComponentDepsMutator(ctx android.BottomUpMutatorContext) {
 	for _, apiScope := range module.getGeneratedApiScopes(ctx) {
 		// Add dependencies to the stubs library
-		ctx.AddVariationDependencies(nil, apiScope.stubsTag, module.stubsLibraryModuleName(apiScope))
+		stubModuleName := module.stubsLibraryModuleName(apiScope)
+		// Use JavaApiLibraryName function to be redirected to stubs generated from .txt if applicable
+		stubModuleName = android.JavaApiLibraryName(ctx.Config(), stubModuleName)
+		ctx.AddVariationDependencies(nil, apiScope.stubsTag, stubModuleName)
 
 		// Add a dependency on the stubs source in order to access both stubs source and api information.
 		ctx.AddVariationDependencies(nil, apiScope.stubsSourceAndApiTag, module.stubsSourceModuleName(apiScope))
@@ -1376,7 +1382,7 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 	})
 
 	// Make the set of components exported by this module available for use elsewhere.
-	exportedComponentInfo := android.ExportedComponentsInfo{Components: android.SortedStringKeys(exportedComponents)}
+	exportedComponentInfo := android.ExportedComponentsInfo{Components: android.SortedKeys(exportedComponents)}
 	ctx.SetProvider(android.ExportedComponentsInfoProvider, exportedComponentInfo)
 
 	// Provide additional information for inclusion in an sdk's generated .info file.
@@ -1599,6 +1605,7 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 		Srcs                             []string
 		Installable                      *bool
 		Sdk_version                      *string
+		Api_surface                      *string
 		System_modules                   *string
 		Libs                             []string
 		Output_javadoc_comments          *bool
@@ -1638,6 +1645,7 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 	props.Srcs = append(props.Srcs, module.properties.Srcs...)
 	props.Srcs = append(props.Srcs, module.sdkLibraryProperties.Api_srcs...)
 	props.Sdk_version = module.deviceProperties.Sdk_version
+	props.Api_surface = &apiScope.name
 	props.System_modules = module.deviceProperties.System_modules
 	props.Installable = proptools.BoolPtr(false)
 	// A droiddoc module has only one Libs property and doesn't distinguish between
@@ -1747,7 +1755,7 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 		}
 	}
 
-	mctx.CreateModule(DroidstubsFactory, &props)
+	mctx.CreateModule(DroidstubsFactory, &props).(*Droidstubs).CallHookIfAvailable(mctx)
 }
 
 func (module *SdkLibrary) compareAgainstLatestApi(apiScope *apiScope) bool {
@@ -1770,7 +1778,7 @@ func (module *SdkLibrary) UniqueApexVariations() bool {
 
 // Creates the xml file that publicizes the runtime library
 func (module *SdkLibrary) createXmlFile(mctx android.DefaultableHookContext) {
-	moduleMinApiLevel := module.Library.MinSdkVersion(mctx).ApiLevel
+	moduleMinApiLevel := module.Library.MinSdkVersion(mctx)
 	var moduleMinApiLevelStr = moduleMinApiLevel.String()
 	if moduleMinApiLevel == android.NoneApiLevel {
 		moduleMinApiLevelStr = "current"
@@ -2079,7 +2087,46 @@ func SdkLibraryFactory() android.Module {
 			module.CreateInternalModules(ctx)
 		}
 	})
+	android.InitBazelModule(module)
 	return module
+}
+
+type bazelSdkLibraryAttributes struct {
+	Public        bazel.StringAttribute
+	System        bazel.StringAttribute
+	Test          bazel.StringAttribute
+	Module_lib    bazel.StringAttribute
+	System_server bazel.StringAttribute
+}
+
+// java_sdk_library bp2build converter
+func (module *SdkLibrary) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+	if ctx.ModuleType() != "java_sdk_library" {
+		return
+	}
+
+	nameToAttr := make(map[string]bazel.StringAttribute)
+
+	for _, scope := range module.getGeneratedApiScopes(ctx) {
+		apiSurfaceFile := path.Join(module.getApiDir(), scope.apiFilePrefix+"current.txt")
+		var scopeStringAttribute bazel.StringAttribute
+		scopeStringAttribute.SetValue(apiSurfaceFile)
+		nameToAttr[scope.name] = scopeStringAttribute
+	}
+
+	attrs := bazelSdkLibraryAttributes{
+		Public:        nameToAttr["public"],
+		System:        nameToAttr["system"],
+		Test:          nameToAttr["test"],
+		Module_lib:    nameToAttr["module-lib"],
+		System_server: nameToAttr["system-server"],
+	}
+	props := bazel.BazelTargetModuleProperties{
+		Rule_class:        "java_sdk_library",
+		Bzl_load_location: "//build/bazel/rules/java:sdk_library.bzl",
+	}
+
+	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: module.Name()}, &attrs)
 }
 
 //
@@ -2199,7 +2246,7 @@ func sdkLibraryImportFactory() android.Module {
 
 	allScopeProperties, scopeToProperties := createPropertiesInstance()
 	module.scopeProperties = scopeToProperties
-	module.AddProperties(&module.properties, allScopeProperties)
+	module.AddProperties(&module.properties, allScopeProperties, &module.importDexpreoptProperties)
 
 	// Initialize information common between source and prebuilt.
 	module.initCommon(module)
@@ -2370,8 +2417,8 @@ func (module *SdkLibraryImport) UniqueApexVariations() bool {
 }
 
 // MinSdkVersion - Implements hiddenAPIModule
-func (module *SdkLibraryImport) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
-	return android.SdkSpecNone
+func (module *SdkLibraryImport) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
+	return android.NoneApiLevel
 }
 
 var _ hiddenAPIModule = (*SdkLibraryImport)(nil)
@@ -2443,18 +2490,24 @@ func (module *SdkLibraryImport) GenerateAndroidBuildActions(ctx android.ModuleCo
 			if di == nil {
 				return // An error has been reported by FindDeapexerProviderForModule.
 			}
-			if dexOutputPath := di.PrebuiltExportPath(apexRootRelativePathToJavaLib(module.BaseModuleName())); dexOutputPath != nil {
+			dexJarFileApexRootRelative := apexRootRelativePathToJavaLib(module.BaseModuleName())
+			if dexOutputPath := di.PrebuiltExportPath(dexJarFileApexRootRelative); dexOutputPath != nil {
 				dexJarFile := makeDexJarPathFromPath(dexOutputPath)
 				module.dexJarFile = dexJarFile
 				installPath := android.PathForModuleInPartitionInstall(
-					ctx, "apex", ai.ApexVariationName, apexRootRelativePathToJavaLib(module.BaseModuleName()))
+					ctx, "apex", ai.ApexVariationName, dexJarFileApexRootRelative)
 				module.installFile = installPath
 				module.initHiddenAPI(ctx, dexJarFile, module.findScopePaths(apiScopePublic).stubsImplPath[0], nil)
 
-				// Dexpreopting.
 				module.dexpreopter.installPath = module.dexpreopter.getInstallPath(ctx, installPath)
 				module.dexpreopter.isSDKLibrary = true
 				module.dexpreopter.uncompressedDex = shouldUncompressDex(ctx, &module.dexpreopter)
+
+				if profilePath := di.PrebuiltExportPath(dexJarFileApexRootRelative + ".prof"); profilePath != nil {
+					module.dexpreopter.inputProfilePathOnHost = profilePath
+				}
+
+				// Dexpreopting.
 				module.dexpreopt(ctx, dexOutputPath)
 			} else {
 				// This should never happen as a variant for a prebuilt_apex is only created if the
@@ -2583,7 +2636,7 @@ var _ android.RequiredFilesFromPrebuiltApex = (*SdkLibraryImport)(nil)
 
 func (module *SdkLibraryImport) RequiredFilesFromPrebuiltApex(ctx android.BaseModuleContext) []string {
 	name := module.BaseModuleName()
-	return requiredFilesFromPrebuiltApexForImport(name)
+	return requiredFilesFromPrebuiltApexForImport(name, &module.dexpreopter)
 }
 
 // java_sdk_library_xml
@@ -2992,6 +3045,8 @@ type sdkLibrarySdkMemberProperties struct {
 	//
 	// This means that the device won't recognise this library as installed.
 	Max_device_sdk *string
+
+	DexPreoptProfileGuided *bool `supported_build_releases:"UpsideDownCake+"`
 }
 
 type scopeProperties struct {
@@ -3045,6 +3100,10 @@ func (s *sdkLibrarySdkMemberProperties) PopulateFromVariant(ctx android.SdkMembe
 	s.On_bootclasspath_before = sdk.commonSdkLibraryProperties.On_bootclasspath_before
 	s.Min_device_sdk = sdk.commonSdkLibraryProperties.Min_device_sdk
 	s.Max_device_sdk = sdk.commonSdkLibraryProperties.Max_device_sdk
+
+	if sdk.dexpreopter.dexpreoptProperties.Dex_preopt_result.Profile_guided {
+		s.DexPreoptProfileGuided = proptools.BoolPtr(true)
+	}
 }
 
 func (s *sdkLibrarySdkMemberProperties) AddToPropertySet(ctx android.SdkMemberContext, propertySet android.BpPropertySet) {
@@ -3059,6 +3118,10 @@ func (s *sdkLibrarySdkMemberProperties) AddToPropertySet(ctx android.SdkMemberCo
 	}
 	if len(s.Permitted_packages) > 0 {
 		propertySet.AddProperty("permitted_packages", s.Permitted_packages)
+	}
+	dexPreoptSet := propertySet.AddPropertySet("dex_preopt")
+	if s.DexPreoptProfileGuided != nil {
+		dexPreoptSet.AddProperty("profile_guided", proptools.Bool(s.DexPreoptProfileGuided))
 	}
 
 	stem := s.Stem

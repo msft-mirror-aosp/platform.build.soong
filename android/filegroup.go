@@ -26,12 +26,17 @@ import (
 )
 
 func init() {
-	RegisterModuleType("filegroup", FileGroupFactory)
+	RegisterFilegroupBuildComponents(InitRegistrationContext)
 }
 
 var PrepareForTestWithFilegroup = FixtureRegisterWithContext(func(ctx RegistrationContext) {
-	ctx.RegisterModuleType("filegroup", FileGroupFactory)
+	RegisterFilegroupBuildComponents(ctx)
 })
+
+func RegisterFilegroupBuildComponents(ctx RegistrationContext) {
+	ctx.RegisterModuleType("filegroup", FileGroupFactory)
+	ctx.RegisterModuleType("filegroup_defaults", FileGroupDefaultsFactory)
+}
 
 var convertedProtoLibrarySuffix = "_bp2build_converted"
 
@@ -78,6 +83,12 @@ type bazelAidlLibraryAttributes struct {
 	Strip_import_prefix *string
 }
 
+// api srcs can be contained in filegroups.
+// this should be generated in api_bp2build workspace as well.
+func (fg *fileGroup) ConvertWithApiBp2build(ctx TopDownMutatorContext) {
+	fg.ConvertWithBp2build(ctx)
+}
+
 // ConvertWithBp2build performs bp2build conversion of filegroup
 func (fg *fileGroup) ConvertWithBp2build(ctx TopDownMutatorContext) {
 	srcs := bazel.MakeLabelListAttribute(
@@ -107,6 +118,7 @@ func (fg *fileGroup) ConvertWithBp2build(ctx TopDownMutatorContext) {
 	// If the module has a mixed bag of AIDL and non-AIDL files, split the filegroup manually
 	// and then convert
 	if fg.ShouldConvertToAidlLibrary(ctx) {
+		tags := []string{"apex_available=//apex_available:anyapex"}
 		attrs := &bazelAidlLibraryAttributes{
 			Srcs:                srcs,
 			Strip_import_prefix: fg.properties.Path,
@@ -114,20 +126,28 @@ func (fg *fileGroup) ConvertWithBp2build(ctx TopDownMutatorContext) {
 
 		props := bazel.BazelTargetModuleProperties{
 			Rule_class:        "aidl_library",
-			Bzl_load_location: "//build/bazel/rules/aidl:library.bzl",
+			Bzl_load_location: "//build/bazel/rules/aidl:aidl_library.bzl",
 		}
 
-		ctx.CreateBazelTargetModule(props, CommonAttributes{Name: fg.Name()}, attrs)
+		ctx.CreateBazelTargetModule(
+			props,
+			CommonAttributes{
+				Name: fg.Name(),
+				Tags: bazel.MakeStringListAttribute(tags),
+			},
+			attrs)
 	} else {
 		if fg.ShouldConvertToProtoLibrary(ctx) {
-			// TODO(b/246997908): we can remove this tag if we could figure out a
-			// solution for this bug.
 			attrs := &ProtoAttrs{
 				Srcs:                srcs,
 				Strip_import_prefix: fg.properties.Path,
 			}
 
-			tags := []string{"manual"}
+			tags := []string{
+				"apex_available=//apex_available:anyapex",
+				// TODO(b/246997908): we can remove this tag if we could figure out a solution for this bug.
+				"manual",
+			}
 			ctx.CreateBazelTargetModule(
 				bazel.BazelTargetModuleProperties{Rule_class: "proto_library"},
 				CommonAttributes{
@@ -172,6 +192,7 @@ type fileGroupProperties struct {
 type fileGroup struct {
 	ModuleBase
 	BazelModuleBase
+	DefaultableModuleBase
 	FileGroupAsLibrary
 	properties fileGroupProperties
 	srcs       Paths
@@ -189,6 +210,7 @@ func FileGroupFactory() Module {
 	module.AddProperties(&module.properties)
 	InitAndroidModule(module)
 	InitBazelModule(module)
+	InitDefaultableModule(module)
 	return module
 }
 
@@ -232,7 +254,7 @@ func (fg *fileGroup) QueueBazelCall(ctx BaseModuleContext) {
 	bazelCtx.QueueBazelRequest(
 		fg.GetBazelLabel(ctx, fg),
 		cquery.GetOutputFiles,
-		configKey{Common.String(), CommonOS})
+		configKey{arch: Common.String(), osType: CommonOS})
 }
 
 func (fg *fileGroup) IsMixedBuildSupported(ctx BaseModuleContext) bool {
@@ -252,7 +274,7 @@ func (fg *fileGroup) ProcessBazelQueryResponse(ctx ModuleContext) {
 		relativeRoot = filepath.Join(relativeRoot, *fg.properties.Path)
 	}
 
-	filePaths, err := bazelCtx.GetOutputFiles(fg.GetBazelLabel(ctx, fg), configKey{Common.String(), CommonOS})
+	filePaths, err := bazelCtx.GetOutputFiles(fg.GetBazelLabel(ctx, fg), configKey{arch: Common.String(), osType: CommonOS})
 	if err != nil {
 		ctx.ModuleErrorf(err.Error())
 		return
@@ -319,4 +341,18 @@ func ToFileGroupAsLibrary(ctx BazelConversionPathContext, name string) (FileGrou
 		}
 	}
 	return nil, false
+}
+
+// Defaults
+type FileGroupDefaults struct {
+	ModuleBase
+	DefaultsModuleBase
+}
+
+func FileGroupDefaultsFactory() Module {
+	module := &FileGroupDefaults{}
+	module.AddProperties(&fileGroupProperties{})
+	InitDefaultsModule(module)
+
+	return module
 }

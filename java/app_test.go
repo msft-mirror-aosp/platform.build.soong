@@ -1005,6 +1005,7 @@ func TestAppSdkVersion(t *testing.T) {
 		platformSdkInt        int
 		platformSdkCodename   string
 		platformSdkFinal      bool
+		minSdkVersionBp       string
 		expectedMinSdkVersion string
 		platformApis          bool
 		activeCodenames       []string
@@ -1052,6 +1053,14 @@ func TestAppSdkVersion(t *testing.T) {
 			platformSdkCodename:   "S",
 			activeCodenames:       []string{"S"},
 		},
+		{
+			name:                  "two active SDKs",
+			sdkVersion:            "module_current",
+			minSdkVersionBp:       "UpsideDownCake",
+			expectedMinSdkVersion: "UpsideDownCake", // And not VanillaIceCream
+			platformSdkCodename:   "VanillaIceCream",
+			activeCodenames:       []string{"UpsideDownCake", "VanillaIceCream"},
+		},
 	}
 
 	for _, moduleType := range []string{"android_app", "android_library"} {
@@ -1061,12 +1070,17 @@ func TestAppSdkVersion(t *testing.T) {
 				if test.platformApis {
 					platformApiProp = "platform_apis: true,"
 				}
+				minSdkVersionProp := ""
+				if test.minSdkVersionBp != "" {
+					minSdkVersionProp = fmt.Sprintf(` min_sdk_version: "%s",`, test.minSdkVersionBp)
+				}
 				bp := fmt.Sprintf(`%s {
 					name: "foo",
 					srcs: ["a.java"],
 					sdk_version: "%s",
 					%s
-				}`, moduleType, test.sdkVersion, platformApiProp)
+					%s
+				}`, moduleType, test.sdkVersion, platformApiProp, minSdkVersionProp)
 
 				result := android.GroupFixturePreparers(
 					prepareForJavaTest,
@@ -2330,12 +2344,14 @@ func TestAndroidTest_FixTestConfig(t *testing.T) {
 			srcs: ["b.java"],
 			package_name: "com.android.bar.test",
 			instrumentation_for: "foo",
+			mainline_package_name: "com.android.bar",
 		}
 
 		override_android_test {
 			name: "baz_test",
 			base: "foo_test",
 			package_name: "com.android.baz.test",
+			mainline_package_name: "com.android.baz",
 		}
 		`)
 
@@ -2354,6 +2370,7 @@ func TestAndroidTest_FixTestConfig(t *testing.T) {
 			expectedFlags: []string{
 				"--manifest out/soong/.intermediates/bar_test/android_common/manifest_fixer/AndroidManifest.xml",
 				"--package-name com.android.bar.test",
+				"--mainline-package-name com.android.bar",
 			},
 		},
 		{
@@ -2363,6 +2380,8 @@ func TestAndroidTest_FixTestConfig(t *testing.T) {
 				"--manifest out/soong/.intermediates/foo_test/android_common_baz_test/manifest_fixer/AndroidManifest.xml",
 				"--package-name com.android.baz.test",
 				"--test-file-name baz_test.apk",
+				"out/soong/.intermediates/foo_test/android_common_baz_test/test_config_fixer/AndroidTest.xml",
+				"--mainline-package-name com.android.baz",
 			},
 		},
 	}
@@ -3058,13 +3077,17 @@ func TestTargetSdkVersionManifestFixer(t *testing.T) {
 		},
 	}
 	for _, testCase := range testCases {
+		targetSdkVersionTemplate := ""
+		if testCase.targetSdkVersionInBp != "" {
+			targetSdkVersionTemplate = fmt.Sprintf(`target_sdk_version: "%s",`, testCase.targetSdkVersionInBp)
+		}
 		bp := fmt.Sprintf(`
 			android_app {
 				name: "foo",
 				sdk_version: "current",
-				target_sdk_version: "%v",
+				%s
 			}
-			`, testCase.targetSdkVersionInBp)
+			`, targetSdkVersionTemplate)
 		fixture := android.GroupFixturePreparers(
 			prepareForJavaTest,
 			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
@@ -3142,16 +3165,20 @@ func TestDefaultAppTargetSdkVersionForUpdatableModules(t *testing.T) {
 		},
 	}
 	for _, testCase := range testCases {
+		targetSdkVersionTemplate := ""
+		if testCase.targetSdkVersionInBp != nil {
+			targetSdkVersionTemplate = fmt.Sprintf(`target_sdk_version: "%s",`, *testCase.targetSdkVersionInBp)
+		}
 		bp := fmt.Sprintf(`
 			android_app {
 				name: "foo",
 				sdk_version: "current",
 				min_sdk_version: "29",
-				target_sdk_version: "%v",
+				%s
 				updatable: %t,
 				enforce_default_target_sdk_version: %t
 			}
-			`, proptools.String(testCase.targetSdkVersionInBp), testCase.updatable, testCase.updatable) // enforce default target sdk version if app is updatable
+			`, targetSdkVersionTemplate, testCase.updatable, testCase.updatable) // enforce default target sdk version if app is updatable
 
 		fixture := android.GroupFixturePreparers(
 			PrepareForTestWithJavaDefaultModules,

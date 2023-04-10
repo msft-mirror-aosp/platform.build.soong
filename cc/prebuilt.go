@@ -16,7 +16,6 @@ package cc
 
 import (
 	"path/filepath"
-	"strings"
 
 	"android/soong/android"
 	"android/soong/bazel"
@@ -208,12 +207,13 @@ func (p *prebuiltLibraryLinker) link(ctx ModuleContext,
 			})
 
 			// TODO(b/220898484): Mainline module sdk prebuilts of stub libraries use a stub
-			// library as their source and must not be installed, but libclang_rt.* libraries
-			// have stubs because they are LLNDK libraries, but use an implementation library
-			// as their source and need to be installed.  This discrepancy should be resolved
-			// without the prefix hack below.
-			if p.hasStubsVariants() && !p.buildStubs() && !ctx.Host() &&
-				!strings.HasPrefix(ctx.baseModuleName(), "libclang_rt.") {
+			// library as their source and must not be installed, but other prebuilts like
+			// libclang_rt.* libraries set `stubs` property because they are LLNDK libraries,
+			// but use an implementation library as their source and need to be installed.
+			// This discrepancy should be resolved without the prefix hack below.
+			isModuleSdkPrebuilts := android.HasAnyPrefix(ctx.ModuleDir(), []string{
+				"prebuilts/runtime/mainline/", "prebuilts/module_sdk/"})
+			if p.hasStubsVariants() && !p.buildStubs() && !ctx.Host() && isModuleSdkPrebuilts {
 				ctx.Module().MakeUninstallable()
 			}
 
@@ -352,6 +352,7 @@ type bazelPrebuiltLibraryStaticAttributes struct {
 	Static_library         bazel.LabelAttribute
 	Export_includes        bazel.StringListAttribute
 	Export_system_includes bazel.StringListAttribute
+	Alwayslink             bazel.BoolAttribute
 }
 
 // TODO(b/228623543): The below is not entirely true until the bug is fixed. For now, both targets are always generated
@@ -389,6 +390,11 @@ func prebuiltLibraryStaticBp2Build(ctx android.TopDownMutatorContext, module *Mo
 
 	tags := android.ApexAvailableTags(module)
 	ctx.CreateBazelTargetModuleWithRestrictions(props, android.CommonAttributes{Name: name, Tags: tags}, attrs, prebuiltAttrs.Enabled)
+
+	_true := true
+	alwayslinkAttrs := *attrs
+	alwayslinkAttrs.Alwayslink.SetValue(&_true)
+	ctx.CreateBazelTargetModuleWithRestrictions(props, android.CommonAttributes{Name: name + "_alwayslink", Tags: tags}, &alwayslinkAttrs, prebuiltAttrs.Enabled)
 }
 
 type bazelPrebuiltLibrarySharedAttributes struct {
@@ -462,6 +468,8 @@ func (h *prebuiltLibraryBazelHandler) ProcessBazelQueryResponse(ctx android.Modu
 	}
 
 	h.module.maybeUnhideFromMake()
+
+	h.module.setAndroidMkVariablesFromCquery(ccInfo.CcAndroidMkInfo)
 }
 
 func (h *prebuiltLibraryBazelHandler) processStaticBazelQueryResponse(ctx android.ModuleContext, label string, ccInfo cquery.CcInfo) bool {
@@ -486,13 +494,17 @@ func (h *prebuiltLibraryBazelHandler) processStaticBazelQueryResponse(ctx androi
 		return true
 	}
 
-	out := android.PathForBazelOut(ctx, staticLibs[0])
-	h.module.outputFile = android.OptionalPathForPath(out)
+	var outputPath android.Path = android.PathForBazelOut(ctx, staticLibs[0])
+	if len(ccInfo.TidyFiles) > 0 {
+		h.module.tidyFiles = android.PathsForBazelOut(ctx, ccInfo.TidyFiles)
+		outputPath = android.AttachValidationActions(ctx, outputPath, h.module.tidyFiles)
+	}
 
-	depSet := android.NewDepSetBuilder(android.TOPOLOGICAL).Direct(out).Build()
+	h.module.outputFile = android.OptionalPathForPath(outputPath)
+
+	depSet := android.NewDepSetBuilder(android.TOPOLOGICAL).Direct(outputPath).Build()
 	ctx.SetProvider(StaticLibraryInfoProvider, StaticLibraryInfo{
-		StaticLibrary: out,
-
+		StaticLibrary:                        outputPath,
 		TransitiveStaticLibrariesForOrdering: depSet,
 	})
 
@@ -516,21 +528,26 @@ func (h *prebuiltLibraryBazelHandler) processSharedBazelQueryResponse(ctx androi
 		return true
 	}
 
-	out := android.PathForBazelOut(ctx, sharedLibs[0])
-	h.module.outputFile = android.OptionalPathForPath(out)
+	var outputPath android.Path = android.PathForBazelOut(ctx, sharedLibs[0])
+	if len(ccInfo.TidyFiles) > 0 {
+		h.module.tidyFiles = android.PathsForBazelOut(ctx, ccInfo.TidyFiles)
+		outputPath = android.AttachValidationActions(ctx, outputPath, h.module.tidyFiles)
+	}
+
+	h.module.outputFile = android.OptionalPathForPath(outputPath)
 
 	// FIXME(b/214600441): We don't yet strip prebuilt shared libraries
-	h.library.unstrippedOutputFile = out
+	h.library.unstrippedOutputFile = outputPath
 
 	var toc android.Path
 	if len(ccInfo.TocFile) > 0 {
 		toc = android.PathForBazelOut(ctx, ccInfo.TocFile)
 	} else {
-		toc = out // Just reuse `out` so ninja still gets an input but won't matter
+		toc = outputPath // Just reuse `out` so ninja still gets an input but won't matter
 	}
 
 	info := SharedLibraryInfo{
-		SharedLibrary:   out,
+		SharedLibrary:   outputPath,
 		TableOfContents: android.OptionalPathForPath(toc),
 		Target:          ctx.Target(),
 	}
@@ -750,12 +767,12 @@ var _ BazelHandler = (*prebuiltBinaryBazelHandler)(nil)
 
 func (h *prebuiltBinaryBazelHandler) QueueBazelCall(ctx android.BaseModuleContext, label string) {
 	bazelCtx := ctx.Config().BazelContext
-	bazelCtx.QueueBazelRequest(label, cquery.GetOutputFiles, android.GetConfigKey(ctx))
+	bazelCtx.QueueBazelRequest(label, cquery.GetOutputFiles, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
 }
 
 func (h *prebuiltBinaryBazelHandler) ProcessBazelQueryResponse(ctx android.ModuleContext, label string) {
 	bazelCtx := ctx.Config().BazelContext
-	outputs, err := bazelCtx.GetOutputFiles(label, android.GetConfigKey(ctx))
+	outputs, err := bazelCtx.GetOutputFiles(label, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
 	if err != nil {
 		ctx.ModuleErrorf(err.Error())
 		return

@@ -248,16 +248,16 @@ func (j *Javadoc) SystemModules() string {
 	return proptools.String(j.properties.System_modules)
 }
 
-func (j *Javadoc) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
-	return j.SdkVersion(ctx)
+func (j *Javadoc) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
+	return j.SdkVersion(ctx).ApiLevel
 }
 
-func (j *Javadoc) ReplaceMaxSdkVersionPlaceholder(ctx android.EarlyModuleContext) android.SdkSpec {
-	return j.SdkVersion(ctx)
+func (j *Javadoc) ReplaceMaxSdkVersionPlaceholder(ctx android.EarlyModuleContext) android.ApiLevel {
+	return j.SdkVersion(ctx).ApiLevel
 }
 
-func (j *Javadoc) TargetSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
-	return j.SdkVersion(ctx)
+func (j *Javadoc) TargetSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
+	return j.SdkVersion(ctx).ApiLevel
 }
 
 func (j *Javadoc) addDeps(ctx android.BottomUpMutatorContext) {
@@ -304,7 +304,7 @@ func (j *Javadoc) aidlFlags(ctx android.ModuleContext, aidlPreprocess android.Op
 		flags = append(flags, "-I"+src.String())
 	}
 
-	minSdkVersion := j.MinSdkVersion(ctx).ApiLevel.FinalOrFutureInt()
+	minSdkVersion := j.MinSdkVersion(ctx).FinalOrFutureInt()
 	flags = append(flags, fmt.Sprintf("--min_sdk_version=%v", minSdkVersion))
 
 	return strings.Join(flags, " "), deps
@@ -602,8 +602,13 @@ func (d *Droiddoc) doclavaDocsFlags(ctx android.ModuleContext, cmd *android.Rule
 		Flag("-J-Xmx1600m").
 		Flag("-J-XX:-OmitStackTraceInFastThrow").
 		Flag("-XDignore.symbol.file").
+		Flag("--ignore-source-errors").
 		FlagWithArg("-doclet ", "com.google.doclava.Doclava").
 		FlagWithInputList("-docletpath ", docletPath.Paths(), ":").
+		FlagWithArg("-Xmaxerrs ", "10").
+		FlagWithArg("-Xmaxwarns ", "10").
+		Flag("-J--add-exports=jdk.javadoc/jdk.javadoc.internal.doclets.formats.html=ALL-UNNAMED").
+		Flag("-J--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED").
 		FlagWithArg("-hdf page.build ", ctx.Config().BuildId()+"-$(cat "+buildNumberFile.String()+")").OrderOnly(buildNumberFile).
 		FlagWithArg("-hdf page.now ", `"$(date -d @$(cat `+ctx.Config().Getenv("BUILD_DATETIME_FILE")+`) "+%d %b %Y %k:%M")" `)
 
@@ -687,7 +692,7 @@ func javadocCmd(ctx android.ModuleContext, rule *android.RuleBuilder, srcs andro
 	outDir, srcJarDir, srcJarList android.Path, sourcepaths android.Paths) *android.RuleBuilderCommand {
 
 	cmd := rule.Command().
-		BuiltTool("soong_javac_wrapper").Tool(android.PathForSource(ctx, "prebuilts/jdk/jdk11/linux-x86/bin/javadoc")).
+		BuiltTool("soong_javac_wrapper").Tool(config.JavadocCmd(ctx)).
 		Flag(config.JavacVmFlags).
 		FlagWithArg("-encoding ", "UTF-8").
 		FlagWithRspFileInputList("@", android.PathForModuleOut(ctx, "javadoc.rsp"), srcs).

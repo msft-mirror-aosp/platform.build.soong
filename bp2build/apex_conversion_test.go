@@ -58,10 +58,14 @@ func registerOverrideApexModuleTypes(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("cc_binary", cc.BinaryFactory)
 	ctx.RegisterModuleType("cc_library", cc.LibraryFactory)
 	ctx.RegisterModuleType("apex_key", apex.ApexKeyFactory)
+	ctx.RegisterModuleType("apex_test", apex.TestApexBundleFactory)
 	ctx.RegisterModuleType("android_app_certificate", java.AndroidAppCertificateFactory)
 	ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
 	ctx.RegisterModuleType("apex", apex.BundleFactory)
+	ctx.RegisterModuleType("apex_defaults", apex.DefaultsFactory)
 	ctx.RegisterModuleType("prebuilt_etc", etc.PrebuiltEtcFactory)
+	ctx.RegisterModuleType("soong_config_module_type", android.SoongConfigModuleTypeFactory)
+	ctx.RegisterModuleType("soong_config_string_variable", android.SoongConfigStringVariableDummyFactory)
 }
 
 func TestApexBundleSimple(t *testing.T) {
@@ -703,6 +707,125 @@ override_apex {
 		}})
 }
 
+func TestOverrideApexTest(t *testing.T) {
+	runOverrideApexTestCase(t, Bp2buildTestCase{
+		Description:                "override_apex",
+		ModuleTypeUnderTest:        "override_apex",
+		ModuleTypeUnderTestFactory: apex.OverrideApexFactory,
+		Filesystem:                 map[string]string{},
+		Blueprint: `
+apex_key {
+	name: "com.android.apogee.key",
+	public_key: "com.android.apogee.avbpubkey",
+	private_key: "com.android.apogee.pem",
+	bazel_module: { bp2build_available: false },
+}
+
+android_app_certificate {
+	name: "com.android.apogee.certificate",
+	certificate: "com.android.apogee",
+	bazel_module: { bp2build_available: false },
+}
+
+cc_library {
+	name: "native_shared_lib_1",
+	bazel_module: { bp2build_available: false },
+}
+
+prebuilt_etc {
+	name: "prebuilt_1",
+	bazel_module: { bp2build_available: false },
+}
+
+filegroup {
+	name: "com.android.apogee-file_contexts",
+	srcs: [
+		"com.android.apogee-file_contexts",
+	],
+	bazel_module: { bp2build_available: false },
+}
+
+cc_binary { name: "cc_binary_1", bazel_module: { bp2build_available: false } }
+sh_binary { name: "sh_binary_2", bazel_module: { bp2build_available: false } }
+
+apex_test {
+	name: "com.android.apogee",
+	manifest: "apogee_manifest.json",
+	androidManifest: "ApogeeAndroidManifest.xml",
+	file_contexts: ":com.android.apogee-file_contexts",
+	min_sdk_version: "29",
+	key: "com.android.apogee.key",
+	certificate: ":com.android.apogee.certificate",
+	updatable: false,
+	installable: false,
+	compressible: false,
+	native_shared_libs: [
+	    "native_shared_lib_1",
+	],
+	binaries: [
+		"cc_binary_1",
+		"sh_binary_2",
+	],
+	prebuilts: [
+	    "prebuilt_1",
+	],
+	bazel_module: { bp2build_available: false },
+}
+
+apex_key {
+	name: "com.google.android.apogee.key",
+	public_key: "com.google.android.apogee.avbpubkey",
+	private_key: "com.google.android.apogee.pem",
+	bazel_module: { bp2build_available: false },
+}
+
+android_app_certificate {
+	name: "com.google.android.apogee.certificate",
+	certificate: "com.google.android.apogee",
+	bazel_module: { bp2build_available: false },
+}
+
+override_apex {
+	name: "com.google.android.apogee",
+	base: ":com.android.apogee",
+	key: "com.google.android.apogee.key",
+	certificate: ":com.google.android.apogee.certificate",
+	prebuilts: [],
+	compressible: true,
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("apex", "com.google.android.apogee", AttrNameToString{
+				"android_manifest": `"ApogeeAndroidManifest.xml"`,
+				"base_apex_name":   `"com.android.apogee"`,
+				"binaries": `[
+        ":cc_binary_1",
+        ":sh_binary_2",
+    ]`,
+				"certificate":     `":com.google.android.apogee.certificate"`,
+				"file_contexts":   `":com.android.apogee-file_contexts"`,
+				"installable":     "False",
+				"key":             `":com.google.android.apogee.key"`,
+				"manifest":        `"apogee_manifest.json"`,
+				"min_sdk_version": `"29"`,
+				"native_shared_libs_32": `select({
+        "//build/bazel/platforms/arch:arm": [":native_shared_lib_1"],
+        "//build/bazel/platforms/arch:x86": [":native_shared_lib_1"],
+        "//conditions:default": [],
+    })`,
+				"native_shared_libs_64": `select({
+        "//build/bazel/platforms/arch:arm64": [":native_shared_lib_1"],
+        "//build/bazel/platforms/arch:x86_64": [":native_shared_lib_1"],
+        "//conditions:default": [],
+    })`,
+				"testonly":     "True",
+				"prebuilts":    `[]`,
+				"updatable":    "False",
+				"compressible": "True",
+			}),
+		}})
+}
+
 func TestApexBundleSimple_manifestIsEmpty_baseApexOverrideApexInDifferentAndroidBp(t *testing.T) {
 	runOverrideApexTestCase(t, Bp2buildTestCase{
 		Description:                "override_apex - manifest of base apex is empty, base apex and override_apex is in different Android.bp",
@@ -1188,9 +1311,9 @@ apex {
 				"tags":              `["apex_available=myapex"]`,
 			}),
 			MakeBazelTarget("cc_stub_suite", "foo_stub_libs", AttrNameToString{
-				"soname":         `"foo.so"`,
-				"source_library": `":foo"`,
-				"symbol_file":    `"foo.map.txt"`,
+				"soname":               `"foo.so"`,
+				"source_library_label": `"//:foo"`,
+				"symbol_file":          `"foo.map.txt"`,
 				"versions": `[
         "28",
         "29",
@@ -1356,6 +1479,112 @@ apex_test {
 				"manifest":      `"apex_manifest.json"`,
 				"testonly":      `True`,
 				"tests":         `[":cc_test_1"]`,
+			}),
+		}})
+}
+
+func TestApexBundle_overridePlusProductVars(t *testing.T) {
+	// Reproduction of b/271424349
+	// Tests that overriding an apex that uses product variables correctly copies the product var
+	// selects over to the override.
+	runOverrideApexTestCase(t, Bp2buildTestCase{
+		Description:                "apex - overriding a module that uses product vars",
+		ModuleTypeUnderTest:        "override_apex",
+		ModuleTypeUnderTestFactory: apex.OverrideApexFactory,
+		Blueprint: `
+soong_config_string_variable {
+    name: "library_linking_strategy",
+    values: [
+        "prefer_static",
+    ],
+}
+
+soong_config_module_type {
+    name: "library_linking_strategy_apex_defaults",
+    module_type: "apex_defaults",
+    config_namespace: "ANDROID",
+    variables: ["library_linking_strategy"],
+    properties: [
+        "manifest",
+        "min_sdk_version",
+    ],
+}
+
+library_linking_strategy_apex_defaults {
+    name: "higher_min_sdk_when_prefer_static",
+    soong_config_variables: {
+        library_linking_strategy: {
+            // Use the R min_sdk_version
+            prefer_static: {},
+            // Override the R min_sdk_version to min_sdk_version that supports dcla
+            conditions_default: {
+                min_sdk_version: "31",
+            },
+        },
+    },
+}
+
+filegroup {
+	name: "foo-file_contexts",
+	srcs: [
+		"com.android.apogee-file_contexts",
+	],
+	bazel_module: { bp2build_available: false },
+}
+
+apex {
+	name: "foo",
+	defaults: ["higher_min_sdk_when_prefer_static"],
+	min_sdk_version: "30",
+	package_name: "pkg_name",
+	file_contexts: ":foo-file_contexts",
+}
+override_apex {
+	name: "override_foo",
+	base: ":foo",
+	package_name: "override_pkg_name",
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("apex", "foo", AttrNameToString{
+				"file_contexts": `":foo-file_contexts"`,
+				"manifest":      `"apex_manifest.json"`,
+				"min_sdk_version": `select({
+        "//build/bazel/product_variables:android__library_linking_strategy__prefer_static": "30",
+        "//conditions:default": "31",
+    })`,
+				"package_name": `"pkg_name"`,
+			}), MakeBazelTarget("apex", "override_foo", AttrNameToString{
+				"base_apex_name": `"foo"`,
+				"file_contexts":  `":foo-file_contexts"`,
+				"manifest":       `"apex_manifest.json"`,
+				"min_sdk_version": `select({
+        "//build/bazel/product_variables:android__library_linking_strategy__prefer_static": "30",
+        "//conditions:default": "31",
+    })`,
+				"package_name": `"override_pkg_name"`,
+			}),
+		}})
+}
+
+func TestApexBundleSimple_customCannedFsConfig(t *testing.T) {
+	runApexTestCase(t, Bp2buildTestCase{
+		Description:                "apex - custom canned_fs_config",
+		ModuleTypeUnderTest:        "apex",
+		ModuleTypeUnderTestFactory: apex.BundleFactory,
+		Filesystem:                 map[string]string{},
+		Blueprint: `
+apex {
+	name: "com.android.apogee",
+	canned_fs_config: "custom.canned_fs_config",
+	file_contexts: "file_contexts_file",
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("apex", "com.android.apogee", AttrNameToString{
+				"canned_fs_config": `"custom.canned_fs_config"`,
+				"file_contexts":    `"file_contexts_file"`,
+				"manifest":         `"apex_manifest.json"`,
 			}),
 		}})
 }

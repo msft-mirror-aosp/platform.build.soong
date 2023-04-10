@@ -352,11 +352,16 @@ func GetBp2BuildAllowList() Bp2BuildConversionAllowlist {
 // metrics reporting.
 func MixedBuildsEnabled(ctx BaseModuleContext) bool {
 	module := ctx.Module()
+	apexInfo := ctx.Provider(ApexInfoProvider).(ApexInfo)
+	withinApex := !apexInfo.IsForPlatform()
 	mixedBuildEnabled := ctx.Config().IsMixedBuildsEnabled() &&
 		ctx.Os() != Windows && // Windows toolchains are not currently supported.
+		ctx.Os() != LinuxBionic && // Linux Bionic toolchains are not currently supported.
+		ctx.Os() != LinuxMusl && // Linux musl toolchains are not currently supported (b/259266326).
+		ctx.Arch().ArchType != Riscv64 && // TODO(b/262192655) Riscv64 toolchains are not currently supported.
 		module.Enabled() &&
 		convertedToBazel(ctx, module) &&
-		ctx.Config().BazelContext.IsModuleNameAllowed(module.Name())
+		ctx.Config().BazelContext.IsModuleNameAllowed(module.Name(), withinApex)
 	ctx.Config().LogMixedBuild(ctx, mixedBuildEnabled)
 	return mixedBuildEnabled
 }
@@ -525,4 +530,16 @@ func GetMainClassInManifest(c Config, filepath string) (string, error) {
 	}
 
 	return "", errors.New("Main-Class is not found.")
+}
+
+func AttachValidationActions(ctx ModuleContext, outputFilePath Path, validations Paths) ModuleOutPath {
+	validatedOutputFilePath := PathForModuleOut(ctx, "validated", outputFilePath.Base())
+	ctx.Build(pctx, BuildParams{
+		Rule:        CpNoPreserveSymlink,
+		Description: "run validations " + outputFilePath.Base(),
+		Output:      validatedOutputFilePath,
+		Input:       outputFilePath,
+		Validations: validations,
+	})
+	return validatedOutputFilePath
 }

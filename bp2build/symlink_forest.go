@@ -15,18 +15,20 @@
 package bp2build
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"android/soong/shared"
+
+	"github.com/google/blueprint/pathtools"
 )
 
 // A tree structure that describes what to do at each directory in the created
@@ -35,6 +37,13 @@ import (
 // or a directory. If excluded is true, then that file/directory should be
 // excluded from symlinking. Otherwise, the node is not excluded, but one of its
 // descendants is (otherwise the node in question would not exist)
+
+// This is a version int written to a file called symlink_forest_version at the root of the
+// symlink forest. If the version here does not match the version in the file, then we'll
+// clean the whole symlink forest and recreate it. This number can be bumped whenever there's
+// an incompatible change to the forest layout or a bug in incrementality that needs to be fixed
+// on machines that may still have the bug present in their forest.
+const symlinkForestVersion = 1
 
 type instructionsNode struct {
 	name     string
@@ -51,59 +60,6 @@ type symlinkForestContext struct {
 	depCh        chan string
 	mkdirCount   atomic.Uint64
 	symlinkCount atomic.Uint64
-}
-
-// A simple thread pool to limit concurrency on system calls.
-// Necessary because Go spawns a new OS-level thread for each blocking system
-// call. This means that if syscalls are too slow and there are too many of
-// them, the hard limit on OS-level threads can be exhausted.
-type syscallPool struct {
-	shutdownCh []chan<- struct{}
-	workCh     chan syscall
-}
-
-type syscall struct {
-	work func()
-	done chan<- struct{}
-}
-
-func createSyscallPool(count int) *syscallPool {
-	result := &syscallPool{
-		shutdownCh: make([]chan<- struct{}, count),
-		workCh:     make(chan syscall),
-	}
-
-	for i := 0; i < count; i++ {
-		shutdownCh := make(chan struct{})
-		result.shutdownCh[i] = shutdownCh
-		go result.worker(shutdownCh)
-	}
-
-	return result
-}
-
-func (p *syscallPool) do(work func()) {
-	doneCh := make(chan struct{})
-	p.workCh <- syscall{work, doneCh}
-	<-doneCh
-}
-
-func (p *syscallPool) shutdown() {
-	for _, ch := range p.shutdownCh {
-		ch <- struct{}{} // Blocks until the value is received
-	}
-}
-
-func (p *syscallPool) worker(shutdownCh <-chan struct{}) {
-	for {
-		select {
-		case <-shutdownCh:
-			return
-		case work := <-p.workCh:
-			work.work()
-			work.done <- struct{}{}
-		}
-	}
 }
 
 // Ensures that the node for the given path exists in the tree and returns it.
@@ -171,25 +127,41 @@ func mergeBuildFiles(output string, srcBuildFile string, generatedBuildFile stri
 		generatedBuildFileContent = packageDefaultVisibilityRegex.ReplaceAll(generatedBuildFileContent, []byte{})
 	}
 
-	outFile, err := os.Create(output)
-	if err != nil {
-		return err
+	newContents := generatedBuildFileContent
+	if newContents[len(newContents)-1] != '\n' {
+		newContents = append(newContents, '\n')
 	}
+	newContents = append(newContents, srcBuildFileContent...)
 
-	_, err = outFile.Write(generatedBuildFileContent)
-	if err != nil {
+	// Say you run bp2build 4 times:
+	// - The first time there's only an Android.bp file. bp2build will convert it to a build file
+	//   under out/soong/bp2build, then symlink from the forest to that generated file
+	// - Then you add a handcrafted BUILD file in the same directory. bp2build will merge this with
+	//   the generated one, and write the result to the output file in the forest. But the output
+	//   file was a symlink to out/soong/bp2build from the previous step! So we erroneously update
+	//   the file in out/soong/bp2build instead. So far this doesn't cause any problems...
+	// - You run a 3rd bp2build with no relevant changes. Everything continues to work.
+	// - You then add a comment to the handcrafted BUILD file. This causes a merge with the
+	//   generated file again. But since we wrote to the generated file in step 2, the generated
+	//   file has an old copy of the handcrafted file in it! This probably causes duplicate bazel
+	//   targets.
+	// To solve this, if we see that the output file is a symlink from a previous build, remove it.
+	stat, err := os.Lstat(output)
+	if err != nil && !os.IsNotExist(err) {
 		return err
-	}
-
-	if generatedBuildFileContent[len(generatedBuildFileContent)-1] != '\n' {
-		_, err = outFile.WriteString("\n")
-		if err != nil {
-			return err
+	} else if err == nil {
+		if stat.Mode()&os.ModeSymlink == os.ModeSymlink {
+			if verbose {
+				fmt.Fprintf(os.Stderr, "Removing symlink so that we can replace it with a merged file: %s\n", output)
+			}
+			err = os.Remove(output)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
-	_, err = outFile.Write(srcBuildFileContent)
-	return err
+	return pathtools.WriteFileIfChanged(output, newContents, 0666)
 }
 
 // Calls readdir() and returns it as a map from the basename of the files in dir
@@ -217,12 +189,35 @@ func readdirToMap(dir string) map[string]os.FileInfo {
 }
 
 // Creates a symbolic link at dst pointing to src
-func symlinkIntoForest(topdir, dst, src string) {
-	err := os.Symlink(shared.JoinPath(topdir, src), shared.JoinPath(topdir, dst))
-	if err != nil {
+func symlinkIntoForest(topdir, dst, src string) uint64 {
+	srcPath := shared.JoinPath(topdir, src)
+	dstPath := shared.JoinPath(topdir, dst)
+
+	// Check if a symlink already exists.
+	if dstInfo, err := os.Lstat(dstPath); err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "Failed to lstat '%s': %s", dst, err)
+			os.Exit(1)
+		}
+	} else {
+		if dstInfo.Mode()&os.ModeSymlink != 0 {
+			// Assume that the link's target is correct, i.e. no manual tampering.
+			// E.g. OUT_DIR could have been previously used with a different source tree check-out!
+			return 0
+		} else {
+			if err := os.RemoveAll(dstPath); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to remove '%s': %s", dst, err)
+				os.Exit(1)
+			}
+		}
+	}
+
+	// Create symlink.
+	if err := os.Symlink(srcPath, dstPath); err != nil {
 		fmt.Fprintf(os.Stderr, "Cannot create symlink at '%s' pointing to '%s': %s", dst, src, err)
 		os.Exit(1)
 	}
+	return 1
 }
 
 func isDir(path string, fi os.FileInfo) bool {
@@ -245,6 +240,46 @@ func isDir(path string, fi os.FileInfo) bool {
 	return false
 }
 
+// maybeCleanSymlinkForest will remove the whole symlink forest directory if the version recorded
+// in the symlink_forest_version file is not equal to symlinkForestVersion.
+func maybeCleanSymlinkForest(topdir, forest string, verbose bool) error {
+	versionFilePath := shared.JoinPath(topdir, forest, "symlink_forest_version")
+	versionFileContents, err := os.ReadFile(versionFilePath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	versionFileString := strings.TrimSpace(string(versionFileContents))
+	symlinkForestVersionString := strconv.Itoa(symlinkForestVersion)
+	if err != nil || versionFileString != symlinkForestVersionString {
+		if verbose {
+			fmt.Fprintf(os.Stderr, "Old symlink_forest_version was %q, current is %q. Cleaning symlink forest before recreating...\n", versionFileString, symlinkForestVersionString)
+		}
+		err = os.RemoveAll(shared.JoinPath(topdir, forest))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// maybeWriteVersionFile will write the symlink_forest_version file containing symlinkForestVersion
+// if it doesn't exist already. If it exists we know it must contain symlinkForestVersion because
+// we checked for that already in maybeCleanSymlinkForest
+func maybeWriteVersionFile(topdir, forest string) error {
+	versionFilePath := shared.JoinPath(topdir, forest, "symlink_forest_version")
+	_, err := os.Stat(versionFilePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		err = os.WriteFile(versionFilePath, []byte(strconv.Itoa(symlinkForestVersion)+"\n"), 0666)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Recursively plants a symlink forest at forestDir. The symlink tree will
 // contain every file in buildFilesDir and srcDir excluding the files in
 // instructions. Collects every directory encountered during the traversal of
@@ -253,8 +288,9 @@ func plantSymlinkForestRecursive(context *symlinkForestContext, instructions *in
 	defer context.wg.Done()
 
 	if instructions != nil && instructions.excluded {
-		// This directory is not needed, bail out
-		return
+		// Excluded paths are skipped at the level of the non-excluded parent.
+		fmt.Fprintf(os.Stderr, "may not specify a root-level exclude directory '%s'", srcDir)
+		os.Exit(1)
 	}
 
 	// We don't add buildFilesDir here because the bp2build files marker files is
@@ -272,6 +308,12 @@ func plantSymlinkForestRecursive(context *symlinkForestContext, instructions *in
 				renamingBuildFile = true
 				srcDirMap["BUILD.bazel"] = srcDirMap["BUILD"]
 				delete(srcDirMap, "BUILD")
+				if instructions != nil {
+					if _, ok := instructions.children["BUILD"]; ok {
+						instructions.children["BUILD.bazel"] = instructions.children["BUILD"]
+						delete(instructions.children, "BUILD")
+					}
+				}
 			}
 		}
 	}
@@ -288,17 +330,41 @@ func plantSymlinkForestRecursive(context *symlinkForestContext, instructions *in
 	// Tests read the error messages generated, so ensure their order is deterministic
 	sort.Strings(allEntries)
 
-	err := os.MkdirAll(shared.JoinPath(context.topdir, forestDir), 0777)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Cannot mkdir '%s': %s\n", forestDir, err)
-		os.Exit(1)
+	fullForestPath := shared.JoinPath(context.topdir, forestDir)
+	createForestDir := false
+	if fi, err := os.Lstat(fullForestPath); err != nil {
+		if os.IsNotExist(err) {
+			createForestDir = true
+		} else {
+			fmt.Fprintf(os.Stderr, "Could not read info for '%s': %s\n", forestDir, err)
+		}
+	} else if fi.Mode()&os.ModeDir == 0 {
+		if err := os.RemoveAll(fullForestPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to remove '%s': %s", forestDir, err)
+			os.Exit(1)
+		}
+		createForestDir = true
 	}
-	context.mkdirCount.Add(1)
+	if createForestDir {
+		if err := os.MkdirAll(fullForestPath, 0777); err != nil {
+			fmt.Fprintf(os.Stderr, "Could not mkdir '%s': %s\n", forestDir, err)
+			os.Exit(1)
+		}
+		context.mkdirCount.Add(1)
+	}
+
+	// Start with a list of items that already exist in the forest, and remove
+	// each element as it is processed in allEntries. Any remaining items in
+	// forestMapForDeletion must be removed. (This handles files which were
+	// removed since the previous forest generation).
+	forestMapForDeletion := readdirToMap(shared.JoinPath(context.topdir, forestDir))
 
 	for _, f := range allEntries {
 		if f[0] == '.' {
 			continue // Ignore dotfiles
 		}
+		delete(forestMapForDeletion, f)
+		// todo add deletionCount metric
 
 		// The full paths of children in the input trees and in the output tree
 		forestChild := shared.JoinPath(forestDir, f)
@@ -309,13 +375,9 @@ func plantSymlinkForestRecursive(context *symlinkForestContext, instructions *in
 		buildFilesChild := shared.JoinPath(buildFilesDir, f)
 
 		// Descend in the instruction tree if it exists
-		var instructionsChild *instructionsNode = nil
+		var instructionsChild *instructionsNode
 		if instructions != nil {
-			if f == "BUILD.bazel" && renamingBuildFile {
-				instructionsChild = instructions.children["BUILD"]
-			} else {
-				instructionsChild = instructions.children[f]
-			}
+			instructionsChild = instructions.children[f]
 		}
 
 		srcChildEntry, sExists := srcDirMap[f]
@@ -323,8 +385,7 @@ func plantSymlinkForestRecursive(context *symlinkForestContext, instructions *in
 
 		if instructionsChild != nil && instructionsChild.excluded {
 			if bExists {
-				symlinkIntoForest(context.topdir, forestChild, buildFilesChild)
-				context.symlinkCount.Add(1)
+				context.symlinkCount.Add(symlinkIntoForest(context.topdir, forestChild, buildFilesChild))
 			}
 			continue
 		}
@@ -340,8 +401,7 @@ func plantSymlinkForestRecursive(context *symlinkForestContext, instructions *in
 				go plantSymlinkForestRecursive(context, instructionsChild, forestChild, buildFilesChild, srcChild)
 			} else {
 				// Not in the source tree, symlink BUILD file
-				symlinkIntoForest(context.topdir, forestChild, buildFilesChild)
-				context.symlinkCount.Add(1)
+				context.symlinkCount.Add(symlinkIntoForest(context.topdir, forestChild, buildFilesChild))
 			}
 		} else if !bExists {
 			if sDir && instructionsChild != nil {
@@ -351,8 +411,7 @@ func plantSymlinkForestRecursive(context *symlinkForestContext, instructions *in
 				go plantSymlinkForestRecursive(context, instructionsChild, forestChild, buildFilesChild, srcChild)
 			} else {
 				// Not in the build file tree, symlink source tree, carry on
-				symlinkIntoForest(context.topdir, forestChild, srcChild)
-				context.symlinkCount.Add(1)
+				context.symlinkCount.Add(symlinkIntoForest(context.topdir, forestChild, srcChild))
 			}
 		} else if sDir && bDir {
 			// Both are directories. Descend.
@@ -365,8 +424,7 @@ func plantSymlinkForestRecursive(context *symlinkForestContext, instructions *in
 			// The Android.bp file that codegen used to produce `buildFilesChild` is
 			// already a dependency, we can ignore `buildFilesChild`.
 			context.depCh <- srcChild
-			err = mergeBuildFiles(shared.JoinPath(context.topdir, forestChild), srcBuildFile, generatedBuildFile, context.verbose)
-			if err != nil {
+			if err := mergeBuildFiles(shared.JoinPath(context.topdir, forestChild), srcBuildFile, generatedBuildFile, context.verbose); err != nil {
 				fmt.Fprintf(os.Stderr, "Error merging %s and %s: %s",
 					srcBuildFile, generatedBuildFile, err)
 				os.Exit(1)
@@ -379,51 +437,27 @@ func plantSymlinkForestRecursive(context *symlinkForestContext, instructions *in
 			os.Exit(1)
 		}
 	}
-}
 
-func removeParallelRecursive(pool *syscallPool, path string, fi os.FileInfo, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	if fi.IsDir() {
-		children := readdirToMap(path)
-		childrenWg := &sync.WaitGroup{}
-		childrenWg.Add(len(children))
-
-		for child, childFi := range children {
-			go removeParallelRecursive(pool, shared.JoinPath(path, child), childFi, childrenWg)
+	// Remove all files in the forest that exist in neither the source
+	// tree nor the build files tree. (This handles files which were removed
+	// since the previous forest generation).
+	for f := range forestMapForDeletion {
+		var instructionsChild *instructionsNode
+		if instructions != nil {
+			instructionsChild = instructions.children[f]
 		}
 
-		childrenWg.Wait()
-	}
-
-	pool.do(func() {
-		if err := os.Remove(path); err != nil {
-			fmt.Fprintf(os.Stderr, "Cannot unlink '%s': %s\n", path, err)
+		if instructionsChild != nil && instructionsChild.excluded {
+			// This directory may be excluded because bazel writes to it under the
+			// forest root. Thus this path is intentionally left alone.
+			continue
+		}
+		forestChild := shared.JoinPath(context.topdir, forestDir, f)
+		if err := os.RemoveAll(forestChild); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to remove '%s/%s': %s", forestDir, f, err)
 			os.Exit(1)
 		}
-	})
-}
-
-func removeParallel(path string) {
-	fi, err := os.Lstat(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return
-		}
-
-		fmt.Fprintf(os.Stderr, "Cannot lstat '%s': %s\n", path, err)
-		os.Exit(1)
 	}
-
-	wg := &sync.WaitGroup{}
-	wg.Add(1)
-
-	// Random guess as to the best number of syscalls to run in parallel
-	pool := createSyscallPool(100)
-	removeParallelRecursive(pool, path, fi, wg)
-	pool.shutdown()
-
-	wg.Wait()
 }
 
 // PlantSymlinkForest Creates a symlink forest by merging the directory tree at "buildFiles" and
@@ -439,7 +473,11 @@ func PlantSymlinkForest(verbose bool, topdir string, forest string, buildFiles s
 		symlinkCount: atomic.Uint64{},
 	}
 
-	removeParallel(shared.JoinPath(topdir, forest))
+	err := maybeCleanSymlinkForest(topdir, forest, verbose)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 
 	instructions := instructionsFromExcludePathList(exclude)
 	go func() {
@@ -451,6 +489,12 @@ func PlantSymlinkForest(verbose bool, topdir string, forest string, buildFiles s
 
 	for dep := range context.depCh {
 		deps = append(deps, dep)
+	}
+
+	err = maybeWriteVersionFile(topdir, forest)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 
 	return deps, context.mkdirCount.Load(), context.symlinkCount.Load()

@@ -51,7 +51,7 @@ func (metrics *CodegenMetrics) Serialize() *bp2build_metrics_proto.Bp2BuildMetri
 // Print the codegen metrics to stdout.
 func (metrics *CodegenMetrics) Print() {
 	generatedTargetCount := uint64(0)
-	for _, ruleClass := range android.SortedStringKeys(metrics.serialized.RuleClassCount) {
+	for _, ruleClass := range android.SortedKeys(metrics.serialized.RuleClassCount) {
 		count := metrics.serialized.RuleClassCount[ruleClass]
 		fmt.Printf("[bp2build] %s: %d targets\n", ruleClass, count)
 		generatedTargetCount += count
@@ -188,6 +188,10 @@ const (
 )
 
 func (metrics *CodegenMetrics) AddConvertedModule(m blueprint.Module, moduleType string, dir string, conversionType ConversionType) {
+	//a package module has empty name
+	if moduleType == "package" {
+		return
+	}
 	// Undo prebuilt_ module name prefix modifications
 	moduleName := android.RemoveOptionalPrebuiltPrefix(m.Name())
 	metrics.serialized.ConvertedModules = append(metrics.serialized.ConvertedModules, moduleName)

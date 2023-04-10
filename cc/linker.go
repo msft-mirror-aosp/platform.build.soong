@@ -15,10 +15,11 @@
 package cc
 
 import (
-	"android/soong/android"
-	"android/soong/cc/config"
 	"fmt"
 	"path/filepath"
+
+	"android/soong/android"
+	"android/soong/cc/config"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -237,29 +238,14 @@ type BaseLinkerProperties struct {
 	Exclude_shared_libs []string `android:"arch_variant"`
 }
 
-func invertBoolPtr(value *bool) *bool {
-	if value == nil {
-		return nil
-	}
-	ret := !(*value)
-	return &ret
+func (blp *BaseLinkerProperties) crt() bool {
+	// Since crt is enabled for almost every module compiling against the Bionic runtime,
+	// we interpret `nil` as  enabled.
+	return blp.Nocrt == nil || !*blp.Nocrt
 }
 
-func (blp *BaseLinkerProperties) crt() *bool {
-	val := invertBoolPtr(blp.Nocrt)
-	if val != nil && *val {
-		// == True
-		//
-		// Since crt is enabled for almost every module compiling against the Bionic runtime,
-		// use `nil` when it's enabled, and rely on the Starlark macro to set it to True by default.
-		// This keeps the BUILD files clean.
-		return nil
-	}
-	return val // can be False or nil
-}
-
-func (blp *BaseLinkerProperties) libCrt() *bool {
-	return invertBoolPtr(blp.No_libcrt)
+func (blp *BaseLinkerProperties) libCrt() bool {
+	return blp.No_libcrt == nil || !*blp.No_libcrt
 }
 
 func NewBaseLinker(sanitize *sanitize) *baseLinker {
@@ -392,7 +378,7 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 
 	if ctx.toolchain().Bionic() {
 		// libclang_rt.builtins has to be last on the command line
-		if !Bool(linker.Properties.No_libcrt) && !ctx.header() {
+		if linker.Properties.libCrt() && !ctx.header() {
 			deps.UnexportedStaticLibs = append(deps.UnexportedStaticLibs, config.BuiltinsRuntimeLibrary(ctx.toolchain()))
 		}
 
@@ -415,7 +401,7 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 			ctx.PropertyErrorf("system_shared_libs", "libdl must be after libc")
 		}
 	} else if ctx.toolchain().Musl() {
-		if !Bool(linker.Properties.No_libcrt) && !ctx.header() {
+		if linker.Properties.libCrt() && !ctx.header() {
 			deps.UnexportedStaticLibs = append(deps.UnexportedStaticLibs, config.BuiltinsRuntimeLibrary(ctx.toolchain()))
 		}
 	}
@@ -557,13 +543,13 @@ func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 				ctx.PropertyErrorf("version_script", "Not supported on Darwin")
 			} else {
 				flags.Local.LdFlags = append(flags.Local.LdFlags,
-					"-Wl,--version-script,"+versionScript.String())
+					config.VersionScriptFlagPrefix+versionScript.String())
 				flags.LdFlagsDeps = append(flags.LdFlagsDeps, versionScript.Path())
 
 				if linker.sanitize.isSanitizerEnabled(cfi) {
-					cfiExportsMap := android.PathForSource(ctx, cfiExportsMapPath)
+					cfiExportsMap := android.PathForSource(ctx, cfiExportsMapPath+"/"+cfiExportsMapFilename)
 					flags.Local.LdFlags = append(flags.Local.LdFlags,
-						"-Wl,--version-script,"+cfiExportsMap.String())
+						config.VersionScriptFlagPrefix+cfiExportsMap.String())
 					flags.LdFlagsDeps = append(flags.LdFlagsDeps, cfiExportsMap)
 				}
 			}

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"android/soong/android"
+	"android/soong/cc"
 	cc_config "android/soong/cc/config"
 	java_config "android/soong/java/config"
 
@@ -21,20 +22,25 @@ type BazelFile struct {
 }
 
 // PRIVATE: Use CreateSoongInjectionDirFiles instead
-func soongInjectionFiles(cfg android.Config, metrics CodegenMetrics) []BazelFile {
+func soongInjectionFiles(cfg android.Config, metrics CodegenMetrics) ([]BazelFile, error) {
 	var files []BazelFile
 
 	files = append(files, newFile("android", GeneratedBuildFileName, "")) // Creates a //cc_toolchain package.
 	files = append(files, newFile("android", "constants.bzl", android.BazelCcToolchainVars(cfg)))
 
 	files = append(files, newFile("cc_toolchain", GeneratedBuildFileName, "")) // Creates a //cc_toolchain package.
-	files = append(files, newFile("cc_toolchain", "constants.bzl", cc_config.BazelCcToolchainVars(cfg)))
+	files = append(files, newFile("cc_toolchain", "config_constants.bzl", cc_config.BazelCcToolchainVars(cfg)))
+	files = append(files, newFile("cc_toolchain", "sanitizer_constants.bzl", cc.BazelCcSanitizerToolchainVars(cfg)))
 
 	files = append(files, newFile("java_toolchain", GeneratedBuildFileName, "")) // Creates a //java_toolchain package.
 	files = append(files, newFile("java_toolchain", "constants.bzl", java_config.BazelJavaToolchainVars(cfg)))
 
 	files = append(files, newFile("apex_toolchain", GeneratedBuildFileName, "")) // Creates a //apex_toolchain package.
-	files = append(files, newFile("apex_toolchain", "constants.bzl", apex.BazelApexToolchainVars()))
+	apexToolchainVars, err := apex.BazelApexToolchainVars()
+	if err != nil {
+		return nil, err
+	}
+	files = append(files, newFile("apex_toolchain", "constants.bzl", apexToolchainVars))
 
 	files = append(files, newFile("metrics", "converted_modules.txt", strings.Join(metrics.Serialize().ConvertedModules, "\n")))
 
@@ -50,17 +56,20 @@ func soongInjectionFiles(cfg android.Config, metrics CodegenMetrics) []BazelFile
 
 	apiLevelsContent, err := json.Marshal(android.GetApiLevelsMap(cfg))
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	files = append(files, newFile("api_levels", GeneratedBuildFileName, `exports_files(["api_levels.json"])`))
+	// TODO(b/269691302)  value of apiLevelsContent is product variable dependent and should be avoided for soong injection
 	files = append(files, newFile("api_levels", "api_levels.json", string(apiLevelsContent)))
 	files = append(files, newFile("api_levels", "api_levels.bzl", android.StarlarkApiLevelConfigs(cfg)))
 
+	files = append(files, newFile("allowlists", GeneratedBuildFileName, ""))
+	files = append(files, newFile("allowlists", "env.bzl", android.EnvironmentVarsFile(cfg)))
 	// TODO(b/262781701): Create an alternate soong_build entrypoint for writing out these files only when requested
 	files = append(files, newFile("allowlists", "mixed_build_prod_allowlist.txt", strings.Join(android.GetBazelEnabledModules(android.BazelProdMode), "\n")+"\n"))
 	files = append(files, newFile("allowlists", "mixed_build_staging_allowlist.txt", strings.Join(android.GetBazelEnabledModules(android.BazelStagingMode), "\n")+"\n"))
 
-	return files
+	return files, nil
 }
 
 func CreateBazelFiles(
@@ -96,7 +105,7 @@ func CreateBazelFiles(
 
 func createBuildFiles(buildToTargets map[string]BazelTargets, mode CodegenMode) []BazelFile {
 	files := make([]BazelFile, 0, len(buildToTargets))
-	for _, dir := range android.SortedStringKeys(buildToTargets) {
+	for _, dir := range android.SortedKeys(buildToTargets) {
 		targets := buildToTargets[dir]
 		targets.sort()
 

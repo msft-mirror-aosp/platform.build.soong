@@ -489,8 +489,8 @@ type Module struct {
 	hideApexVariantFromMake bool
 
 	sdkVersion    android.SdkSpec
-	minSdkVersion android.SdkSpec
-	maxSdkVersion android.SdkSpec
+	minSdkVersion android.ApiLevel
+	maxSdkVersion android.ApiLevel
 
 	sourceExtensions []string
 }
@@ -665,34 +665,38 @@ func (j *Module) SystemModules() string {
 	return proptools.String(j.deviceProperties.System_modules)
 }
 
-func (j *Module) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
+func (j *Module) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
 	if j.deviceProperties.Min_sdk_version != nil {
-		return android.SdkSpecFrom(ctx, *j.deviceProperties.Min_sdk_version)
+		return android.ApiLevelFrom(ctx, *j.deviceProperties.Min_sdk_version)
 	}
-	return j.SdkVersion(ctx)
+	return j.SdkVersion(ctx).ApiLevel
 }
 
-func (j *Module) MaxSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
-	maxSdkVersion := proptools.StringDefault(j.deviceProperties.Max_sdk_version, "")
-	// SdkSpecFrom returns SdkSpecPrivate for this, which may be confusing.
-	// TODO(b/208456999): ideally MaxSdkVersion should be an ApiLevel and not SdkSpec.
-	return android.SdkSpecFrom(ctx, maxSdkVersion)
+func (j *Module) MaxSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
+	if j.deviceProperties.Max_sdk_version != nil {
+		return android.ApiLevelFrom(ctx, *j.deviceProperties.Max_sdk_version)
+	}
+	// Default is PrivateApiLevel
+	return android.SdkSpecPrivate.ApiLevel
 }
 
-func (j *Module) ReplaceMaxSdkVersionPlaceholder(ctx android.EarlyModuleContext) android.SdkSpec {
-	replaceMaxSdkVersionPlaceholder := proptools.StringDefault(j.deviceProperties.Replace_max_sdk_version_placeholder, "")
-	return android.SdkSpecFrom(ctx, replaceMaxSdkVersionPlaceholder)
+func (j *Module) ReplaceMaxSdkVersionPlaceholder(ctx android.EarlyModuleContext) android.ApiLevel {
+	if j.deviceProperties.Replace_max_sdk_version_placeholder != nil {
+		return android.ApiLevelFrom(ctx, *j.deviceProperties.Replace_max_sdk_version_placeholder)
+	}
+	// Default is PrivateApiLevel
+	return android.SdkSpecPrivate.ApiLevel
 }
 
 func (j *Module) MinSdkVersionString() string {
-	return j.minSdkVersion.Raw
+	return j.minSdkVersion.String()
 }
 
-func (j *Module) TargetSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
+func (j *Module) TargetSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
 	if j.deviceProperties.Target_sdk_version != nil {
-		return android.SdkSpecFrom(ctx, *j.deviceProperties.Target_sdk_version)
+		return android.ApiLevelFrom(ctx, *j.deviceProperties.Target_sdk_version)
 	}
-	return j.SdkVersion(ctx)
+	return j.SdkVersion(ctx).ApiLevel
 }
 
 func (j *Module) AvailableFor(what string) bool {
@@ -881,7 +885,7 @@ func (j *Module) aidlFlags(ctx android.ModuleContext, aidlPreprocess android.Opt
 		j.ignoredAidlPermissionList = android.PathsForModuleSrcExcludes(ctx, exceptions, nil)
 	}
 
-	aidlMinSdkVersion := j.MinSdkVersion(ctx).ApiLevel.String()
+	aidlMinSdkVersion := j.MinSdkVersion(ctx).String()
 	flags = append(flags, "--min_sdk_version="+aidlMinSdkVersion)
 
 	return strings.Join(flags, " "), deps
@@ -1003,7 +1007,7 @@ func (j *Module) collectJavacFlags(
 					topLevelDirs[srcFileParts[0]] = true
 				}
 			}
-			patchPaths = append(patchPaths, android.SortedStringKeys(topLevelDirs)...)
+			patchPaths = append(patchPaths, android.SortedKeys(topLevelDirs)...)
 
 			classPath := flags.classpath.FormJavaClassPath("")
 			if classPath != "" {
@@ -1487,7 +1491,14 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 			}
 			// Dex compilation
 			var dexOutputFile android.OutputPath
-			dexOutputFile = j.dexer.compileDex(ctx, flags, j.MinSdkVersion(ctx), implementationAndResourcesJar, jarName)
+			params := &compileDexParams{
+				flags:         flags,
+				sdkVersion:    j.SdkVersion(ctx),
+				minSdkVersion: j.MinSdkVersion(ctx),
+				classesJar:    implementationAndResourcesJar,
+				jarName:       jarName,
+			}
+			dexOutputFile = j.dexer.compileDex(ctx, params)
 			if ctx.Failed() {
 				return
 			}
@@ -1535,9 +1546,9 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 	}
 
 	if ctx.Device() {
-		lintSDKVersion := func(sdkSpec android.SdkSpec) int {
-			if v := sdkSpec.ApiLevel; !v.IsPreview() {
-				return v.FinalInt()
+		lintSDKVersion := func(apiLevel android.ApiLevel) int {
+			if !apiLevel.IsPreview() {
+				return apiLevel.FinalInt()
 			} else {
 				// When running metalava, we pass --version-codename. When that value
 				// is not REL, metalava will add 1 to the --current-version argument.
@@ -1569,7 +1580,7 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 		j.linter.classes = j.implementationJarFile
 		j.linter.minSdkVersion = lintSDKVersion(j.MinSdkVersion(ctx))
 		j.linter.targetSdkVersion = lintSDKVersion(j.TargetSdkVersion(ctx))
-		j.linter.compileSdkVersion = lintSDKVersion(j.SdkVersion(ctx))
+		j.linter.compileSdkVersion = lintSDKVersion(j.SdkVersion(ctx).ApiLevel)
 		j.linter.compileSdkKind = j.SdkVersion(ctx).Kind
 		j.linter.javaLanguageLevel = flags.javaVersion.String()
 		j.linter.kotlinLanguageLevel = "1.3"
@@ -1583,6 +1594,8 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 
 	ctx.SetProvider(JavaInfoProvider, JavaInfo{
 		HeaderJars:                     android.PathsIfNonNil(j.headerJarFile),
+		TransitiveLibsHeaderJars:       j.transitiveLibsHeaderJars,
+		TransitiveStaticLibsHeaderJars: j.transitiveStaticLibsHeaderJars,
 		ImplementationAndResourcesJars: android.PathsIfNonNil(j.implementationAndResourcesJar),
 		ImplementationJars:             android.PathsIfNonNil(j.implementationJarFile),
 		ResourceJars:                   android.PathsIfNonNil(j.resourceJar),
@@ -1719,6 +1732,52 @@ func (j *Module) instrument(ctx android.ModuleContext, flags javaBuilderFlags,
 	return instrumentedJar
 }
 
+type providesTransitiveHeaderJars struct {
+	// set of header jars for all transitive libs deps
+	transitiveLibsHeaderJars *android.DepSet
+	// set of header jars for all transitive static libs deps
+	transitiveStaticLibsHeaderJars *android.DepSet
+}
+
+func (j *providesTransitiveHeaderJars) TransitiveLibsHeaderJars() *android.DepSet {
+	return j.transitiveLibsHeaderJars
+}
+
+func (j *providesTransitiveHeaderJars) TransitiveStaticLibsHeaderJars() *android.DepSet {
+	return j.transitiveStaticLibsHeaderJars
+}
+
+func (j *providesTransitiveHeaderJars) collectTransitiveHeaderJars(ctx android.ModuleContext) {
+	directLibs := android.Paths{}
+	directStaticLibs := android.Paths{}
+	transitiveLibs := []*android.DepSet{}
+	transitiveStaticLibs := []*android.DepSet{}
+	ctx.VisitDirectDeps(func(module android.Module) {
+		// don't add deps of the prebuilt version of the same library
+		if ctx.ModuleName() == android.RemoveOptionalPrebuiltPrefix(module.Name()) {
+			return
+		}
+
+		dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
+		if dep.TransitiveLibsHeaderJars != nil {
+			transitiveLibs = append(transitiveLibs, dep.TransitiveLibsHeaderJars)
+		}
+		if dep.TransitiveStaticLibsHeaderJars != nil {
+			transitiveStaticLibs = append(transitiveStaticLibs, dep.TransitiveStaticLibsHeaderJars)
+		}
+
+		tag := ctx.OtherModuleDependencyTag(module)
+		_, isUsesLibDep := tag.(usesLibraryDependencyTag)
+		if tag == libTag || tag == r8LibraryJarTag || isUsesLibDep {
+			directLibs = append(directLibs, dep.HeaderJars...)
+		} else if tag == staticLibTag {
+			directStaticLibs = append(directStaticLibs, dep.HeaderJars...)
+		}
+	})
+	j.transitiveLibsHeaderJars = android.NewDepSet(android.POSTORDER, directLibs, transitiveLibs)
+	j.transitiveStaticLibsHeaderJars = android.NewDepSet(android.POSTORDER, directStaticLibs, transitiveStaticLibs)
+}
+
 func (j *Module) HeaderJars() android.Paths {
 	if j.headerJarFile == nil {
 		return nil
@@ -1790,15 +1849,17 @@ func (j *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Modu
 
 // Implements android.ApexModule
 func (j *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersion android.ApiLevel) error {
-	sdkSpec := j.MinSdkVersion(ctx)
-	if !sdkSpec.Specified() {
+	sdkVersionSpec := j.SdkVersion(ctx)
+	minSdkVersion := j.MinSdkVersion(ctx)
+	if !minSdkVersion.Specified() {
 		return fmt.Errorf("min_sdk_version is not specified")
 	}
-	if sdkSpec.Kind == android.SdkCore {
+	// If the module is compiling against core (via sdk_version), skip comparison check.
+	if sdkVersionSpec.Kind == android.SdkCore {
 		return nil
 	}
-	if sdkSpec.ApiLevel.GreaterThan(sdkVersion) {
-		return fmt.Errorf("newer SDK(%v)", sdkSpec.ApiLevel)
+	if minSdkVersion.GreaterThan(sdkVersion) {
+		return fmt.Errorf("newer SDK(%v)", minSdkVersion)
 	}
 	return nil
 }
@@ -1862,19 +1923,19 @@ type moduleWithSdkDep interface {
 
 func (m *Module) getSdkLinkType(ctx android.BaseModuleContext, name string) (ret sdkLinkType, stubs bool) {
 	switch name {
-	case "core.current.stubs", "legacy.core.platform.api.stubs", "stable.core.platform.api.stubs",
+	case android.SdkCore.JavaLibraryName(ctx.Config()), "legacy.core.platform.api.stubs", "stable.core.platform.api.stubs",
 		"stub-annotations", "private-stub-annotations-jar",
 		"core-lambda-stubs", "core-generated-annotation-stubs":
 		return javaCore, true
-	case "android_stubs_current":
+	case android.SdkPublic.JavaLibraryName(ctx.Config()):
 		return javaSdk, true
-	case "android_system_stubs_current":
+	case android.SdkSystem.JavaLibraryName(ctx.Config()):
 		return javaSystem, true
-	case "android_module_lib_stubs_current":
+	case android.SdkModule.JavaLibraryName(ctx.Config()):
 		return javaModule, true
-	case "android_system_server_stubs_current":
+	case android.SdkSystemServer.JavaLibraryName(ctx.Config()):
 		return javaSystemServer, true
-	case "android_test_stubs_current":
+	case android.SdkTest.JavaLibraryName(ctx.Config()):
 		return javaSystem, true
 	}
 
@@ -1947,6 +2008,7 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 
 	sdkLinkType, _ := j.getSdkLinkType(ctx, ctx.ModuleName())
 
+	j.collectTransitiveHeaderJars(ctx)
 	ctx.VisitDirectDeps(func(module android.Module) {
 		otherName := ctx.OtherModuleName(module)
 		tag := ctx.OtherModuleDependencyTag(module)

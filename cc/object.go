@@ -54,12 +54,12 @@ var _ BazelHandler = (*objectBazelHandler)(nil)
 
 func (handler *objectBazelHandler) QueueBazelCall(ctx android.BaseModuleContext, label string) {
 	bazelCtx := ctx.Config().BazelContext
-	bazelCtx.QueueBazelRequest(label, cquery.GetOutputFiles, android.GetConfigKey(ctx))
+	bazelCtx.QueueBazelRequest(label, cquery.GetOutputFiles, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
 }
 
 func (handler *objectBazelHandler) ProcessBazelQueryResponse(ctx android.ModuleContext, label string) {
 	bazelCtx := ctx.Config().BazelContext
-	objPaths, err := bazelCtx.GetOutputFiles(label, android.GetConfigKey(ctx))
+	objPaths, err := bazelCtx.GetOutputFiles(label, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
 	if err != nil {
 		ctx.ModuleErrorf(err.Error())
 		return
@@ -142,6 +142,7 @@ type bazelObjectAttributes struct {
 	Absolute_includes   bazel.StringListAttribute
 	Stl                 *string
 	Linker_script       bazel.LabelAttribute
+	Crt                 *bool
 	sdkAttributes
 }
 
@@ -208,6 +209,7 @@ func objectBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Absolute_includes:   compilerAttrs.absoluteIncludes,
 		Stl:                 compilerAttrs.stl,
 		Linker_script:       linkerScript,
+		Crt:                 m.linker.(*objectLinker).Properties.Crt,
 		sdkAttributes:       bp2BuildParseSdkAttributes(m),
 	}
 

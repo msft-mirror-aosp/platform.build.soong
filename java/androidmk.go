@@ -133,13 +133,19 @@ func (library *Library) AndroidMkEntries() []android.AndroidMkEntries {
 	return entriesList
 }
 
-func (j *JavaFuzzLibrary) AndroidMkEntries() []android.AndroidMkEntries {
+func (j *JavaFuzzTest) AndroidMkEntries() []android.AndroidMkEntries {
 	entriesList := j.Library.AndroidMkEntries()
 	entries := &entriesList[0]
 	entries.ExtraEntries = append(entries.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 		entries.AddStrings("LOCAL_COMPATIBILITY_SUITE", "null-suite")
-		androidMkWriteTestData(j.jniFilePaths, entries)
 		androidMkWriteTestData(android.Paths{j.implementationJarFile}, entries)
+		androidMkWriteTestData(j.jniFilePaths, entries)
+		if j.fuzzPackagedModule.Corpus != nil {
+			androidMkWriteTestData(j.fuzzPackagedModule.Corpus, entries)
+		}
+		if j.fuzzPackagedModule.Dictionary != nil {
+			androidMkWriteTestData(android.Paths{j.fuzzPackagedModule.Dictionary}, entries)
+		}
 	})
 	return entriesList
 }
@@ -732,4 +738,23 @@ func (apkSet *AndroidAppSet) AndroidMkEntries() []android.AndroidMkEntries {
 			},
 		},
 	}
+}
+
+func (al *ApiLibrary) AndroidMkEntries() []android.AndroidMkEntries {
+	var entriesList []android.AndroidMkEntries
+
+	entriesList = append(entriesList, android.AndroidMkEntries{
+		Class:      "JAVA_LIBRARIES",
+		OutputFile: android.OptionalPathForPath(al.stubsJar),
+		Include:    "$(BUILD_SYSTEM)/soong_java_prebuilt.mk",
+		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
+			func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
+				entries.SetBoolIfTrue("LOCAL_UNINSTALLABLE_MODULE", true)
+				entries.SetPath("LOCAL_SOONG_CLASSES_JAR", al.stubsJar)
+				entries.SetPath("LOCAL_SOONG_HEADER_JAR", al.stubsJar)
+			},
+		},
+	})
+
+	return entriesList
 }

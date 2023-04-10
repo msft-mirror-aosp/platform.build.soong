@@ -193,6 +193,7 @@ var (
 
 	noOverrideGlobalCflags = []string{
 		"-Werror=bool-operation",
+		"-Werror=format-insufficient-args",
 		"-Werror=implicit-int-float-conversion",
 		"-Werror=int-in-bool-context",
 		"-Werror=int-to-pointer-cast",
@@ -207,10 +208,7 @@ var (
 		"-Werror=fortify-source",
 
 		"-Werror=address-of-temporary",
-		// Bug: http://b/29823425 Disable -Wnull-dereference until the
-		// new cases detected by this warning in Clang r271374 are
-		// fixed.
-		//"-Werror=null-dereference",
+		"-Werror=null-dereference",
 		"-Werror=return-type",
 
 		// http://b/72331526 Disable -Wtautological-* until the instances detected by these
@@ -236,29 +234,28 @@ var (
 		// New warnings to be fixed after clang-r433403
 		"-Wno-error=unused-but-set-variable",  // http://b/197240255
 		"-Wno-error=unused-but-set-parameter", // http://b/197240255
-		// New warnings to be fixed after clang-r458507
-		"-Wno-error=unqualified-std-cast-call", // http://b/239662094
 		// New warnings to be fixed after clang-r468909
 		"-Wno-error=deprecated-builtins", // http://b/241601211
 		"-Wno-error=deprecated",          // in external/googletest/googletest
 		// New warnings to be fixed after clang-r475365
 		"-Wno-error=single-bit-bitfield-constant-conversion", // http://b/243965903
-		"-Wno-error=incompatible-function-pointer-types",     // http://b/257101299
 		"-Wno-error=enum-constexpr-conversion",               // http://b/243964282
 	}
 
+	noOverride64GlobalCflags = []string{}
+
 	noOverrideExternalGlobalCflags = []string{
-		// http://b/148815709
+		// http://b/191699019
+		"-Wno-format-insufficient-args",
 		"-Wno-sizeof-array-div",
-		// http://b/197240255
+		"-Wno-incompatible-function-pointer-types",
 		"-Wno-unused-but-set-variable",
 		"-Wno-unused-but-set-parameter",
-		// http://b/215753485
+		"-Wno-unqualified-std-cast-call",
 		"-Wno-bitwise-instead-of-logical",
-		// http://b/232926688
 		"-Wno-misleading-indentation",
-		// http://b/241941550
 		"-Wno-array-parameter",
+		"-Wno-gnu-offsetof-extensions",
 	}
 
 	// Extra cflags for external third-party projects to disable warnings that
@@ -277,7 +274,6 @@ var (
 
 		// http://b/145211477
 		"-Wno-pointer-compare",
-		// http://b/145211022
 		"-Wno-final-dtor-non-final-class",
 
 		// http://b/165945989
@@ -309,14 +305,16 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r475365b"
-	ClangDefaultShortVersion = "16.0.2"
+	ClangDefaultVersion      = "clang-r487747"
+	ClangDefaultShortVersion = "17"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{
 		"device/",
 		"vendor/",
 	}
+
+	VersionScriptFlagPrefix = "-Wl,--version-script,"
 )
 
 // BazelCcToolchainVars generates bzl file content containing variables for
@@ -394,6 +392,7 @@ func init() {
 		return strings.Join(flags, " ")
 	})
 
+	exportedVars.ExportStringListStaticVariable("NoOverride64GlobalCflags", noOverride64GlobalCflags)
 	exportedVars.ExportStringListStaticVariable("HostGlobalCflags", hostGlobalCflags)
 	exportedVars.ExportStringListStaticVariable("NoOverrideExternalGlobalCflags", noOverrideExternalGlobalCflags)
 	exportedVars.ExportStringListStaticVariable("CommonGlobalCppflags", commonGlobalCppflags)
@@ -403,6 +402,8 @@ func init() {
 	exportedVars.ExportString("CppStdVersion", CppStdVersion)
 	exportedVars.ExportString("ExperimentalCStdVersion", ExperimentalCStdVersion)
 	exportedVars.ExportString("ExperimentalCppStdVersion", ExperimentalCppStdVersion)
+
+	exportedVars.ExportString("VersionScriptFlagPrefix", VersionScriptFlagPrefix)
 
 	// Everything in these lists is a crime against abstraction and dependency tracking.
 	// Do not add anything to this list.
@@ -420,16 +421,13 @@ func init() {
 	exportedVars.ExportStringList("CommonGlobalIncludes", commonGlobalIncludes)
 	pctx.PrefixedExistentPathsForSourcesVariable("CommonGlobalIncludes", "-I", commonGlobalIncludes)
 
-	exportedVars.ExportStringStaticVariable("CLANG_DEFAULT_VERSION", ClangDefaultVersion)
-	exportedVars.ExportStringStaticVariable("CLANG_DEFAULT_SHORT_VERSION", ClangDefaultShortVersion)
-
 	pctx.StaticVariableWithEnvOverride("ClangBase", "LLVM_PREBUILTS_BASE", ClangDefaultBase)
-	pctx.StaticVariableWithEnvOverride("ClangVersion", "LLVM_PREBUILTS_VERSION", ClangDefaultVersion)
+	exportedVars.ExportStringStaticVariableWithEnvOverride("ClangVersion", "LLVM_PREBUILTS_VERSION", ClangDefaultVersion)
 	pctx.StaticVariable("ClangPath", "${ClangBase}/${HostPrebuiltTag}/${ClangVersion}")
 	pctx.StaticVariable("ClangBin", "${ClangPath}/bin")
 
-	pctx.StaticVariableWithEnvOverride("ClangShortVersion", "LLVM_RELEASE_VERSION", ClangDefaultShortVersion)
-	pctx.StaticVariable("ClangAsanLibDir", "${ClangBase}/linux-x86/${ClangVersion}/lib64/clang/${ClangShortVersion}/lib/linux")
+	exportedVars.ExportStringStaticVariableWithEnvOverride("ClangShortVersion", "LLVM_RELEASE_VERSION", ClangDefaultShortVersion)
+	pctx.StaticVariable("ClangAsanLibDir", "${ClangBase}/linux-x86/${ClangVersion}/lib/clang/${ClangShortVersion}/lib/linux")
 
 	// These are tied to the version of LLVM directly in external/llvm, so they might trail the host prebuilts
 	// being used for the rest of the build process.

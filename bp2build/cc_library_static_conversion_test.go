@@ -1517,12 +1517,14 @@ cc_library_static {
         },
     },
     include_build_directory: false,
+    apex_available: ["foo"],
 }
 
 cc_library_static {
     name: "all",
     shared_libs: ["libc"],
     include_build_directory: false,
+    apex_available: ["foo"],
 }
 
 cc_library_static {
@@ -1530,12 +1532,14 @@ cc_library_static {
     shared_libs: ["libc"],
     system_shared_libs: [],
     include_build_directory: false,
+    apex_available: ["foo"],
 }
 
 cc_library_static {
     name: "used_with_stubs",
     shared_libs: ["libm"],
     include_build_directory: false,
+    apex_available: ["foo"],
 }
 
 cc_library_static {
@@ -1543,23 +1547,32 @@ cc_library_static {
     shared_libs: ["libm"],
     system_shared_libs: [],
     include_build_directory: false,
+    apex_available: ["foo"],
 }
 `,
 		ExpectedBazelTargets: []string{
-			MakeBazelTarget("cc_library_static", "all", AttrNameToString{}),
+			MakeBazelTarget("cc_library_static", "all", AttrNameToString{
+				"tags": `["apex_available=foo"]`,
+			}),
 			MakeBazelTarget("cc_library_static", "keep_for_empty_system_shared_libs", AttrNameToString{
 				"implementation_dynamic_deps": `[":libc"]`,
 				"system_dynamic_deps":         `[]`,
+				"tags":                        `["apex_available=foo"]`,
 			}),
 			MakeBazelTarget("cc_library_static", "keep_with_stubs", AttrNameToString{
 				"implementation_dynamic_deps": `select({
-        "//build/bazel/rules/apex:android-in_apex": [":libm_stub_libs_current"],
+        "//build/bazel/rules/apex:android-in_apex": ["@api_surfaces//module-libapi/current:libm"],
         "//conditions:default": [":libm"],
     })`,
 				"system_dynamic_deps": `[]`,
+				"tags":                `["apex_available=foo"]`,
 			}),
-			MakeBazelTarget("cc_library_static", "used_in_bionic_oses", AttrNameToString{}),
-			MakeBazelTarget("cc_library_static", "used_with_stubs", AttrNameToString{}),
+			MakeBazelTarget("cc_library_static", "used_in_bionic_oses", AttrNameToString{
+				"tags": `["apex_available=foo"]`,
+			}),
+			MakeBazelTarget("cc_library_static", "used_with_stubs", AttrNameToString{
+				"tags": `["apex_available=foo"]`,
+			}),
 		},
 	})
 }
@@ -1884,6 +1897,136 @@ cc_library_static {
         "//build/bazel/platforms/os:linux_glibc": ["ubsan_integer_overflow"],
         "//conditions:default": [],
     })`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryStaticWithThinLto(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static has correct features when thin lto is enabled",
+		Blueprint: `
+cc_library_static {
+	name: "foo",
+	lto: {
+		thin: true,
+	},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"features":       `["android_thin_lto"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryStaticWithLtoNever(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static has correct features when thin lto is enabled",
+		Blueprint: `
+cc_library_static {
+	name: "foo",
+	lto: {
+		never: true,
+	},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"features":       `["-android_thin_lto"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryStaticWithThinLtoArchSpecific(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static has correct features when LTO differs across arch and os variants",
+		Blueprint: `
+cc_library_static {
+	name: "foo",
+	target: {
+		android: {
+			lto: {
+				thin: true,
+			},
+		},
+	},
+	arch: {
+		riscv64: {
+			lto: {
+				thin: false,
+			},
+		},
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `select({
+        "//build/bazel/platforms/os_arch:android_arm": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_arm64": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_riscv64": ["-android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_x86": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_x86_64": ["android_thin_lto"],
+        "//conditions:default": [],
+    })`}),
+		},
+	})
+}
+
+func TestCcLibraryStaticWithThinLtoDisabledDefaultEnabledVariant(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static has correct features when LTO disabled by default but enabled on a particular variant",
+		Blueprint: `
+cc_library_static {
+	name: "foo",
+	lto: {
+		never: true,
+	},
+	target: {
+		android: {
+			lto: {
+				thin: true,
+				never: false,
+			},
+		},
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `select({
+        "//build/bazel/platforms/os:android": ["android_thin_lto"],
+        "//conditions:default": ["-android_thin_lto"],
+    })`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryStaticWithThinLtoAndWholeProgramVtables(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static has correct features when thin lto is enabled with whole_program_vtables",
+		Blueprint: `
+cc_library_static {
+	name: "foo",
+	lto: {
+		thin: true,
+	},
+	whole_program_vtables: true,
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"features": `[
+        "android_thin_lto",
+        "android_thin_lto_whole_program_vtables",
+    ]`,
 				"local_includes": `["."]`,
 			}),
 		},

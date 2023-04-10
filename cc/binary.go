@@ -151,7 +151,7 @@ func (binary *binaryDecorator) getStem(ctx BaseModuleContext) string {
 // modules common to most binaries, such as bionic libraries.
 func (binary *binaryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	deps = binary.baseLinker.linkerDeps(ctx, deps)
-	if !Bool(binary.baseLinker.Properties.Nocrt) {
+	if binary.baseLinker.Properties.crt() {
 		if binary.static() {
 			deps.CrtBegin = ctx.toolchain().CrtBeginStaticBinary()
 			deps.CrtEnd = ctx.toolchain().CrtEndStaticBinary()
@@ -512,7 +512,7 @@ func (binary *binaryDecorator) install(ctx ModuleContext, file android.Path) {
 		}
 		binary.baseInstaller.subDir = "bootstrap"
 	}
-	binary.baseInstaller.install(ctx, file)
+	binary.baseInstaller.installExecutable(ctx, file)
 
 	var preferredArchSymlinkPath android.OptionalPath
 	for _, symlink := range binary.symlinks {
@@ -577,20 +577,26 @@ var _ BazelHandler = (*ccBinaryBazelHandler)(nil)
 
 func (handler *ccBinaryBazelHandler) QueueBazelCall(ctx android.BaseModuleContext, label string) {
 	bazelCtx := ctx.Config().BazelContext
-	bazelCtx.QueueBazelRequest(label, cquery.GetCcUnstrippedInfo, android.GetConfigKey(ctx))
+	bazelCtx.QueueBazelRequest(label, cquery.GetCcUnstrippedInfo, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
 }
 
 func (handler *ccBinaryBazelHandler) ProcessBazelQueryResponse(ctx android.ModuleContext, label string) {
 	bazelCtx := ctx.Config().BazelContext
-	info, err := bazelCtx.GetCcUnstrippedInfo(label, android.GetConfigKey(ctx))
+	info, err := bazelCtx.GetCcUnstrippedInfo(label, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
 	if err != nil {
 		ctx.ModuleErrorf(err.Error())
 		return
 	}
 
-	outputFilePath := android.PathForBazelOut(ctx, info.OutputFile)
+	var outputFilePath android.Path = android.PathForBazelOut(ctx, info.OutputFile)
+	if len(info.TidyFiles) > 0 {
+		handler.module.tidyFiles = android.PathsForBazelOut(ctx, info.TidyFiles)
+		outputFilePath = android.AttachValidationActions(ctx, outputFilePath, handler.module.tidyFiles)
+	}
 	handler.module.outputFile = android.OptionalPathForPath(outputFilePath)
 	handler.module.linker.(*binaryDecorator).unstrippedOutputFile = android.PathForBazelOut(ctx, info.UnstrippedOutput)
+
+	handler.module.setAndroidMkVariablesFromCquery(info.CcAndroidMkInfo)
 }
 
 func binaryBp2buildAttrs(ctx android.TopDownMutatorContext, m *Module) binaryAttributes {
@@ -624,8 +630,6 @@ func binaryBp2buildAttrs(ctx android.TopDownMutatorContext, m *Module) binaryAtt
 		Local_includes:    baseAttrs.localIncludes,
 		Absolute_includes: baseAttrs.absoluteIncludes,
 		Linkopts:          baseAttrs.linkopts,
-		Link_crt:          baseAttrs.linkCrt,
-		Use_libcrt:        baseAttrs.useLibcrt,
 		Use_version_lib:   baseAttrs.useVersionLib,
 		Rtti:              baseAttrs.rtti,
 		Stl:               baseAttrs.stl,
@@ -689,10 +693,7 @@ type binaryAttributes struct {
 
 	Linkopts                 bazel.StringListAttribute
 	Additional_linker_inputs bazel.LabelListAttribute
-
-	Link_crt        bazel.BoolAttribute
-	Use_libcrt      bazel.BoolAttribute
-	Use_version_lib bazel.BoolAttribute
+	Use_version_lib          bazel.BoolAttribute
 
 	Rtti    bazel.BoolAttribute
 	Stl     *string

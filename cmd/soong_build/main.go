@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"android/soong/android"
+	"android/soong/android/allowlists"
 	"android/soong/bazel"
 	"android/soong/bp2build"
 	"android/soong/shared"
@@ -78,9 +79,12 @@ func init() {
 	flag.StringVar(&cmdlineArgs.OutFile, "o", "build.ninja", "the Ninja file to output")
 	flag.StringVar(&cmdlineArgs.BazelForceEnabledModules, "bazel-force-enabled-modules", "", "additional modules to build with Bazel. Comma-delimited")
 	flag.BoolVar(&cmdlineArgs.EmptyNinjaFile, "empty-ninja-file", false, "write out a 0-byte ninja file")
+	flag.BoolVar(&cmdlineArgs.MultitreeBuild, "multitree-build", false, "this is a multitree build")
 	flag.BoolVar(&cmdlineArgs.BazelMode, "bazel-mode", false, "use bazel for analysis of certain modules")
 	flag.BoolVar(&cmdlineArgs.BazelModeStaging, "bazel-mode-staging", false, "use bazel for analysis of certain near-ready modules")
 	flag.BoolVar(&cmdlineArgs.BazelModeDev, "bazel-mode-dev", false, "use bazel for analysis of a large number of modules (less stable)")
+	flag.BoolVar(&cmdlineArgs.UseBazelProxy, "use-bazel-proxy", false, "communicate with bazel using unix socket proxy instead of spawning subprocesses")
+	flag.BoolVar(&cmdlineArgs.BuildFromTextStub, "build-from-text-stub", false, "build Java stubs from API text files instead of source files")
 
 	// Flags that probably shouldn't be flags of soong_build, but we haven't found
 	// the time to remove them yet
@@ -102,6 +106,7 @@ func newContext(configuration android.Config) *android.Context {
 	ctx.SetNameInterface(newNameResolver(configuration))
 	ctx.SetAllowMissingDependencies(configuration.AllowMissingDependencies())
 	ctx.AddIncludeTags(configuration.IncludeTags()...)
+	ctx.AddSourceRootDirs(configuration.SourceRootDirs()...)
 	return ctx
 }
 
@@ -135,7 +140,7 @@ func runQueryView(queryviewDir, queryviewMarker string, ctx *android.Context) {
 	ctx.EventHandler.Begin("queryview")
 	defer ctx.EventHandler.End("queryview")
 	codegenContext := bp2build.NewCodegenContext(ctx.Config(), ctx, bp2build.QueryView, topDir)
-	err := createBazelWorkspace(codegenContext, shared.JoinPath(topDir, queryviewDir))
+	err := createBazelWorkspace(codegenContext, shared.JoinPath(topDir, queryviewDir), false)
 	maybeQuit(err, "")
 	touch(shared.JoinPath(topDir, queryviewMarker))
 }
@@ -173,12 +178,34 @@ func runApiBp2build(ctx *android.Context, extraNinjaDeps []string) string {
 	// Run codegen to generate BUILD files
 	codegenContext := bp2build.NewCodegenContext(ctx.Config(), ctx, bp2build.ApiBp2build, topDir)
 	absoluteApiBp2buildDir := shared.JoinPath(topDir, cmdlineArgs.BazelApiBp2buildDir)
-	err := createBazelWorkspace(codegenContext, absoluteApiBp2buildDir)
+	// Always generate bp2build_all_srcs filegroups in api_bp2build.
+	// This is necessary to force each Android.bp file to create an equivalent BUILD file
+	// and prevent package boundray issues.
+	// e.g.
+	// Source
+	// f/b/Android.bp
+	// java_library{
+	//   name: "foo",
+	//   api: "api/current.txt",
+	// }
+	//
+	// f/b/api/Android.bp <- will cause package boundary issues
+	//
+	// Gen
+	// f/b/BUILD
+	// java_contribution{
+	//   name: "foo.contribution",
+	//   api: "//f/b/api:current.txt",
+	// }
+	//
+	// If we don't generate f/b/api/BUILD, foo.contribution will be unbuildable.
+	err := createBazelWorkspace(codegenContext, absoluteApiBp2buildDir, true)
 	maybeQuit(err, "")
 	ninjaDeps = append(ninjaDeps, codegenContext.AdditionalNinjaDeps()...)
 
 	// Create soong_injection repository
-	soongInjectionFiles := bp2build.CreateSoongInjectionDirFiles(codegenContext, bp2build.CreateCodegenMetrics())
+	soongInjectionFiles, err := bp2build.CreateSoongInjectionDirFiles(codegenContext, bp2build.CreateCodegenMetrics())
+	maybeQuit(err, "")
 	absoluteSoongInjectionDir := shared.JoinPath(topDir, ctx.Config().SoongOutDir(), bazel.SoongInjectionDirName)
 	for _, file := range soongInjectionFiles {
 		// The API targets in api_bp2build workspace do not have any dependency on api_bp2build.
@@ -226,6 +253,29 @@ func apiBuildFileExcludes(ctx *android.Context) []string {
 	// dep for api_bp2build. Otherwise, api_bp2build will be run every single time
 	ret = append(ret, ctx.Config().OutDir())
 	return ret
+}
+
+func writeNinjaHint(ctx *android.Context) error {
+	wantModules := make([]string, len(allowlists.HugeModulesMap))
+	i := 0
+	for k := range allowlists.HugeModulesMap {
+		wantModules[i] = k
+		i += 1
+	}
+	outputsMap := ctx.Context.GetOutputsFromModuleNames(wantModules)
+	var outputBuilder strings.Builder
+	for k, v := range allowlists.HugeModulesMap {
+		for _, output := range outputsMap[k] {
+			outputBuilder.WriteString(fmt.Sprintf("%s,%d\n", output, v))
+		}
+	}
+	weightListFile := filepath.Join(topDir, ctx.Config().OutDir(), ".ninja_weight_list")
+
+	err := os.WriteFile(weightListFile, []byte(outputBuilder.String()), 0644)
+	if err != nil {
+		return fmt.Errorf("could not write ninja weight list file %s", err)
+	}
+	return nil
 }
 
 func writeMetrics(configuration android.Config, eventHandler *metrics.EventHandler, metricsDir string) {
@@ -388,6 +438,9 @@ func main() {
 		} else {
 			finalOutputFile = runSoongOnlyBuild(ctx, extraNinjaDeps)
 		}
+		if ctx.Config().IsEnvTrue("SOONG_GENERATES_NINJA_HINT") {
+			writeNinjaHint(ctx)
+		}
 		writeMetrics(configuration, ctx.EventHandler, metricsDir)
 	}
 	writeUsedEnvironmentFile(configuration, finalOutputFile)
@@ -447,6 +500,7 @@ func bazelArtifacts() []string {
 		"bazel-genfiles",
 		"bazel-out",
 		"bazel-testlogs",
+		"bazel-workspace",
 		"bazel-" + filepath.Base(topDir),
 	}
 }
