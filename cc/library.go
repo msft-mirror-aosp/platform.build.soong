@@ -26,7 +26,6 @@ import (
 	"android/soong/android"
 	"android/soong/bazel"
 	"android/soong/bazel/cquery"
-	"android/soong/cc/config"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/pathtools"
@@ -264,12 +263,15 @@ type bazelCcLibraryAttributes struct {
 type aidlLibraryAttributes struct {
 	Srcs        bazel.LabelListAttribute
 	Include_dir *string
+	Tags        bazel.StringListAttribute
 }
 
 type ccAidlLibraryAttributes struct {
 	Deps                        bazel.LabelListAttribute
 	Implementation_deps         bazel.LabelListAttribute
 	Implementation_dynamic_deps bazel.LabelListAttribute
+	Tags                        bazel.StringListAttribute
+	sdkAttributes
 }
 
 type stripAttributes struct {
@@ -428,8 +430,10 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 	if compilerAttrs.stubsSymbolFile == nil && len(compilerAttrs.stubsVersions.Value) == 0 {
 		tagsForStaticVariant = android.ApexAvailableTags(m)
 	}
+	tagsForStaticVariant.Append(bazel.StringListAttribute{Value: staticAttrs.Apex_available})
 
 	tagsForSharedVariant := android.ApexAvailableTags(m)
+	tagsForSharedVariant.Append(bazel.StringListAttribute{Value: sharedAttrs.Apex_available})
 
 	ctx.CreateBazelTargetModuleWithRestrictions(staticProps,
 		android.CommonAttributes{
@@ -2256,8 +2260,7 @@ func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 		!ctx.useVndk() && !ctx.inRamdisk() && !ctx.inVendorRamdisk() && !ctx.inRecovery() && ctx.Device() &&
 		library.baseLinker.sanitize.isUnsanitizedVariant() &&
 		ctx.isForPlatform() && !ctx.isPreventInstall() {
-		installPath := getNdkSysrootBase(ctx).Join(
-			ctx, "usr/lib", config.NDKTriple(ctx.toolchain()), file.Base())
+		installPath := getUnversionedLibraryInstallPath(ctx).Join(ctx, file.Base())
 
 		ctx.ModuleBuild(pctx, android.ModuleBuildParams{
 			Rule:        android.Cp,
