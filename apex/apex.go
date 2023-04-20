@@ -103,12 +103,13 @@ type apexBundleProperties struct {
 	// to avoid mistakes. When set as true, no force-labelling.
 	Use_file_contexts_as_is *bool
 
-	// Path to the canned fs config file for customizing file's uid/gid/mod/capabilities. The
-	// format is /<path_or_glob> <uid> <gid> <mode> [capabilities=0x<cap>], where path_or_glob is a
-	// path or glob pattern for a file or set of files, uid/gid are numerial values of user ID
-	// and group ID, mode is octal value for the file mode, and cap is hexadecimal value for the
-	// capability. If this property is not set, or a file is missing in the file, default config
-	// is used.
+	// Path to the canned fs config file for customizing file's
+	// uid/gid/mod/capabilities. The content of this file is appended to the
+	// default config, so that the custom entries are preferred. The format is
+	// /<path_or_glob> <uid> <gid> <mode> [capabilities=0x<cap>], where
+	// path_or_glob is a path or glob pattern for a file or set of files,
+	// uid/gid are numerial values of user ID and group ID, mode is octal value
+	// for the file mode, and cap is hexadecimal value for the capability.
 	Canned_fs_config *string `android:"path"`
 
 	ApexNativeDependencies
@@ -993,6 +994,9 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		if !useVndk {
 			mctx.PropertyErrorf("use_vndk_as_stable", "not supported for system/system_ext APEXes")
 		}
+		if a.minSdkVersionValue(mctx) != "" {
+			mctx.PropertyErrorf("use_vndk_as_stable", "not supported when min_sdk_version is set")
+		}
 		mctx.VisitDirectDepsWithTag(sharedLibTag, func(dep android.Module) {
 			if c, ok := dep.(*cc.Module); ok && c.IsVndk() {
 				mctx.PropertyErrorf("use_vndk_as_stable", "Trying to include a VNDK library(%s) while use_vndk_as_stable is true.", dep.Name())
@@ -1655,7 +1659,6 @@ func apexFileForNativeLibrary(ctx android.BaseModuleContext, ccMod *cc.Module, h
 	if ccMod.Target().NativeBridge == android.NativeBridgeEnabled {
 		dirInApex = filepath.Join(dirInApex, ccMod.Target().NativeBridgeRelativePath)
 	}
-	dirInApex = filepath.Join(dirInApex, ccMod.RelativeInstallPath())
 	if handleSpecialLibs && cc.InstallToBootstrap(ccMod.BaseModuleName(), ctx.Config()) {
 		// Special case for Bionic libs and other libs installed with them. This is to
 		// prevent those libs from being included in the search path
@@ -1668,6 +1671,10 @@ func apexFileForNativeLibrary(ctx android.BaseModuleContext, ccMod *cc.Module, h
 		// loading of them, which isn't supported.
 		dirInApex = filepath.Join(dirInApex, "bionic")
 	}
+	// This needs to go after the runtime APEX handling because otherwise we would get
+	// weird paths like lib64/rel_install_path/bionic rather than
+	// lib64/bionic/rel_install_path.
+	dirInApex = filepath.Join(dirInApex, ccMod.RelativeInstallPath())
 
 	fileToCopy := android.OutputFileForModule(ctx, ccMod, "")
 	androidMkModuleName := ccMod.BaseModuleName() + ccMod.Properties.SubName
@@ -1939,7 +1946,7 @@ func (f fsType) string() string {
 var _ android.MixedBuildBuildable = (*apexBundle)(nil)
 
 func (a *apexBundle) IsMixedBuildSupported(ctx android.BaseModuleContext) bool {
-	return ctx.ModuleType() == "apex" && a.properties.ApexType == imageApex
+	return a.properties.ApexType == imageApex
 }
 
 func (a *apexBundle) QueueBazelCall(ctx android.BaseModuleContext) {
@@ -1982,9 +1989,9 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 	// Set the output file to .apex or .capex depending on the compression configuration.
 	a.setCompression(ctx)
 	if a.isCompressed {
-		a.outputApexFile = android.PathForBazelOut(ctx, outputs.SignedCompressedOutput)
+		a.outputApexFile = android.PathForBazelOutRelative(ctx, ctx.ModuleDir(), outputs.SignedCompressedOutput)
 	} else {
-		a.outputApexFile = android.PathForBazelOut(ctx, outputs.SignedOutput)
+		a.outputApexFile = android.PathForBazelOutRelative(ctx, ctx.ModuleDir(), outputs.SignedOutput)
 	}
 	a.outputFile = a.outputApexFile
 
@@ -2828,7 +2835,7 @@ func (o *OverrideApex) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	if !baseModuleIsApex {
 		panic(fmt.Errorf("Base module is not apex module: %s", baseApexModuleName))
 	}
-	attrs, props := convertWithBp2build(a, ctx)
+	attrs, props, commonAttrs := convertWithBp2build(a, ctx)
 
 	// We just want the name, not module reference.
 	baseApexName := strings.TrimPrefix(baseApexModuleName, ":")
@@ -2902,7 +2909,9 @@ func (o *OverrideApex) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 		}
 	}
 
-	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: o.Name()}, &attrs)
+	commonAttrs.Name = o.Name()
+
+	ctx.CreateBazelTargetModule(props, commonAttrs, &attrs)
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2946,12 +2955,8 @@ func (a *apexBundle) minSdkVersionValue(ctx android.EarlyModuleContext) string {
 }
 
 // Returns apex's min_sdk_version SdkSpec, honoring overrides
-func (a *apexBundle) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
-	return android.SdkSpec{
-		Kind:     android.SdkNone,
-		ApiLevel: a.minSdkVersion(ctx),
-		Raw:      a.minSdkVersionValue(ctx),
-	}
+func (a *apexBundle) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
+	return a.minSdkVersion(ctx)
 }
 
 // Returns apex's min_sdk_version ApiLevel, honoring overrides
@@ -3517,6 +3522,7 @@ type bazelApexBundleAttributes struct {
 	Manifest              bazel.LabelAttribute
 	Android_manifest      bazel.LabelAttribute
 	File_contexts         bazel.LabelAttribute
+	Canned_fs_config      bazel.LabelAttribute
 	Key                   bazel.LabelAttribute
 	Certificate           bazel.LabelAttribute  // used when the certificate prop is a module
 	Certificate_name      bazel.StringAttribute // used when the certificate prop is a string
@@ -3550,17 +3556,12 @@ func (a *apexBundle) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 		return
 	}
 
-	attrs, props := convertWithBp2build(a, ctx)
-	commonAttrs := android.CommonAttributes{
-		Name: a.Name(),
-	}
-	if a.testApex {
-		commonAttrs.Testonly = proptools.BoolPtr(a.testApex)
-	}
+	attrs, props, commonAttrs := convertWithBp2build(a, ctx)
+	commonAttrs.Name = a.Name()
 	ctx.CreateBazelTargetModule(props, commonAttrs, &attrs)
 }
 
-func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (bazelApexBundleAttributes, bazel.BazelTargetModuleProperties) {
+func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (bazelApexBundleAttributes, bazel.BazelTargetModuleProperties, android.CommonAttributes) {
 	var manifestLabelAttribute bazel.LabelAttribute
 	manifestLabelAttribute.SetValue(android.BazelLabelForModuleSrcSingle(ctx, proptools.StringDefault(a.properties.Manifest, "apex_manifest.json")))
 
@@ -3579,6 +3580,11 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 	} else {
 		// File_contexts is a file
 		fileContextsLabelAttribute.SetValue(android.BazelLabelForModuleSrcSingle(ctx, *a.properties.File_contexts))
+	}
+
+	var cannedFsConfigAttribute bazel.LabelAttribute
+	if a.properties.Canned_fs_config != nil {
+		cannedFsConfigAttribute.SetValue(android.BazelLabelForModuleSrcSingle(ctx, *a.properties.Canned_fs_config))
 	}
 
 	productVariableProps := android.ProductVariableProperties(ctx, a)
@@ -3667,6 +3673,7 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 		Manifest:              manifestLabelAttribute,
 		Android_manifest:      androidManifestLabelAttribute,
 		File_contexts:         fileContextsLabelAttribute,
+		Canned_fs_config:      cannedFsConfigAttribute,
 		Min_sdk_version:       minSdkVersion,
 		Key:                   keyLabelAttribute,
 		Certificate:           certificate,
@@ -3688,7 +3695,12 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 		Bzl_load_location: "//build/bazel/rules/apex:apex.bzl",
 	}
 
-	return attrs, props
+	commonAttrs := android.CommonAttributes{}
+	if a.testApex {
+		commonAttrs.Testonly = proptools.BoolPtr(true)
+	}
+
+	return attrs, props, commonAttrs
 }
 
 // The following conversions are based on this table where the rows are the compile_multilib

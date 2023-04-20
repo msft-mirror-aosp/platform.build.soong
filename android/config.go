@@ -100,6 +100,8 @@ type CmdArgs struct {
 	BazelForceEnabledModules string
 
 	UseBazelProxy bool
+
+	BuildFromTextStub bool
 }
 
 // Build modes that soong_build can run as.
@@ -272,6 +274,10 @@ type config struct {
 	// If true, for any requests to Bazel, communicate with a Bazel proxy using
 	// unix sockets, instead of spawning Bazel as a subprocess.
 	UseBazelProxy bool
+
+	// If buildFromTextStub is true then the Java API stubs are
+	// built from the signature text files, not the source Java files.
+	buildFromTextStub bool
 }
 
 type deviceConfig struct {
@@ -414,12 +420,21 @@ func saveToBazelConfigFile(config *productVariables, outDir string) error {
 		fmt.Sprintf(`_arch_variant_product_var_constraints = %s`, archVariantProductVariablesJson),
 		"\n", `
 product_vars = _product_vars
+
+# TODO(b/269577299) Remove these when everything switches over to loading them from product_variable_constants.bzl
 product_var_constraints = _product_var_constraints
 arch_variant_product_var_constraints = _arch_variant_product_var_constraints
 `,
 	}
 	err = pathtools.WriteFileIfChanged(filepath.Join(dir, "product_variables.bzl"),
 		[]byte(strings.Join(bzl, "\n")), 0644)
+	if err != nil {
+		return fmt.Errorf("Could not write .bzl config file %s", err)
+	}
+	err = pathtools.WriteFileIfChanged(filepath.Join(dir, "product_variable_constants.bzl"), []byte(fmt.Sprintf(`
+product_var_constraints = %s
+arch_variant_product_var_constraints = %s
+`, nonArchVariantProductVariablesJson, archVariantProductVariablesJson)), 0644)
 	if err != nil {
 		return fmt.Errorf("Could not write .bzl config file %s", err)
 	}
@@ -466,6 +481,8 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 
 		MultitreeBuild: cmdArgs.MultitreeBuild,
 		UseBazelProxy:  cmdArgs.UseBazelProxy,
+
+		buildFromTextStub: cmdArgs.BuildFromTextStub,
 	}
 
 	config.deviceConfig = &deviceConfig{
@@ -575,12 +592,11 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 	setBazelMode(cmdArgs.BazelMode, "--bazel-mode", BazelProdMode)
 	setBazelMode(cmdArgs.BazelModeStaging, "--bazel-mode-staging", BazelStagingMode)
 
-	config.BazelContext, err = NewBazelContext(config)
-	config.Bp2buildPackageConfig = GetBp2BuildAllowList()
-
 	for _, module := range strings.Split(cmdArgs.BazelForceEnabledModules, ",") {
 		config.bazelForceEnabledModules[module] = struct{}{}
 	}
+	config.BazelContext, err = NewBazelContext(config)
+	config.Bp2buildPackageConfig = GetBp2BuildAllowList()
 
 	return Config{config}, err
 }
@@ -816,6 +832,10 @@ func (c *config) PlatformSdkVersion() ApiLevel {
 	return uncheckedFinalApiLevel(*c.productVariables.Platform_sdk_version)
 }
 
+func (c *config) RawPlatformSdkVersion() *int {
+	return c.productVariables.Platform_sdk_version
+}
+
 func (c *config) PlatformSdkFinal() bool {
 	return Bool(c.productVariables.Platform_sdk_final)
 }
@@ -905,8 +925,16 @@ func (c *config) DefaultAppTargetSdk(ctx EarlyModuleContext) ApiLevel {
 		return c.PlatformSdkVersion()
 	}
 	codename := c.PlatformSdkCodename()
+	hostOnlyBuild := c.productVariables.DeviceArch == nil
 	if codename == "" {
-		return NoneApiLevel
+		// There are some host-only builds (those are invoked by build-prebuilts.sh) which
+		// don't set platform sdk codename. Platform sdk codename makes sense only when we
+		// are building the platform. So we don't enforce the below panic for the host-only
+		// builds.
+		if hostOnlyBuild {
+			return NoneApiLevel
+		}
+		panic("Platform_sdk_codename must be set")
 	}
 	if codename == "REL" {
 		panic("Platform_sdk_codename should not be REL when Platform_sdk_final is true")
@@ -921,6 +949,11 @@ func (c *config) AppsDefaultVersionName() string {
 // Codenames that are active in the current lunch target.
 func (c *config) PlatformVersionActiveCodenames() []string {
 	return c.productVariables.Platform_version_active_codenames
+}
+
+// All unreleased codenames.
+func (c *config) PlatformVersionAllPreviewCodenames() []string {
+	return c.productVariables.Platform_version_all_preview_codenames
 }
 
 func (c *config) ProductAAPTConfig() []string {
@@ -1179,6 +1212,10 @@ func (c *config) ExportedNamespaces() []string {
 	return append([]string(nil), c.productVariables.NamespacesToExport...)
 }
 
+func (c *config) SourceRootDirs() []string {
+	return c.productVariables.SourceRootDirs
+}
+
 func (c *config) IncludeTags() []string {
 	return c.productVariables.IncludeTags
 }
@@ -1385,6 +1422,11 @@ func (c *deviceConfig) NativeCoverageEnabledForPath(path string) bool {
 		}
 	}
 	if coverage && len(c.config.productVariables.NativeCoverageExcludePaths) > 0 {
+		// Workaround coverage boot failure.
+		// http://b/269981180
+		if strings.HasPrefix(path, "external/protobuf") {
+			coverage = false
+		}
 		if HasAnyPrefix(path, c.config.productVariables.NativeCoverageExcludePaths) {
 			coverage = false
 		}
@@ -1394,6 +1436,21 @@ func (c *deviceConfig) NativeCoverageEnabledForPath(path string) bool {
 
 func (c *deviceConfig) PgoAdditionalProfileDirs() []string {
 	return c.config.productVariables.PgoAdditionalProfileDirs
+}
+
+// AfdoProfile returns fully qualified path associated to the given module name
+func (c *deviceConfig) AfdoProfile(name string) (*string, error) {
+	for _, afdoProfile := range c.config.productVariables.AfdoProfiles {
+		split := strings.Split(afdoProfile, ":")
+		if len(split) != 3 {
+			return nil, fmt.Errorf("AFDO_PROFILES has invalid value: %s. "+
+				"The expected format is <module>:<fully-qualified-path-to-fdo_profile>", afdoProfile)
+		}
+		if split[0] == name {
+			return proptools.StringPtr(strings.Join([]string{split[1], split[2]}, ":")), nil
+		}
+	}
+	return nil, nil
 }
 
 func (c *deviceConfig) VendorSepolicyDirs() []string {
@@ -1867,4 +1924,17 @@ func (c *config) ApiSurfacesDir(s ApiSurface, version string) string {
 		"api_surfaces",
 		s.String(),
 		version)
+}
+
+func (c *config) BuildFromTextStub() bool {
+	return c.buildFromTextStub
+}
+
+func (c *config) SetBuildFromTextStub(b bool) {
+	c.buildFromTextStub = b
+}
+func (c *config) AddForceEnabledModules(forceEnabled []string) {
+	for _, forceEnabledModule := range forceEnabled {
+		c.bazelForceEnabledModules[forceEnabledModule] = struct{}{}
+	}
 }

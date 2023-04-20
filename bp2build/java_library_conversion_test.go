@@ -172,10 +172,13 @@ func TestJavaLibraryJavaVersion(t *testing.T) {
 }`,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("java_library", "java-lib-1", AttrNameToString{
-				"srcs":      `["a.java"]`,
-				"javacopts": `["-source 11 -target 11"]`,
+				"srcs":         `["a.java"]`,
+				"java_version": `"11"`,
 			}),
-			MakeNeverlinkDuplicateTarget("java_library", "java-lib-1"),
+			MakeNeverlinkDuplicateTargetWithAttrs(
+				"java_library",
+				"java-lib-1",
+				AttrNameToString{"java_version": `"11"`}),
 		},
 	})
 }
@@ -493,6 +496,7 @@ java_library {
         "a.aidl",
         "b.aidl",
     ]`,
+				"tags": `["apex_available=//apex_available:anyapex"]`,
 			}),
 			MakeBazelTarget("java_aidl_library", "example_lib_java_aidl_library", AttrNameToString{
 				"deps": `[":aidl_files"]`,
@@ -739,7 +743,7 @@ func TestJavaLibraryKotlinCommonSrcs(t *testing.T) {
 	})
 }
 
-func TestJavaLibraryArchVariantLibs(t *testing.T) {
+func TestJavaLibraryArchVariantDeps(t *testing.T) {
 	runJavaLibraryTestCase(t, Bp2buildTestCase{
 		Description: "java_library with arch variant libs",
 		Blueprint: `java_library {
@@ -749,6 +753,7 @@ func TestJavaLibraryArchVariantLibs(t *testing.T) {
     target: {
         android: {
             libs: ["java-lib-3"],
+            static_libs: ["java-lib-4"],
         },
     },
     bazel_module: { bp2build_available: true },
@@ -761,12 +766,23 @@ func TestJavaLibraryArchVariantLibs(t *testing.T) {
 	java_library{
 		name: "java-lib-3",
 }
+
+	java_library{
+		name: "java-lib-4",
+}
 `,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("java_library", "java-lib-1", AttrNameToString{
 				"srcs": `["a.java"]`,
+				"exports": `select({
+        "//build/bazel/platforms/os:android": [":java-lib-4"],
+        "//conditions:default": [],
+    })`,
 				"deps": `[":java-lib-2-neverlink"] + select({
-        "//build/bazel/platforms/os:android": [":java-lib-3-neverlink"],
+        "//build/bazel/platforms/os:android": [
+            ":java-lib-3-neverlink",
+            ":java-lib-4",
+        ],
         "//conditions:default": [],
     })`,
 			}),
@@ -775,6 +791,8 @@ func TestJavaLibraryArchVariantLibs(t *testing.T) {
 			MakeNeverlinkDuplicateTarget("java_library", "java-lib-2"),
 			MakeBazelTarget("java_library", "java-lib-3", AttrNameToString{}),
 			MakeNeverlinkDuplicateTarget("java_library", "java-lib-3"),
+			MakeBazelTarget("java_library", "java-lib-4", AttrNameToString{}),
+			MakeNeverlinkDuplicateTarget("java_library", "java-lib-4"),
 		},
 	})
 }

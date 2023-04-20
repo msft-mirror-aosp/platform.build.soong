@@ -228,6 +228,7 @@ type BazelTestResult struct {
 //
 // If ignoreUnexpected=true then it will ignore directories for which there are no expected targets.
 func (b BazelTestResult) CompareAllBazelTargets(t *testing.T, description string, expectedTargets map[string][]string, ignoreUnexpected bool) {
+	t.Helper()
 	actualTargets := b.buildFileToTargets
 
 	// Generate the sorted set of directories to check.
@@ -641,10 +642,14 @@ func makeCcStubSuiteTargets(name string, attrs AttrNameToString) string {
 }
 
 func MakeNeverlinkDuplicateTarget(moduleType string, name string) string {
-	return MakeBazelTarget(moduleType, name+"-neverlink", AttrNameToString{
-		"neverlink": `True`,
-		"exports":   `[":` + name + `"]`,
-	})
+	return MakeNeverlinkDuplicateTargetWithAttrs(moduleType, name, AttrNameToString{})
+}
+
+func MakeNeverlinkDuplicateTargetWithAttrs(moduleType string, name string, extraAttrs AttrNameToString) string {
+	attrs := extraAttrs
+	attrs["neverlink"] = `True`
+	attrs["exports"] = `[":` + name + `"]`
+	return MakeBazelTarget(moduleType, name+"-neverlink", attrs)
 }
 
 func getTargetName(targetContent string) string {

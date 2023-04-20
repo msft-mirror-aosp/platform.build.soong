@@ -16,7 +16,6 @@ package cc
 
 import (
 	"path/filepath"
-	"strings"
 
 	"android/soong/android"
 	"android/soong/bazel"
@@ -208,12 +207,13 @@ func (p *prebuiltLibraryLinker) link(ctx ModuleContext,
 			})
 
 			// TODO(b/220898484): Mainline module sdk prebuilts of stub libraries use a stub
-			// library as their source and must not be installed, but libclang_rt.* libraries
-			// have stubs because they are LLNDK libraries, but use an implementation library
-			// as their source and need to be installed.  This discrepancy should be resolved
-			// without the prefix hack below.
-			if p.hasStubsVariants() && !p.buildStubs() && !ctx.Host() &&
-				!strings.HasPrefix(ctx.baseModuleName(), "libclang_rt.") {
+			// library as their source and must not be installed, but other prebuilts like
+			// libclang_rt.* libraries set `stubs` property because they are LLNDK libraries,
+			// but use an implementation library as their source and need to be installed.
+			// This discrepancy should be resolved without the prefix hack below.
+			isModuleSdkPrebuilts := android.HasAnyPrefix(ctx.ModuleDir(), []string{
+				"prebuilts/runtime/mainline/", "prebuilts/module_sdk/"})
+			if p.hasStubsVariants() && !p.buildStubs() && !ctx.Host() && isModuleSdkPrebuilts {
 				ctx.Module().MakeUninstallable()
 			}
 
@@ -376,6 +376,7 @@ func prebuiltLibraryStaticBp2Build(ctx android.TopDownMutatorContext, module *Mo
 		Static_library:         prebuiltAttrs.Src,
 		Export_includes:        exportedIncludes.Includes,
 		Export_system_includes: exportedIncludes.SystemIncludes,
+		// TODO: ¿Alwayslink?
 	}
 
 	props := bazel.BazelTargetModuleProperties{
@@ -398,14 +399,19 @@ func prebuiltLibraryStaticBp2Build(ctx android.TopDownMutatorContext, module *Mo
 }
 
 type bazelPrebuiltLibrarySharedAttributes struct {
-	Shared_library bazel.LabelAttribute
+	Shared_library         bazel.LabelAttribute
+	Export_includes        bazel.StringListAttribute
+	Export_system_includes bazel.StringListAttribute
 }
 
 func prebuiltLibrarySharedBp2Build(ctx android.TopDownMutatorContext, module *Module) {
 	prebuiltAttrs := Bp2BuildParsePrebuiltLibraryProps(ctx, module, false)
+	exportedIncludes := bp2BuildParseExportedIncludes(ctx, module, nil)
 
 	attrs := &bazelPrebuiltLibrarySharedAttributes{
-		Shared_library: prebuiltAttrs.Src,
+		Shared_library:         prebuiltAttrs.Src,
+		Export_includes:        exportedIncludes.Includes,
+		Export_system_includes: exportedIncludes.SystemIncludes,
 	}
 
 	props := bazel.BazelTargetModuleProperties{
