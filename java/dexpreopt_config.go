@@ -68,6 +68,7 @@ func genBootImageConfigRaw(ctx android.PathContext) map[string]*bootImageConfig 
 			modules:                  artModules,
 			preloadedClassesFile:     "art/build/boot/preloaded-classes",
 			compilerFilter:           "speed-profile",
+			singleImage:              false,
 		}
 
 		// Framework config for the boot image extension.
@@ -81,6 +82,7 @@ func genBootImageConfigRaw(ctx android.PathContext) map[string]*bootImageConfig 
 			modules:              frameworkModules,
 			preloadedClassesFile: "frameworks/base/config/preloaded-classes",
 			compilerFilter:       "speed-profile",
+			singleImage:          false,
 		}
 
 		mainlineCfg := bootImageConfig{
@@ -91,6 +93,7 @@ func genBootImageConfigRaw(ctx android.PathContext) map[string]*bootImageConfig 
 			installDirOnDevice: frameworkSubdir,
 			modules:            mainlineBcpModules,
 			compilerFilter:     "verify",
+			singleImage:        true,
 		}
 
 		return map[string]*bootImageConfig{

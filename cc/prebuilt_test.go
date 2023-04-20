@@ -169,6 +169,11 @@ func TestPrebuilt(t *testing.T) {
 	if !hasDep(crtx, prebuiltCrtx) {
 		t.Errorf("crtx missing dependency on prebuilt_crtx")
 	}
+
+	entries := android.AndroidMkEntriesForTest(t, ctx, prebuiltLiba)[0]
+	android.AssertStringEquals(t, "unexpected LOCAL_SOONG_MODULE_TYPE", "cc_prebuilt_library_shared", entries.EntryMap["LOCAL_SOONG_MODULE_TYPE"][0])
+	entries = android.AndroidMkEntriesForTest(t, ctx, prebuiltLibb)[0]
+	android.AssertStringEquals(t, "unexpected LOCAL_SOONG_MODULE_TYPE", "cc_prebuilt_library_static", entries.EntryMap["LOCAL_SOONG_MODULE_TYPE"][0])
 }
 
 func TestPrebuiltLibraryShared(t *testing.T) {
@@ -665,11 +670,15 @@ cc_prebuilt_library_shared {
 }
 
 func TestPrebuiltStubNoinstall(t *testing.T) {
-	testFunc := func(t *testing.T, bp string) {
+	testFunc := func(t *testing.T, expectLibfooOnSystemLib bool, fs android.MockFS) {
 		result := android.GroupFixturePreparers(
 			prepareForPrebuiltTest,
 			android.PrepareForTestWithMakevars,
-		).RunTestWithBp(t, bp)
+			android.FixtureMergeMockFs(fs),
+		).RunTest(t)
+
+		ldRule := result.ModuleForTests("installedlib", "android_arm64_armv8-a_shared").Rule("ld")
+		android.AssertStringDoesContain(t, "", ldRule.Args["libFlags"], "android_arm64_armv8-a_shared/libfoo.so")
 
 		installRules := result.InstallMakeRulesForTesting(t)
 		var installedlibRule *android.InstallMakeRule
@@ -686,50 +695,83 @@ func TestPrebuiltStubNoinstall(t *testing.T) {
 			return
 		}
 
-		android.AssertStringListDoesNotContain(t,
-			"installedlib has install dependency on stub",
-			installedlibRule.Deps,
-			"out/target/product/test_device/system/lib/stublib.so")
-		android.AssertStringListDoesNotContain(t,
-			"installedlib has order-only install dependency on stub",
-			installedlibRule.OrderOnlyDeps,
-			"out/target/product/test_device/system/lib/stublib.so")
+		if expectLibfooOnSystemLib {
+			android.AssertStringListContains(t,
+				"installedlib doesn't have install dependency on libfoo impl",
+				installedlibRule.OrderOnlyDeps,
+				"out/target/product/test_device/system/lib/libfoo.so")
+		} else {
+			android.AssertStringListDoesNotContain(t,
+				"installedlib has install dependency on libfoo stub",
+				installedlibRule.Deps,
+				"out/target/product/test_device/system/lib/libfoo.so")
+			android.AssertStringListDoesNotContain(t,
+				"installedlib has order-only install dependency on libfoo stub",
+				installedlibRule.OrderOnlyDeps,
+				"out/target/product/test_device/system/lib/libfoo.so")
+		}
 	}
 
-	const prebuiltStublibBp = `
+	prebuiltLibfooBp := []byte(`
 		cc_prebuilt_library {
-			name: "stublib",
+			name: "libfoo",
 			prefer: true,
-			srcs: ["foo.so"],
+			srcs: ["libfoo.so"],
 			stubs: {
 				versions: ["1"],
 			},
 		}
-	`
+	`)
 
-	const installedlibBp = `
+	installedlibBp := []byte(`
 		cc_library {
 			name: "installedlib",
-			shared_libs: ["stublib"],
+			shared_libs: ["libfoo"],
 		}
-	`
+	`)
 
-	t.Run("prebuilt without source", func(t *testing.T) {
-		testFunc(t, prebuiltStublibBp+installedlibBp)
+	t.Run("prebuilt stub (without source): no install", func(t *testing.T) {
+		testFunc(
+			t,
+			/*expectLibfooOnSystemLib=*/ false,
+			android.MockFS{
+				"prebuilts/module_sdk/art/current/Android.bp": prebuiltLibfooBp,
+				"Android.bp": installedlibBp,
+			},
+		)
 	})
 
-	const disabledSourceStublibBp = `
+	disabledSourceLibfooBp := []byte(`
 		cc_library {
-			name: "stublib",
+			name: "libfoo",
 			enabled: false,
 			stubs: {
 				versions: ["1"],
 			},
 		}
-	`
+	`)
 
-	t.Run("prebuilt with disabled source", func(t *testing.T) {
-		testFunc(t, disabledSourceStublibBp+prebuiltStublibBp+installedlibBp)
+	t.Run("prebuilt stub (with disabled source): no install", func(t *testing.T) {
+		testFunc(
+			t,
+			/*expectLibfooOnSystemLib=*/ false,
+			android.MockFS{
+				"prebuilts/module_sdk/art/current/Android.bp": prebuiltLibfooBp,
+				"impl/Android.bp": disabledSourceLibfooBp,
+				"Android.bp":      installedlibBp,
+			},
+		)
+	})
+
+	t.Run("prebuilt impl (with `stubs` property set): install", func(t *testing.T) {
+		testFunc(
+			t,
+			/*expectLibfooOnSystemLib=*/ true,
+			android.MockFS{
+				"impl/Android.bp": prebuiltLibfooBp,
+				"Android.bp":      installedlibBp,
+			},
+		)
 	})
 }
 

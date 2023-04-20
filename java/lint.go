@@ -96,9 +96,10 @@ type linter struct {
 }
 
 type lintOutputs struct {
-	html android.Path
-	text android.Path
-	xml  android.Path
+	html              android.Path
+	text              android.Path
+	xml               android.Path
+	referenceBaseline android.Path
 
 	depSets LintDepSets
 }
@@ -450,7 +451,7 @@ func (l *linter) lint(ctx android.ModuleContext) {
 	html := android.PathForModuleOut(ctx, "lint", "lint-report.html")
 	text := android.PathForModuleOut(ctx, "lint", "lint-report.txt")
 	xml := android.PathForModuleOut(ctx, "lint", "lint-report.xml")
-	baseline := android.PathForModuleOut(ctx, "lint", "lint-baseline.xml")
+	referenceBaseline := android.PathForModuleOut(ctx, "lint", "lint-baseline.xml")
 
 	depSetsBuilder := NewLintDepSetBuilder().Direct(html, text, xml)
 
@@ -495,7 +496,6 @@ func (l *linter) lint(ctx android.ModuleContext) {
 		FlagWithArg("--java-language-level ", l.javaLanguageLevel).
 		FlagWithArg("--kotlin-language-level ", l.kotlinLanguageLevel).
 		FlagWithArg("--url ", fmt.Sprintf(".=.,%s=out", android.PathForOutput(ctx).String())).
-		Flag("--exitcode").
 		Flag("--apply-suggestions"). // applies suggested fixes to files in the sandbox
 		Flags(l.properties.Lint.Flags).
 		Implicit(annotationsZipPath).
@@ -503,6 +503,10 @@ func (l *linter) lint(ctx android.ModuleContext) {
 
 	rule.Temporary(lintPaths.projectXML)
 	rule.Temporary(lintPaths.configXML)
+
+	if exitCode := ctx.Config().Getenv("ANDROID_LINT_SUPPRESS_EXIT_CODE"); exitCode == "" {
+		cmd.Flag("--exitcode")
+	}
 
 	if checkOnly := ctx.Config().Getenv("ANDROID_LINT_CHECK"); checkOnly != "" {
 		cmd.FlagWithArg("--check ", checkOnly)
@@ -513,7 +517,7 @@ func (l *linter) lint(ctx android.ModuleContext) {
 		cmd.FlagWithInput("--baseline ", lintBaseline.Path())
 	}
 
-	cmd.FlagWithOutput("--write-reference-baseline ", baseline)
+	cmd.FlagWithOutput("--write-reference-baseline ", referenceBaseline)
 
 	cmd.Text("; EXITCODE=$?; ")
 
@@ -535,9 +539,10 @@ func (l *linter) lint(ctx android.ModuleContext) {
 	rule.Build("lint", "lint")
 
 	l.outputs = lintOutputs{
-		html: html,
-		text: text,
-		xml:  xml,
+		html:              html,
+		text:              text,
+		xml:               xml,
+		referenceBaseline: referenceBaseline,
 
 		depSets: depSetsBuilder.Build(),
 	}
@@ -569,9 +574,10 @@ func BuildModuleLintReportZips(ctx android.ModuleContext, depSets LintDepSets) a
 }
 
 type lintSingleton struct {
-	htmlZip android.WritablePath
-	textZip android.WritablePath
-	xmlZip  android.WritablePath
+	htmlZip              android.WritablePath
+	textZip              android.WritablePath
+	xmlZip               android.WritablePath
+	referenceBaselineZip android.WritablePath
 }
 
 func (l *lintSingleton) GenerateBuildActions(ctx android.SingletonContext) {
@@ -684,12 +690,15 @@ func (l *lintSingleton) generateLintReportZips(ctx android.SingletonContext) {
 	l.xmlZip = android.PathForOutput(ctx, "lint-report-xml.zip")
 	zip(l.xmlZip, func(l *lintOutputs) android.Path { return l.xml })
 
-	ctx.Phony("lint-check", l.htmlZip, l.textZip, l.xmlZip)
+	l.referenceBaselineZip = android.PathForOutput(ctx, "lint-report-reference-baselines.zip")
+	zip(l.referenceBaselineZip, func(l *lintOutputs) android.Path { return l.referenceBaseline })
+
+	ctx.Phony("lint-check", l.htmlZip, l.textZip, l.xmlZip, l.referenceBaselineZip)
 }
 
 func (l *lintSingleton) MakeVars(ctx android.MakeVarsContext) {
 	if !ctx.Config().UnbundledBuild() {
-		ctx.DistForGoal("lint-check", l.htmlZip, l.textZip, l.xmlZip)
+		ctx.DistForGoal("lint-check", l.htmlZip, l.textZip, l.xmlZip, l.referenceBaselineZip)
 	}
 }
 

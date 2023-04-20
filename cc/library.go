@@ -26,7 +26,6 @@ import (
 	"android/soong/android"
 	"android/soong/bazel"
 	"android/soong/bazel/cquery"
-	"android/soong/cc/config"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/pathtools"
@@ -264,11 +263,15 @@ type bazelCcLibraryAttributes struct {
 type aidlLibraryAttributes struct {
 	Srcs        bazel.LabelListAttribute
 	Include_dir *string
+	Tags        bazel.StringListAttribute
 }
 
 type ccAidlLibraryAttributes struct {
 	Deps                        bazel.LabelListAttribute
+	Implementation_deps         bazel.LabelListAttribute
 	Implementation_dynamic_deps bazel.LabelListAttribute
+	Tags                        bazel.StringListAttribute
+	sdkAttributes
 }
 
 type stripAttributes struct {
@@ -427,8 +430,10 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 	if compilerAttrs.stubsSymbolFile == nil && len(compilerAttrs.stubsVersions.Value) == 0 {
 		tagsForStaticVariant = android.ApexAvailableTags(m)
 	}
+	tagsForStaticVariant.Append(bazel.StringListAttribute{Value: staticAttrs.Apex_available})
 
 	tagsForSharedVariant := android.ApexAvailableTags(m)
+	tagsForSharedVariant.Append(bazel.StringListAttribute{Value: sharedAttrs.Apex_available})
 
 	ctx.CreateBazelTargetModuleWithRestrictions(staticProps,
 		android.CommonAttributes{
@@ -454,16 +459,31 @@ func createStubsBazelTargetIfNeeded(ctx android.TopDownMutatorContext, m *Module
 		}
 		soname := m.Name() + ".so"
 		stubSuitesAttrs := &bazelCcStubSuiteAttributes{
-			Symbol_file:     compilerAttrs.stubsSymbolFile,
-			Versions:        compilerAttrs.stubsVersions,
-			Export_includes: exportedIncludes.Includes,
-			Soname:          &soname,
-			Source_library:  *bazel.MakeLabelAttribute(":" + m.Name()),
-			Deps:            baseAttributes.deps,
+			Symbol_file:          compilerAttrs.stubsSymbolFile,
+			Versions:             compilerAttrs.stubsVersions,
+			Export_includes:      exportedIncludes.Includes,
+			Soname:               &soname,
+			Source_library_label: proptools.StringPtr(m.GetBazelLabel(ctx, m)),
+			Deps:                 baseAttributes.deps,
 		}
 		ctx.CreateBazelTargetModule(stubSuitesProps,
 			android.CommonAttributes{Name: m.Name() + "_stub_libs"},
 			stubSuitesAttrs)
+
+		// Add alias for the stub shared_library in @api_surfaces repository
+		currentModuleLibApiDir := ctx.Config().ApiSurfacesDir(android.ModuleLibApi, "current")
+		actualLabelInMainWorkspace := bazel.Label{
+			Label: fmt.Sprintf("@//%s:%s%s", ctx.ModuleDir(), m.Name(), stubsSuffix),
+		}
+		ctx.CreateBazelTargetAliasInDir(currentModuleLibApiDir, m.Name(), actualLabelInMainWorkspace)
+
+		// Add alias for headers exported by the stub library
+		headerLabelInMainWorkspace := bazel.Label{
+			// This label is generated from cc_stub_suite macro
+			Label: fmt.Sprintf("@//%s:%s_stub_libs_%s_headers", ctx.ModuleDir(), m.Name(), android.ModuleLibApi.String()),
+		}
+		headerAlias := m.Name() + "_headers"
+		ctx.CreateBazelTargetAliasInDir(currentModuleLibApiDir, headerAlias, headerLabelInMainWorkspace)
 	}
 }
 
@@ -2173,7 +2193,16 @@ func (library *libraryDecorator) toc() android.OptionalPath {
 func (library *libraryDecorator) installSymlinkToRuntimeApex(ctx ModuleContext, file android.Path) {
 	dir := library.baseInstaller.installDir(ctx)
 	dirOnDevice := android.InstallPathToOnDevicePath(ctx, dir)
-	target := "/" + filepath.Join("apex", "com.android.runtime", dir.Base(), "bionic", file.Base())
+	// libc_hwasan has relative_install_dir set, which would mess up the dir.Base() logic.
+	// hardcode here because it's the only target, if we have other targets that use this
+	// we can generalise this.
+	var target string
+	if ctx.baseModuleName() == "libc_hwasan" {
+		target = "/" + filepath.Join("apex", "com.android.runtime", "lib64", "bionic", "hwasan", file.Base())
+	} else {
+		base := dir.Base()
+		target = "/" + filepath.Join("apex", "com.android.runtime", base, "bionic", file.Base())
+	}
 	ctx.InstallAbsoluteSymlink(dir, file.Base(), target)
 	library.postInstallCmds = append(library.postInstallCmds, makeSymlinkCmd(dirOnDevice, file.Base(), target))
 }
@@ -2240,8 +2269,7 @@ func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 		!ctx.useVndk() && !ctx.inRamdisk() && !ctx.inVendorRamdisk() && !ctx.inRecovery() && ctx.Device() &&
 		library.baseLinker.sanitize.isUnsanitizedVariant() &&
 		ctx.isForPlatform() && !ctx.isPreventInstall() {
-		installPath := getNdkSysrootBase(ctx).Join(
-			ctx, "usr/lib", config.NDKTriple(ctx.toolchain()), file.Base())
+		installPath := getUnversionedLibraryInstallPath(ctx).Join(ctx, file.Base())
 
 		ctx.ModuleBuild(pctx, android.ModuleBuildParams{
 			Rule:        android.Cp,
@@ -2951,12 +2979,6 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 
 	tags := android.ApexAvailableTags(module)
 
-	// This lib needs some special handling in bazel, so add this tag to the build
-	// file.
-	if module.Name() == "libprofile-clang-extras" {
-		tags.Append(bazel.MakeStringListAttribute([]string{"NO_EXPORTING"}))
-	}
-
 	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: module.Name(), Tags: tags}, attrs)
 }
 
@@ -3024,12 +3046,12 @@ type bazelCcLibrarySharedAttributes struct {
 }
 
 type bazelCcStubSuiteAttributes struct {
-	Symbol_file     *string
-	Versions        bazel.StringListAttribute
-	Export_includes bazel.StringListAttribute
-	Source_library  bazel.LabelAttribute
-	Soname          *string
-	Deps            bazel.LabelListAttribute
+	Symbol_file          *string
+	Versions             bazel.StringListAttribute
+	Export_includes      bazel.StringListAttribute
+	Source_library_label *string
+	Soname               *string
+	Deps                 bazel.LabelListAttribute
 }
 
 type bazelCcHeaderAbiCheckerAttributes struct {
