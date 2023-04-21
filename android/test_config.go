@@ -65,6 +65,7 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 		BuildMode:                 BazelProdMode,
 		mixedBuildDisabledModules: make(map[string]struct{}),
 		mixedBuildEnabledModules:  make(map[string]struct{}),
+		bazelForceEnabledModules:  make(map[string]struct{}),
 	}
 	config.deviceConfig = &deviceConfig{
 		config: config,
@@ -109,7 +110,8 @@ func modifyTestConfigToSupportArchMutator(testConfig Config) {
 	config.TestProductVariables.DeviceSecondaryArchVariant = proptools.StringPtr("armv7-a-neon")
 }
 
-func modifyTestConfigForMusl(config Config) {
+// ModifyTestConfigForMusl takes a Config returned by TestConfig and changes the host targets from glibc to musl.
+func ModifyTestConfigForMusl(config Config) {
 	delete(config.Targets, config.BuildOS)
 	config.productVariables.HostMusl = boolPtr(true)
 	determineBuildOS(config.config)

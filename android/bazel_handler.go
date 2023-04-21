@@ -63,6 +63,8 @@ var (
 		"LLVM_NEXT",
 		"ALLOW_UNKNOWN_WARNING_OPTION",
 
+		"UNBUNDLED_BUILD_TARGET_SDK_WITH_API_FINGERPRINT",
+
 		// Overrides the version in the apex_manifest.json. The version is unique for
 		// each branch (internal, aosp, mainline releases, dessert releases).  This
 		// enables modules built on an older branch to be installed against a newer
@@ -84,8 +86,12 @@ func RegisterMixedBuildsMutator(ctx RegistrationContext) {
 func mixedBuildsPrepareMutator(ctx BottomUpMutatorContext) {
 	if m := ctx.Module(); m.Enabled() {
 		if mixedBuildMod, ok := m.(MixedBuildBuildable); ok {
-			if mixedBuildMod.IsMixedBuildSupported(ctx) && MixedBuildsEnabled(ctx) {
+			queueMixedBuild := mixedBuildMod.IsMixedBuildSupported(ctx) && MixedBuildsEnabled(ctx)
+			if queueMixedBuild {
 				mixedBuildMod.QueueBazelCall(ctx)
+			} else if _, ok := ctx.Config().bazelForceEnabledModules[m.Name()]; ok {
+				// TODO(b/273910287) - remove this once --ensure_allowlist_integrity is added
+				ctx.ModuleErrorf("Attempted to force enable an unready module: %s. Did you forget to Bp2BuildDefaultTrue its directory?\n", m.Name())
 			}
 		}
 	}
@@ -607,7 +613,7 @@ func NewBazelContext(c *config) (BazelContext, error) {
 	dclaEnabledModules := map[string]bool{}
 	addToStringSet(dclaEnabledModules, dclaMixedBuildsEnabledList)
 	return &mixedBuildBazelContext{
-		bazelRunner:             &builtinBazelRunner{},
+		bazelRunner:             &builtinBazelRunner{c.UseBazelProxy, absolutePath(c.outDir)},
 		paths:                   &paths,
 		modulesDefaultToBazel:   c.BuildMode == BazelDevMode,
 		bazelEnabledModules:     enabledModules,
@@ -684,23 +690,46 @@ func (r *mockBazelRunner) issueBazelCommand(bazelCmd *exec.Cmd, _ *metrics.Event
 	return "", "", nil
 }
 
-type builtinBazelRunner struct{}
+type builtinBazelRunner struct {
+	useBazelProxy bool
+	outDir        string
+}
 
 // Issues the given bazel command with given build label and additional flags.
 // Returns (stdout, stderr, error). The first and second return values are strings
 // containing the stdout and stderr of the run command, and an error is returned if
 // the invocation returned an error code.
 func (r *builtinBazelRunner) issueBazelCommand(bazelCmd *exec.Cmd, eventHandler *metrics.EventHandler) (string, string, error) {
-	eventHandler.Begin("bazel command")
-	defer eventHandler.End("bazel command")
-	stderr := &bytes.Buffer{}
-	bazelCmd.Stderr = stderr
-	if output, err := bazelCmd.Output(); err != nil {
-		return "", string(stderr.Bytes()),
-			fmt.Errorf("bazel command failed: %s\n---command---\n%s\n---env---\n%s\n---stderr---\n%s---",
-				err, bazelCmd, strings.Join(bazelCmd.Env, "\n"), stderr)
+	if r.useBazelProxy {
+		eventHandler.Begin("client_proxy")
+		defer eventHandler.End("client_proxy")
+		proxyClient := bazel.NewProxyClient(r.outDir)
+		// Omit the arg containing the Bazel binary, as that is handled by the proxy
+		// server.
+		bazelFlags := bazelCmd.Args[1:]
+		// TODO(b/270989498): Refactor these functions to not take exec.Cmd, as its
+		// not actually executed for client proxying.
+		resp, err := proxyClient.IssueCommand(bazel.CmdRequest{bazelFlags, bazelCmd.Env})
+
+		if err != nil {
+			return "", "", err
+		}
+		if len(resp.ErrorString) > 0 {
+			return "", "", fmt.Errorf(resp.ErrorString)
+		}
+		return resp.Stdout, resp.Stderr, nil
 	} else {
-		return string(output), string(stderr.Bytes()), nil
+		eventHandler.Begin("bazel command")
+		defer eventHandler.End("bazel command")
+		stderr := &bytes.Buffer{}
+		bazelCmd.Stderr = stderr
+		if output, err := bazelCmd.Output(); err != nil {
+			return "", string(stderr.Bytes()),
+				fmt.Errorf("bazel command failed: %s\n---command---\n%s\n---env---\n%s\n---stderr---\n%s---",
+					err, bazelCmd, strings.Join(bazelCmd.Env, "\n"), stderr)
+		} else {
+			return string(output), string(stderr.Bytes()), nil
+		}
 	}
 }
 
@@ -712,15 +741,6 @@ func (r *builtinBazelRunner) createBazelCommand(config Config, paths *bazelPaths
 		command.expression,
 		// TODO(asmundak): is it needed in every build?
 		"--profile=" + shared.BazelMetricsFilename(paths, runName),
-
-		// Set default platforms to canonicalized values for mixed builds requests.
-		// If these are set in the bazelrc, they will have values that are
-		// non-canonicalized to @sourceroot labels, and thus be invalid when
-		// referenced from the buildroot.
-		//
-		// The actual platform values here may be overridden by configuration
-		// transitions from the buildroot.
-		fmt.Sprintf("--extra_toolchains=%s", "//prebuilts/clang/host/linux-x86:all"),
 
 		// We don't need to set --host_platforms because it's set in bazelrc files
 		// that the bazel shell script wrapper passes
@@ -946,9 +966,13 @@ func indent(original string) string {
 // request type.
 func (context *mixedBuildBazelContext) cqueryStarlarkFileContents() []byte {
 	requestTypeToCqueryIdEntries := map[cqueryRequest][]string{}
+	requestTypes := []cqueryRequest{}
 	for _, val := range context.requests {
 		cqueryId := getCqueryId(val)
 		mapEntryString := fmt.Sprintf("%q : True", cqueryId)
+		if _, seenKey := requestTypeToCqueryIdEntries[val.requestType]; !seenKey {
+			requestTypes = append(requestTypes, val.requestType)
+		}
 		requestTypeToCqueryIdEntries[val.requestType] =
 			append(requestTypeToCqueryIdEntries[val.requestType], mapEntryString)
 	}
@@ -970,7 +994,7 @@ def %s(target, id_string):
     return id_string + ">>" + %s(target, id_string)
 `
 
-	for requestType := range requestTypeToCqueryIdEntries {
+	for _, requestType := range requestTypes {
 		labelMapName := requestType.Name() + "_Labels"
 		functionName := requestType.Name() + "_Fn"
 		labelRegistrationMapSection += fmt.Sprintf(mapDeclarationFormatString,
@@ -985,31 +1009,6 @@ def %s(target, id_string):
 
 	formatString := `
 # This file is generated by soong_build. Do not edit.
-
-# a drop-in replacement for json.encode(), not available in cquery environment
-# TODO(cparsons): bring json module in and remove this function
-def json_encode(input):
-  # Avoiding recursion by limiting
-  #  - a dict to contain anything except a dict
-  #  - a list to contain only primitives
-  def encode_primitive(p):
-    t = type(p)
-    if t == "string" or t == "int":
-      return repr(p)
-    fail("unsupported value '%s' of type '%s'" % (p, type(p)))
-
-  def encode_list(list):
-    return "[%s]" % ", ".join([encode_primitive(item) for item in list])
-
-  def encode_list_or_primitive(v):
-    return encode_list(v) if type(v) == "list" else encode_primitive(v)
-
-  if type(input) == "dict":
-    # TODO(juu): the result is read line by line so can't use '\n' yet
-    kv_pairs = [("%s: %s" % (encode_primitive(k), encode_list_or_primitive(v))) for (k, v) in input.items()]
-    return "{ %s }" % ", ".join(kv_pairs)
-  else:
-    return encode_list_or_primitive(input)
 
 {LABEL_REGISTRATION_MAP_SECTION}
 

@@ -199,6 +199,7 @@ type productVariables struct {
 	Platform_sdk_extension_version            *int     `json:",omitempty"`
 	Platform_base_sdk_extension_version       *int     `json:",omitempty"`
 	Platform_version_active_codenames         []string `json:",omitempty"`
+	Platform_version_all_preview_codenames    []string `json:",omitempty"`
 	Platform_vndk_version                     *string  `json:",omitempty"`
 	Platform_systemsdk_versions               []string `json:",omitempty"`
 	Platform_security_patch                   *string  `json:",omitempty"`
@@ -442,6 +443,7 @@ type productVariables struct {
 	BuildBrokenDepfile                 *bool    `json:",omitempty"`
 	BuildBrokenEnforceSyspropOwner     bool     `json:",omitempty"`
 	BuildBrokenTrebleSyspropNeverallow bool     `json:",omitempty"`
+	BuildBrokenUsesSoongPython2Modules bool     `json:",omitempty"`
 	BuildBrokenVendorPropertyNamespace bool     `json:",omitempty"`
 	BuildBrokenInputDirModules         []string `json:",omitempty"`
 
@@ -460,7 +462,10 @@ type productVariables struct {
 
 	IgnorePrefer32OnDevice bool `json:",omitempty"`
 
-	IncludeTags []string `json:",omitempty"`
+	IncludeTags    []string `json:",omitempty"`
+	SourceRootDirs []string `json:",omitempty"`
+
+	AfdoProfiles []string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
@@ -479,13 +484,14 @@ func (v *productVariables) SetDefaultConfig() {
 	*v = productVariables{
 		BuildNumberFile: stringPtr("build_number.txt"),
 
-		Platform_version_name:               stringPtr("S"),
-		Platform_base_sdk_extension_version: intPtr(30),
-		Platform_sdk_version:                intPtr(30),
-		Platform_sdk_codename:               stringPtr("S"),
-		Platform_sdk_final:                  boolPtr(false),
-		Platform_version_active_codenames:   []string{"S"},
-		Platform_vndk_version:               stringPtr("S"),
+		Platform_version_name:                  stringPtr("S"),
+		Platform_base_sdk_extension_version:    intPtr(30),
+		Platform_sdk_version:                   intPtr(30),
+		Platform_sdk_codename:                  stringPtr("S"),
+		Platform_sdk_final:                     boolPtr(false),
+		Platform_version_active_codenames:      []string{"S"},
+		Platform_version_all_preview_codenames: []string{"S"},
+		Platform_vndk_version:                  stringPtr("S"),
 
 		HostArch:                   stringPtr("x86_64"),
 		HostSecondaryArch:          stringPtr("x86"),
@@ -663,9 +669,8 @@ func (p *ProductConfigProperty) SelectKey() string {
 type ProductConfigProperties map[string]map[ProductConfigProperty]interface{}
 
 // ProductVariableProperties returns a ProductConfigProperties containing only the properties which
-// have been set for the module in the given context.
-func ProductVariableProperties(ctx BazelConversionPathContext) ProductConfigProperties {
-	module := ctx.Module()
+// have been set for the given module.
+func ProductVariableProperties(ctx ArchVariantContext, module Module) ProductConfigProperties {
 	moduleBase := module.base()
 
 	productConfigProperties := ProductConfigProperties{}

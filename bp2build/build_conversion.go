@@ -60,6 +60,15 @@ func (t BazelTarget) Label() string {
 	}
 }
 
+// PackageName returns the package of the Bazel target.
+// Defaults to root of tree.
+func (t BazelTarget) PackageName() string {
+	if t.packageName == "" {
+		return "."
+	}
+	return t.packageName
+}
+
 // BazelTargets is a typedef for a slice of BazelTarget objects.
 type BazelTargets []BazelTarget
 
@@ -227,7 +236,7 @@ func NewCodegenContext(config android.Config, context *android.Context, mode Cod
 // the generated attributes are sorted to ensure determinism.
 func propsToAttributes(props map[string]string) string {
 	var attributes string
-	for _, propName := range android.SortedStringKeys(props) {
+	for _, propName := range android.SortedKeys(props) {
 		attributes += fmt.Sprintf("    %s = %s,\n", propName, props[propName])
 	}
 	return attributes
@@ -312,6 +321,9 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 					// target, each of a different rule class.
 					metrics.IncrementRuleClassCount(t.ruleClass)
 				}
+			} else if _, ok := ctx.Config().BazelModulesForceEnabledByFlag()[m.Name()]; ok && m.Name() != "" {
+				err := fmt.Errorf("Force Enabled Module %s not converted", m.Name())
+				errs = append(errs, err)
 			} else {
 				metrics.AddUnconvertedModule(moduleType)
 				return
@@ -337,7 +349,10 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 			return
 		}
 
-		buildFileToTargets[dir] = append(buildFileToTargets[dir], targets...)
+		for _, target := range targets {
+			targetDir := target.PackageName()
+			buildFileToTargets[targetDir] = append(buildFileToTargets[targetDir], target)
+		}
 	})
 
 	if len(errs) > 0 {
@@ -454,7 +469,8 @@ func generateSoongModuleTarget(ctx bpToBuildContext, m blueprint.Module) (BazelT
 
 	targetName := targetNameWithVariant(ctx, m)
 	return BazelTarget{
-		name: targetName,
+		name:        targetName,
+		packageName: ctx.ModuleDir(m),
 		content: fmt.Sprintf(
 			soongModuleTargetTemplate,
 			targetName,

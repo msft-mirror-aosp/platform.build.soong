@@ -440,7 +440,7 @@ func (i BootclasspathFragmentApexContentInfo) DexBootJarPathForContentModule(mod
 		return dexJar, nil
 	} else {
 		return nil, fmt.Errorf("unknown bootclasspath_fragment content module %s, expected one of %s",
-			name, strings.Join(android.SortedStringKeys(i.contentModuleDexJarPaths), ", "))
+			name, strings.Join(android.SortedKeys(i.contentModuleDexJarPaths), ", "))
 	}
 }
 
@@ -499,6 +499,8 @@ func (b *BootclasspathFragmentModule) DepsMutator(ctx android.BottomUpMutatorCon
 		for _, apiScope := range hiddenAPISdkLibrarySupportedScopes {
 			// Add a dependency onto a possibly scope specific stub library.
 			scopeSpecificDependency := apiScope.scopeSpecificStubModule(ctx, additionalStubModule)
+			// Use JavaApiLibraryName function to be redirected to stubs generated from .txt if applicable
+			scopeSpecificDependency = android.JavaApiLibraryName(ctx.Config(), scopeSpecificDependency)
 			tag := hiddenAPIStubsDependencyTag{apiScope: apiScope, fromAdditionalDependency: true}
 			ctx.AddVariationDependencies(nil, tag, scopeSpecificDependency)
 		}
@@ -709,7 +711,7 @@ func (b *BootclasspathFragmentModule) getImageConfig(ctx android.EarlyModuleCont
 	imageName := *imageNamePtr
 	imageConfig := imageConfigs[imageName]
 	if imageConfig == nil {
-		ctx.PropertyErrorf("image_name", "Unknown image name %q, expected one of %s", imageName, strings.Join(android.SortedStringKeys(imageConfigs), ", "))
+		ctx.PropertyErrorf("image_name", "Unknown image name %q, expected one of %s", imageName, strings.Join(android.SortedKeys(imageConfigs), ", "))
 		return nil
 	}
 	return imageConfig

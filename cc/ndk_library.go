@@ -342,7 +342,14 @@ func canDumpAbi(config android.Config) bool {
 	if android.InList("hwaddress", config.SanitizeDevice()) {
 		return false
 	}
-	return true
+	// http://b/156513478
+	// http://b/277624006
+	// This step is expensive. We're not able to do anything with the outputs of
+	// this step yet (canDiffAbi is flagged off because libabigail isn't able to
+	// handle all our libraries), disable it. There's no sense in protecting
+	// against checking in code that breaks abidw since by the time any of this
+	// can be turned on we'll need to migrate to STG anyway.
+	return false
 }
 
 // Feature flag to disable diffing against prebuilts.
@@ -528,17 +535,20 @@ func (stub *stubDecorator) nativeCoverage() bool {
 	return false
 }
 
-func (stub *stubDecorator) install(ctx ModuleContext, path android.Path) {
-	arch := ctx.Target().Arch.ArchType.Name
-	// arm64 isn't actually a multilib toolchain, so unlike the other LP64
-	// architectures it's just installed to lib.
-	libDir := "lib"
-	if ctx.toolchain().Is64Bit() && arch != "arm64" {
-		libDir = "lib64"
-	}
+// Returns the install path for unversioned NDK libraries (currently only static
+// libraries).
+func getUnversionedLibraryInstallPath(ctx ModuleContext) android.InstallPath {
+	return getNdkSysrootBase(ctx).Join(ctx, "usr/lib", config.NDKTriple(ctx.toolchain()))
+}
 
-	installDir := getNdkInstallBase(ctx).Join(ctx, fmt.Sprintf(
-		"platforms/android-%s/arch-%s/usr/%s", stub.apiLevel, arch, libDir))
+// Returns the install path for versioned NDK libraries. These are most often
+// stubs, but the same paths are used for CRT objects.
+func getVersionedLibraryInstallPath(ctx ModuleContext, apiLevel android.ApiLevel) android.InstallPath {
+	return getUnversionedLibraryInstallPath(ctx).Join(ctx, apiLevel.String())
+}
+
+func (stub *stubDecorator) install(ctx ModuleContext, path android.Path) {
+	installDir := getVersionedLibraryInstallPath(ctx, stub.apiLevel)
 	stub.installPath = ctx.InstallFile(installDir, path.Base(), path)
 }
 
