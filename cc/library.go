@@ -311,6 +311,11 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		asFlags = bazel.MakeStringListAttribute(nil)
 	}
 
+	sharedFeatures := baseAttributes.features.Clone().Append(sharedAttrs.Features)
+	sharedFeatures.DeduplicateAxesFromBase()
+	staticFeatures := baseAttributes.features.Clone().Append(staticAttrs.Features)
+	staticFeatures.DeduplicateAxesFromBase()
+
 	staticCommonAttrs := staticOrSharedAttributes{
 		Srcs:    *srcs.Clone().Append(staticAttrs.Srcs),
 		Srcs_c:  *compilerAttrs.cSrcs.Clone().Append(staticAttrs.Srcs_c),
@@ -366,7 +371,7 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Cpp_std:                  compilerAttrs.cppStd,
 		C_std:                    compilerAttrs.cStd,
 
-		Features: baseAttributes.features,
+		Features: *staticFeatures,
 	}
 
 	sharedTargetAttrs := &bazelCcLibrarySharedAttributes{
@@ -390,7 +395,7 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Additional_linker_inputs: linkerAttrs.additionalLinkerInputs,
 
 		Strip:                             stripAttrsFromLinkerAttrs(&linkerAttrs),
-		Features:                          baseAttributes.features,
+		Features:                          *sharedFeatures,
 		bazelCcHeaderAbiCheckerAttributes: bp2buildParseAbiCheckerProps(ctx, m),
 
 		Fdo_profile: compilerAttrs.fdoProfile,
@@ -428,11 +433,11 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 
 	var tagsForStaticVariant bazel.StringListAttribute
 	if compilerAttrs.stubsSymbolFile == nil && len(compilerAttrs.stubsVersions.Value) == 0 {
-		tagsForStaticVariant = android.ApexAvailableTags(m)
+		tagsForStaticVariant = android.ApexAvailableTagsWithoutTestApexes(ctx, m)
 	}
 	tagsForStaticVariant.Append(bazel.StringListAttribute{Value: staticAttrs.Apex_available})
 
-	tagsForSharedVariant := android.ApexAvailableTags(m)
+	tagsForSharedVariant := android.ApexAvailableTagsWithoutTestApexes(ctx, m)
 	tagsForSharedVariant.Append(bazel.StringListAttribute{Value: sharedAttrs.Apex_available})
 
 	ctx.CreateBazelTargetModuleWithRestrictions(staticProps,
@@ -2406,7 +2411,10 @@ func (library *libraryDecorator) stubsVersions(ctx android.BaseMutatorContext) [
 	}
 
 	// Future API level is implicitly added if there isn't
-	vers := library.Properties.Stubs.Versions
+	return addCurrentVersionIfNotPresent(library.Properties.Stubs.Versions)
+}
+
+func addCurrentVersionIfNotPresent(vers []string) []string {
 	if inList(android.FutureApiLevel.String(), vers) {
 		return vers
 	}
@@ -2895,6 +2903,9 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 		asFlags = bazel.MakeStringListAttribute(nil)
 	}
 
+	features := baseAttributes.features.Clone().Append(libSharedOrStaticAttrs.Features)
+	features.DeduplicateAxesFromBase()
+
 	commonAttrs := staticOrSharedAttributes{
 		Srcs:    compilerAttrs.srcs,
 		Srcs_c:  compilerAttrs.cSrcs,
@@ -2936,7 +2947,7 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 			Conlyflags: compilerAttrs.conlyFlags,
 			Asflags:    asFlags,
 
-			Features: baseAttributes.features,
+			Features: *features,
 		}
 	} else {
 		commonAttrs.Dynamic_deps.Add(baseAttributes.protoDependency)
@@ -2965,7 +2976,7 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 
 			Strip: stripAttrsFromLinkerAttrs(&linkerAttrs),
 
-			Features: baseAttributes.features,
+			Features: *features,
 
 			Suffix: compilerAttrs.suffix,
 
@@ -2991,7 +3002,7 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 		Bzl_load_location: fmt.Sprintf("//build/bazel/rules/cc:%s.bzl", modType),
 	}
 
-	tags := android.ApexAvailableTags(module)
+	tags := android.ApexAvailableTagsWithoutTestApexes(ctx, module)
 
 	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: module.Name(), Tags: tags}, attrs)
 }

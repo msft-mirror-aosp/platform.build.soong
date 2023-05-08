@@ -3034,11 +3034,13 @@ func TestExportedProguardFlagFiles(t *testing.T) {
 
 func TestTargetSdkVersionManifestFixer(t *testing.T) {
 	platform_sdk_codename := "Tiramisu"
+	platform_sdk_version := 33
 	testCases := []struct {
 		name                     string
 		targetSdkVersionInBp     string
 		targetSdkVersionExpected string
 		unbundledBuild           bool
+		platformSdkFinal         bool
 	}{
 		{
 			name:                     "Non-Unbundled build: Android.bp has targetSdkVersion",
@@ -3075,6 +3077,12 @@ func TestTargetSdkVersionManifestFixer(t *testing.T) {
 			targetSdkVersionExpected: "10000",
 			unbundledBuild:           true,
 		},
+		{
+			name:                     "Bundled build in REL branches",
+			targetSdkVersionExpected: "33",
+			unbundledBuild:           false,
+			platformSdkFinal:         true,
+		},
 	}
 	for _, testCase := range testCases {
 		targetSdkVersionTemplate := ""
@@ -3091,8 +3099,12 @@ func TestTargetSdkVersionManifestFixer(t *testing.T) {
 		fixture := android.GroupFixturePreparers(
 			prepareForJavaTest,
 			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+				if testCase.platformSdkFinal {
+					variables.Platform_sdk_final = proptools.BoolPtr(true)
+				}
 				// explicitly set platform_sdk_codename to make the test deterministic
 				variables.Platform_sdk_codename = &platform_sdk_codename
+				variables.Platform_sdk_version = &platform_sdk_version
 				variables.Platform_version_active_codenames = []string{platform_sdk_codename}
 				// create a non-empty list if unbundledBuild==true
 				if testCase.unbundledBuild {
@@ -3526,4 +3538,52 @@ func TestTargetSdkVersionMtsTests(t *testing.T) {
 		manifestFixerArgs := mytest.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
 		android.AssertStringDoesContain(t, testCase.desc, manifestFixerArgs, "--targetSdkVersion  "+testCase.targetSdkVersionExpected)
 	}
+}
+
+func TestPrivappAllowlist(t *testing.T) {
+	testJavaError(t, "privileged must be set in order to use privapp_allowlist", `
+		android_app {
+			name: "foo",
+			srcs: ["a.java"],
+			privapp_allowlist: "perms.xml",
+		}
+	`)
+
+	result := PrepareForTestWithJavaDefaultModules.RunTestWithBp(
+		t,
+		`
+		android_app {
+			name: "foo",
+			srcs: ["a.java"],
+			privapp_allowlist: "perms.xml",
+			privileged: true,
+			package_name: "com.android.foo",
+			sdk_version: "current",
+		}
+		override_android_app {
+			name: "bar",
+			base: "foo",
+			package_name: "com.google.android.foo",
+		}
+		`,
+	)
+	app := result.ModuleForTests("foo", "android_common")
+	overrideApp := result.ModuleForTests("foo", "android_common_bar")
+
+	// verify that privapp allowlist is created
+	app.Output("out/soong/.intermediates/foo/android_common/privapp_allowlist_com.android.foo.xml")
+	overrideApp.Output("out/soong/.intermediates/foo/android_common_bar/privapp_allowlist_com.google.android.foo.xml")
+	expectedAllowlist := "perms.xml"
+	actualAllowlist := app.Rule("modifyAllowlist").Input.String()
+	if expectedAllowlist != actualAllowlist {
+		t.Errorf("expected allowlist to be %q; got %q", expectedAllowlist, actualAllowlist)
+	}
+	overrideActualAllowlist := overrideApp.Rule("modifyAllowlist").Input.String()
+	if expectedAllowlist != overrideActualAllowlist {
+		t.Errorf("expected override allowlist to be %q; got %q", expectedAllowlist, overrideActualAllowlist)
+	}
+
+	// verify that permissions are copied to device
+	app.Output("out/soong/target/product/test_device/system/etc/permissions/privapp_allowlist_com.android.foo.xml")
+	overrideApp.Output("out/soong/target/product/test_device/system/etc/permissions/privapp_allowlist_com.google.android.foo.xml")
 }

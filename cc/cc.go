@@ -1890,37 +1890,49 @@ func (c *Module) QueueBazelCall(ctx android.BaseModuleContext) {
 	c.bazelHandler.QueueBazelCall(ctx, c.getBazelModuleLabel(ctx))
 }
 
-var (
-	mixedBuildSupportedCcTest = []string{
-		"adbd_test",
-		"adb_crypto_test",
-		"adb_pairing_auth_test",
-		"adb_pairing_connection_test",
-		"adb_tls_connection_test",
-	}
-)
-
 // IsMixedBuildSupported returns true if the module should be analyzed by Bazel
-// in any of the --bazel-mode(s). This filters at the module level and takes
-// precedence over the allowlists in allowlists/allowlists.go.
+// in any of the --bazel-mode(s).
 func (c *Module) IsMixedBuildSupported(ctx android.BaseModuleContext) bool {
-	_, isForTesting := ctx.Config().BazelContext.(android.MockBazelContext)
-	if c.testBinary() && !android.InList(c.Name(), mixedBuildSupportedCcTest) && !isForTesting {
-		// Per-module rollout of mixed-builds for cc_test modules.
+	if !allEnabledSanitizersSupportedByBazel(c) {
+		//TODO(b/278772861) support sanitizers in Bazel rules
 		return false
 	}
-
-	// TODO(b/261058727): Remove this (enable mixed builds for modules with UBSan)
-	// Currently we can only support ubsan when minimum runtime is used.
-	return c.bazelHandler != nil && (!isUbsanEnabled(c) || c.MinimalRuntimeNeeded())
+	return c.bazelHandler != nil
 }
 
-func isUbsanEnabled(c *Module) bool {
+func allEnabledSanitizersSupportedByBazel(c *Module) bool {
 	if c.sanitize == nil {
-		return false
+		return true
 	}
 	sanitizeProps := &c.sanitize.Properties.SanitizeMutated
-	return Bool(sanitizeProps.Integer_overflow) || len(sanitizeProps.Misc_undefined) > 0
+
+	unsupportedSanitizers := []*bool{
+		sanitizeProps.Safestack,
+		sanitizeProps.Cfi,
+		sanitizeProps.Scudo,
+		BoolPtr(len(c.sanitize.Properties.Sanitize.Recover) > 0),
+		BoolPtr(c.sanitize.Properties.Sanitize.Blocklist != nil),
+	}
+	for _, san := range unsupportedSanitizers {
+		if Bool(san) {
+			return false
+		}
+	}
+
+	for _, san := range Sanitizers {
+		if san == intOverflow {
+			// TODO(b/261058727): enable mixed builds for all modules with UBSan
+			// Currently we can only support ubsan when minimum runtime is used.
+			ubsanEnabled := Bool(sanitizeProps.Integer_overflow) || len(sanitizeProps.Misc_undefined) > 0
+			if ubsanEnabled && !c.MinimalRuntimeNeeded() {
+				return false
+			}
+		} else if c.sanitize.isSanitizerEnabled(san) {
+			return false
+		}
+	}
+
+	return true
 }
 
 func GetApexConfigKey(ctx android.BaseModuleContext) *android.ApexConfigKey {
@@ -1975,6 +1987,56 @@ func moduleContextFromAndroidModuleContext(actx android.ModuleContext, c *Module
 	return ctx
 }
 
+// TODO (b/277651159): Remove this allowlist
+var (
+	skipStubLibraryMultipleApexViolation = map[string]bool{
+		"libclang_rt.asan":   true,
+		"libclang_rt.hwasan": true,
+		// runtime apex
+		"libc":          true,
+		"libc_hwasan":   true,
+		"libdl_android": true,
+		"libm":          true,
+		"libdl":         true,
+		// art apex
+		"libandroidio":    true,
+		"libdexfile":      true,
+		"libnativebridge": true,
+		"libnativehelper": true,
+		"libnativeloader": true,
+		"libsigchain":     true,
+	}
+)
+
+// Returns true if a stub library could be installed in multiple apexes
+func (c *Module) stubLibraryMultipleApexViolation(ctx android.ModuleContext) bool {
+	// If this is not an apex variant, no check necessary
+	if !c.InAnyApex() {
+		return false
+	}
+	// If this is not a stub library, no check necessary
+	if !c.HasStubsVariants() {
+		return false
+	}
+	// Skip the allowlist
+	// Use BaseModuleName so that this matches prebuilts.
+	if _, exists := skipStubLibraryMultipleApexViolation[c.BaseModuleName()]; exists {
+		return false
+	}
+
+	_, aaWithoutTestApexes, _ := android.ListSetDifference(c.ApexAvailable(), c.TestApexes())
+	// Stub libraries should not have more than one apex_available
+	if len(aaWithoutTestApexes) > 1 {
+		return true
+	}
+	// Stub libraries should not use the wildcard
+	if aaWithoutTestApexes[0] == android.AvailableToAnyApex {
+		return true
+	}
+	// Default: no violation
+	return false
+}
+
 func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	// Handle the case of a test module split by `test_per_src` mutator.
 	//
@@ -2001,6 +2063,10 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		return
 	}
 
+	if c.stubLibraryMultipleApexViolation(actx) {
+		actx.PropertyErrorf("apex_available",
+			"Stub libraries should have a single apex_available (test apexes excluded). Got %v", c.ApexAvailable())
+	}
 	if c.Properties.Clang != nil && *c.Properties.Clang == false {
 		ctx.PropertyErrorf("clang", "false (GCC) is no longer supported")
 	} else if c.Properties.Clang != nil && !ctx.DeviceConfig().BuildBrokenClangProperty() {
@@ -3923,8 +3989,8 @@ func (c *Module) typ() moduleType {
 		// TODO(b/244431896) properly convert cc_test_library to its own macro. This
 		// will let them add implicit compile deps on gtest, for example.
 		//
-		// For now, treat them as regular shared libraries.
-		return sharedLibrary
+		// For now, treat them as regular libraries.
+		return fullLibrary
 	} else if c.CcLibrary() {
 		static := false
 		shared := false

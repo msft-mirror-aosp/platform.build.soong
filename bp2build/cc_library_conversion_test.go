@@ -153,10 +153,10 @@ cc_library {
         "//build/bazel/platforms/os:linux_glibc": ["linux.cpp"],
         "//conditions:default": [],
     })`,
-			"sdk_version":                       `"current"`,
-			"min_sdk_version":                   `"29"`,
-			"use_version_lib":                   `True`,
-			"implementation_whole_archive_deps": `["//build/soong/cc/libbuildversion:libbuildversion"]`,
+			"sdk_version":        `"current"`,
+			"min_sdk_version":    `"29"`,
+			"use_version_lib":    `True`,
+			"whole_archive_deps": `["//build/soong/cc/libbuildversion:libbuildversion"]`,
 		}),
 	})
 }
@@ -4349,4 +4349,177 @@ cc_library {
 			}),
 		},
 	})
+}
+
+func TestCcLibraryHiddenVisibilityConvertedToFeature(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library changes hidden visibility flag to feature",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	cflags: ["-fvisibility=hidden"],
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"features":       `["visibility_hidden"]`,
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features":       `["visibility_hidden"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryHiddenVisibilityConvertedToFeatureSharedSpecific(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library changes hidden visibility flag to feature when specific to shared variant",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	shared: {
+		cflags: ["-fvisibility=hidden"],
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features":       `["visibility_hidden"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryHiddenVisibilityConvertedToFeatureStaticSpecific(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library changes hidden visibility flag to feature when specific to static variant",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	static: {
+		cflags: ["-fvisibility=hidden"],
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"features":       `["visibility_hidden"]`,
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryHiddenVisibilityConvertedToFeatureOsSpecific(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library changes hidden visibility flag to feature when specific to an os",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	target: {
+		android: {
+			cflags: ["-fvisibility=hidden"],
+		},
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"features": `select({
+        "//build/bazel/platforms/os:android": ["visibility_hidden"],
+        "//conditions:default": [],
+    })`,
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features": `select({
+        "//build/bazel/platforms/os:android": ["visibility_hidden"],
+        "//conditions:default": [],
+    })`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+// Test that a config_setting specific to an apex is created by cc_library.
+func TestCcLibraryCreatesInApexConfigSetting(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library creates a config_setting for each apex in apex_available",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Dir:                        "build/bazel/rules/apex",
+		Blueprint: `
+cc_library {
+	name: "foo",
+	apex_available: [
+	"//apex_available:platform", // This will be skipped, since it is equivalent to //build/bazel/rules/apex:android-non_apex
+	"myapex"
+	],
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTargetNoRestrictions(
+				"config_setting",
+				"android-in_myapex",
+				AttrNameToString{
+					"flag_values": `{
+        "//build/bazel/rules/apex:apex_name": "myapex",
+    }`,
+				},
+			),
+		},
+	})
+}
+
+func TestCcLibraryCppFlagsInProductVariables(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library cppflags in product variables",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: soongCcLibraryPreamble + `cc_library {
+    name: "a",
+    srcs: ["a.cpp"],
+    cppflags: [
+        "-Wextra",
+        "-DDEBUG_ONLY_CODE=0",
+    ],
+    product_variables: {
+        eng: {
+            cppflags: [
+                "-UDEBUG_ONLY_CODE",
+                "-DDEBUG_ONLY_CODE=1",
+            ],
+        },
+    },
+    include_build_directory: false,
+}
+`,
+		ExpectedBazelTargets: makeCcLibraryTargets("a", AttrNameToString{
+			"cppflags": `[
+        "-Wextra",
+        "-DDEBUG_ONLY_CODE=0",
+    ] + select({
+        "//build/bazel/product_variables:eng": [
+            "-UDEBUG_ONLY_CODE",
+            "-DDEBUG_ONLY_CODE=1",
+        ],
+        "//conditions:default": [],
+    })`,
+			"srcs": `["a.cpp"]`,
+		}),
+	},
+	)
 }

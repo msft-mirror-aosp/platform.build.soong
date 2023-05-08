@@ -30,6 +30,7 @@ import (
 	"android/soong/shared"
 	"android/soong/ui/metrics/bp2build_metrics_proto"
 
+	"github.com/google/blueprint"
 	"github.com/google/blueprint/bootstrap"
 	"github.com/google/blueprint/deptools"
 	"github.com/google/blueprint/metrics"
@@ -85,7 +86,7 @@ func init() {
 	flag.BoolVar(&cmdlineArgs.BazelModeDev, "bazel-mode-dev", false, "use bazel for analysis of a large number of modules (less stable)")
 	flag.BoolVar(&cmdlineArgs.UseBazelProxy, "use-bazel-proxy", false, "communicate with bazel using unix socket proxy instead of spawning subprocesses")
 	flag.BoolVar(&cmdlineArgs.BuildFromTextStub, "build-from-text-stub", false, "build Java stubs from API text files instead of source files")
-
+	flag.BoolVar(&cmdlineArgs.EnsureAllowlistIntegrity, "ensure-allowlist-integrity", false, "verify that allowlisted modules are mixed-built")
 	// Flags that probably shouldn't be flags of soong_build, but we haven't found
 	// the time to remove them yet
 	flag.BoolVar(&cmdlineArgs.RunGoTests, "t", false, "build and run go tests during bootstrap")
@@ -256,18 +257,47 @@ func apiBuildFileExcludes(ctx *android.Context) []string {
 }
 
 func writeNinjaHint(ctx *android.Context) error {
-	wantModules := make([]string, len(allowlists.HugeModulesMap))
-	i := 0
-	for k := range allowlists.HugeModulesMap {
-		wantModules[i] = k
-		i += 1
-	}
-	outputsMap := ctx.Context.GetOutputsFromModuleNames(wantModules)
-	var outputBuilder strings.Builder
-	for k, v := range allowlists.HugeModulesMap {
-		for _, output := range outputsMap[k] {
-			outputBuilder.WriteString(fmt.Sprintf("%s,%d\n", output, v))
+	ctx.BeginEvent("ninja_hint")
+	defer ctx.EndEvent("ninja_hint")
+	// The current predictor focuses on reducing false negatives.
+	// If there are too many false positives (e.g., most modules are marked as positive),
+	// real long-running jobs cannot run early.
+	// Therefore, the model should be adjusted in this case.
+	// The model should also be adjusted if there are critical false negatives.
+	predicate := func(j *blueprint.JsonModule) (prioritized bool, weight int) {
+		prioritized = false
+		weight = 0
+		for prefix, w := range allowlists.HugeModuleTypePrefixMap {
+			if strings.HasPrefix(j.Type, prefix) {
+				prioritized = true
+				weight = w
+				return
+			}
 		}
+		dep_count := len(j.Deps)
+		src_count := 0
+		for _, a := range j.Module["Actions"].([]blueprint.JSONAction) {
+			src_count += len(a.Inputs)
+		}
+		input_size := dep_count + src_count
+
+		// Current threshold is an arbitrary value which only consider recall rather than accuracy.
+		if input_size > allowlists.INPUT_SIZE_THRESHOLD {
+			prioritized = true
+			weight += ((input_size) / allowlists.INPUT_SIZE_THRESHOLD) * allowlists.DEFAULT_PRIORITIZED_WEIGHT
+
+			// To prevent some modules from having too large a priority value.
+			if weight > allowlists.HIGH_PRIORITIZED_WEIGHT {
+				weight = allowlists.HIGH_PRIORITIZED_WEIGHT
+			}
+		}
+		return
+	}
+
+	outputsMap := ctx.Context.GetWeightedOutputsFromPredicate(predicate)
+	var outputBuilder strings.Builder
+	for output, weight := range outputsMap {
+		outputBuilder.WriteString(fmt.Sprintf("%s,%d\n", output, weight))
 	}
 	weightListFile := filepath.Join(topDir, ctx.Config().OutDir(), ".ninja_weight_list")
 
@@ -286,6 +316,67 @@ func writeMetrics(configuration android.Config, eventHandler *metrics.EventHandl
 	metricsFile := filepath.Join(metricsDir, "soong_build_metrics.pb")
 	err := android.WriteMetrics(configuration, eventHandler, metricsFile)
 	maybeQuit(err, "error writing soong_build metrics %s", metricsFile)
+}
+
+// Errors out if any modules expected to be mixed_built were not, unless
+// the modules did not exist.
+func checkForAllowlistIntegrityError(configuration android.Config, isStagingMode bool) error {
+	modules := findMisconfiguredModules(configuration, isStagingMode)
+	if len(modules) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf("Error: expected the following modules to be mixed_built: %s", modules)
+}
+
+// Returns true if the given module has all of the following true:
+//  1. Is allowlisted to be built with Bazel.
+//  2. Has a variant which is *not* built with Bazel.
+//  3. Has no variant which is built with Bazel.
+//
+// This indicates the allowlisting of this variant had no effect.
+// TODO(b/280457637): Return true for nonexistent modules.
+func isAllowlistMisconfiguredForModule(module string, mixedBuildsEnabled map[string]struct{}, mixedBuildsDisabled map[string]struct{}) bool {
+	_, enabled := mixedBuildsEnabled[module]
+
+	if enabled {
+		return false
+	}
+
+	_, disabled := mixedBuildsDisabled[module]
+	return disabled
+
+}
+
+// Returns the list of modules that should have been mixed_built (per the
+// allowlists and cmdline flags) but were not.
+// Note: nonexistent modules are excluded from the list. See b/280457637
+func findMisconfiguredModules(configuration android.Config, isStagingMode bool) []string {
+	retval := []string{}
+	forceEnabledModules := configuration.BazelModulesForceEnabledByFlag()
+
+	mixedBuildsEnabled := configuration.GetMixedBuildsEnabledModules()
+	mixedBuildsDisabled := configuration.GetMixedBuildsDisabledModules()
+	for _, module := range allowlists.ProdMixedBuildsEnabledList {
+		if isAllowlistMisconfiguredForModule(module, mixedBuildsEnabled, mixedBuildsDisabled) {
+			retval = append(retval, module)
+		}
+	}
+
+	if isStagingMode {
+		for _, module := range allowlists.StagingMixedBuildsEnabledList {
+			if isAllowlistMisconfiguredForModule(module, mixedBuildsEnabled, mixedBuildsDisabled) {
+				retval = append(retval, module)
+			}
+		}
+	}
+
+	for module, _ := range forceEnabledModules {
+		if isAllowlistMisconfiguredForModule(module, mixedBuildsEnabled, mixedBuildsDisabled) {
+			retval = append(retval, module)
+		}
+	}
+	return retval
 }
 
 func writeJsonModuleGraphAndActions(ctx *android.Context, cmdArgs android.CmdArgs) {
@@ -433,8 +524,14 @@ func main() {
 		writeMetrics(configuration, ctx.EventHandler, metricsDir)
 	default:
 		ctx.Register()
-		if configuration.IsMixedBuildsEnabled() {
+		isMixedBuildsEnabled := configuration.IsMixedBuildsEnabled()
+		if isMixedBuildsEnabled {
 			finalOutputFile = runMixedModeBuild(ctx, extraNinjaDeps)
+			if cmdlineArgs.EnsureAllowlistIntegrity {
+				if err := checkForAllowlistIntegrityError(configuration, cmdlineArgs.BazelModeStaging); err != nil {
+					maybeQuit(err, "")
+				}
+			}
 		} else {
 			finalOutputFile = runSoongOnlyBuild(ctx, extraNinjaDeps)
 		}

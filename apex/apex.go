@@ -1064,6 +1064,10 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 
 	apexVariationName := mctx.ModuleName() // could be com.android.foo
 	a.properties.ApexVariationName = apexVariationName
+	testApexes := []string{}
+	if a.testApex {
+		testApexes = []string{apexVariationName}
+	}
 	apexInfo := android.ApexInfo{
 		ApexVariationName: apexVariationName,
 		MinSdkVersion:     minSdkVersion,
@@ -1072,6 +1076,7 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		InApexVariants:    []string{apexVariationName},
 		InApexModules:     []string{a.Name()}, // could be com.mycompany.android.foo
 		ApexContents:      []*android.ApexContents{apexContents},
+		TestApexes:        testApexes,
 	}
 	mctx.WalkDeps(func(child, parent android.Module) bool {
 		if !continueApexDepsWalk(child, parent) {
@@ -1823,6 +1828,7 @@ type androidApp interface {
 	Certificate() java.Certificate
 	BaseModuleName() string
 	LintDepSets() java.LintDepSets
+	PrivAppAllowlist() android.OptionalPath
 }
 
 var _ androidApp = (*java.AndroidApp)(nil)
@@ -1843,7 +1849,7 @@ func sanitizedBuildIdForPath(ctx android.BaseModuleContext) string {
 	return buildId
 }
 
-func apexFileForAndroidApp(ctx android.BaseModuleContext, aapp androidApp) apexFile {
+func apexFilesForAndroidApp(ctx android.BaseModuleContext, aapp androidApp) []apexFile {
 	appDir := "app"
 	if aapp.Privileged() {
 		appDir = "priv-app"
@@ -1865,7 +1871,15 @@ func apexFileForAndroidApp(ctx android.BaseModuleContext, aapp androidApp) apexF
 	}); ok {
 		af.overriddenPackageName = app.OverriddenManifestPackageName()
 	}
-	return af
+	apexFiles := []apexFile{af}
+
+	if allowlist := aapp.PrivAppAllowlist(); allowlist.Valid() {
+		dirInApex := filepath.Join("etc", "permissions")
+		privAppAllowlist := newApexFile(ctx, allowlist.Path(), aapp.BaseModuleName()+"privapp", dirInApex, etc, aapp)
+		apexFiles = append(apexFiles, privAppAllowlist)
+	}
+
+	return apexFiles
 }
 
 func apexFileForRuntimeResourceOverlay(ctx android.BaseModuleContext, rro java.RuntimeResourceOverlayModule) apexFile {
@@ -1959,9 +1973,6 @@ func (a *apexBundle) QueueBazelCall(ctx android.BaseModuleContext) {
 // overridden by different override_apex modules (e.g. Google or Go variants),
 // which is handled by the overrides mutators.
 func (a *apexBundle) GetBazelLabel(ctx android.BazelConversionPathContext, module blueprint.Module) string {
-	if _, ok := ctx.Module().(android.OverridableModule); ok {
-		return android.MaybeBp2buildLabelOfOverridingModule(ctx)
-	}
 	return a.BazelModuleBase.GetBazelLabel(ctx, a)
 }
 
@@ -2313,12 +2324,12 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 		case androidAppTag:
 			switch ap := child.(type) {
 			case *java.AndroidApp:
-				vctx.filesInfo = append(vctx.filesInfo, apexFileForAndroidApp(ctx, ap))
+				vctx.filesInfo = append(vctx.filesInfo, apexFilesForAndroidApp(ctx, ap)...)
 				return true // track transitive dependencies
 			case *java.AndroidAppImport:
-				vctx.filesInfo = append(vctx.filesInfo, apexFileForAndroidApp(ctx, ap))
+				vctx.filesInfo = append(vctx.filesInfo, apexFilesForAndroidApp(ctx, ap)...)
 			case *java.AndroidTestHelperApp:
-				vctx.filesInfo = append(vctx.filesInfo, apexFileForAndroidApp(ctx, ap))
+				vctx.filesInfo = append(vctx.filesInfo, apexFilesForAndroidApp(ctx, ap)...)
 			case *java.AndroidAppSet:
 				appDir := "app"
 				if ap.Privileged() {
@@ -3421,15 +3432,6 @@ func makeApexAvailableBaseline() map[string][]string {
 	// Module separator
 	//
 	m[android.AvailableToAnyApex] = []string{
-		// TODO(b/156996905) Set apex_available/min_sdk_version for androidx/extras support libraries
-		"androidx",
-		"androidx-constraintlayout_constraintlayout",
-		"androidx-constraintlayout_constraintlayout-nodeps",
-		"androidx-constraintlayout_constraintlayout-solver",
-		"androidx-constraintlayout_constraintlayout-solver-nodeps",
-		"com.google.android.material_material",
-		"com.google.android.material_material-nodeps",
-
 		"libclang_rt",
 		"libprofile-clang-extras",
 		"libprofile-clang-extras_ndk",
@@ -3805,4 +3807,8 @@ func makeSharedLibsAttributes(config string, libsLabelList bazel.LabelList,
 
 func invalidCompileMultilib(ctx android.TopDownMutatorContext, value string) {
 	ctx.PropertyErrorf("compile_multilib", "Invalid value: %s", value)
+}
+
+func (a *apexBundle) IsTestApex() bool {
+	return a.testApex
 }

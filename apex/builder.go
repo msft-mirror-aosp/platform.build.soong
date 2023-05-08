@@ -231,7 +231,7 @@ var (
 
 	apexSepolicyTestsRule = pctx.StaticRule("apexSepolicyTestsRule", blueprint.RuleParams{
 		Command: `${deapexer} --debugfs_path ${debugfs_static} list -Z ${in} > ${out}.fc` +
-			`&& ${apex_sepolicy_tests} -f ${out}.fc && touch ${out}`,
+			` && ${apex_sepolicy_tests} -f ${out}.fc && touch ${out}`,
 		CommandDeps: []string{"${apex_sepolicy_tests}", "${deapexer}", "${debugfs_static}"},
 		Description: "run apex_sepolicy_tests",
 	})
@@ -468,10 +468,6 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 	imageDir := android.PathForModuleOut(ctx, "image"+suffix)
 
 	installSymbolFiles := (!ctx.Config().KatiEnabled() || a.ExportedToMake()) && a.installable()
-	// We can't install symbol files when prebuilt is used.
-	if a.IsReplacedByPrebuilt() {
-		installSymbolFiles = false
-	}
 
 	// set of dependency module:location mappings
 	installMapSet := make(map[string]bool)
@@ -517,9 +513,6 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 				}
 			}
 			implicitInputs = append(implicitInputs, fi.builtFile)
-			if installSymbolFiles {
-				implicitInputs = append(implicitInputs, installedPath)
-			}
 
 			// Create additional symlinks pointing the file inside the APEX (if any). Note that
 			// this is independent from the symlink optimization.
@@ -527,8 +520,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 				symlinkDest := imageDir.Join(ctx, symlinkPath).String()
 				copyCommands = append(copyCommands, "ln -sfn "+filepath.Base(destPath)+" "+symlinkDest)
 				if installSymbolFiles {
-					installedSymlink := ctx.InstallSymlink(apexDir.Join(ctx, filepath.Dir(symlinkPath)), filepath.Base(symlinkPath), installedPath)
-					implicitInputs = append(implicitInputs, installedSymlink)
+					ctx.InstallSymlink(apexDir.Join(ctx, filepath.Dir(symlinkPath)), filepath.Base(symlinkPath), installedPath)
 				}
 			}
 
@@ -553,11 +545,6 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		installMapSet[installMapPath.String()+":"+fi.installDir+"/"+fi.builtFile.Base()] = true
 	}
 	implicitInputs = append(implicitInputs, a.manifestPbOut)
-	if installSymbolFiles {
-		installedManifest := ctx.InstallFile(apexDir, "apex_manifest.pb", a.manifestPbOut)
-		installedKey := ctx.InstallFile(apexDir, "apex_pubkey", a.publicKeyFile)
-		implicitInputs = append(implicitInputs, installedManifest, installedKey)
-	}
 
 	if len(installMapSet) > 0 {
 		var installs []string
@@ -885,7 +872,8 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		args["outCommaList"] = signedOutputFile.String()
 	}
 	var validations android.Paths
-	if suffix == imageApexSuffix {
+	// TODO(b/279688635) deapexer supports [ext4]
+	if suffix == imageApexSuffix && ext4 == a.payloadFsType {
 		validations = append(validations, runApexSepolicyTests(ctx, unsignedOutputFile.OutputPath))
 	}
 	ctx.Build(pctx, android.BuildParams{

@@ -102,6 +102,8 @@ type CmdArgs struct {
 	UseBazelProxy bool
 
 	BuildFromTextStub bool
+
+	EnsureAllowlistIntegrity bool
 }
 
 // Build modes that soong_build can run as.
@@ -172,6 +174,13 @@ func (c Config) PrimaryBuilderInvocations() []bootstrap.PrimaryBuilderInvocation
 // RunningInsideUnitTest returns true if this code is being run as part of a Soong unit test.
 func (c Config) RunningInsideUnitTest() bool {
 	return c.config.TestProductVariables != nil
+}
+
+// MaxPageSizeSupported returns the max page size supported by the device. This
+// value will define the ELF segment alignment for binaries (executables and
+// shared libraries).
+func (c Config) MaxPageSizeSupported() string {
+	return String(c.config.productVariables.DeviceMaxPageSizeSupported)
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -278,6 +287,11 @@ type config struct {
 	// If buildFromTextStub is true then the Java API stubs are
 	// built from the signature text files, not the source Java files.
 	buildFromTextStub bool
+
+	// If ensureAllowlistIntegrity is true, then the presence of any allowlisted
+	// modules that aren't mixed-built for at least one variant will cause a build
+	// failure
+	ensureAllowlistIntegrity bool
 }
 
 type deviceConfig struct {
@@ -592,13 +606,20 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 	setBazelMode(cmdArgs.BazelMode, "--bazel-mode", BazelProdMode)
 	setBazelMode(cmdArgs.BazelModeStaging, "--bazel-mode-staging", BazelStagingMode)
 
-	for _, module := range strings.Split(cmdArgs.BazelForceEnabledModules, ",") {
+	for _, module := range getForceEnabledModulesFromFlag(cmdArgs.BazelForceEnabledModules) {
 		config.bazelForceEnabledModules[module] = struct{}{}
 	}
 	config.BazelContext, err = NewBazelContext(config)
 	config.Bp2buildPackageConfig = GetBp2BuildAllowList()
 
 	return Config{config}, err
+}
+
+func getForceEnabledModulesFromFlag(forceEnabledFlag string) []string {
+	if forceEnabledFlag == "" {
+		return []string{}
+	}
+	return strings.Split(forceEnabledFlag, ",")
 }
 
 // mockFileSystem replaces all reads with accesses to the provided map of
@@ -1557,6 +1578,13 @@ func (c *config) MemtagHeapSyncEnabledForPath(path string) bool {
 	return HasAnyPrefix(path, c.productVariables.MemtagHeapSyncIncludePaths) && !c.MemtagHeapDisabledForPath(path)
 }
 
+func (c *config) HWASanEnabledForPath(path string) bool {
+	if len(c.productVariables.HWASanIncludePaths) == 0 {
+		return false
+	}
+	return HasAnyPrefix(path, c.productVariables.HWASanIncludePaths)
+}
+
 func (c *config) VendorConfig(name string) VendorConfig {
 	return soongconfig.Config(c.productVariables.VendorVars[name])
 }
@@ -1902,6 +1930,14 @@ func (c *config) RBEWrapper() string {
 // UseHostMusl returns true if the host target has been configured to build against musl libc.
 func (c *config) UseHostMusl() bool {
 	return Bool(c.productVariables.HostMusl)
+}
+
+func (c *config) GetMixedBuildsEnabledModules() map[string]struct{} {
+	return c.mixedBuildEnabledModules
+}
+
+func (c *config) GetMixedBuildsDisabledModules() map[string]struct{} {
+	return c.mixedBuildDisabledModules
 }
 
 func (c *config) LogMixedBuild(ctx BaseModuleContext, useBazel bool) {

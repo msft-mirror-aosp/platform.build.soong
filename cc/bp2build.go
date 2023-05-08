@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"android/soong/android"
 	"android/soong/bazel"
@@ -66,6 +67,8 @@ type staticOrSharedAttributes struct {
 	Native_coverage *bool
 
 	Apex_available []string
+
+	Features bazel.StringListAttribute
 
 	sdkAttributes
 
@@ -226,7 +229,7 @@ func bp2buildParseStaticOrSharedProps(ctx android.BazelConversionPathContext, mo
 	attrs := staticOrSharedAttributes{}
 
 	setAttrs := func(axis bazel.ConfigurationAxis, config string, props StaticOrSharedProperties) {
-		attrs.Copts.SetSelectValue(axis, config, parseCommandLineFlags(props.Cflags, filterOutStdFlag))
+		attrs.Copts.SetSelectValue(axis, config, parseCommandLineFlags(props.Cflags, filterOutStdFlag, filterOutHiddenVisibility))
 		attrs.Srcs.SetSelectValue(axis, config, android.BazelLabelForModuleSrc(ctx, props.Srcs))
 		attrs.System_dynamic_deps.SetSelectValue(axis, config, bazelLabelForSharedDeps(ctx, props.System_shared_libs))
 
@@ -268,7 +271,9 @@ func bp2buildParseStaticOrSharedProps(ctx android.BazelConversionPathContext, mo
 	attrs.Srcs_c = partitionedSrcs[cSrcPartition]
 	attrs.Srcs_as = partitionedSrcs[asSrcPartition]
 
-	attrs.Apex_available = android.ConvertApexAvailableToTags(apexAvailable)
+	attrs.Apex_available = android.ConvertApexAvailableToTagsWithoutTestApexes(ctx.(android.TopDownMutatorContext), apexAvailable)
+
+	attrs.Features.Append(convertHiddenVisibilityToFeatureStaticOrShared(ctx, module, isStatic))
 
 	if !partitionedSrcs[protoSrcPartition].IsEmpty() {
 		// TODO(b/208815215): determine whether this is used and add support if necessary
@@ -428,6 +433,12 @@ type compilerAttributes struct {
 
 type filterOutFn func(string) bool
 
+// filterOutHiddenVisibility removes the flag specifying hidden visibility as
+// this flag is converted to a toolchain feature
+func filterOutHiddenVisibility(flag string) bool {
+	return flag == config.VisibilityHiddenFlag
+}
+
 func filterOutStdFlag(flag string) bool {
 	return strings.HasPrefix(flag, "-std=")
 }
@@ -490,7 +501,7 @@ func (ca *compilerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversi
 	// overridden. In Bazel we always allow overriding, via flags; however, this can cause
 	// incompatibilities, so we remove "-std=" flags from Cflag properties while leaving it in other
 	// cases.
-	ca.copts.SetSelectValue(axis, config, parseCommandLineFlags(props.Cflags, filterOutStdFlag, filterOutClangUnknownCflags))
+	ca.copts.SetSelectValue(axis, config, parseCommandLineFlags(props.Cflags, filterOutStdFlag, filterOutClangUnknownCflags, filterOutHiddenVisibility))
 	ca.asFlags.SetSelectValue(axis, config, parseCommandLineFlags(props.Asflags, nil))
 	ca.conlyFlags.SetSelectValue(axis, config, parseCommandLineFlags(props.Conlyflags, filterOutClangUnknownCflags))
 	ca.cppFlags.SetSelectValue(axis, config, parseCommandLineFlags(props.Cppflags, filterOutClangUnknownCflags))
@@ -517,7 +528,7 @@ func (ca *compilerAttributes) convertProductVariables(ctx android.BazelConversio
 	productVarPropNameToAttribute := map[string]*bazel.StringListAttribute{
 		"Cflags":   &ca.copts,
 		"Asflags":  &ca.asFlags,
-		"CppFlags": &ca.cppFlags,
+		"Cppflags": &ca.cppFlags,
 	}
 	for propName, attr := range productVarPropNameToAttribute {
 		if productConfigProps, exists := productVariableProps[propName]; exists {
@@ -762,10 +773,13 @@ func bp2BuildParseBaseProps(ctx android.Bp2buildMutatorContext, module *Module) 
 
 			if libraryProps, ok := archVariantLibraryProperties[axis][cfg].(*LibraryProperties); ok {
 				if axis == bazel.NoConfigAxis {
-					versions := android.CopyOf(libraryProps.Stubs.Versions)
-					normalizeVersions(ctx, versions)
-					compilerAttrs.stubsSymbolFile = libraryProps.Stubs.Symbol_file
-					compilerAttrs.stubsVersions.SetSelectValue(axis, cfg, versions)
+					if libraryProps.Stubs.Symbol_file != nil {
+						compilerAttrs.stubsSymbolFile = libraryProps.Stubs.Symbol_file
+						versions := android.CopyOf(libraryProps.Stubs.Versions)
+						normalizeVersions(ctx, versions)
+						versions = addCurrentVersionIfNotPresent(versions)
+						compilerAttrs.stubsVersions.SetSelectValue(axis, cfg, versions)
+					}
 				}
 				if suffix := libraryProps.Suffix; suffix != nil {
 					compilerAttrs.suffix.SetSelectValue(axis, cfg, suffix)
@@ -835,6 +849,7 @@ func bp2BuildParseBaseProps(ctx android.Bp2buildMutatorContext, module *Module) 
 
 	features := compilerAttrs.features.Clone().Append(linkerAttrs.features).Append(bp2buildSanitizerFeatures(ctx, module))
 	features = features.Append(bp2buildLtoFeatures(ctx, module))
+	features = features.Append(convertHiddenVisibilityToFeatureBase(ctx, module))
 	features.DeduplicateAxesFromBase()
 
 	addMuslSystemDynamicDeps(ctx, linkerAttrs)
@@ -909,7 +924,7 @@ func bp2buildCcAidlLibrary(
 			return false
 		})
 
-		apexAvailableTags := android.ApexAvailableTags(ctx.Module())
+		apexAvailableTags := android.ApexAvailableTagsWithoutTestApexes(ctx.(android.TopDownMutatorContext), ctx.Module())
 		sdkAttrs := bp2BuildParseSdkAttributes(m)
 
 		if !aidlSrcs.IsEmpty() {
@@ -1038,11 +1053,7 @@ func (la *linkerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversion
 			_, staticLibs = android.RemoveFromList(versionLib, staticLibs)
 			// only add the dep if it is not in progress
 			if !versionLibAlreadyInDeps {
-				if isBinary {
-					wholeStaticLibs = append(wholeStaticLibs, versionLib)
-				} else {
-					la.implementationWholeArchiveDeps.SetSelectValue(axis, config, bazelLabelForWholeDepsExcludes(ctx, []string{versionLib}, props.Exclude_static_libs))
-				}
+				wholeStaticLibs = append(wholeStaticLibs, versionLib)
 			}
 		}
 	}
@@ -1109,8 +1120,11 @@ func (la *linkerAttributes) bp2buildForAxisAndConfig(ctx android.BazelConversion
 		// having stubs or not, so Bazel select() statement can be used to choose
 		// source/stub variants of them.
 		apexAvailable := module.ApexAvailable()
-		setStubsForDynamicDeps(ctx, axis, config, apexAvailable, sharedDeps.export, &la.dynamicDeps, 0)
-		setStubsForDynamicDeps(ctx, axis, config, apexAvailable, sharedDeps.implementation, &la.implementationDynamicDeps, 1)
+		setStubsForDynamicDeps(ctx, axis, config, apexAvailable, sharedDeps.export, &la.dynamicDeps, 0, false)
+		setStubsForDynamicDeps(ctx, axis, config, apexAvailable, sharedDeps.implementation, &la.implementationDynamicDeps, 1, false)
+		if len(systemSharedLibs) > 0 {
+			setStubsForDynamicDeps(ctx, axis, config, apexAvailable, bazelLabelForSharedDeps(ctx, systemSharedLibs), &la.systemDynamicDeps, 2, true)
+		}
 	}
 
 	if !BoolDefault(props.Pack_relocations, packRelocationsDefault) {
@@ -1179,8 +1193,65 @@ func availableToSameApexes(a, b []string) bool {
 	return !differ
 }
 
+var (
+	apexConfigSettingKey  = android.NewOnceKey("apexConfigSetting")
+	apexConfigSettingLock sync.Mutex
+)
+
+func getApexConfigSettingMap(config android.Config) *map[string]bool {
+	return config.Once(apexConfigSettingKey, func() interface{} {
+		return &map[string]bool{}
+	}).(*map[string]bool)
+}
+
+// Create a config setting for this apex in build/bazel/rules/apex
+// The use case for this is stub/impl selection in cc libraries
+// Long term, these config_setting(s) should be colocated with the respective apex definitions.
+// Note that this is an anti-pattern: The config_setting should be created from the apex definition
+// and not from a cc_library.
+// This anti-pattern is needed today since not all apexes have been allowlisted.
+func createInApexConfigSetting(ctx android.TopDownMutatorContext, apexName string) {
+	if apexName == android.AvailableToPlatform || apexName == android.AvailableToAnyApex {
+		// These correspond to android-non_apex and android-in_apex
+		return
+	}
+	apexConfigSettingLock.Lock()
+	defer apexConfigSettingLock.Unlock()
+
+	// Return if a config_setting has already been created
+	acsm := getApexConfigSettingMap(ctx.Config())
+	if _, exists := (*acsm)[apexName]; exists {
+		return
+	}
+	(*acsm)[apexName] = true
+
+	csa := bazel.ConfigSettingAttributes{
+		Flag_values: bazel.StringMapAttribute{
+			"//build/bazel/rules/apex:apex_name": apexName,
+		},
+	}
+	ca := android.CommonAttributes{
+		Name: "android-in_" + apexName,
+	}
+	ctx.CreateBazelConfigSetting(
+		csa,
+		ca,
+		"build/bazel/rules/apex",
+	)
+}
+
+func inApexConfigSetting(apexAvailable string) string {
+	if apexAvailable == android.AvailableToPlatform {
+		return bazel.AndroidAndNonApex
+	}
+	if apexAvailable == android.AvailableToAnyApex {
+		return bazel.AndroidAndInApex
+	}
+	return "//build/bazel/rules/apex:android-in_" + apexAvailable
+}
+
 func setStubsForDynamicDeps(ctx android.BazelConversionPathContext, axis bazel.ConfigurationAxis,
-	config string, apexAvailable []string, dynamicLibs bazel.LabelList, dynamicDeps *bazel.LabelListAttribute, ind int) {
+	config string, apexAvailable []string, dynamicLibs bazel.LabelList, dynamicDeps *bazel.LabelListAttribute, ind int, buildNonApexWithStubs bool) {
 
 	depsWithStubs := []bazel.Label{}
 	for _, l := range dynamicLibs.Includes {
@@ -1206,20 +1277,31 @@ func setStubsForDynamicDeps(ctx android.BazelConversionPathContext, axis bazel.C
 		inApexSelectValue := dynamicDeps.SelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndInApex)
 		nonApexSelectValue := dynamicDeps.SelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndNonApex)
 		defaultSelectValue := dynamicDeps.SelectValue(bazel.OsAndInApexAxis, bazel.ConditionsDefaultConfigKey)
+		nonApexDeps := depsWithStubs
+		if buildNonApexWithStubs {
+			nonApexDeps = stubLibLabels
+		}
 		if axis == bazel.NoConfigAxis {
 			(&inApexSelectValue).Append(bazel.MakeLabelList(stubLibLabels))
-			(&nonApexSelectValue).Append(bazel.MakeLabelList(depsWithStubs))
+			(&nonApexSelectValue).Append(bazel.MakeLabelList(nonApexDeps))
 			(&defaultSelectValue).Append(bazel.MakeLabelList(depsWithStubs))
 			dynamicDeps.SetSelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndInApex, bazel.FirstUniqueBazelLabelList(inApexSelectValue))
 			dynamicDeps.SetSelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndNonApex, bazel.FirstUniqueBazelLabelList(nonApexSelectValue))
 			dynamicDeps.SetSelectValue(bazel.OsAndInApexAxis, bazel.ConditionsDefaultConfigKey, bazel.FirstUniqueBazelLabelList(defaultSelectValue))
 		} else if config == bazel.OsAndroid {
 			(&inApexSelectValue).Append(bazel.MakeLabelList(stubLibLabels))
-			(&nonApexSelectValue).Append(bazel.MakeLabelList(depsWithStubs))
+			(&nonApexSelectValue).Append(bazel.MakeLabelList(nonApexDeps))
 			dynamicDeps.SetSelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndInApex, bazel.FirstUniqueBazelLabelList(inApexSelectValue))
 			dynamicDeps.SetSelectValue(bazel.OsAndInApexAxis, bazel.AndroidAndNonApex, bazel.FirstUniqueBazelLabelList(nonApexSelectValue))
 		}
 	}
+
+	// Create a config_setting for each apex_available.
+	// This will be used to select impl of a dep if dep is available to the same apex.
+	for _, aa := range apexAvailable {
+		createInApexConfigSetting(ctx.(android.TopDownMutatorContext), aa)
+	}
+
 }
 
 func (la *linkerAttributes) convertStripProps(ctx android.BazelConversionPathContext, module *Module) {
@@ -1548,4 +1630,39 @@ func bp2buildLtoFeatures(ctx android.BazelConversionPathContext, m *Module) baze
 		ctx.ModuleErrorf("Error processing LTO attributes: %s", err)
 	}
 	return ltoStringFeatures
+}
+
+func convertHiddenVisibilityToFeatureBase(ctx android.BazelConversionPathContext, m *Module) bazel.StringListAttribute {
+	visibilityHiddenFeature := bazel.StringListAttribute{}
+	bp2BuildPropParseHelper(ctx, m, &BaseCompilerProperties{}, func(axis bazel.ConfigurationAxis, configString string, props interface{}) {
+		if baseCompilerProps, ok := props.(*BaseCompilerProperties); ok {
+			convertHiddenVisibilityToFeatureHelper(&visibilityHiddenFeature, axis, configString, baseCompilerProps.Cflags)
+		}
+	})
+	return visibilityHiddenFeature
+}
+
+func convertHiddenVisibilityToFeatureStaticOrShared(ctx android.BazelConversionPathContext, m *Module, isStatic bool) bazel.StringListAttribute {
+	visibilityHiddenFeature := bazel.StringListAttribute{}
+	if isStatic {
+		bp2BuildPropParseHelper(ctx, m, &StaticProperties{}, func(axis bazel.ConfigurationAxis, configString string, props interface{}) {
+			if staticProps, ok := props.(*StaticProperties); ok {
+				convertHiddenVisibilityToFeatureHelper(&visibilityHiddenFeature, axis, configString, staticProps.Static.Cflags)
+			}
+		})
+	} else {
+		bp2BuildPropParseHelper(ctx, m, &SharedProperties{}, func(axis bazel.ConfigurationAxis, configString string, props interface{}) {
+			if sharedProps, ok := props.(*SharedProperties); ok {
+				convertHiddenVisibilityToFeatureHelper(&visibilityHiddenFeature, axis, configString, sharedProps.Shared.Cflags)
+			}
+		})
+	}
+
+	return visibilityHiddenFeature
+}
+
+func convertHiddenVisibilityToFeatureHelper(feature *bazel.StringListAttribute, axis bazel.ConfigurationAxis, configString string, cflags []string) {
+	if inList(config.VisibilityHiddenFlag, cflags) {
+		feature.SetSelectValue(axis, configString, []string{"visibility_hidden"})
+	}
 }

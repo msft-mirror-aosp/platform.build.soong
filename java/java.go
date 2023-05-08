@@ -456,7 +456,9 @@ func sdkDeps(ctx android.BottomUpMutatorContext, sdkContext android.SdkContext, 
 		ctx.AddVariationDependencies(nil, java9LibTag, sdkDep.java9Classpath...)
 		ctx.AddVariationDependencies(nil, sdkLibTag, sdkDep.classpath...)
 		if d.effectiveOptimizeEnabled() && sdkDep.hasStandardLibs() {
-			ctx.AddVariationDependencies(nil, proguardRaiseTag, config.LegacyCorePlatformBootclasspathLibraries...)
+			ctx.AddVariationDependencies(nil, proguardRaiseTag,
+				android.JavaApiLibraryNames(ctx.Config(), config.LegacyCorePlatformBootclasspathLibraries)...,
+			)
 		}
 		if d.effectiveOptimizeEnabled() && sdkDep.hasFrameworkLibs() {
 			ctx.AddVariationDependencies(nil, proguardRaiseTag, config.FrameworkLibraries...)
@@ -813,7 +815,10 @@ func (p *librarySdkMemberProperties) PopulateFromVariant(ctx android.SdkMemberCo
 	// If the min_sdk_version was set then add the canonical representation of the API level to the
 	// snapshot.
 	if j.deviceProperties.Min_sdk_version != nil {
-		canonical := android.ReplaceFinalizedCodenames(ctx.SdkModuleContext().Config(), j.minSdkVersion.String())
+		canonical, err := android.ReplaceFinalizedCodenames(ctx.SdkModuleContext().Config(), j.minSdkVersion.String())
+		if err != nil {
+			ctx.ModuleErrorf("%s", err)
+		}
 		p.MinSdkVersion = proptools.StringPtr(canonical)
 	}
 
@@ -2705,8 +2710,13 @@ func (m *Library) convertJavaResourcesAttributes(ctx android.TopDownMutatorConte
 	var resources bazel.LabelList
 	var resourceStripPrefix *string
 
+	if m.properties.Java_resources != nil && len(m.properties.Java_resource_dirs) > 0 {
+		ctx.ModuleErrorf("bp2build doesn't support both java_resources and java_resource_dirs being set on the same module.")
+	}
+
 	if m.properties.Java_resources != nil {
 		resources.Append(android.BazelLabelForModuleSrc(ctx, m.properties.Java_resources))
+		resourceStripPrefix = proptools.StringPtr(ctx.ModuleDir())
 	}
 
 	//TODO(b/179889880) handle case where glob includes files outside package
@@ -2837,7 +2847,7 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.TopDownMutatorContext)
 			return android.IsConvertedToAidlLibrary(ctx, src.OriginalModuleName)
 		})
 
-		apexAvailableTags := android.ApexAvailableTags(ctx.Module())
+		apexAvailableTags := android.ApexAvailableTagsWithoutTestApexes(ctx, ctx.Module())
 
 		if !aidlSrcs.IsEmpty() {
 			aidlLibName := m.Name() + "_aidl_library"
