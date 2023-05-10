@@ -35,11 +35,12 @@ var (
 		blueprint.RuleParams{
 			Command: `rm -rf "$out" && ` +
 				`${extract_apks} -o "${out}" -allow-prereleased=${allow-prereleased} ` +
-				`-sdk-version=${sdk-version} -abis=${abis} -screen-densities=all -extract-single ` +
+				`-sdk-version=${sdk-version} -skip-sdk-check=${skip-sdk-check} -abis=${abis} ` +
+				`-screen-densities=all -extract-single ` +
 				`${in}`,
 			CommandDeps: []string{"${extract_apks}"},
 		},
-		"abis", "allow-prereleased", "sdk-version")
+		"abis", "allow-prereleased", "sdk-version", "skip-sdk-check")
 )
 
 type prebuilt interface {
@@ -315,31 +316,29 @@ func prebuiltApexModuleCreatorMutator(ctx android.TopDownMutatorContext) {
 	}
 }
 
-func (p *prebuiltCommon) getExportedDependencies() map[string]exportedDependencyTag {
-	dependencies := make(map[string]exportedDependencyTag)
-
-	for _, dep := range p.prebuiltCommonProperties.Exported_java_libs {
-		dependencies[dep] = exportedJavaLibTag
-	}
-
-	for _, dep := range p.prebuiltCommonProperties.Exported_bootclasspath_fragments {
-		dependencies[dep] = exportedBootclasspathFragmentTag
-	}
-
-	for _, dep := range p.prebuiltCommonProperties.Exported_systemserverclasspath_fragments {
-		dependencies[dep] = exportedSystemserverclasspathFragmentTag
-	}
-
-	return dependencies
+func (p *prebuiltCommon) hasExportedDeps() bool {
+	return len(p.prebuiltCommonProperties.Exported_java_libs) > 0 ||
+		len(p.prebuiltCommonProperties.Exported_bootclasspath_fragments) > 0 ||
+		len(p.prebuiltCommonProperties.Exported_systemserverclasspath_fragments) > 0
 }
 
 // prebuiltApexContentsDeps adds dependencies onto the prebuilt apex module's contents.
 func (p *prebuiltCommon) prebuiltApexContentsDeps(ctx android.BottomUpMutatorContext) {
 	module := ctx.Module()
 
-	for dep, tag := range p.getExportedDependencies() {
+	for _, dep := range p.prebuiltCommonProperties.Exported_java_libs {
 		prebuiltDep := android.PrebuiltNameFromSource(dep)
-		ctx.AddDependency(module, tag, prebuiltDep)
+		ctx.AddDependency(module, exportedJavaLibTag, prebuiltDep)
+	}
+
+	for _, dep := range p.prebuiltCommonProperties.Exported_bootclasspath_fragments {
+		prebuiltDep := android.PrebuiltNameFromSource(dep)
+		ctx.AddDependency(module, exportedBootclasspathFragmentTag, prebuiltDep)
+	}
+
+	for _, dep := range p.prebuiltCommonProperties.Exported_systemserverclasspath_fragments {
+		prebuiltDep := android.PrebuiltNameFromSource(dep)
+		ctx.AddDependency(module, exportedSystemserverclasspathFragmentTag, prebuiltDep)
 	}
 }
 
@@ -607,7 +606,7 @@ func createApexSelectorModule(ctx android.TopDownMutatorContext, name string, ap
 // the listed modules need access to files from within the prebuilt .apex file.
 func (p *prebuiltCommon) createDeapexerModuleIfNeeded(ctx android.TopDownMutatorContext, deapexerName string, apexFileSource string) {
 	// Only create the deapexer module if it is needed.
-	if len(p.getExportedDependencies()) == 0 {
+	if !p.hasExportedDeps() {
 		return
 	}
 
@@ -845,6 +844,7 @@ func (p *prebuiltApexExtractorModule) GenerateAndroidBuildActions(ctx android.Mo
 				"abis":              strings.Join(abis, ","),
 				"allow-prereleased": strconv.FormatBool(proptools.BoolDefault(p.properties.Prerelease, defaultAllowPrerelease)),
 				"sdk-version":       ctx.Config().PlatformSdkVersion().String(),
+				"skip-sdk-check":    strconv.FormatBool(ctx.Config().IsEnvTrue("SOONG_SKIP_APPSET_SDK_CHECK")),
 			},
 		})
 }

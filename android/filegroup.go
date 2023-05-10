@@ -26,12 +26,17 @@ import (
 )
 
 func init() {
-	RegisterModuleType("filegroup", FileGroupFactory)
+	RegisterFilegroupBuildComponents(InitRegistrationContext)
 }
 
 var PrepareForTestWithFilegroup = FixtureRegisterWithContext(func(ctx RegistrationContext) {
-	ctx.RegisterModuleType("filegroup", FileGroupFactory)
+	RegisterFilegroupBuildComponents(ctx)
 })
+
+func RegisterFilegroupBuildComponents(ctx RegistrationContext) {
+	ctx.RegisterModuleType("filegroup", FileGroupFactory)
+	ctx.RegisterModuleType("filegroup_defaults", FileGroupDefaultsFactory)
+}
 
 var convertedProtoLibrarySuffix = "_bp2build_converted"
 
@@ -76,6 +81,13 @@ type bazelFilegroupAttributes struct {
 type bazelAidlLibraryAttributes struct {
 	Srcs                bazel.LabelListAttribute
 	Strip_import_prefix *string
+	Deps                bazel.LabelListAttribute
+}
+
+// api srcs can be contained in filegroups.
+// this should be generated in api_bp2build workspace as well.
+func (fg *fileGroup) ConvertWithApiBp2build(ctx TopDownMutatorContext) {
+	fg.ConvertWithBp2build(ctx)
 }
 
 // ConvertWithBp2build performs bp2build conversion of filegroup
@@ -107,27 +119,39 @@ func (fg *fileGroup) ConvertWithBp2build(ctx TopDownMutatorContext) {
 	// If the module has a mixed bag of AIDL and non-AIDL files, split the filegroup manually
 	// and then convert
 	if fg.ShouldConvertToAidlLibrary(ctx) {
+		tags := []string{"apex_available=//apex_available:anyapex"}
+		deps := bazel.MakeLabelListAttribute(BazelLabelForModuleDeps(ctx, fg.properties.Aidl.Deps))
+
 		attrs := &bazelAidlLibraryAttributes{
 			Srcs:                srcs,
 			Strip_import_prefix: fg.properties.Path,
+			Deps:                deps,
 		}
 
 		props := bazel.BazelTargetModuleProperties{
 			Rule_class:        "aidl_library",
-			Bzl_load_location: "//build/bazel/rules/aidl:library.bzl",
+			Bzl_load_location: "//build/bazel/rules/aidl:aidl_library.bzl",
 		}
 
-		ctx.CreateBazelTargetModule(props, CommonAttributes{Name: fg.Name()}, attrs)
+		ctx.CreateBazelTargetModule(
+			props,
+			CommonAttributes{
+				Name: fg.Name(),
+				Tags: bazel.MakeStringListAttribute(tags),
+			},
+			attrs)
 	} else {
 		if fg.ShouldConvertToProtoLibrary(ctx) {
-			// TODO(b/246997908): we can remove this tag if we could figure out a
-			// solution for this bug.
 			attrs := &ProtoAttrs{
 				Srcs:                srcs,
 				Strip_import_prefix: fg.properties.Path,
 			}
 
-			tags := []string{"manual"}
+			tags := []string{
+				"apex_available=//apex_available:anyapex",
+				// TODO(b/246997908): we can remove this tag if we could figure out a solution for this bug.
+				"manual",
+			}
 			ctx.CreateBazelTargetModule(
 				bazel.BazelTargetModuleProperties{Rule_class: "proto_library"},
 				CommonAttributes{
@@ -167,11 +191,20 @@ type fileGroupProperties struct {
 	// Create a make variable with the specified name that contains the list of files in the
 	// filegroup, relative to the root of the source tree.
 	Export_to_make_var *string
+
+	// aidl is explicitly provided for implicit aidl dependencies
+	// TODO(b/278298615): aidl prop is a no-op in Soong and is an escape hatch
+	// to include implicit aidl dependencies for bazel migration compatibility
+	Aidl struct {
+		// List of aidl files or filegroup depended on by srcs
+		Deps []string `android:"path"`
+	}
 }
 
 type fileGroup struct {
 	ModuleBase
 	BazelModuleBase
+	DefaultableModuleBase
 	FileGroupAsLibrary
 	properties fileGroupProperties
 	srcs       Paths
@@ -189,6 +222,7 @@ func FileGroupFactory() Module {
 	module.AddProperties(&module.properties)
 	InitAndroidModule(module)
 	InitBazelModule(module)
+	InitDefaultableModule(module)
 	return module
 }
 
@@ -319,4 +353,18 @@ func ToFileGroupAsLibrary(ctx BazelConversionPathContext, name string) (FileGrou
 		}
 	}
 	return nil, false
+}
+
+// Defaults
+type FileGroupDefaults struct {
+	ModuleBase
+	DefaultsModuleBase
+}
+
+func FileGroupDefaultsFactory() Module {
+	module := &FileGroupDefaults{}
+	module.AddProperties(&fileGroupProperties{})
+	InitDefaultsModule(module)
+
+	return module
 }

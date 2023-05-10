@@ -291,6 +291,9 @@ type bootImageConfig struct {
 
 	// The "--compiler-filter" argument.
 	compilerFilter string
+
+	// The "--single-image" argument.
+	singleImage bool
 }
 
 // Target-dependent description of a boot image.
@@ -398,6 +401,9 @@ func (image bootImageConfig) moduleFiles(ctx android.PathContext, dir android.Ou
 		for _, ext := range exts {
 			ret = append(ret, dir.Join(ctx, name+ext))
 		}
+		if image.singleImage {
+			break
+		}
 	}
 	return ret
 }
@@ -494,9 +500,6 @@ func (d *dexpreoptBootJars) GenerateAndroidBuildActions(ctx android.ModuleContex
 
 // Generate build rules for boot images.
 func (d *dexpreoptBootJars) GenerateSingletonBuildActions(ctx android.SingletonContext) {
-	if SkipDexpreoptBootJars(ctx) {
-		return
-	}
 	if dexpreopt.GetCachedGlobalSoongConfig(ctx) == nil {
 		// No module has enabled dexpreopting, so we assume there will be no boot image to make.
 		return
@@ -768,6 +771,10 @@ func buildBootImageVariant(ctx android.ModuleContext, image *bootImageVariant, p
 		cmd.FlagWithArg("--compiler-filter=", image.compilerFilter)
 	}
 
+	if image.singleImage {
+		cmd.Flag("--single-image")
+	}
+
 	// Use the default variant/features for host builds.
 	// The map below contains only device CPU info (which might be x86 on some devices).
 	if image.target.Os == android.Android {
@@ -992,7 +999,7 @@ func writeGlobalConfigForMake(ctx android.SingletonContext, path android.Writabl
 // (make/core/dex_preopt_libart.mk) to generate install rules that copy boot image files to the
 // correct output directories.
 func (d *dexpreoptBootJars) MakeVars(ctx android.MakeVarsContext) {
-	if d.dexpreoptConfigForMake != nil {
+	if d.dexpreoptConfigForMake != nil && !SkipDexpreoptBootJars(ctx) {
 		ctx.Strict("DEX_PREOPT_CONFIG_FOR_MAKE", d.dexpreoptConfigForMake.String())
 		ctx.Strict("DEX_PREOPT_SOONG_CONFIG_FOR_MAKE", android.PathForOutput(ctx, "dexpreopt_soong.config").String())
 	}
@@ -1002,6 +1009,10 @@ func (d *dexpreoptBootJars) MakeVars(ctx android.MakeVarsContext) {
 		ctx.Strict("DEXPREOPT_IMAGE_PROFILE_BUILT_INSTALLED", image.profileInstalls.String())
 		if image.profileLicenseMetadataFile.Valid() {
 			ctx.Strict("DEXPREOPT_IMAGE_PROFILE_LICENSE_METADATA", image.profileLicenseMetadataFile.String())
+		}
+
+		if SkipDexpreoptBootJars(ctx) {
+			return
 		}
 
 		global := dexpreopt.GetGlobalConfig(ctx)

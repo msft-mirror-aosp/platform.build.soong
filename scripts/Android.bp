@@ -189,6 +189,18 @@ python_binary_host {
     libs: [
         "linker_config_proto",
     ],
+    visibility: ["//system/linkerconfig"],
+}
+
+python_test_host {
+    name: "conv_linker_config_test",
+    main: "conv_linker_config_test.py",
+    srcs: [
+        "conv_linker_config_test.py",
+        "conv_linker_config.py",
+    ],
+    libs: ["linker_config_proto"],
+    test_suites: ["general-tests"],
 }
 
 python_binary_host {
@@ -219,4 +231,9 @@ filegroup {
     name: "rustfmt.toml",
     srcs: ["rustfmt.toml"],
     visibility: ["//visibility:public"],
+}
+
+sh_binary_host {
+    name: "jars-to-module-info-java",
+    src: "jars-to-module-info-java.sh",
 }

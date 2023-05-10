@@ -356,9 +356,18 @@ func (m *ApexModuleBase) apexModuleBase() *ApexModuleBase {
 	return m
 }
 
+var (
+	availableToPlatformList = []string{AvailableToPlatform}
+)
+
 // Implements ApexModule
 func (m *ApexModuleBase) ApexAvailable() []string {
-	return m.ApexProperties.Apex_available
+	aa := m.ApexProperties.Apex_available
+	if len(aa) > 0 {
+		return aa
+	}
+	// Default is availability to platform
+	return CopyOf(availableToPlatformList)
 }
 
 // Implements ApexModule
@@ -847,7 +856,7 @@ type WalkPayloadDepsFunc func(ctx ModuleContext, do PayloadDepsCallback)
 // ModuleWithMinSdkVersionCheck represents a module that implements min_sdk_version checks
 type ModuleWithMinSdkVersionCheck interface {
 	Module
-	MinSdkVersion(ctx EarlyModuleContext) SdkSpec
+	MinSdkVersion(ctx EarlyModuleContext) ApiLevel
 	CheckMinSdkVersion(ctx ModuleContext)
 }
 

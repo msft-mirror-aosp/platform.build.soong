@@ -241,7 +241,7 @@ var (
 func vndkModuleLister(predicate func(*Module) bool) moduleListerFunc {
 	return func(ctx android.SingletonContext) (moduleNames, fileNames []string) {
 		ctx.VisitAllModules(func(m android.Module) {
-			if c, ok := m.(*Module); ok && predicate(c) {
+			if c, ok := m.(*Module); ok && predicate(c) && !c.IsVndkPrebuiltLibrary() {
 				filename, err := getVndkFileName(c)
 				if err != nil {
 					ctx.ModuleErrorf(m, "%s", err)
@@ -400,6 +400,11 @@ func VndkMutator(mctx android.BottomUpMutatorContext) {
 	if m.UseVndk() && isPrebuiltLib && prebuiltLib.hasLLNDKStubs() {
 		m.VendorProperties.IsLLNDK = true
 		m.VendorProperties.IsVNDKPrivate = Bool(prebuiltLib.Properties.Llndk.Private)
+	}
+
+	if m.IsVndkPrebuiltLibrary() && !m.IsVndk() {
+		m.VendorProperties.IsLLNDK = true
+		// TODO(b/280697209): copy "llndk.private" flag to vndk_prebuilt_shared
 	}
 
 	if (isLib && lib.buildShared()) || (isPrebuiltLib && prebuiltLib.buildShared()) {
@@ -674,7 +679,11 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 	snapshotArchDir := filepath.Join(snapshotDir, ctx.DeviceConfig().DeviceArch())
 
 	configsDir := filepath.Join(snapshotArchDir, "configs")
+	noticeDir := filepath.Join(snapshotArchDir, "NOTICE_FILES")
 	includeDir := filepath.Join(snapshotArchDir, "include")
+
+	// set of notice files copied.
+	noticeBuilt := make(map[string]bool)
 
 	// paths of VNDK modules for GPL license checking
 	modulePaths := make(map[string]string)
@@ -700,28 +709,38 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 		snapshotLibOut := filepath.Join(snapshotArchDir, targetArch, "shared", vndkType, libPath.Base())
 		ret = append(ret, snapshot.CopyFileRule(pctx, ctx, libPath, snapshotLibOut))
 
+		// json struct to export snapshot information
+		prop := struct {
+			MinSdkVersion       string   `json:",omitempty"`
+			LicenseKinds        []string `json:",omitempty"`
+			LicenseTexts        []string `json:",omitempty"`
+			ExportedDirs        []string `json:",omitempty"`
+			ExportedSystemDirs  []string `json:",omitempty"`
+			ExportedFlags       []string `json:",omitempty"`
+			RelativeInstallPath string   `json:",omitempty"`
+		}{}
+
+		prop.LicenseKinds = m.EffectiveLicenseKinds()
+		prop.LicenseTexts = m.EffectiveLicenseFiles().Strings()
+		prop.MinSdkVersion = m.MinSdkVersion()
+
 		if ctx.Config().VndkSnapshotBuildArtifacts() {
-			prop := struct {
-				ExportedDirs        []string `json:",omitempty"`
-				ExportedSystemDirs  []string `json:",omitempty"`
-				ExportedFlags       []string `json:",omitempty"`
-				RelativeInstallPath string   `json:",omitempty"`
-			}{}
 			exportedInfo := ctx.ModuleProvider(m, FlagExporterInfoProvider).(FlagExporterInfo)
 			prop.ExportedFlags = exportedInfo.Flags
 			prop.ExportedDirs = exportedInfo.IncludeDirs.Strings()
 			prop.ExportedSystemDirs = exportedInfo.SystemIncludeDirs.Strings()
 			prop.RelativeInstallPath = m.RelativeInstallPath()
-
-			propOut := snapshotLibOut + ".json"
-
-			j, err := json.Marshal(prop)
-			if err != nil {
-				ctx.Errorf("json marshal to %q failed: %#v", propOut, err)
-				return nil, false
-			}
-			ret = append(ret, snapshot.WriteStringToFileRule(ctx, string(j), propOut))
 		}
+
+		propOut := snapshotLibOut + ".json"
+
+		j, err := json.Marshal(prop)
+		if err != nil {
+			ctx.Errorf("json marshal to %q failed: %#v", propOut, err)
+			return nil, false
+		}
+		ret = append(ret, snapshot.WriteStringToFileRule(ctx, string(j), propOut))
+
 		return ret, true
 	}
 
@@ -760,6 +779,14 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 		stem := m.outputFile.Path().Base()
 		moduleNames[stem] = ctx.ModuleName(m)
 		modulePaths[stem] = ctx.ModuleDir(m)
+
+		for _, notice := range m.EffectiveLicenseFiles() {
+			if _, ok := noticeBuilt[notice.String()]; !ok {
+				noticeBuilt[notice.String()] = true
+				snapshotOutputs = append(snapshotOutputs, snapshot.CopyFileRule(
+					pctx, ctx, notice, filepath.Join(noticeDir, notice.String())))
+			}
+		}
 
 		if ctx.Config().VndkSnapshotBuildArtifacts() {
 			headers = append(headers, m.SnapshotHeaders()...)

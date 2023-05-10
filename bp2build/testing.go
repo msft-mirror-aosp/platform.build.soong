@@ -21,6 +21,7 @@ specific-but-shared functionality among tests in package
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -227,6 +228,7 @@ type BazelTestResult struct {
 //
 // If ignoreUnexpected=true then it will ignore directories for which there are no expected targets.
 func (b BazelTestResult) CompareAllBazelTargets(t *testing.T, description string, expectedTargets map[string][]string, ignoreUnexpected bool) {
+	t.Helper()
 	actualTargets := b.buildFileToTargets
 
 	// Generate the sorted set of directories to check.
@@ -263,6 +265,12 @@ func (b BazelTestResult) CompareBazelTargets(t *testing.T, description string, e
 		t.Errorf("%s: Expected %d bazel target (%s), got %d (%s)",
 			description, expectedCount, expectedContents, actualCount, actualTargets)
 	} else {
+		sort.SliceStable(actualTargets, func(i, j int) bool {
+			return actualTargets[i].name < actualTargets[j].name
+		})
+		sort.SliceStable(expectedContents, func(i, j int) bool {
+			return getTargetName(expectedContents[i]) < getTargetName(expectedContents[j])
+		})
 		for i, actualTarget := range actualTargets {
 			if w, g := expectedContents[i], actualTarget.content; w != g {
 				t.Errorf(
@@ -454,7 +462,7 @@ func (m *customModule) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 			}
 		}
 	}
-	productVariableProps := android.ProductVariableProperties(ctx)
+	productVariableProps := android.ProductVariableProperties(ctx, ctx.Module())
 	if props, ok := productVariableProps["String_literal_prop"]; ok {
 		for c, p := range props {
 			if val, ok := p.(*string); ok {
@@ -616,24 +624,40 @@ func makeCcStubSuiteTargets(name string, attrs AttrNameToString) string {
 		return ""
 	}
 	STUB_SUITE_ATTRS := map[string]string{
-		"stubs_symbol_file": "symbol_file",
-		"stubs_versions":    "versions",
-		"soname":            "soname",
-		"source_library":    "source_library",
+		"stubs_symbol_file":    "symbol_file",
+		"stubs_versions":       "versions",
+		"soname":               "soname",
+		"source_library_label": "source_library_label",
 	}
 
 	stubSuiteAttrs := AttrNameToString{}
 	for key, _ := range attrs {
 		if _, stubSuiteAttr := STUB_SUITE_ATTRS[key]; stubSuiteAttr {
 			stubSuiteAttrs[STUB_SUITE_ATTRS[key]] = attrs[key]
+		} else {
+			panic(fmt.Sprintf("unused cc_stub_suite attr %q\n", key))
 		}
 	}
 	return MakeBazelTarget("cc_stub_suite", name+"_stub_libs", stubSuiteAttrs)
 }
 
 func MakeNeverlinkDuplicateTarget(moduleType string, name string) string {
-	return MakeBazelTarget(moduleType, name+"-neverlink", AttrNameToString{
-		"neverlink": `True`,
-		"exports":   `[":` + name + `"]`,
-	})
+	return MakeNeverlinkDuplicateTargetWithAttrs(moduleType, name, AttrNameToString{})
+}
+
+func MakeNeverlinkDuplicateTargetWithAttrs(moduleType string, name string, extraAttrs AttrNameToString) string {
+	attrs := extraAttrs
+	attrs["neverlink"] = `True`
+	attrs["exports"] = `[":` + name + `"]`
+	return MakeBazelTarget(moduleType, name+"-neverlink", attrs)
+}
+
+func getTargetName(targetContent string) string {
+	data := strings.Split(targetContent, "name = \"")
+	if len(data) < 2 {
+		return ""
+	} else {
+		endIndex := strings.Index(data[1], "\"")
+		return data[1][:endIndex]
+	}
 }
