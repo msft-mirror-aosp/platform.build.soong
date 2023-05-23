@@ -111,9 +111,6 @@ var (
 
 		// Turn off FMA which got enabled by default in clang-r445002 (http://b/218805949)
 		"-ffp-contract=off",
-
-		// Turn off stack protector check for noreturn calls. (http://b/264965700)
-		"-mllvm -disable-check-noreturn-call",
 	}
 
 	commonGlobalConlyflags = []string{}
@@ -150,9 +147,6 @@ var (
 	commonGlobalLldflags = []string{
 		"-fuse-ld=lld",
 		"-Wl,--icf=safe",
-
-		// Turn off stack protector check for noreturn calls. (http://b/264965700)
-		"-Wl,-mllvm,-disable-check-noreturn-call",
 	}
 
 	deviceGlobalCppflags = []string{
@@ -311,7 +305,7 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r487747b"
+	ClangDefaultVersion      = "clang-r487747c"
 	ClangDefaultShortVersion = "17"
 
 	// Directories with warnings from Android.bp files.
@@ -360,14 +354,14 @@ func init() {
 		// Automatically initialize any uninitialized stack variables.
 		// Prefer zero-init if multiple options are set.
 		if ctx.Config().IsEnvTrue("AUTO_ZERO_INITIALIZE") {
-			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang -Wno-unused-command-line-argument")
+			flags = append(flags, "-ftrivial-auto-var-init=zero")
 		} else if ctx.Config().IsEnvTrue("AUTO_PATTERN_INITIALIZE") {
 			flags = append(flags, "-ftrivial-auto-var-init=pattern")
 		} else if ctx.Config().IsEnvTrue("AUTO_UNINITIALIZE") {
 			flags = append(flags, "-ftrivial-auto-var-init=uninitialized")
 		} else {
 			// Default to zero initialization.
-			flags = append(flags, "-ftrivial-auto-var-init=zero -enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang -Wno-unused-command-line-argument")
+			flags = append(flags, "-ftrivial-auto-var-init=zero")
 		}
 
 		// Workaround for ccache with clang.
@@ -443,6 +437,8 @@ func init() {
 
 	pctx.StaticVariableWithEnvOverride("ClangShortVersion", "LLVM_RELEASE_VERSION", ClangDefaultShortVersion)
 	pctx.StaticVariable("ClangAsanLibDir", "${ClangBase}/linux-x86/${ClangVersion}/lib/clang/${ClangShortVersion}/lib/linux")
+
+	exportedVars.ExportStringListStaticVariable("WarningAllowedProjects", WarningAllowedProjects)
 
 	// These are tied to the version of LLVM directly in external/llvm, so they might trail the host prebuilts
 	// being used for the rest of the build process.

@@ -147,7 +147,7 @@ var prepareForApexTest = android.GroupFixturePreparers(
 	android.PrepareForTestWithAndroidBuildComponents,
 	bpf.PrepareForTestWithBpf,
 	cc.PrepareForTestWithCcBuildComponents,
-	java.PrepareForTestWithJavaDefaultModules,
+	java.PrepareForTestWithDexpreopt,
 	prebuilt_etc.PrepareForTestWithPrebuiltEtc,
 	rust.PrepareForTestWithRustDefaultModules,
 	sh.PrepareForTestWithShBuildComponents,
@@ -1368,6 +1368,8 @@ func TestApexWithRuntimeLibsDependency(t *testing.T) {
 		cc_library {
 			name: "mylib",
 			srcs: ["mylib.cpp"],
+			static_libs: ["libstatic"],
+			shared_libs: ["libshared"],
 			runtime_libs: ["libfoo", "libbar"],
 			system_shared_libs: [],
 			stl: "none",
@@ -1392,6 +1394,39 @@ func TestApexWithRuntimeLibsDependency(t *testing.T) {
 			apex_available: [ "myapex" ],
 		}
 
+		cc_library {
+			name: "libstatic",
+			srcs: ["mylib.cpp"],
+			system_shared_libs: [],
+			stl: "none",
+			apex_available: [ "myapex" ],
+			runtime_libs: ["libstatic_to_runtime"],
+		}
+
+		cc_library {
+			name: "libshared",
+			srcs: ["mylib.cpp"],
+			system_shared_libs: [],
+			stl: "none",
+			apex_available: [ "myapex" ],
+			runtime_libs: ["libshared_to_runtime"],
+		}
+
+		cc_library {
+			name: "libstatic_to_runtime",
+			srcs: ["mylib.cpp"],
+			system_shared_libs: [],
+			stl: "none",
+			apex_available: [ "myapex" ],
+		}
+
+		cc_library {
+			name: "libshared_to_runtime",
+			srcs: ["mylib.cpp"],
+			system_shared_libs: [],
+			stl: "none",
+			apex_available: [ "myapex" ],
+		}
 	`)
 
 	apexRule := ctx.ModuleForTests("myapex", "android_common_myapex_image").Rule("apexRule")
@@ -1405,11 +1440,14 @@ func TestApexWithRuntimeLibsDependency(t *testing.T) {
 
 	// Ensure that runtime_libs dep in included
 	ensureContains(t, copyCmds, "image.apex/lib64/libbar.so")
+	ensureContains(t, copyCmds, "image.apex/lib64/libshared.so")
+	ensureContains(t, copyCmds, "image.apex/lib64/libshared_to_runtime.so")
+
+	ensureNotContains(t, copyCmds, "image.apex/lib64/libstatic_to_runtime.so")
 
 	apexManifestRule := ctx.ModuleForTests("myapex", "android_common_myapex_image").Rule("apexManifestRule")
 	ensureListEmpty(t, names(apexManifestRule.Args["provideNativeLibs"]))
 	ensureListContains(t, names(apexManifestRule.Args["requireNativeLibs"]), "libfoo.so")
-
 }
 
 var prepareForTestOfRuntimeApexWithHwasan = android.GroupFixturePreparers(
@@ -1461,6 +1499,10 @@ func TestRuntimeApexShouldInstallHwasanIfLibcDependsOnIt(t *testing.T) {
 			sanitize: {
 				never: true,
 			},
+			apex_available: [
+				"//apex_available:anyapex",
+				"//apex_available:platform",
+			],
 		}	`)
 	ctx := result.TestContext
 
@@ -1509,6 +1551,10 @@ func TestRuntimeApexShouldInstallHwasanIfHwaddressSanitized(t *testing.T) {
 			sanitize: {
 				never: true,
 			},
+			apex_available: [
+				"//apex_available:anyapex",
+				"//apex_available:platform",
+			],
 		}
 		`)
 	ctx := result.TestContext
@@ -6533,6 +6579,72 @@ func TestApexAvailable_IndirectDep(t *testing.T) {
 	}`)
 }
 
+func TestApexAvailable_IndirectStaticDep(t *testing.T) {
+	testApex(t, `
+	apex {
+		name: "myapex",
+		key: "myapex.key",
+		native_shared_libs: ["libfoo"],
+		updatable: false,
+	}
+
+	apex_key {
+		name: "myapex.key",
+		public_key: "testkey.avbpubkey",
+		private_key: "testkey.pem",
+	}
+
+	cc_library {
+		name: "libfoo",
+		stl: "none",
+		static_libs: ["libbar"],
+		system_shared_libs: [],
+		apex_available: ["myapex"],
+	}
+
+	cc_library {
+		name: "libbar",
+		stl: "none",
+		shared_libs: ["libbaz"],
+		system_shared_libs: [],
+		apex_available: ["myapex"],
+	}
+
+	cc_library {
+		name: "libbaz",
+		stl: "none",
+		system_shared_libs: [],
+	}`)
+
+	testApexError(t, `requires "libbar" that doesn't list the APEX under 'apex_available'.`, `
+	apex {
+		name: "myapex",
+		key: "myapex.key",
+		native_shared_libs: ["libfoo"],
+		updatable: false,
+	}
+
+	apex_key {
+		name: "myapex.key",
+		public_key: "testkey.avbpubkey",
+		private_key: "testkey.pem",
+	}
+
+	cc_library {
+		name: "libfoo",
+		stl: "none",
+		static_libs: ["libbar"],
+		system_shared_libs: [],
+		apex_available: ["myapex"],
+	}
+
+	cc_library {
+		name: "libbar",
+		stl: "none",
+		system_shared_libs: [],
+	}`)
+}
+
 func TestApexAvailable_InvalidApexName(t *testing.T) {
 	testApexError(t, "\"otherapex\" is not a valid module name", `
 	apex {
@@ -8341,8 +8453,8 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, "", preparer, fragments...)
 	})
 
-	t.Run("updatable jar from ART apex in the framework boot image => error", func(t *testing.T) {
-		err := `module "some-art-lib" from updatable apexes \["com.android.art.debug"\] is not allowed in the framework boot image`
+	t.Run("updatable jar from ART apex in the platform bootclasspath => error", func(t *testing.T) {
+		err := `module "some-art-lib" from updatable apexes \["com.android.art.debug"\] is not allowed in the platform bootclasspath`
 		// Update the dexpreopt BootJars directly.
 		preparer := android.GroupFixturePreparers(
 			prepareSetBootJars("com.android.art.debug:some-art-lib"),
@@ -8365,8 +8477,8 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, err, preparer)
 	})
 
-	t.Run("updatable jar from some other apex in the framework boot image => error", func(t *testing.T) {
-		err := `module "some-updatable-apex-lib" from updatable apexes \["some-updatable-apex"\] is not allowed in the framework boot image`
+	t.Run("updatable jar from some other apex in the platform bootclasspath => error", func(t *testing.T) {
+		err := `module "some-updatable-apex-lib" from updatable apexes \["some-updatable-apex"\] is not allowed in the platform bootclasspath`
 		preparer := android.GroupFixturePreparers(
 			java.FixtureConfigureBootJars("some-updatable-apex:some-updatable-apex-lib"),
 			java.FixtureConfigureApexBootJars("some-non-updatable-apex:some-non-updatable-apex-lib"),
@@ -8374,7 +8486,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, err, preparer)
 	})
 
-	t.Run("non-updatable jar from some other apex in the framework boot image => ok", func(t *testing.T) {
+	t.Run("non-updatable jar from some other apex in the platform bootclasspath => ok", func(t *testing.T) {
 		preparer := java.FixtureConfigureApexBootJars("some-non-updatable-apex:some-non-updatable-apex-lib")
 		fragment := java.ApexVariantReference{
 			Apex:   proptools.StringPtr("some-non-updatable-apex"),
@@ -8389,7 +8501,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, err, preparer)
 	})
 
-	t.Run("nonexistent jar in the framework boot image => error", func(t *testing.T) {
+	t.Run("nonexistent jar in the platform bootclasspath => error", func(t *testing.T) {
 		err := `"platform-bootclasspath" depends on undefined module "nonexistent"`
 		preparer := java.FixtureConfigureBootJars("platform:nonexistent")
 		testNoUpdatableJarsInBootImage(t, err, preparer)
@@ -8402,7 +8514,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, err, preparer)
 	})
 
-	t.Run("platform jar in the framework boot image => ok", func(t *testing.T) {
+	t.Run("platform jar in the platform bootclasspath => ok", func(t *testing.T) {
 		preparer := android.GroupFixturePreparers(
 			java.FixtureConfigureBootJars("platform:some-platform-lib"),
 			java.FixtureConfigureApexBootJars("some-non-updatable-apex:some-non-updatable-apex-lib"),

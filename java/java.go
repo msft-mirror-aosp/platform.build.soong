@@ -73,8 +73,8 @@ func registerJavaBuildComponents(ctx android.RegistrationContext) {
 		ctx.BottomUp("jacoco_deps", jacocoDepsMutator).Parallel()
 	})
 
-	ctx.RegisterSingletonType("logtags", LogtagsSingleton)
-	ctx.RegisterSingletonType("kythe_java_extract", kytheExtractJavaFactory)
+	ctx.RegisterParallelSingletonType("logtags", LogtagsSingleton)
+	ctx.RegisterParallelSingletonType("kythe_java_extract", kytheExtractJavaFactory)
 }
 
 func RegisterJavaSdkMemberTypes() {
@@ -1156,7 +1156,6 @@ func (j *TestHost) DepsMutator(ctx android.BottomUpMutatorContext) {
 	}
 
 	j.addDataDeviceBinsDeps(ctx)
-
 	j.deps(ctx)
 }
 
@@ -1651,7 +1650,7 @@ type JavaApiLibraryProperties struct {
 	// list of api.txt files relative to this directory that contribute to the
 	// API surface.
 	// This is a list of relative paths
-	Api_files []string
+	Api_files []string `android:"path"`
 
 	// List of flags to be passed to the javac compiler to generate jar file
 	Javacflags []string
@@ -1833,9 +1832,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Add the api_files inputs
 	for _, api := range al.properties.Api_files {
-		// Use MaybeExistentPathForSource since the api file might not exist during analysis.
-		// This will be provided by the orchestrator in the combined execution.
-		srcFiles = append(srcFiles, android.MaybeExistentPathForSource(ctx, ctx.ModuleDir(), api))
+		srcFiles = append(srcFiles, android.PathForModuleSrc(ctx, api))
 	}
 
 	if srcFiles == nil {
@@ -2973,14 +2970,14 @@ type kotlinAttributes struct {
 func ktJvmLibraryBazelTargetModuleProperties() bazel.BazelTargetModuleProperties {
 	return bazel.BazelTargetModuleProperties{
 		Rule_class:        "kt_jvm_library",
-		Bzl_load_location: "//build/bazel/rules/kotlin:rules.bzl",
+		Bzl_load_location: "//build/bazel/rules/kotlin:kt_jvm_library.bzl",
 	}
 }
 
 func javaLibraryBazelTargetModuleProperties() bazel.BazelTargetModuleProperties {
 	return bazel.BazelTargetModuleProperties{
 		Rule_class:        "java_library",
-		Bzl_load_location: "//build/bazel/rules/java:rules.bzl",
+		Bzl_load_location: "//build/bazel/rules/java:library.bzl",
 	}
 }
 
@@ -3089,7 +3086,7 @@ func javaBinaryHostBp2Build(ctx android.TopDownMutatorContext, m *Binary) {
 
 	props := bazel.BazelTargetModuleProperties{
 		Rule_class:        "java_binary",
-		Bzl_load_location: "//build/bazel/rules/java:rules.bzl",
+		Bzl_load_location: "@rules_java//java:defs.bzl",
 	}
 	binAttrs := &javaBinaryHostAttributes{
 		Runtime_deps: runtimeDeps,
@@ -3145,7 +3142,7 @@ func (i *Import) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	}
 	props := bazel.BazelTargetModuleProperties{
 		Rule_class:        "java_import",
-		Bzl_load_location: "//build/bazel/rules/java:rules.bzl",
+		Bzl_load_location: "//build/bazel/rules/java:import.bzl",
 	}
 
 	name := android.RemoveOptionalPrebuiltPrefix(i.Name())

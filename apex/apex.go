@@ -137,6 +137,10 @@ type apexBundleProperties struct {
 	// List of filesystem images that are embedded inside this APEX bundle.
 	Filesystems []string
 
+	// The minimum SDK version that this APEX must support at minimum. This is usually set to
+	// the SDK version that the APEX was first introduced.
+	Min_sdk_version *string
+
 	// Whether this APEX is considered updatable or not. When set to true, this will enforce
 	// additional rules for making sure that the APEX is truly updatable. To be updatable,
 	// min_sdk_version should be set as well. This will also disable the size optimizations like
@@ -380,10 +384,6 @@ type overridableProperties struct {
 
 	// Trim against a specific Dynamic Common Lib APEX
 	Trim_against *string
-
-	// The minimum SDK version that this APEX must support at minimum. This is usually set to
-	// the SDK version that the APEX was first introduced.
-	Min_sdk_version *string
 }
 
 type apexBundle struct {
@@ -404,7 +404,7 @@ type apexBundle struct {
 	///////////////////////////////////////////////////////////////////////////////////////////
 	// Inputs
 
-	// Keys for apex_paylaod.img
+	// Keys for apex_payload.img
 	publicKeyFile  android.Path
 	privateKeyFile android.Path
 
@@ -2287,16 +2287,13 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 				ctx.PropertyErrorf("sh_binaries", "%q is not a sh_binary module", depName)
 			}
 		case bcpfTag:
-			bcpfModule, ok := child.(*java.BootclasspathFragmentModule)
+			_, ok := child.(*java.BootclasspathFragmentModule)
 			if !ok {
 				ctx.PropertyErrorf("bootclasspath_fragments", "%q is not a bootclasspath_fragment module", depName)
 				return false
 			}
 
 			vctx.filesInfo = append(vctx.filesInfo, apexBootclasspathFragmentFiles(ctx, child)...)
-			for _, makeModuleName := range bcpfModule.BootImageDeviceInstallMakeModules() {
-				a.makeModulesToInstall = append(a.makeModulesToInstall, makeModuleName)
-			}
 			return true
 		case sscpfTag:
 			if _, ok := child.(*java.SystemServerClasspathModule); !ok {
@@ -2609,8 +2606,45 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	ctx.WalkDepsBlueprint(func(child, parent blueprint.Module) bool { return a.depVisitor(&vctx, ctx, child, parent) })
 	vctx.normalizeFileInfo(ctx)
 	if a.privateKeyFile == nil {
-		ctx.PropertyErrorf("key", "private_key for %q could not be found", String(a.overridableProperties.Key))
-		return
+		if ctx.Config().AllowMissingDependencies() {
+			// TODO(b/266099037): a better approach for slim manifests.
+			ctx.AddMissingDependencies([]string{String(a.overridableProperties.Key)})
+			// Create placeholder paths for later stages that expect to see those paths,
+			// though they won't be used.
+			var unusedPath = android.PathForModuleOut(ctx, "nonexistentprivatekey")
+			ctx.Build(pctx, android.BuildParams{
+				Rule:   android.ErrorRule,
+				Output: unusedPath,
+				Args: map[string]string{
+					"error": "Private key not available",
+				},
+			})
+			a.privateKeyFile = unusedPath
+		} else {
+			ctx.PropertyErrorf("key", "private_key for %q could not be found", String(a.overridableProperties.Key))
+			return
+		}
+	}
+
+	if a.publicKeyFile == nil {
+		if ctx.Config().AllowMissingDependencies() {
+			// TODO(b/266099037): a better approach for slim manifests.
+			ctx.AddMissingDependencies([]string{String(a.overridableProperties.Key)})
+			// Create placeholder paths for later stages that expect to see those paths,
+			// though they won't be used.
+			var unusedPath = android.PathForModuleOut(ctx, "nonexistentpublickey")
+			ctx.Build(pctx, android.BuildParams{
+				Rule:   android.ErrorRule,
+				Output: unusedPath,
+				Args: map[string]string{
+					"error": "Public key not available",
+				},
+			})
+			a.publicKeyFile = unusedPath
+		} else {
+			ctx.PropertyErrorf("key", "public_key for %q could not be found", String(a.overridableProperties.Key))
+			return
+		}
 	}
 
 	////////////////////////////////////////////////////////////////////////////////////////////
@@ -2662,26 +2696,13 @@ func apexBootclasspathFragmentFiles(ctx android.ModuleContext, module blueprint.
 	bootclasspathFragmentInfo := ctx.OtherModuleProvider(module, java.BootclasspathFragmentApexContentInfoProvider).(java.BootclasspathFragmentApexContentInfo)
 	var filesToAdd []apexFile
 
-	// Add the boot image files, e.g. .art, .oat and .vdex files.
-	if bootclasspathFragmentInfo.ShouldInstallBootImageInApex() {
-		for arch, files := range bootclasspathFragmentInfo.AndroidBootImageFilesByArchType() {
-			dirInApex := filepath.Join("javalib", arch.String())
-			for _, f := range files {
-				androidMkModuleName := "javalib_" + arch.String() + "_" + filepath.Base(f.String())
-				// TODO(b/177892522) - consider passing in the bootclasspath fragment module here instead of nil
-				af := newApexFile(ctx, f, androidMkModuleName, dirInApex, etc, nil)
-				filesToAdd = append(filesToAdd, af)
-			}
-		}
-	}
-
 	// Add classpaths.proto config.
 	if af := apexClasspathFragmentProtoFile(ctx, module); af != nil {
 		filesToAdd = append(filesToAdd, *af)
 	}
 
 	pathInApex := bootclasspathFragmentInfo.ProfileInstallPathInApex()
-	if pathInApex != "" && !java.SkipDexpreoptBootJars(ctx) {
+	if pathInApex != "" {
 		pathOnHost := bootclasspathFragmentInfo.ProfilePathOnHost()
 		tempPath := android.PathForModuleOut(ctx, "boot_image_profile", pathInApex)
 
@@ -2951,7 +2972,7 @@ func (a *apexBundle) minSdkVersionValue(ctx android.EarlyModuleContext) string {
 	// Only override the minSdkVersion value on Apexes which already specify
 	// a min_sdk_version (it's optional for non-updatable apexes), and that its
 	// min_sdk_version value is lower than the one to override with.
-	minApiLevel := minSdkVersionFromValue(ctx, proptools.String(a.overridableProperties.Min_sdk_version))
+	minApiLevel := minSdkVersionFromValue(ctx, proptools.String(a.properties.Min_sdk_version))
 	if minApiLevel.IsNone() {
 		return ""
 	}
@@ -3242,7 +3263,6 @@ func makeApexAvailableBaseline() map[string][]string {
 	//
 	m["com.android.appsearch"] = []string{
 		"icing-java-proto-lite",
-		"libprotobuf-java-lite",
 	}
 	//
 	// Module separator
@@ -3253,16 +3273,13 @@ func makeApexAvailableBaseline() map[string][]string {
 	//
 	// Module separator
 	//
-	m["com.android.cellbroadcast"] = []string{"CellBroadcastApp", "CellBroadcastServiceModule"}
+	m["com.android.cellbroadcast"] = []string{}
 	//
 	// Module separator
 	//
 	m["com.android.extservices"] = []string{
-		"error_prone_annotations",
 		"ExtServices-core",
-		"ExtServices",
 		"libtextclassifier-java",
-		"libz_current",
 		"textclassifier-statsd",
 		"TextClassifierNotificationLibNoManifest",
 		"TextClassifierServiceLibNoManifest",
@@ -3280,8 +3297,6 @@ func makeApexAvailableBaseline() map[string][]string {
 		"android.hidl.memory@1.0",
 		"android.hidl.safe_union@1.0",
 		"libarect",
-		"libbuildversion",
-		"libmath",
 		"libprocpartition",
 	}
 	//
@@ -3311,15 +3326,12 @@ func makeApexAvailableBaseline() map[string][]string {
 	// Module separator
 	//
 	m["com.android.runtime"] = []string{
-		"bionic_libc_platform_headers",
-		"libarm-optimized-routines-math",
 		"libc_aeabi",
 		"libc_bionic",
 		"libc_bionic_ndk",
 		"libc_bootstrap",
 		"libc_common",
 		"libc_common_shared",
-		"libc_common_static",
 		"libc_dns",
 		"libc_dynamic_dispatch",
 		"libc_fortify",
@@ -3336,19 +3348,16 @@ func makeApexAvailableBaseline() map[string][]string {
 		"libc_openbsd_large_stack",
 		"libc_openbsd_ndk",
 		"libc_pthread",
-		"libc_static_dispatch",
 		"libc_syscalls",
 		"libc_tzcode",
 		"libc_unwind_static",
 		"libdebuggerd",
 		"libdebuggerd_common_headers",
 		"libdebuggerd_handler_core",
-		"libdebuggerd_handler_fallback",
 		"libdl_static",
 		"libjemalloc5",
 		"liblinker_main",
 		"liblinker_malloc",
-		"liblz4",
 		"liblzma",
 		"libprocinfo",
 		"libpropertyinfoparser",
@@ -3366,17 +3375,7 @@ func makeApexAvailableBaseline() map[string][]string {
 	m["com.android.tethering"] = []string{
 		"android.hardware.tetheroffload.config-V1.0-java",
 		"android.hardware.tetheroffload.control-V1.0-java",
-		"android.hidl.base-V1.0-java",
-		"libcgrouprc",
-		"libcgrouprc_format",
-		"libtetherutilsjni",
-		"libvndksupport",
 		"net-utils-framework-common",
-		"netd_aidl_interface-V3-java",
-		"netlink-client",
-		"networkstack-aidl-interfaces-java",
-		"tethering-aidl-interfaces-java",
-		"TetheringApiCurrentLib",
 	}
 	//
 	// Module separator
@@ -3396,48 +3395,22 @@ func makeApexAvailableBaseline() map[string][]string {
 		"android.hardware.wifi.supplicant-V1.1-java",
 		"android.hardware.wifi.supplicant-V1.2-java",
 		"android.hardware.wifi.supplicant-V1.3-java",
-		"android.hidl.base-V1.0-java",
-		"android.hidl.manager-V1.0-java",
-		"android.hidl.manager-V1.1-java",
-		"android.hidl.manager-V1.2-java",
 		"bouncycastle-unbundled",
-		"dnsresolver_aidl_interface-V2-java",
-		"error_prone_annotations",
-		"framework-wifi-pre-jarjar",
 		"framework-wifi-util-lib",
-		"ipmemorystore-aidl-interfaces-V3-java",
-		"ipmemorystore-aidl-interfaces-java",
 		"ksoap2",
 		"libnanohttpd",
-		"libwifi-jni",
-		"net-utils-services-common",
-		"netd_aidl_interface-V2-java",
-		"netd_aidl_interface-unstable-java",
-		"netd_event_listener_interface-java",
-		"netlink-client",
-		"networkstack-client",
-		"services.net",
 		"wifi-lite-protos",
 		"wifi-nano-protos",
 		"wifi-service-pre-jarjar",
-		"wifi-service-resources",
-	}
-	//
-	// Module separator
-	//
-	m["com.android.os.statsd"] = []string{
-		"libstatssocket",
 	}
 	//
 	// Module separator
 	//
 	m[android.AvailableToAnyApex] = []string{
-		"libclang_rt",
 		"libprofile-clang-extras",
 		"libprofile-clang-extras_ndk",
 		"libprofile-extras",
 		"libprofile-extras_ndk",
-		"libunwind",
 	}
 	return m
 }
@@ -3593,8 +3566,8 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 	// TODO(b/219503907) this would need to be set to a.MinSdkVersionValue(ctx) but
 	// given it's coming via config, we probably don't want to put it in here.
 	var minSdkVersion bazel.StringAttribute
-	if a.overridableProperties.Min_sdk_version != nil {
-		minSdkVersion.SetValue(*a.overridableProperties.Min_sdk_version)
+	if a.properties.Min_sdk_version != nil {
+		minSdkVersion.SetValue(*a.properties.Min_sdk_version)
 	}
 	if props, ok := productVariableProps[minSdkVersionPropName]; ok {
 		for c, p := range props {
@@ -3700,6 +3673,8 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 	commonAttrs := android.CommonAttributes{}
 	if a.testApex {
 		commonAttrs.Testonly = proptools.BoolPtr(true)
+		// Set the api_domain of the test apex
+		attrs.Base_apex_name = proptools.StringPtr(cc.GetApiDomain(a.Name()))
 	}
 
 	return attrs, props, commonAttrs

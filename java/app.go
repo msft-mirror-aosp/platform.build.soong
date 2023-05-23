@@ -585,19 +585,6 @@ func processMainCert(m android.ModuleBase, certPropValue string, certificates []
 		certificates = append([]Certificate{mainCert}, certificates...)
 	}
 
-	if !m.Platform() {
-		certPath := certificates[0].Pem.String()
-		systemCertPath := ctx.Config().DefaultAppCertificateDir(ctx).String()
-		if strings.HasPrefix(certPath, systemCertPath) {
-			enforceSystemCert := ctx.Config().EnforceSystemCertificate()
-			allowed := ctx.Config().EnforceSystemCertificateAllowList()
-
-			if enforceSystemCert && !inList(m.Name(), allowed) {
-				ctx.PropertyErrorf("certificate", "The module in product partition cannot be signed with certificate in system.")
-			}
-		}
-	}
-
 	if len(certificates) > 0 {
 		mainCertificate = certificates[0]
 	} else {
@@ -612,6 +599,20 @@ func processMainCert(m android.ModuleBase, certPropValue string, certificates []
 			Pem: android.PathForModuleOut(ctx, "missing.x509.pem"),
 		}
 	}
+
+	if !m.Platform() {
+		certPath := mainCertificate.Pem.String()
+		systemCertPath := ctx.Config().DefaultAppCertificateDir(ctx).String()
+		if strings.HasPrefix(certPath, systemCertPath) {
+			enforceSystemCert := ctx.Config().EnforceSystemCertificate()
+			allowed := ctx.Config().EnforceSystemCertificateAllowList()
+
+			if enforceSystemCert && !inList(m.Name(), allowed) {
+				ctx.PropertyErrorf("certificate", "The module in product partition cannot be signed with certificate in system.")
+			}
+		}
+	}
+
 
 	return mainCertificate, certificates
 }
@@ -976,6 +977,10 @@ func (a *AndroidApp) DepIsInSameApex(ctx android.BaseModuleContext, dep android.
 // For OutputFileProducer interface
 func (a *AndroidApp) OutputFiles(tag string) (android.Paths, error) {
 	switch tag {
+	// In some instances, it can be useful to reference the aapt-generated flags from another
+	// target, e.g., system server implements services declared in the framework-res manifest.
+	case ".aapt.proguardOptionsFile":
+		return []android.Path{a.proguardOptionsFile}, nil
 	case ".aapt.srcjar":
 		return []android.Path{a.aaptSrcJar}, nil
 	case ".export-package.apk":
@@ -1539,7 +1544,7 @@ func androidAppCertificateBp2Build(ctx android.TopDownMutatorContext, module *An
 
 	props := bazel.BazelTargetModuleProperties{
 		Rule_class:        "android_app_certificate",
-		Bzl_load_location: "//build/bazel/rules/android:rules.bzl",
+		Bzl_load_location: "//build/bazel/rules/android:android_app_certificate.bzl",
 	}
 
 	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: module.Name()}, attrs)
@@ -1592,7 +1597,7 @@ func (a *AndroidApp) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 
 	props := bazel.BazelTargetModuleProperties{
 		Rule_class:        "android_binary",
-		Bzl_load_location: "//build/bazel/rules/android:rules.bzl",
+		Bzl_load_location: "//build/bazel/rules/android:android_binary.bzl",
 	}
 
 	if !bp2BuildInfo.hasKotlin {
@@ -1622,7 +1627,7 @@ func (a *AndroidApp) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 
 	ctx.CreateBazelTargetModule(
 		props,
-		android.CommonAttributes{Name: a.Name()},
+		android.CommonAttributes{Name: a.Name(), SkipData: proptools.BoolPtr(true)},
 		appAttrs,
 	)
 

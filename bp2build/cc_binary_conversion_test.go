@@ -222,6 +222,7 @@ func TestCcBinaryVersionScriptAndDynamicList(t *testing.T) {
         "-Wl,--version-script,$(location vs)",
         "-Wl,--dynamic-list,$(location dynamic.list)",
     ]`,
+				"features": `["android_cfi_exports_map"]`,
 			},
 			},
 		},
@@ -249,6 +250,7 @@ func TestCcBinaryLdflagsSplitBySpaceExceptSoongAdded(t *testing.T) {
         "version_script",
         "dynamic.list",
     ]`,
+				"features": `["android_cfi_exports_map"]`,
 				"linkopts": `[
         "--nospace_flag",
         "-z",
@@ -644,10 +646,7 @@ func TestCcBinaryWithInstructionSet(t *testing.T) {
 		targets: []testBazelTarget{
 			{"cc_binary", "foo", AttrNameToString{
 				"features": `select({
-        "//build/bazel/platforms/arch:arm": [
-            "arm_isa_arm",
-            "-arm_isa_thumb",
-        ],
+        "//build/bazel/platforms/arch:arm": ["arm_isa_arm"],
         "//conditions:default": [],
     })`,
 				"local_includes": `["."]`,

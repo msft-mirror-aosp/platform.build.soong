@@ -85,6 +85,7 @@ var (
 		"development/apps/DevelopmentSettings":        Bp2BuildDefaultTrue,
 		"development/apps/Fallback":                   Bp2BuildDefaultTrue,
 		"development/apps/WidgetPreview":              Bp2BuildDefaultTrue,
+		"development/python-packages/adb":             Bp2BuildDefaultTrueRecursively,
 		"development/samples/BasicGLSurfaceView":      Bp2BuildDefaultTrue,
 		"development/samples/BluetoothChat":           Bp2BuildDefaultTrue,
 		"development/samples/BrokenKeyDerivation":     Bp2BuildDefaultTrue,
@@ -203,23 +204,26 @@ var (
 		"frameworks/av/media/audioaidlconversion":            Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/media/codec2/components/aom":          Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/media/codecs":                         Bp2BuildDefaultTrueRecursively,
-		"frameworks/av/media/module/codecs":                  Bp2BuildDefaultTrueRecursively,
-		"frameworks/av/media/module/foundation":              Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/media/liberror":                       Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/media/libmediahelper":                 Bp2BuildDefaultTrue,
 		"frameworks/av/media/libshmem":                       Bp2BuildDefaultTrueRecursively,
+		"frameworks/av/media/module/codecs":                  Bp2BuildDefaultTrueRecursively,
+		"frameworks/av/media/module/foundation":              Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/media/module/minijail":                Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/services/minijail":                    Bp2BuildDefaultTrueRecursively,
 		"frameworks/base/libs/androidfw":                     Bp2BuildDefaultTrue,
+		"frameworks/base/libs/services":                      Bp2BuildDefaultTrue,
 		"frameworks/base/media/tests/MediaDump":              Bp2BuildDefaultTrue,
-		"frameworks/base/services/tests/servicestests/aidl":  Bp2BuildDefaultTrue,
 		"frameworks/base/proto":                              Bp2BuildDefaultTrue,
+		"frameworks/base/services/tests/servicestests/aidl":  Bp2BuildDefaultTrue,
 		"frameworks/base/startop/apps/test":                  Bp2BuildDefaultTrue,
 		"frameworks/base/tests/appwidgets/AppWidgetHostTest": Bp2BuildDefaultTrueRecursively,
 		"frameworks/base/tools/aapt2":                        Bp2BuildDefaultTrue,
 		"frameworks/base/tools/codegen":                      Bp2BuildDefaultTrueRecursively,
 		"frameworks/base/tools/streaming_proto":              Bp2BuildDefaultTrueRecursively,
 		"frameworks/hardware/interfaces/stats/aidl":          Bp2BuildDefaultTrue,
+		"frameworks/libs/modules-utils/build":                Bp2BuildDefaultTrueRecursively,
+		"frameworks/libs/net/common/native":                  Bp2BuildDefaultTrueRecursively,
 		"frameworks/native/libs/adbd_auth":                   Bp2BuildDefaultTrueRecursively,
 		"frameworks/native/libs/arect":                       Bp2BuildDefaultTrueRecursively,
 		"frameworks/native/libs/gui":                         Bp2BuildDefaultTrue,
@@ -313,6 +317,7 @@ var (
 		"prebuilts/clang/host/linux-x86":                   Bp2BuildDefaultTrueRecursively,
 		"prebuilts/gradle-plugin":                          Bp2BuildDefaultTrueRecursively,
 		"prebuilts/runtime/mainline/platform/sdk":          Bp2BuildDefaultTrueRecursively,
+		"prebuilts/sdk":                                    Bp2BuildDefaultTrue,
 		"prebuilts/sdk/current/androidx":                   Bp2BuildDefaultTrue,
 		"prebuilts/sdk/current/androidx-legacy":            Bp2BuildDefaultTrue,
 		"prebuilts/sdk/current/extras/constraint-layout-x": Bp2BuildDefaultTrue,
@@ -568,6 +573,9 @@ var (
 		//external/fec
 		"libfec_rs",
 
+		//frameworks/base/core/java
+		"IDropBoxManagerService_aidl",
+
 		//system/core/libsparse
 		"libsparse",
 
@@ -749,6 +757,10 @@ var (
 		"CaptivePortalLogin",
 
 		"libstagefright_headers",
+
+		// aidl
+		"aidl",
+		"libaidl-common",
 	}
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
@@ -1557,6 +1569,7 @@ var (
 		"com.android.media.swcodec",
 		"test_com.android.media.swcodec",
 		"libstagefright_foundation",
+		"libcodec2_hidl@1.0",
 	}
 
 	// These should be the libs that are included by the apexes in the ProdMixedBuildsEnabledList

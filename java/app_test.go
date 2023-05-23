@@ -443,9 +443,9 @@ func TestUpdatableApps_JniLibShouldBeBuiltAgainstMinSdkVersion(t *testing.T) {
 	inputs := ctx.ModuleForTests("libjni", "android_arm64_armv8-a_sdk_shared").Description("link").Implicits
 	var crtbeginFound, crtendFound bool
 	expectedCrtBegin := ctx.ModuleForTests("crtbegin_so",
-		"android_arm64_armv8-a_sdk_29").Rule("partialLd").Output
+		"android_arm64_armv8-a_sdk_29").Rule("noAddrSig").Output
 	expectedCrtEnd := ctx.ModuleForTests("crtend_so",
-		"android_arm64_armv8-a_sdk_29").Rule("partialLd").Output
+		"android_arm64_armv8-a_sdk_29").Rule("noAddrSig").Output
 	implicits := []string{}
 	for _, input := range inputs {
 		implicits = append(implicits, input.String())
@@ -3381,6 +3381,14 @@ func TestAppMissingCertificateAllowMissingDependencies(t *testing.T) {
 			name: "foo",
 			srcs: ["a.java"],
 			certificate: ":missing_certificate",
+			sdk_version: "current",
+		}
+
+		android_app {
+			name: "bar",
+			srcs: ["a.java"],
+			certificate: ":missing_certificate",
+			product_specific: true,
 			sdk_version: "current",
 		}`)
 
