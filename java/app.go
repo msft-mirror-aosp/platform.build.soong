@@ -563,19 +563,6 @@ func processMainCert(m android.ModuleBase, certPropValue string, certificates []
 		certificates = append([]Certificate{mainCert}, certificates...)
 	}
 
-	if !m.Platform() {
-		certPath := certificates[0].Pem.String()
-		systemCertPath := ctx.Config().DefaultAppCertificateDir(ctx).String()
-		if strings.HasPrefix(certPath, systemCertPath) {
-			enforceSystemCert := ctx.Config().EnforceSystemCertificate()
-			allowed := ctx.Config().EnforceSystemCertificateAllowList()
-
-			if enforceSystemCert && !inList(m.Name(), allowed) {
-				ctx.PropertyErrorf("certificate", "The module in product partition cannot be signed with certificate in system.")
-			}
-		}
-	}
-
 	if len(certificates) > 0 {
 		mainCertificate = certificates[0]
 	} else {
@@ -590,6 +577,20 @@ func processMainCert(m android.ModuleBase, certPropValue string, certificates []
 			Pem: android.PathForModuleOut(ctx, "missing.x509.pem"),
 		}
 	}
+
+	if !m.Platform() {
+		certPath := mainCertificate.Pem.String()
+		systemCertPath := ctx.Config().DefaultAppCertificateDir(ctx).String()
+		if strings.HasPrefix(certPath, systemCertPath) {
+			enforceSystemCert := ctx.Config().EnforceSystemCertificate()
+			allowed := ctx.Config().EnforceSystemCertificateAllowList()
+
+			if enforceSystemCert && !inList(m.Name(), allowed) {
+				ctx.PropertyErrorf("certificate", "The module in product partition cannot be signed with certificate in system.")
+			}
+		}
+	}
+
 
 	return mainCertificate, certificates
 }
@@ -752,7 +753,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 
 type appDepsInterface interface {
 	SdkVersion(ctx android.EarlyModuleContext) android.SdkSpec
-	MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec
+	MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel
 	RequiresStableAPIs(ctx android.BaseModuleContext) bool
 }
 
@@ -865,10 +866,10 @@ func (a *AndroidApp) buildAppDependencyInfo(ctx android.ModuleContext) {
 		} else {
 			toMinSdkVersion := "(no version)"
 			if m, ok := to.(interface {
-				MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec
+				MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel
 			}); ok {
-				if v := m.MinSdkVersion(ctx); !v.ApiLevel.IsNone() {
-					toMinSdkVersion = v.ApiLevel.String()
+				if v := m.MinSdkVersion(ctx); !v.IsNone() {
+					toMinSdkVersion = v.String()
 				}
 			} else if m, ok := to.(interface{ MinSdkVersion() string }); ok {
 				// TODO(b/175678607) eliminate the use of MinSdkVersion returning
@@ -1495,6 +1496,10 @@ func androidAppCertificateBp2Build(ctx android.TopDownMutatorContext, module *An
 	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: module.Name()}, attrs)
 }
 
+type manifestValueAttribute struct {
+	MinSdkVersion *string
+}
+
 type bazelAndroidAppAttributes struct {
 	*javaCommonAttributes
 	*bazelAapt
@@ -1502,6 +1507,7 @@ type bazelAndroidAppAttributes struct {
 	Custom_package   *string
 	Certificate      bazel.LabelAttribute
 	Certificate_name bazel.StringAttribute
+	Manifest_values  *manifestValueAttribute
 }
 
 // ConvertWithBp2build is used to convert android_app to Bazel.
@@ -1516,11 +1522,23 @@ func (a *AndroidApp) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 
 	certificate, certificateName := android.BazelStringOrLabelFromProp(ctx, a.overridableAppProperties.Certificate)
 
+	manifestValues := &manifestValueAttribute{}
+	// TODO(b/274474008 ): Directly convert deviceProperties.Min_sdk_version in bp2build
+	// MinSdkVersion(ctx) calls SdkVersion(ctx) if no value for min_sdk_version is set
+	minSdkVersion := a.MinSdkVersion(ctx)
+	if !minSdkVersion.IsPreview() && !minSdkVersion.IsInvalid() {
+		minSdkStr, err := minSdkVersion.EffectiveVersionString(ctx)
+		if err == nil {
+			manifestValues.MinSdkVersion = &minSdkStr
+		}
+	}
+
 	appAttrs := &bazelAndroidAppAttributes{
 		// TODO(b/209576404): handle package name override by product variable PRODUCT_MANIFEST_PACKAGE_NAME_OVERRIDES
 		Custom_package:   a.overridableAppProperties.Package_name,
 		Certificate:      certificate,
 		Certificate_name: certificateName,
+		Manifest_values:  manifestValues,
 	}
 
 	props := bazel.BazelTargetModuleProperties{
@@ -1528,18 +1546,14 @@ func (a *AndroidApp) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 		Bzl_load_location: "//build/bazel/rules/android:rules.bzl",
 	}
 
-	if !bp2BuildInfo.hasKotlinSrcs && len(a.properties.Common_srcs) == 0 {
+	if !bp2BuildInfo.hasKotlin {
 		appAttrs.javaCommonAttributes = commonAttrs
 		appAttrs.bazelAapt = aapt
 		appAttrs.Deps = deps
 	} else {
 		ktName := a.Name() + "_kt"
-		commonAttrs.Common_srcs = bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrc(ctx, a.properties.Common_srcs))
 		ctx.CreateBazelTargetModule(
-			bazel.BazelTargetModuleProperties{
-				Rule_class:        "android_library",
-				Bzl_load_location: "//build/bazel/rules/android:rules.bzl",
-			},
+			AndroidLibraryBazelTargetModuleProperties(),
 			android.CommonAttributes{Name: ktName},
 			&bazelAndroidLibrary{
 				javaLibraryAttributes: &javaLibraryAttributes{
@@ -1552,6 +1566,9 @@ func (a *AndroidApp) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 
 		appAttrs.bazelAapt = &bazelAapt{Manifest: aapt.Manifest}
 		appAttrs.Deps = bazel.MakeSingleLabelListAttribute(bazel.Label{Label: ":" + ktName})
+		appAttrs.javaCommonAttributes = &javaCommonAttributes{
+			Sdk_version: commonAttrs.Sdk_version,
+		}
 	}
 
 	ctx.CreateBazelTargetModule(

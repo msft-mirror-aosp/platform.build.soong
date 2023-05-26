@@ -53,6 +53,7 @@ android_app {
 				"srcs":           `["app.java"]`,
 				"manifest":       `"AndroidManifest.xml"`,
 				"resource_files": `["res/res.png"]`,
+				"sdk_version":    `"current"`,
 			}),
 		}})
 }
@@ -91,7 +92,8 @@ android_app {
     ]`,
 				"custom_package":   `"com.google"`,
 				"deps":             `[":static_lib_dep"]`,
-				"javacopts":        `["-source 1.7 -target 1.7"]`,
+				"java_version":     `"7"`,
+				"sdk_version":      `"current"`,
 				"certificate_name": `"foocert"`,
 			}),
 		}})
@@ -131,6 +133,7 @@ android_app {
     })`,
 				"manifest":       `"AndroidManifest.xml"`,
 				"resource_files": `["res/res.png"]`,
+				"sdk_version":    `"current"`,
 			}),
 		}})
 }
@@ -303,6 +306,93 @@ java_library{
 				"deps":             `[":foo_kt"]`,
 				"certificate_name": `"foocert"`,
 				"manifest":         `"fooManifest.xml"`,
+			}),
+		}})
+}
+
+func TestAndroidAppKotlinCflags(t *testing.T) {
+	runAndroidAppTestCase(t, Bp2buildTestCase{
+		Description:                "Android app with kotlincflags",
+		ModuleTypeUnderTest:        "android_app",
+		ModuleTypeUnderTestFactory: java.AndroidAppFactory,
+		Filesystem: map[string]string{
+			"res/res.png": "",
+		},
+		Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "foocert") + `
+android_app {
+        name: "foo",
+        srcs: ["a.java", "b.kt"],
+        certificate: ":foocert",
+        manifest: "fooManifest.xml",
+        kotlincflags: ["-flag1", "-flag2"],
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("android_library", "foo_kt", AttrNameToString{
+				"srcs": `[
+        "a.java",
+        "b.kt",
+    ]`,
+				"manifest":       `"fooManifest.xml"`,
+				"resource_files": `["res/res.png"]`,
+				"kotlincflags": `[
+        "-flag1",
+        "-flag2",
+    ]`,
+			}),
+			MakeBazelTarget("android_binary", "foo", AttrNameToString{
+				"deps":        `[":foo_kt"]`,
+				"certificate": `":foocert"`,
+				"manifest":    `"fooManifest.xml"`,
+			}),
+		}})
+}
+
+func TestAndroidAppMinSdkProvided(t *testing.T) {
+	runAndroidAppTestCase(t, Bp2buildTestCase{
+		Description:                "Android app with value for min_sdk_version",
+		ModuleTypeUnderTest:        "android_app",
+		ModuleTypeUnderTestFactory: java.AndroidAppFactory,
+		Filesystem:                 map[string]string{},
+		Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "foocert") + `
+android_app {
+        name: "foo",
+        sdk_version: "current",
+				min_sdk_version: "24",
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("android_binary", "foo", AttrNameToString{
+				"manifest":       `"AndroidManifest.xml"`,
+				"resource_files": `[]`,
+				"manifest_values": `{
+        "minSdkVersion": "24",
+    }`,
+				"sdk_version": `"current"`,
+			}),
+		}})
+}
+
+func TestAndroidAppMinSdkDefaultToSdkVersion(t *testing.T) {
+	runAndroidAppTestCase(t, Bp2buildTestCase{
+		Description:                "Android app with value for sdk_version",
+		ModuleTypeUnderTest:        "android_app",
+		ModuleTypeUnderTestFactory: java.AndroidAppFactory,
+		Filesystem:                 map[string]string{},
+		Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "foocert") + `
+android_app {
+        name: "foo",
+        sdk_version: "30",
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("android_binary", "foo", AttrNameToString{
+				"manifest":       `"AndroidManifest.xml"`,
+				"resource_files": `[]`,
+				"manifest_values": `{
+        "minSdkVersion": "30",
+    }`,
+				"sdk_version": `"30"`,
 			}),
 		}})
 }

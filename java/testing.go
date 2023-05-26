@@ -80,9 +80,7 @@ var prepareForTestWithFrameworkDeps = android.GroupFixturePreparers(
 	}.AddToFixture(),
 )
 
-// Test fixture preparer that will define all default java modules except the
-// fake_tool_binary for dex2oatd.
-var PrepareForTestWithJavaDefaultModulesWithoutFakeDex2oatd = android.GroupFixturePreparers(
+var prepareForTestWithJavaDefaultModulesBase = android.GroupFixturePreparers(
 	// Make sure that all the module types used in the defaults are registered.
 	PrepareForTestWithJavaBuildComponents,
 	prepareForTestWithFrameworkDeps,
@@ -92,13 +90,21 @@ var PrepareForTestWithJavaDefaultModulesWithoutFakeDex2oatd = android.GroupFixtu
 
 // Test fixture preparer that will define default java modules, e.g. standard prebuilt modules.
 var PrepareForTestWithJavaDefaultModules = android.GroupFixturePreparers(
-	PrepareForTestWithJavaDefaultModulesWithoutFakeDex2oatd,
-	dexpreopt.PrepareForTestWithFakeDex2oatd,
+	prepareForTestWithJavaDefaultModulesBase,
+	dexpreopt.FixtureDisableDexpreoptBootImages(true),
+	dexpreopt.FixtureDisableDexpreopt(true),
 )
 
 // Provides everything needed by dexpreopt.
 var PrepareForTestWithDexpreopt = android.GroupFixturePreparers(
-	PrepareForTestWithJavaDefaultModules,
+	prepareForTestWithJavaDefaultModulesBase,
+	dexpreopt.PrepareForTestWithFakeDex2oatd,
+	dexpreopt.PrepareForTestByEnablingDexpreopt,
+)
+
+// Provides everything needed by dexpreopt except the fake_tool_binary for dex2oatd.
+var PrepareForTestWithDexpreoptWithoutFakeDex2oatd = android.GroupFixturePreparers(
+	prepareForTestWithJavaDefaultModulesBase,
 	dexpreopt.PrepareForTestByEnablingDexpreopt,
 )
 
@@ -198,7 +204,7 @@ func FixtureWithPrebuiltApisAndExtensions(apiLevel2Modules map[string][]string, 
 				imports_sdk_version: "none",
 				imports_compile_dex: true,
 			}
-		`, strings.Join(android.SortedStringKeys(apiLevel2Modules), `", "`))
+		`, strings.Join(android.SortedKeys(apiLevel2Modules), `", "`))
 
 	for release, modules := range apiLevel2Modules {
 		mockFS.Merge(prebuiltApisFilesForModules([]string{release}, modules))
@@ -368,6 +374,7 @@ func gatherRequiredDepsForTest() string {
 		"core.current.stubs",
 		"legacy.core.platform.api.stubs",
 		"stable.core.platform.api.stubs",
+
 		"kotlin-stdlib",
 		"kotlin-stdlib-jdk7",
 		"kotlin-stdlib-jdk8",
@@ -385,6 +392,28 @@ func gatherRequiredDepsForTest() string {
 				compile_dex: true,
 			}
 		`, extra)
+	}
+
+	extraApiLibraryModules := map[string]string{
+		"android_stubs_current.from-text":                 "api/current.txt",
+		"android_system_stubs_current.from-text":          "api/system-current.txt",
+		"android_test_stubs_current.from-text":            "api/test-current.txt",
+		"android_module_lib_stubs_current.from-text":      "api/module-lib-current.txt",
+		"android_module_lib_stubs_current_full.from-text": "api/module-lib-current.txt",
+		"android_system_server_stubs_current.from-text":   "api/system-server-current.txt",
+		"core.current.stubs.from-text":                    "api/current.txt",
+		"legacy.core.platform.api.stubs.from-text":        "api/current.txt",
+		"stable.core.platform.api.stubs.from-text":        "api/current.txt",
+		"core-lambda-stubs.from-text":                     "api/current.txt",
+	}
+
+	for libName, apiFile := range extraApiLibraryModules {
+		bp += fmt.Sprintf(`
+            java_api_library {
+                name: "%s",
+                api_files: ["%s"],
+            }
+        `, libName, apiFile)
 	}
 
 	bp += `
@@ -409,6 +438,10 @@ func gatherRequiredDepsForTest() string {
 		"core-module-lib-stubs-system-modules",
 		"legacy-core-platform-api-stubs-system-modules",
 		"stable-core-platform-api-stubs-system-modules",
+		"core-public-stubs-system-modules.from-text",
+		"core-module-lib-stubs-system-modules.from-text",
+		"legacy-core-platform-api-stubs-system-modules.from-text",
+		"stable-core-platform-api-stubs-system-modules.from-text",
 	}
 
 	for _, extra := range systemModules {
@@ -577,9 +610,9 @@ func FixtureModifyBootImageConfig(name string, configModifier func(*bootImageCon
 	})
 }
 
-// Sets the value of `installDirOnDevice` of the boot image config with the given name.
+// Sets the value of `installDir` of the boot image config with the given name.
 func FixtureSetBootImageInstallDirOnDevice(name string, installDir string) android.FixturePreparer {
 	return FixtureModifyBootImageConfig(name, func(config *bootImageConfig) {
-		config.installDirOnDevice = installDir
+		config.installDir = installDir
 	})
 }

@@ -74,7 +74,7 @@ func fixtureAddPrebuiltApexForBootclasspathFragment(apex, fragment string) andro
 func TestSnapshotWithBootclasspathFragment_ImageName(t *testing.T) {
 	result := android.GroupFixturePreparers(
 		prepareForSdkTestWithJava,
-		java.PrepareForTestWithJavaDefaultModules,
+		java.PrepareForTestWithDexpreopt,
 		prepareForSdkTestWithApex,
 
 		// Some additional files needed for the art apex.
@@ -839,6 +839,7 @@ func TestSnapshotWithBootclasspathFragment_HiddenAPI(t *testing.T) {
 				compile_dex: true,
 				public: {enabled: true},
 				permitted_packages: ["mysdklibrary"],
+				min_sdk_version: "current",
 			}
 
 			java_sdk_library {

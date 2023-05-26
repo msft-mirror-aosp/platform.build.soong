@@ -102,9 +102,9 @@ const (
 	// Whether to include the kati-generated ninja file in the combined ninja.
 	RunKatiNinja = 1 << iota
 	// Whether to run ninja on the combined ninja.
-	RunNinja      = 1 << iota
-	RunBuildTests = 1 << iota
-	RunAll        = RunProductConfig | RunSoong | RunKati | RunKatiNinja | RunNinja
+	RunNinja       = 1 << iota
+	RunDistActions = 1 << iota
+	RunBuildTests  = 1 << iota
 )
 
 // checkBazelMode fails the build if there are conflicting arguments for which bazel
@@ -259,10 +259,16 @@ func Build(ctx Context, config Config) {
 		startGoma(ctx, config)
 	}
 
+	rbeCh := make(chan bool)
 	if config.StartRBE() {
 		cleanupRBELogsDir(ctx, config)
-		startRBE(ctx, config)
+		go func() {
+			startRBE(ctx, config)
+			close(rbeCh)
+		}()
 		defer DumpRBEMetrics(ctx, config, filepath.Join(config.LogsDir(), "rbe_metrics.pb"))
+	} else {
+		close(rbeCh)
 	}
 
 	if what&RunProductConfig != 0 {
@@ -315,41 +321,49 @@ func Build(ctx Context, config Config) {
 		testForDanglingRules(ctx, config)
 	}
 
+	<-rbeCh
 	if what&RunNinja != 0 {
 		if what&RunKati != 0 {
 			installCleanIfNecessary(ctx, config)
 		}
-
 		runNinjaForBuild(ctx, config)
+	}
+
+	if what&RunDistActions != 0 {
+		runDistActions(ctx, config)
 	}
 }
 
 func evaluateWhatToRun(config Config, verboseln func(v ...interface{})) int {
 	//evaluate what to run
-	what := RunAll
+	what := 0
 	if config.Checkbuild() {
 		what |= RunBuildTests
 	}
-	if config.SkipConfig() {
+	if !config.SkipConfig() {
+		what |= RunProductConfig
+	} else {
 		verboseln("Skipping Config as requested")
-		what = what &^ RunProductConfig
 	}
-	if config.SkipKati() {
-		verboseln("Skipping Kati as requested")
-		what = what &^ RunKati
-	}
-	if config.SkipKatiNinja() {
-		verboseln("Skipping use of Kati ninja as requested")
-		what = what &^ RunKatiNinja
-	}
-	if config.SkipSoong() {
+	if !config.SkipSoong() {
+		what |= RunSoong
+	} else {
 		verboseln("Skipping use of Soong as requested")
-		what = what &^ RunSoong
 	}
-
-	if config.SkipNinja() {
+	if !config.SkipKati() {
+		what |= RunKati
+	} else {
+		verboseln("Skipping Kati as requested")
+	}
+	if !config.SkipKatiNinja() {
+		what |= RunKatiNinja
+	} else {
+		verboseln("Skipping use of Kati ninja as requested")
+	}
+	if !config.SkipNinja() {
+		what |= RunNinja
+	} else {
 		verboseln("Skipping Ninja as requested")
-		what = what &^ RunNinja
 	}
 
 	if !config.SoongBuildInvocationNeeded() {
@@ -361,6 +375,11 @@ func evaluateWhatToRun(config Config, verboseln func(v ...interface{})) int {
 		what = what &^ RunNinja
 		what = what &^ RunKati
 	}
+
+	if config.Dist() {
+		what |= RunDistActions
+	}
+
 	return what
 }
 
@@ -418,4 +437,10 @@ func distFile(ctx Context, config Config, src string, subDirs ...string) {
 			ctx.Printf("failed to dist %s: %s", filepath.Base(src), err.Error())
 		}
 	}()
+}
+
+// Actions to run on every build where 'dist' is in the actions.
+// Be careful, anything added here slows down EVERY CI build
+func runDistActions(ctx Context, config Config) {
+	runStagingSnapshot(ctx, config)
 }

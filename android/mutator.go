@@ -268,6 +268,11 @@ type TopDownMutatorContext interface {
 	// platforms, as dictated by a given bool attribute: the target will not be buildable in
 	// any platform for which this bool attribute is false.
 	CreateBazelTargetModuleWithRestrictions(bazel.BazelTargetModuleProperties, CommonAttributes, interface{}, bazel.BoolAttribute)
+
+	// CreateBazelTargetAliasInDir creates an alias definition in `dir` directory.
+	// This function can be used to create alias definitions in a directory that is different
+	// from the directory of the visited Soong module.
+	CreateBazelTargetAliasInDir(dir string, name string, actual bazel.Label)
 }
 
 type topDownMutatorContext struct {
@@ -705,6 +710,34 @@ func (t *topDownMutatorContext) CreateBazelTargetModuleWithRestrictions(
 	t.createBazelTargetModule(bazelProps, commonAttrs, attrs, enabledProperty)
 }
 
+var (
+	bazelAliasModuleProperties = bazel.BazelTargetModuleProperties{
+		Rule_class: "alias",
+	}
+)
+
+type bazelAliasAttributes struct {
+	Actual *bazel.LabelAttribute
+}
+
+func (t *topDownMutatorContext) CreateBazelTargetAliasInDir(
+	dir string,
+	name string,
+	actual bazel.Label) {
+	mod := t.Module()
+	attrs := &bazelAliasAttributes{
+		Actual: bazel.MakeLabelAttribute(actual.Label),
+	}
+	info := bp2buildInfo{
+		Dir:             dir,
+		BazelProps:      bazelAliasModuleProperties,
+		CommonAttrs:     CommonAttributes{Name: name},
+		ConstraintAttrs: constraintAttributes{},
+		Attrs:           attrs,
+	}
+	mod.base().addBp2buildInfo(info)
+}
+
 // ApexAvailableTags converts the apex_available property value of an ApexModule
 // module and returns it as a list of keyed tags.
 func ApexAvailableTags(mod Module) bazel.StringListAttribute {
@@ -714,7 +747,13 @@ func ApexAvailableTags(mod Module) bazel.StringListAttribute {
 		// TODO(b/218841706): hidl_interface has the apex_available prop, but it's
 		// defined directly as a prop and not via ApexModule, so this doesn't
 		// pick those props up.
-		attr.Value = ConvertApexAvailableToTags(am.apexModuleBase().ApexAvailable())
+		apexAvailable := am.apexModuleBase().ApexAvailable()
+		// If a user does not specify apex_available in Android.bp, then soong provides a default.
+		// To avoid verbosity of BUILD files, remove this default from user-facing BUILD files.
+		if len(am.apexModuleBase().ApexProperties.Apex_available) == 0 {
+			apexAvailable = []string{}
+		}
+		attr.Value = ConvertApexAvailableToTags(apexAvailable)
 	}
 	return attr
 }

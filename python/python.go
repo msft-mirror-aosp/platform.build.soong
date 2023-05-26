@@ -239,6 +239,7 @@ var (
 	protoExt                 = ".proto"
 	pyVersion2               = "PY2"
 	pyVersion3               = "PY3"
+	pyVersion2And3           = "PY2ANDPY3"
 	internalPath             = "internal"
 )
 
@@ -263,6 +264,12 @@ func versionSplitMutator() func(android.BottomUpMutatorContext) {
 				versionProps = append(versionProps, props.Version.Py3)
 			}
 			if proptools.BoolDefault(props.Version.Py2.Enabled, false) {
+				if !mctx.DeviceConfig().BuildBrokenUsesSoongPython2Modules() &&
+					mctx.ModuleName() != "par_test" &&
+					mctx.ModuleName() != "py2-cmd" &&
+					mctx.ModuleName() != "py2-stdlib" {
+					mctx.PropertyErrorf("version.py2.enabled", "Python 2 is no longer supported, please convert to python 3. This error can be temporarily overridden by setting BUILD_BROKEN_USES_SOONG_PYTHON2_MODULES := true in the product configuration")
+				}
 				versionNames = append(versionNames, pyVersion2)
 				versionProps = append(versionProps, props.Version.Py2)
 			}
@@ -532,7 +539,7 @@ func (p *PythonLibraryModule) createSrcsZip(ctx android.ModuleContext, pkgPath s
 
 	if len(relativeRootMap) > 0 {
 		// in order to keep stable order of soong_zip params, we sort the keys here.
-		roots := android.SortedStringKeys(relativeRootMap)
+		roots := android.SortedKeys(relativeRootMap)
 
 		// Use -symlinks=false so that the symlinks in the bazel output directory are followed
 		parArgs := []string{"-symlinks=false"}

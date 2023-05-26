@@ -100,17 +100,6 @@ func makeSymlinkCmd(linkDirOnDevice string, linkName string, target string) stri
 		"ln -sf " + target + " " + filepath.Join(dir, linkName)
 }
 
-func combineNoticesRule(ctx android.SingletonContext, paths android.Paths, out string) android.OutputPath {
-	outPath := android.PathForOutput(ctx, out)
-	ctx.Build(pctx, android.BuildParams{
-		Rule:        android.Cat,
-		Inputs:      paths,
-		Output:      outPath,
-		Description: "combine notices for " + out,
-	})
-	return outPath
-}
-
 // Dump a map to a list file as:
 //
 // {key1} {value1}
@@ -118,7 +107,7 @@ func combineNoticesRule(ctx android.SingletonContext, paths android.Paths, out s
 // ...
 func installMapListFileRule(ctx android.SingletonContext, m map[string]string, path string) android.OutputPath {
 	var txtBuilder strings.Builder
-	for idx, k := range android.SortedStringKeys(m) {
+	for idx, k := range android.SortedKeys(m) {
 		if idx > 0 {
 			txtBuilder.WriteString("\n")
 		}

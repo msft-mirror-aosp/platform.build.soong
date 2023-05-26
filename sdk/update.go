@@ -357,6 +357,12 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) {
 		// If the minApiLevel of the member is greater than the target API level then exclude it from
 		// this snapshot.
 		exclude := memberVariantDep.minApiLevel.GreaterThan(targetApiLevel)
+		// Always include host variants (e.g. host tools) in the snapshot.
+		// Host variants should not be guarded by a min_sdk_version check. In fact, host variants
+		// do not have a `min_sdk_version`.
+		if memberVariantDep.Host() {
+			exclude = false
+		}
 
 		addMember(name, export, exclude)
 
@@ -565,7 +571,7 @@ func (m *moduleInfo) MarshalJSON() ([]byte, error) {
 	if m.deps != nil {
 		writeObjectPair("@deps", m.deps)
 	}
-	for _, k := range android.SortedStringKeys(m.memberSpecific) {
+	for _, k := range android.SortedKeys(m.memberSpecific) {
 		v := m.memberSpecific[k]
 		writeObjectPair(k, v)
 	}
@@ -626,7 +632,7 @@ func (s *sdk) generateInfoData(ctx android.ModuleContext, memberVariantDeps []sd
 		getModuleInfo(memberVariantDep.variant)
 	}
 
-	for _, memberName := range android.SortedStringKeys(name2Info) {
+	for _, memberName := range android.SortedKeys(name2Info) {
 		info := name2Info[memberName]
 		modules = append(modules, info)
 	}
@@ -1263,6 +1269,11 @@ type sdkMemberVariantDep struct {
 	minApiLevel android.ApiLevel
 }
 
+// Host returns true if the sdk member is a host variant (e.g. host tool)
+func (s *sdkMemberVariantDep) Host() bool {
+	return s.variant.Target().Os.Class == android.Host
+}
+
 var _ android.SdkMember = (*sdkMember)(nil)
 
 // sdkMember groups all the variants of a specific member module together along with the name of the
@@ -1708,7 +1719,7 @@ func newArchSpecificInfo(ctx android.SdkMemberContext, archId archId, osType and
 		}
 
 		// Create the image variant info in a fixed order.
-		for _, imageVariantName := range android.SortedStringKeys(variantsByImage) {
+		for _, imageVariantName := range android.SortedKeys(variantsByImage) {
 			variants := variantsByImage[imageVariantName]
 			archInfo.imageVariantInfos = append(archInfo.imageVariantInfos, newImageVariantSpecificInfo(ctx, imageVariantName, variantPropertiesFactory, variants))
 		}

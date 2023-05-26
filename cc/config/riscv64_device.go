@@ -26,6 +26,9 @@ var (
 		// Help catch common 32/64-bit errors.
 		"-Werror=implicit-function-declaration",
 		"-fno-emulated-tls",
+		// A temporary fix for SExtWRemoval miscompilation bug.
+		"-mllvm",
+		"-riscv-disable-sextw-removal=true",
 	}
 
 	riscv64ArchVariantCflags = map[string][]string{}

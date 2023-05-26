@@ -219,13 +219,32 @@ func (a *aapt) aapt2Flags(ctx android.ModuleContext, sdkContext android.SdkConte
 	linkFlags = append(linkFlags, android.JoinWithPrefix(assetDirStrings, "-A "))
 	linkDeps = append(linkDeps, assetDeps...)
 
-	// SDK version flags
-	minSdkVersion, err := sdkContext.MinSdkVersion(ctx).EffectiveVersionString(ctx)
-	if err != nil {
-		ctx.ModuleErrorf("invalid minSdkVersion: %s", err)
+	// Returns the effective version for {min|target}_sdk_version
+	effectiveVersionString := func(sdkVersion android.SdkSpec, minSdkVersion android.ApiLevel) string {
+		// If {min|target}_sdk_version is current, use sdk_version to determine the effective level
+		// This is necessary for vendor modules.
+		// The effective version does not _only_ depend on {min|target}_sdk_version(level),
+		// but also on the sdk_version (kind+level)
+		if minSdkVersion.IsCurrent() {
+			ret, err := sdkVersion.EffectiveVersionString(ctx)
+			if err != nil {
+				ctx.ModuleErrorf("invalid sdk_version: %s", err)
+			}
+			return ret
+		}
+		ret, err := minSdkVersion.EffectiveVersionString(ctx)
+		if err != nil {
+			ctx.ModuleErrorf("invalid min_sdk_version: %s", err)
+		}
+		return ret
 	}
+	// SDK version flags
+	sdkVersion := sdkContext.SdkVersion(ctx)
+	minSdkVersion := effectiveVersionString(sdkVersion, sdkContext.MinSdkVersion(ctx))
 
 	linkFlags = append(linkFlags, "--min-sdk-version "+minSdkVersion)
+	// Use minSdkVersion for target-sdk-version, even if `target_sdk_version` is set
+	// This behavior has been copied from Make.
 	linkFlags = append(linkFlags, "--target-sdk-version "+minSdkVersion)
 
 	// Version code
@@ -670,7 +689,7 @@ type AARImport struct {
 	jniPackages android.Paths
 
 	sdkVersion    android.SdkSpec
-	minSdkVersion android.SdkSpec
+	minSdkVersion android.ApiLevel
 }
 
 var _ android.OutputFileProducer = (*AARImport)(nil)
@@ -695,19 +714,19 @@ func (a *AARImport) SystemModules() string {
 	return ""
 }
 
-func (a *AARImport) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
+func (a *AARImport) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
 	if a.properties.Min_sdk_version != nil {
-		return android.SdkSpecFrom(ctx, *a.properties.Min_sdk_version)
+		return android.ApiLevelFrom(ctx, *a.properties.Min_sdk_version)
 	}
-	return a.SdkVersion(ctx)
+	return a.SdkVersion(ctx).ApiLevel
 }
 
-func (a *AARImport) ReplaceMaxSdkVersionPlaceholder(ctx android.EarlyModuleContext) android.SdkSpec {
-	return android.SdkSpecFrom(ctx, "")
+func (a *AARImport) ReplaceMaxSdkVersionPlaceholder(ctx android.EarlyModuleContext) android.ApiLevel {
+	return android.SdkSpecFrom(ctx, "").ApiLevel
 }
 
-func (a *AARImport) TargetSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
-	return a.SdkVersion(ctx)
+func (a *AARImport) TargetSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
+	return a.SdkVersion(ctx).ApiLevel
 }
 
 func (a *AARImport) javaVersion() string {
@@ -996,9 +1015,10 @@ type bazelAndroidLibrary struct {
 }
 
 type bazelAndroidLibraryImport struct {
-	Aar     bazel.Label
-	Deps    bazel.LabelListAttribute
-	Exports bazel.LabelListAttribute
+	Aar         bazel.Label
+	Deps        bazel.LabelListAttribute
+	Exports     bazel.LabelListAttribute
+	Sdk_version bazel.StringAttribute
 }
 
 func (a *aapt) convertAaptAttrsWithBp2Build(ctx android.TopDownMutatorContext) *bazelAapt {
@@ -1040,27 +1060,34 @@ func (a *AARImport) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 		},
 		android.CommonAttributes{Name: name},
 		&bazelAndroidLibraryImport{
-			Aar:     aars.Includes[0],
-			Deps:    bazel.MakeLabelListAttribute(deps),
-			Exports: bazel.MakeLabelListAttribute(exports),
+			Aar:         aars.Includes[0],
+			Deps:        bazel.MakeLabelListAttribute(deps),
+			Exports:     bazel.MakeLabelListAttribute(exports),
+			Sdk_version: bazel.StringAttribute{Value: a.properties.Sdk_version},
 		},
 	)
 
 	neverlink := true
 	ctx.CreateBazelTargetModule(
-		bazel.BazelTargetModuleProperties{
-			Rule_class:        "android_library",
-			Bzl_load_location: "//build/bazel/rules/android:rules.bzl",
-		},
+		AndroidLibraryBazelTargetModuleProperties(),
 		android.CommonAttributes{Name: name + "-neverlink"},
 		&bazelAndroidLibrary{
 			javaLibraryAttributes: &javaLibraryAttributes{
 				Neverlink: bazel.BoolAttribute{Value: &neverlink},
 				Exports:   bazel.MakeSingleLabelListAttribute(bazel.Label{Label: ":" + name}),
+				javaCommonAttributes: &javaCommonAttributes{
+					Sdk_version: bazel.StringAttribute{Value: a.properties.Sdk_version},
+				},
 			},
 		},
 	)
 
+}
+func AndroidLibraryBazelTargetModuleProperties() bazel.BazelTargetModuleProperties {
+	return bazel.BazelTargetModuleProperties{
+		Rule_class:        "android_library",
+		Bzl_load_location: "//build/bazel/rules/android:rules.bzl",
+	}
 }
 
 func (a *AndroidLibrary) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
@@ -1073,16 +1100,8 @@ func (a *AndroidLibrary) ConvertWithBp2build(ctx android.TopDownMutatorContext) 
 	} else if !depLabels.Deps.IsEmpty() {
 		ctx.ModuleErrorf("Module has direct dependencies but no sources. Bazel will not allow this.")
 	}
-
-	if len(a.properties.Common_srcs) != 0 {
-		commonAttrs.Common_srcs = bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrc(ctx, a.properties.Common_srcs))
-	}
-
 	name := a.Name()
-	props := bazel.BazelTargetModuleProperties{
-		Rule_class:        "android_library",
-		Bzl_load_location: "//build/bazel/rules/android:rules.bzl",
-	}
+	props := AndroidLibraryBazelTargetModuleProperties()
 
 	ctx.CreateBazelTargetModule(
 		props,
@@ -1105,6 +1124,10 @@ func (a *AndroidLibrary) ConvertWithBp2build(ctx android.TopDownMutatorContext) 
 			javaLibraryAttributes: &javaLibraryAttributes{
 				Neverlink: bazel.BoolAttribute{Value: &neverlink},
 				Exports:   bazel.MakeSingleLabelListAttribute(bazel.Label{Label: ":" + name}),
+				javaCommonAttributes: &javaCommonAttributes{
+					Sdk_version:  bazel.StringAttribute{Value: a.deviceProperties.Sdk_version},
+					Java_version: bazel.StringAttribute{Value: a.properties.Java_version},
+				},
 			},
 		},
 	)
