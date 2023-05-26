@@ -288,6 +288,9 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	if config.buildFromTextStub {
 		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--build-from-text-stub")
 	}
+	if config.ensureAllowlistIntegrity {
+		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--ensure-allowlist-integrity")
+	}
 
 	queryviewDir := filepath.Join(config.SoongOutDir(), "queryview")
 	// The BUILD files will be generated in out/soong/.api_bp2build (no symlinks to src files)
@@ -397,6 +400,8 @@ func bootstrapBlueprint(ctx Context, config Config) {
 			pbi.Inputs = append(pbi.Inputs,
 				config.Bp2BuildFilesMarkerFile(),
 				filepath.Join(config.FileListDir(), "bazel.list"))
+		case bp2buildFilesTag:
+			pbi.Inputs = append(pbi.Inputs, filepath.Join(config.FileListDir(), "METADATA.list"))
 		}
 		invocations = append(invocations, pbi)
 	}

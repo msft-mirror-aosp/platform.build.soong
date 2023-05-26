@@ -67,28 +67,30 @@ type configImpl struct {
 	logsPrefix    string
 
 	// From the arguments
-	parallel          int
-	keepGoing         int
-	verbose           bool
-	checkbuild        bool
-	dist              bool
-	jsonModuleGraph   bool
-	apiBp2build       bool // Generate BUILD files for Soong modules that contribute APIs
-	bp2build          bool
-	queryview         bool
-	reportMkMetrics   bool // Collect and report mk2bp migration progress metrics.
-	soongDocs         bool
-	multitreeBuild    bool // This is a multitree build.
-	skipConfig        bool
-	skipKati          bool
-	skipKatiNinja     bool
-	skipSoong         bool
-	skipNinja         bool
-	skipSoongTests    bool
-	searchApiDir      bool // Scan the Android.bp files generated in out/api_surfaces
-	skipMetricsUpload bool
-	buildStartedTime  int64 // For metrics-upload-only - manually specify a build-started time
-	buildFromTextStub bool
+	parallel                 int
+	keepGoing                int
+	verbose                  bool
+	checkbuild               bool
+	dist                     bool
+	jsonModuleGraph          bool
+	apiBp2build              bool // Generate BUILD files for Soong modules that contribute APIs
+	bp2build                 bool
+	queryview                bool
+	reportMkMetrics          bool // Collect and report mk2bp migration progress metrics.
+	soongDocs                bool
+	multitreeBuild           bool // This is a multitree build.
+	skipConfig               bool
+	skipKati                 bool
+	skipKatiNinja            bool
+	skipSoong                bool
+	skipNinja                bool
+	skipSoongTests           bool
+	searchApiDir             bool // Scan the Android.bp files generated in out/api_surfaces
+	skipMetricsUpload        bool
+	buildStartedTime         int64 // For metrics-upload-only - manually specify a build-started time
+	buildFromTextStub        bool
+	ensureAllowlistIntegrity bool  // For CI builds - make sure modules are mixed-built
+	bazelExitCode            int32 // For b-runs - necessary for updating NonZeroExit
 
 	// From the product config
 	katiArgs        []string
@@ -297,11 +299,12 @@ func defaultBazelProdMode(cfg *configImpl) bool {
 	return true
 }
 
-func UploadOnlyConfig(ctx Context, _ ...string) Config {
+func UploadOnlyConfig(ctx Context, args ...string) Config {
 	ret := &configImpl{
 		environ:       OsEnvironment(),
 		sandboxConfig: &SandboxConfig{},
 	}
+	ret.parseArgs(ctx, args)
 	srcDir := absPath(ctx, ".")
 	bc := os.Getenv("ANDROID_BUILD_ENVIRONMENT_CONFIG")
 	if err := loadEnvConfig(ctx, ret, bc); err != nil {
@@ -813,9 +816,6 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			//   by a previous build.
 			c.skipConfig = true
 			c.skipKati = true
-		} else if arg == "--skip-kati" {
-			// TODO: remove --skip-kati once module builds have been migrated to --song-only
-			c.skipKati = true
 		} else if arg == "--soong-only" {
 			c.skipKati = true
 			c.skipKatiNinja = true
@@ -882,6 +882,16 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 				c.buildStartedTime = val
 			} else {
 				ctx.Fatalf("Error parsing build-time-started-unix-millis", err)
+			}
+		} else if arg == "--ensure-allowlist-integrity" {
+			c.ensureAllowlistIntegrity = true
+		} else if strings.HasPrefix(arg, "--bazel-exit-code=") {
+			bazelExitCodeStr := strings.TrimPrefix(arg, "--bazel-exit-code=")
+			val, err := strconv.Atoi(bazelExitCodeStr)
+			if err == nil {
+				c.bazelExitCode = int32(val)
+			} else {
+				ctx.Fatalf("Error parsing bazel-exit-code", err)
 			}
 		} else if len(arg) > 0 && arg[0] == '-' {
 			parseArgNum := func(def int) int {
@@ -1710,6 +1720,10 @@ func (c *configImpl) SkipMetricsUpload() bool {
 	return c.skipMetricsUpload
 }
 
+func (c *configImpl) EnsureAllowlistIntegrity() bool {
+	return c.ensureAllowlistIntegrity
+}
+
 // Returns a Time object if one was passed via a command-line flag.
 // Otherwise returns the passed default.
 func (c *configImpl) BuildStartedTimeOrDefault(defaultTime time.Time) time.Time {
@@ -1717,6 +1731,10 @@ func (c *configImpl) BuildStartedTimeOrDefault(defaultTime time.Time) time.Time 
 		return defaultTime
 	}
 	return time.UnixMilli(c.buildStartedTime)
+}
+
+func (c *configImpl) BazelExitCode() int32 {
+	return c.bazelExitCode
 }
 
 func GetMetricsUploader(topDir string, env *Environment) string {
