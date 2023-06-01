@@ -241,7 +241,7 @@ var (
 func vndkModuleLister(predicate func(*Module) bool) moduleListerFunc {
 	return func(ctx android.SingletonContext) (moduleNames, fileNames []string) {
 		ctx.VisitAllModules(func(m android.Module) {
-			if c, ok := m.(*Module); ok && predicate(c) {
+			if c, ok := m.(*Module); ok && predicate(c) && !c.IsVndkPrebuiltLibrary() {
 				filename, err := getVndkFileName(c)
 				if err != nil {
 					ctx.ModuleErrorf(m, "%s", err)
@@ -402,6 +402,11 @@ func VndkMutator(mctx android.BottomUpMutatorContext) {
 		m.VendorProperties.IsVNDKPrivate = Bool(prebuiltLib.Properties.Llndk.Private)
 	}
 
+	if m.IsVndkPrebuiltLibrary() && !m.IsVndk() {
+		m.VendorProperties.IsLLNDK = true
+		// TODO(b/280697209): copy "llndk.private" flag to vndk_prebuilt_shared
+	}
+
 	if (isLib && lib.buildShared()) || (isPrebuiltLib && prebuiltLib.buildShared()) {
 		if m.vndkdep != nil && m.vndkdep.isVndk() && !m.vndkdep.isVndkExt() {
 			processVndkLibrary(mctx, m)
@@ -412,16 +417,16 @@ func VndkMutator(mctx android.BottomUpMutatorContext) {
 
 func init() {
 	RegisterVndkLibraryTxtTypes(android.InitRegistrationContext)
-	android.RegisterSingletonType("vndk-snapshot", VndkSnapshotSingleton)
+	android.RegisterParallelSingletonType("vndk-snapshot", VndkSnapshotSingleton)
 }
 
 func RegisterVndkLibraryTxtTypes(ctx android.RegistrationContext) {
-	ctx.RegisterSingletonModuleType("llndk_libraries_txt", llndkLibrariesTxtFactory)
-	ctx.RegisterSingletonModuleType("vndksp_libraries_txt", vndkSPLibrariesTxtFactory)
-	ctx.RegisterSingletonModuleType("vndkcore_libraries_txt", vndkCoreLibrariesTxtFactory)
-	ctx.RegisterSingletonModuleType("vndkprivate_libraries_txt", vndkPrivateLibrariesTxtFactory)
-	ctx.RegisterSingletonModuleType("vndkproduct_libraries_txt", vndkProductLibrariesTxtFactory)
-	ctx.RegisterSingletonModuleType("vndkcorevariant_libraries_txt", vndkUsingCoreVariantLibrariesTxtFactory)
+	ctx.RegisterParallelSingletonModuleType("llndk_libraries_txt", llndkLibrariesTxtFactory)
+	ctx.RegisterParallelSingletonModuleType("vndksp_libraries_txt", vndkSPLibrariesTxtFactory)
+	ctx.RegisterParallelSingletonModuleType("vndkcore_libraries_txt", vndkCoreLibrariesTxtFactory)
+	ctx.RegisterParallelSingletonModuleType("vndkprivate_libraries_txt", vndkPrivateLibrariesTxtFactory)
+	ctx.RegisterParallelSingletonModuleType("vndkproduct_libraries_txt", vndkProductLibrariesTxtFactory)
+	ctx.RegisterParallelSingletonModuleType("vndkcorevariant_libraries_txt", vndkUsingCoreVariantLibrariesTxtFactory)
 }
 
 type vndkLibrariesTxt struct {

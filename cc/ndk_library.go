@@ -342,7 +342,14 @@ func canDumpAbi(config android.Config) bool {
 	if android.InList("hwaddress", config.SanitizeDevice()) {
 		return false
 	}
-	return true
+	// http://b/156513478
+	// http://b/277624006
+	// This step is expensive. We're not able to do anything with the outputs of
+	// this step yet (canDiffAbi is flagged off because libabigail isn't able to
+	// handle all our libraries), disable it. There's no sense in protecting
+	// against checking in code that breaks abidw since by the time any of this
+	// can be turned on we'll need to migrate to STG anyway.
+	return false
 }
 
 // Feature flag to disable diffing against prebuilts.
@@ -591,25 +598,4 @@ func apiHeaderLabels(ctx android.TopDownMutatorContext, hdrLibs []string) bazel.
 		return android.ApiContributionTargetName(label)
 	}
 	return android.BazelLabelForModuleDepsWithFn(ctx, hdrLibs, addSuffix)
-}
-
-func ndkLibraryBp2build(ctx android.TopDownMutatorContext, m *Module) {
-	props := bazel.BazelTargetModuleProperties{
-		Rule_class:        "cc_api_contribution",
-		Bzl_load_location: "//build/bazel/rules/apis:cc_api_contribution.bzl",
-	}
-	stubLibrary := m.compiler.(*stubDecorator)
-	attrs := &bazelCcApiContributionAttributes{
-		Library_name: stubLibrary.implementationModuleName(m.Name()),
-		Api_surfaces: bazel.MakeStringListAttribute(
-			[]string{android.PublicApi.String()}),
-	}
-	if symbolFile := stubLibrary.properties.Symbol_file; symbolFile != nil {
-		apiLabel := android.BazelLabelForModuleSrcSingle(ctx, proptools.String(symbolFile)).Label
-		attrs.Api = *bazel.MakeLabelAttribute(apiLabel)
-	}
-	apiHeaders := apiHeaderLabels(ctx, stubLibrary.properties.Export_header_libs)
-	attrs.Hdrs = bazel.MakeLabelListAttribute(apiHeaders)
-	apiContributionTargetName := android.ApiContributionTargetName(ctx.ModuleName())
-	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: apiContributionTargetName}, attrs)
 }

@@ -593,6 +593,12 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		}
 	}
 
+	// Enable HWASan for all components in the include paths (for Aarch64 only)
+	if s.Hwaddress == nil && ctx.Config().HWASanEnabledForPath(ctx.ModuleDir()) &&
+		ctx.Arch().ArchType == android.Arm64 && ctx.toolchain().Bionic() {
+		s.Hwaddress = proptools.BoolPtr(true)
+	}
+
 	// Enable CFI for non-host components in the include paths
 	if s.Cfi == nil && ctx.Config().CFIEnabledForPath(ctx.ModuleDir()) && !ctx.Host() {
 		s.Cfi = proptools.BoolPtr(true)
@@ -657,6 +663,21 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 	if ctx.toolchain().Musl() {
 		s.Cfi = nil
 		s.Diag.Cfi = nil
+	}
+
+	// TODO(b/280478629): runtimes don't exist for musl arm64 yet.
+	if ctx.toolchain().Musl() && ctx.Arch().ArchType == android.Arm64 {
+		s.Address = nil
+		s.Hwaddress = nil
+		s.Thread = nil
+		s.Scudo = nil
+		s.Fuzzer = nil
+		s.Cfi = nil
+		s.Diag.Cfi = nil
+		s.Misc_undefined = nil
+		s.Undefined = nil
+		s.All_undefined = nil
+		s.Integer_overflow = nil
 	}
 
 	// Also disable CFI for VNDK variants of components

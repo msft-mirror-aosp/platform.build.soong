@@ -80,9 +80,10 @@ type SoongBuildMode int
 
 type CmdArgs struct {
 	bootstrap.Args
-	RunGoTests  bool
-	OutDir      string
-	SoongOutDir string
+	RunGoTests     bool
+	OutDir         string
+	SoongOutDir    string
+	SoongVariables string
 
 	SymlinkForestMarker string
 	Bp2buildMarker      string
@@ -102,6 +103,8 @@ type CmdArgs struct {
 	UseBazelProxy bool
 
 	BuildFromTextStub bool
+
+	EnsureAllowlistIntegrity bool
 }
 
 // Build modes that soong_build can run as.
@@ -172,6 +175,23 @@ func (c Config) PrimaryBuilderInvocations() []bootstrap.PrimaryBuilderInvocation
 // RunningInsideUnitTest returns true if this code is being run as part of a Soong unit test.
 func (c Config) RunningInsideUnitTest() bool {
 	return c.config.TestProductVariables != nil
+}
+
+// MaxPageSizeSupported returns the max page size supported by the device. This
+// value will define the ELF segment alignment for binaries (executables and
+// shared libraries).
+func (c Config) MaxPageSizeSupported() string {
+	return String(c.config.productVariables.DeviceMaxPageSizeSupported)
+}
+
+// The release version passed to aconfig, derived from RELEASE_VERSION
+func (c Config) ReleaseVersion() string {
+	return c.config.productVariables.ReleaseVersion
+}
+
+// The flag values files passed to aconfig, derived from RELEASE_VERSION
+func (c Config) ReleaseDeviceConfigValueSets() []string {
+	return c.config.productVariables.ReleaseDeviceConfigValueSets
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -278,6 +298,14 @@ type config struct {
 	// If buildFromTextStub is true then the Java API stubs are
 	// built from the signature text files, not the source Java files.
 	buildFromTextStub bool
+
+	// If ensureAllowlistIntegrity is true, then the presence of any allowlisted
+	// modules that aren't mixed-built for at least one variant will cause a build
+	// failure
+	ensureAllowlistIntegrity bool
+
+	// List of Api libraries that contribute to Api surfaces.
+	apiLibraries map[string]struct{}
 }
 
 type deviceConfig struct {
@@ -464,7 +492,7 @@ func NullConfig(outDir, soongOutDir string) Config {
 func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) {
 	// Make a config with default options.
 	config := &config{
-		ProductVariablesFileName: filepath.Join(cmdArgs.SoongOutDir, productVariablesFileName),
+		ProductVariablesFileName: cmdArgs.SoongVariables,
 
 		env: availableEnv,
 
@@ -592,13 +620,47 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 	setBazelMode(cmdArgs.BazelMode, "--bazel-mode", BazelProdMode)
 	setBazelMode(cmdArgs.BazelModeStaging, "--bazel-mode-staging", BazelStagingMode)
 
-	for _, module := range strings.Split(cmdArgs.BazelForceEnabledModules, ",") {
+	for _, module := range getForceEnabledModulesFromFlag(cmdArgs.BazelForceEnabledModules) {
 		config.bazelForceEnabledModules[module] = struct{}{}
 	}
 	config.BazelContext, err = NewBazelContext(config)
 	config.Bp2buildPackageConfig = GetBp2BuildAllowList()
 
+	// TODO(b/276958307): Replace the hardcoded list to a sdk_library local prop.
+	config.apiLibraries = map[string]struct{}{
+		"android.net.ipsec.ike":             {},
+		"art.module.public.api":             {},
+		"conscrypt.module.public.api":       {},
+		"framework-adservices":              {},
+		"framework-appsearch":               {},
+		"framework-bluetooth":               {},
+		"framework-connectivity":            {},
+		"framework-connectivity-t":          {},
+		"framework-graphics":                {},
+		"framework-media":                   {},
+		"framework-mediaprovider":           {},
+		"framework-ondevicepersonalization": {},
+		"framework-permission":              {},
+		"framework-permission-s":            {},
+		"framework-scheduling":              {},
+		"framework-sdkextensions":           {},
+		"framework-statsd":                  {},
+		"framework-sdksandbox":              {},
+		"framework-tethering":               {},
+		"framework-uwb":                     {},
+		"framework-virtualization":          {},
+		"framework-wifi":                    {},
+		"i18n.module.public.api":            {},
+	}
+
 	return Config{config}, err
+}
+
+func getForceEnabledModulesFromFlag(forceEnabledFlag string) []string {
+	if forceEnabledFlag == "" {
+		return []string{}
+	}
+	return strings.Split(forceEnabledFlag, ",")
 }
 
 // mockFileSystem replaces all reads with accesses to the provided map of
@@ -693,6 +755,14 @@ func (c *config) HostJNIToolPath(ctx PathContext, lib string) Path {
 func (c *config) HostJavaToolPath(ctx PathContext, tool string) Path {
 	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "framework", false, tool)
 	return path
+}
+
+func (c *config) HostCcSharedLibPath(ctx PathContext, lib string) Path {
+	libDir := "lib"
+	if ctx.Config().BuildArch.Multilib == "lib64" {
+		libDir = "lib64"
+	}
+	return pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, libDir, false, lib+".so")
 }
 
 // PrebuiltOS returns the name of the host OS used in prebuilts directories.
@@ -1557,6 +1627,13 @@ func (c *config) MemtagHeapSyncEnabledForPath(path string) bool {
 	return HasAnyPrefix(path, c.productVariables.MemtagHeapSyncIncludePaths) && !c.MemtagHeapDisabledForPath(path)
 }
 
+func (c *config) HWASanEnabledForPath(path string) bool {
+	if len(c.productVariables.HWASanIncludePaths) == 0 {
+		return false
+	}
+	return HasAnyPrefix(path, c.productVariables.HWASanIncludePaths)
+}
+
 func (c *config) VendorConfig(name string) VendorConfig {
 	return soongconfig.Config(c.productVariables.VendorVars[name])
 }
@@ -1812,6 +1889,10 @@ func (c *deviceConfig) ShippingApiLevel() ApiLevel {
 	return uncheckedFinalApiLevel(apiLevel)
 }
 
+func (c *deviceConfig) BuildBrokenPluginValidation() []string {
+	return c.config.productVariables.BuildBrokenPluginValidation
+}
+
 func (c *deviceConfig) BuildBrokenClangAsFlags() bool {
 	return c.config.productVariables.BuildBrokenClangAsFlags
 }
@@ -1848,8 +1929,8 @@ func (c *deviceConfig) BuildBrokenInputDir(name string) bool {
 	return InList(name, c.config.productVariables.BuildBrokenInputDirModules)
 }
 
-func (c *deviceConfig) BuildBrokenDepfile() bool {
-	return Bool(c.config.productVariables.BuildBrokenDepfile)
+func (c *deviceConfig) GenruleSandboxing() bool {
+	return Bool(c.config.productVariables.GenruleSandboxing)
 }
 
 func (c *deviceConfig) RequiresInsecureExecmemForSwiftshader() bool {
@@ -1904,6 +1985,14 @@ func (c *config) UseHostMusl() bool {
 	return Bool(c.productVariables.HostMusl)
 }
 
+func (c *config) GetMixedBuildsEnabledModules() map[string]struct{} {
+	return c.mixedBuildEnabledModules
+}
+
+func (c *config) GetMixedBuildsDisabledModules() map[string]struct{} {
+	return c.mixedBuildDisabledModules
+}
+
 func (c *config) LogMixedBuild(ctx BaseModuleContext, useBazel bool) {
 	moduleName := ctx.Module().Name()
 	c.mixedBuildsLock.Lock()
@@ -1933,8 +2022,20 @@ func (c *config) BuildFromTextStub() bool {
 func (c *config) SetBuildFromTextStub(b bool) {
 	c.buildFromTextStub = b
 }
+
 func (c *config) AddForceEnabledModules(forceEnabled []string) {
 	for _, forceEnabledModule := range forceEnabled {
 		c.bazelForceEnabledModules[forceEnabledModule] = struct{}{}
 	}
+}
+
+func (c *config) SetApiLibraries(libs []string) {
+	c.apiLibraries = make(map[string]struct{})
+	for _, lib := range libs {
+		c.apiLibraries[lib] = struct{}{}
+	}
+}
+
+func (c *config) GetApiLibraries() map[string]struct{} {
+	return c.apiLibraries
 }
