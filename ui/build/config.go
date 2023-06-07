@@ -17,6 +17,7 @@ package build
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
@@ -140,6 +141,9 @@ const (
 	EXTERNAL_FILE
 	// ninja uses a prioritized module list from Soong
 	HINT_FROM_SOONG
+	// If ninja log exists, use NINJA_LOG, if not, use HINT_FROM_SOONG instead.
+	// We can assume it is an incremental build if ninja log exists.
+	DEFAULT
 )
 const srcDirFileCheck = "build/soong/root.bp"
 
@@ -316,8 +320,9 @@ func UploadOnlyConfig(ctx Context, args ...string) Config {
 
 func NewConfig(ctx Context, args ...string) Config {
 	ret := &configImpl{
-		environ:       OsEnvironment(),
-		sandboxConfig: &SandboxConfig{},
+		environ:               OsEnvironment(),
+		sandboxConfig:         &SandboxConfig{},
+		ninjaWeightListSource: DEFAULT,
 	}
 
 	// Default matching ninja
@@ -328,8 +333,21 @@ func NewConfig(ctx Context, args ...string) Config {
 	ret.parseArgs(ctx, args)
 
 	if ret.ninjaWeightListSource == HINT_FROM_SOONG {
-		ret.environ.Set("SOONG_GENERATES_NINJA_HINT", "true")
+		ret.environ.Set("SOONG_GENERATES_NINJA_HINT", "always")
+	} else if ret.ninjaWeightListSource == DEFAULT {
+		defaultNinjaWeightListSource := NINJA_LOG
+		if _, err := os.Stat(filepath.Join(ret.OutDir(), ninjaLogFileName)); errors.Is(err, os.ErrNotExist) {
+			ctx.Verboseln("$OUT/.ninja_log doesn't exist, use HINT_FROM_SOONG instead")
+			defaultNinjaWeightListSource = HINT_FROM_SOONG
+		} else {
+			ctx.Verboseln("$OUT/.ninja_log exist, use NINJA_LOG")
+		}
+		ret.ninjaWeightListSource = defaultNinjaWeightListSource
+		// soong_build generates ninja hint depending on ninja log existence.
+		// Set it "depend" to avoid soong re-run due to env variable change.
+		ret.environ.Set("SOONG_GENERATES_NINJA_HINT", "depend")
 	}
+
 	// Make sure OUT_DIR is set appropriately
 	if outDir, ok := ret.environ.Get("OUT_DIR"); ok {
 		ret.environ.Set("OUT_DIR", filepath.Clean(outDir))
@@ -1229,6 +1247,13 @@ func (c *configImpl) TargetProduct() string {
 	panic("TARGET_PRODUCT is not defined")
 }
 
+func (c *configImpl) TargetProductOrErr() (string, error) {
+	if v, ok := c.environ.Get("TARGET_PRODUCT"); ok {
+		return v, nil
+	}
+	return "", fmt.Errorf("TARGET_PRODUCT is not defined")
+}
+
 func (c *configImpl) TargetDevice() string {
 	return c.targetDevice
 }
@@ -1486,7 +1511,7 @@ func (c *configImpl) GoogleProdCredsExist() bool {
 	if googleProdCredsExistCache {
 		return googleProdCredsExistCache
 	}
-	if _, err := exec.Command("/usr/bin/prodcertstatus", "--simple_output", "--nocheck_loas").Output(); err != nil {
+	if _, err := exec.Command("/usr/bin/gcertstatus").Output(); err != nil {
 		return false
 	}
 	googleProdCredsExistCache = true
@@ -1554,11 +1579,21 @@ func (c *configImpl) KatiPackageNinjaFile() string {
 }
 
 func (c *configImpl) SoongVarsFile() string {
-	return filepath.Join(c.SoongOutDir(), "soong.variables")
+	targetProduct, err := c.TargetProductOrErr()
+	if err != nil {
+		return filepath.Join(c.SoongOutDir(), "soong.variables")
+	} else {
+		return filepath.Join(c.SoongOutDir(), "soong."+targetProduct+".variables")
+	}
 }
 
 func (c *configImpl) SoongNinjaFile() string {
-	return filepath.Join(c.SoongOutDir(), "build.ninja")
+	targetProduct, err := c.TargetProductOrErr()
+	if err != nil {
+		return filepath.Join(c.SoongOutDir(), "build.ninja")
+	} else {
+		return filepath.Join(c.SoongOutDir(), "build."+targetProduct+".ninja")
+	}
 }
 
 func (c *configImpl) CombinedNinjaFile() string {
@@ -1710,6 +1745,16 @@ func (c *configImpl) IsBazelMixedBuildForceDisabled() bool {
 
 func (c *configImpl) IsPersistentBazelEnabled() bool {
 	return c.Environment().IsEnvTrue("USE_PERSISTENT_BAZEL")
+}
+
+// GetBazeliskBazelVersion returns the Bazel version to use for this build,
+// or the empty string if the current canonical prod Bazel should be used.
+// This environment variable should only be set to debug the build system.
+// The Bazel version, if set, will be passed to Bazelisk, and Bazelisk will
+// handle downloading and invoking the correct Bazel binary.
+func (c *configImpl) GetBazeliskBazelVersion() string {
+	value, _ := c.Environment().Get("USE_BAZEL_VERSION")
+	return value
 }
 
 func (c *configImpl) BazelModulesForceEnabledByFlag() string {

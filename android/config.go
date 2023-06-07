@@ -80,9 +80,10 @@ type SoongBuildMode int
 
 type CmdArgs struct {
 	bootstrap.Args
-	RunGoTests  bool
-	OutDir      string
-	SoongOutDir string
+	RunGoTests     bool
+	OutDir         string
+	SoongOutDir    string
+	SoongVariables string
 
 	SymlinkForestMarker string
 	Bp2buildMarker      string
@@ -491,7 +492,7 @@ func NullConfig(outDir, soongOutDir string) Config {
 func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) {
 	// Make a config with default options.
 	config := &config{
-		ProductVariablesFileName: filepath.Join(cmdArgs.SoongOutDir, productVariablesFileName),
+		ProductVariablesFileName: cmdArgs.SoongVariables,
 
 		env: availableEnv,
 
@@ -515,6 +516,8 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 	config.deviceConfig = &deviceConfig{
 		config: config,
 	}
+
+	config.productVariables.Build_from_text_stub = boolPtr(config.buildFromTextStub)
 
 	// Soundness check of the build and source directories. This won't catch strange
 	// configurations with symlinks, but at least checks the obvious case.
@@ -1709,10 +1712,6 @@ func (c *config) ProductPrivateSepolicyDirs() []string {
 	return c.productVariables.ProductPrivateSepolicyDirs
 }
 
-func (c *config) MissingUsesLibraries() []string {
-	return c.productVariables.MissingUsesLibraries
-}
-
 func (c *config) TargetMultitreeUpdateMeta() bool {
 	return c.productVariables.MultitreeUpdateMeta
 }
@@ -1928,6 +1927,10 @@ func (c *deviceConfig) BuildBrokenInputDir(name string) bool {
 	return InList(name, c.config.productVariables.BuildBrokenInputDirModules)
 }
 
+func (c *config) BuildWarningBadOptionalUsesLibsAllowlist() []string {
+	return c.productVariables.BuildWarningBadOptionalUsesLibsAllowlist
+}
+
 func (c *deviceConfig) GenruleSandboxing() bool {
 	return Bool(c.config.productVariables.GenruleSandboxing)
 }
@@ -1938,10 +1941,6 @@ func (c *deviceConfig) RequiresInsecureExecmemForSwiftshader() bool {
 
 func (c *config) SelinuxIgnoreNeverallows() bool {
 	return c.productVariables.SelinuxIgnoreNeverallows
-}
-
-func (c *deviceConfig) SepolicySplit() bool {
-	return c.config.productVariables.SepolicySplit
 }
 
 func (c *deviceConfig) SepolicyFreezeTestExtraDirs() []string {
@@ -2020,6 +2019,7 @@ func (c *config) BuildFromTextStub() bool {
 
 func (c *config) SetBuildFromTextStub(b bool) {
 	c.buildFromTextStub = b
+	c.productVariables.Build_from_text_stub = boolPtr(b)
 }
 
 func (c *config) AddForceEnabledModules(forceEnabled []string) {
