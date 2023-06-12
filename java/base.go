@@ -79,6 +79,9 @@ type CommonProperties struct {
 	// list of java libraries that will be compiled into the resulting jar
 	Static_libs []string `android:"arch_variant"`
 
+	// list of java libraries that should not be used to build this module
+	Exclude_static_libs []string `android:"arch_variant"`
+
 	// manifest file to be included in resulting jar
 	Manifest *string `android:"path"`
 
@@ -184,6 +187,9 @@ type CommonProperties struct {
 
 	// A list of java_library instances that provide additional hiddenapi annotations for the library.
 	Hiddenapi_additional_annotations []string
+
+	// Additional srcJars tacked in by GeneratedJavaLibraryModule
+	Generated_srcjars []android.Path `android:"mutated"`
 }
 
 // Properties that are specific to device modules. Host module factories should not add these when
@@ -724,6 +730,8 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 	}
 
 	libDeps := ctx.AddVariationDependencies(nil, libTag, j.properties.Libs...)
+
+	j.properties.Static_libs = android.RemoveListFromList(j.properties.Static_libs, j.properties.Exclude_static_libs)
 	ctx.AddVariationDependencies(nil, staticLibTag, j.properties.Static_libs...)
 
 	// Add dependency on libraries that provide additional hidden api annotations.
@@ -1036,6 +1044,10 @@ func (j *Module) AddJSONData(d *map[string]interface{}) {
 
 }
 
+func (module *Module) addGeneratedSrcJars(path android.Path) {
+	module.properties.Generated_srcjars = append(module.properties.Generated_srcjars, path)
+}
+
 func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 	j.exportAidlIncludeDirs = android.PathsForModuleSrc(ctx, j.deviceProperties.Aidl.Export_include_dirs)
 
@@ -1076,6 +1088,10 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 	srcJars = append(srcJars, deps.srcJars...)
 	if aaptSrcJar != nil {
 		srcJars = append(srcJars, aaptSrcJar)
+	}
+	srcJars = append(srcJars, j.properties.Generated_srcjars...)
+	if len(j.properties.Generated_srcjars) > 0 {
+		fmt.Printf("Java module %s Generated_srcjars: %v\n", ctx.ModuleName(), j.properties.Generated_srcjars)
 	}
 	srcFiles = srcFiles.FilterOutByExt(".srcjar")
 
@@ -1923,22 +1939,22 @@ type moduleWithSdkDep interface {
 
 func (m *Module) getSdkLinkType(ctx android.BaseModuleContext, name string) (ret sdkLinkType, stubs bool) {
 	switch name {
-	case android.SdkCore.JavaLibraryName(ctx.Config()),
-		android.JavaApiLibraryName(ctx.Config(), "legacy.core.platform.api.stubs"),
-		android.JavaApiLibraryName(ctx.Config(), "stable.core.platform.api.stubs"),
+	case android.SdkCore.DefaultJavaLibraryName(),
+		"legacy.core.platform.api.stubs",
+		"stable.core.platform.api.stubs",
 		"stub-annotations", "private-stub-annotations-jar",
-		android.JavaApiLibraryName(ctx.Config(), "core-lambda-stubs"),
+		"core-lambda-stubs",
 		"core-generated-annotation-stubs":
 		return javaCore, true
-	case android.SdkPublic.JavaLibraryName(ctx.Config()):
+	case android.SdkPublic.DefaultJavaLibraryName():
 		return javaSdk, true
-	case android.SdkSystem.JavaLibraryName(ctx.Config()):
+	case android.SdkSystem.DefaultJavaLibraryName():
 		return javaSystem, true
-	case android.SdkModule.JavaLibraryName(ctx.Config()):
+	case android.SdkModule.DefaultJavaLibraryName():
 		return javaModule, true
-	case android.SdkSystemServer.JavaLibraryName(ctx.Config()):
+	case android.SdkSystemServer.DefaultJavaLibraryName():
 		return javaSystemServer, true
-	case android.SdkTest.JavaLibraryName(ctx.Config()):
+	case android.SdkTest.DefaultJavaLibraryName():
 		return javaSystem, true
 	}
 
@@ -2187,6 +2203,10 @@ func (j *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	case "java_binary_host":
 		if binary, ok := ctx.Module().(*Binary); ok {
 			javaBinaryHostBp2Build(ctx, binary)
+		}
+	case "java_test_host":
+		if testHost, ok := ctx.Module().(*TestHost); ok {
+			javaTestHostBp2Build(ctx, testHost)
 		}
 	}
 }

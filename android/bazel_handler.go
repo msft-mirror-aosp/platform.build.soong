@@ -187,6 +187,9 @@ type BazelContext interface {
 	// Returns the results of the GetCcUnstrippedInfo query
 	GetCcUnstrippedInfo(label string, cfgkey configKey) (cquery.CcUnstrippedInfo, error)
 
+	// Returns the results of the GetPrebuiltFileInfo query
+	GetPrebuiltFileInfo(label string, cfgKey configKey) (cquery.PrebuiltFileInfo, error)
+
 	// ** end Cquery Results Retrieval Functions
 
 	// Issues commands to Bazel to receive results for all cquery requests
@@ -272,11 +275,12 @@ var _ BazelContext = noopBazelContext{}
 type MockBazelContext struct {
 	OutputBaseDir string
 
-	LabelToOutputFiles  map[string][]string
-	LabelToCcInfo       map[string]cquery.CcInfo
-	LabelToPythonBinary map[string]string
-	LabelToApexInfo     map[string]cquery.ApexInfo
-	LabelToCcBinary     map[string]cquery.CcUnstrippedInfo
+	LabelToOutputFiles      map[string][]string
+	LabelToCcInfo           map[string]cquery.CcInfo
+	LabelToPythonBinary     map[string]string
+	LabelToApexInfo         map[string]cquery.ApexInfo
+	LabelToCcBinary         map[string]cquery.CcUnstrippedInfo
+	LabelToPrebuiltFileInfo map[string]cquery.PrebuiltFileInfo
 
 	BazelRequests map[string]bool
 }
@@ -321,6 +325,14 @@ func (m MockBazelContext) GetCcUnstrippedInfo(label string, _ configKey) (cquery
 	result, ok := m.LabelToCcBinary[label]
 	if !ok {
 		return cquery.CcUnstrippedInfo{}, fmt.Errorf("no target with label %q in LabelToCcBinary", label)
+	}
+	return result, nil
+}
+
+func (m MockBazelContext) GetPrebuiltFileInfo(label string, _ configKey) (cquery.PrebuiltFileInfo, error) {
+	result, ok := m.LabelToPrebuiltFileInfo[label]
+	if !ok {
+		return cquery.PrebuiltFileInfo{}, fmt.Errorf("no target with label %q in LabelToPrebuiltFileInfo", label)
 	}
 	return result, nil
 }
@@ -433,6 +445,14 @@ func (bazelCtx *mixedBuildBazelContext) GetCcUnstrippedInfo(label string, cfgKey
 	return cquery.CcUnstrippedInfo{}, fmt.Errorf("no bazel response for %s", key)
 }
 
+func (bazelCtx *mixedBuildBazelContext) GetPrebuiltFileInfo(label string, cfgKey configKey) (cquery.PrebuiltFileInfo, error) {
+	key := makeCqueryKey(label, cquery.GetPrebuiltFileInfo, cfgKey)
+	if rawString, ok := bazelCtx.results[key]; ok {
+		return cquery.GetPrebuiltFileInfo.ParseResult(strings.TrimSpace(rawString))
+	}
+	return cquery.PrebuiltFileInfo{}, fmt.Errorf("no bazel response for %s", key)
+}
+
 func (n noopBazelContext) QueueBazelRequest(_ string, _ cqueryRequest, _ configKey) {
 	panic("unimplemented")
 }
@@ -451,6 +471,10 @@ func (n noopBazelContext) GetApexInfo(_ string, _ configKey) (cquery.ApexInfo, e
 
 func (n noopBazelContext) GetCcUnstrippedInfo(_ string, _ configKey) (cquery.CcUnstrippedInfo, error) {
 	//TODO implement me
+	panic("implement me")
+}
+
+func (n noopBazelContext) GetPrebuiltFileInfo(_ string, _ configKey) (cquery.PrebuiltFileInfo, error) {
 	panic("implement me")
 }
 
@@ -665,26 +689,20 @@ func (r *builtinBazelRunner) issueBazelCommand(cmdRequest bazel.CmdRequest, path
 
 func (context *mixedBuildBazelContext) createBazelCommand(config Config, runName bazel.RunName, command bazelCommand,
 	extraFlags ...string) bazel.CmdRequest {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		panic("Unknown GOOS: " + runtime.GOOS)
+	}
 	cmdFlags := []string{
 		"--output_base=" + absolutePath(context.paths.outputBase),
 		command.command,
 		command.expression,
 		"--profile=" + shared.BazelMetricsFilename(context.paths, runName),
 
-		// We don't need to set --host_platforms because it's set in bazelrc files
-		// that the bazel shell script wrapper passes
-
-		// Optimize Ninja rebuilds by ensuring Bazel write into product-agnostic
-		// output paths for the configured targets that shouldn't be affected by
-		// TARGET_PRODUCT. Otherwise product agnostic modules will be rebuilt by
-		// Ninja when the product changes, unconditionally.
-		//
-		// For example, Mainline APEXes should be identical regardless of the
-		// product (modulo arch/cpu).
-		//
-		// This flag forcibly disables the platform prefix in the intermediate
-		// outputs during a mixed build.
-		"--noexperimental_platform_in_output_dir",
+		"--host_platform=@soong_injection//product_config_platforms:mixed_builds_product-" + context.targetBuildVariant + "_" + runtime.GOOS + "_x86_64",
+		// Don't specify --platforms, because on some products/branches (like kernel-build-tools)
+		// the main platform for mixed_builds_product-variant doesn't exist because an arch isn't
+		// specified in product config. The derivative platforms that config_node transitions into
+		// will still work.
 
 		// Suppress noise
 		"--ui_event_filters=-INFO",
@@ -731,9 +749,9 @@ func (context *mixedBuildBazelContext) mainBzlFileContents() []byte {
 #####################################################
 def _config_node_transition_impl(settings, attr):
     if attr.os == "android" and attr.arch == "target":
-        target = "current_product-{VARIANT}"
+        target = "mixed_builds_product-{VARIANT}"
     else:
-        target = "current_product-{VARIANT}_%s_%s" % (attr.os, attr.arch)
+        target = "mixed_builds_product-{VARIANT}_%s_%s" % (attr.os, attr.arch)
     apex_name = ""
     if attr.within_apex:
         # //build/bazel/rules/apex:apex_name has to be set to a non_empty value,
@@ -970,9 +988,9 @@ def get_arch(target):
   platform_name = platforms[0].name
   if platform_name == "host":
     return "HOST"
-  if not platform_name.startswith("current_product-{TARGET_BUILD_VARIANT}"):
-    fail("expected platform name of the form 'current_product-{TARGET_BUILD_VARIANT}_android_<arch>' or 'current_product-{TARGET_BUILD_VARIANT}_linux_<arch>', but was " + str(platforms))
-  platform_name = platform_name.removeprefix("current_product-{TARGET_BUILD_VARIANT}").removeprefix("_")
+  if not platform_name.startswith("mixed_builds_product-{TARGET_BUILD_VARIANT}"):
+    fail("expected platform name of the form 'mixed_builds_product-{TARGET_BUILD_VARIANT}_android_<arch>' or 'mixed_builds_product-{TARGET_BUILD_VARIANT}_linux_<arch>', but was " + str(platforms))
+  platform_name = platform_name.removeprefix("mixed_builds_product-{TARGET_BUILD_VARIANT}").removeprefix("_")
   config_key = ""
   if not platform_name:
     config_key = "target|android"
@@ -981,7 +999,7 @@ def get_arch(target):
   elif platform_name.startswith("linux_"):
     config_key = platform_name.removeprefix("linux_") + "|linux"
   else:
-    fail("expected platform name of the form 'current_product-{TARGET_BUILD_VARIANT}_android_<arch>' or 'current_product-{TARGET_BUILD_VARIANT}_linux_<arch>', but was " + str(platforms))
+    fail("expected platform name of the form 'mixed_builds_product-{TARGET_BUILD_VARIANT}_android_<arch>' or 'mixed_builds_product-{TARGET_BUILD_VARIANT}_linux_<arch>', but was " + str(platforms))
 
   within_apex = buildoptions.get("//build/bazel/rules/apex:within_apex")
   apex_sdk_version = buildoptions.get("//build/bazel/rules/apex:min_sdk_version")

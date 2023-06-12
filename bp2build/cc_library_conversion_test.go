@@ -4718,3 +4718,136 @@ func TestCcLibraryHostLdLibs(t *testing.T) {
 		},
 	})
 }
+
+func TestCcLibraryWithCfi(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library has correct features when cfi is enabled",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	sanitize: {
+		cfi: true,
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"features":       `["android_cfi"]`,
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features":       `["android_cfi"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryWithCfiOsSpecific(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library has correct features when cfi is enabled for specific variants",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	target: {
+		android: {
+			sanitize: {
+				cfi: true,
+			},
+		},
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"features": `select({
+        "//build/bazel/platforms/os:android": ["android_cfi"],
+        "//conditions:default": [],
+    })`,
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features": `select({
+        "//build/bazel/platforms/os:android": ["android_cfi"],
+        "//conditions:default": [],
+    })`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryWithCfiAndCfiAssemblySupport(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library has correct features when cfi is enabled with cfi_assembly_support",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	sanitize: {
+		cfi: true,
+		config: {
+			cfi_assembly_support: true,
+		},
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"features": `[
+        "android_cfi",
+        "android_cfi_assembly_support",
+    ]`,
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features": `[
+        "android_cfi",
+        "android_cfi_assembly_support",
+    ]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryWithStem(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library with stem property",
+		ModuleTypeUnderTest:        "cc_library_shared",
+		ModuleTypeUnderTestFactory: cc.LibrarySharedFactory,
+		Blueprint: soongCcLibraryPreamble + `
+cc_library_shared {
+	name: "foo_with_stem_simple",
+	stem: "foo",
+}
+cc_library_shared {
+	name: "foo_with_arch_variant_stem",
+	arch: {
+		arm: {
+			stem: "foo-arm",
+		},
+		arm64: {
+			stem: "foo-arm64",
+		},
+	},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "foo_with_stem_simple", AttrNameToString{
+				"stem":           `"foo"`,
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo_with_arch_variant_stem", AttrNameToString{
+				"stem": `select({
+        "//build/bazel/platforms/arch:arm": "foo-arm",
+        "//build/bazel/platforms/arch:arm64": "foo-arm64",
+        "//conditions:default": None,
+    })`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}

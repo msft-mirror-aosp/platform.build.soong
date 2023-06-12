@@ -291,6 +291,10 @@ type config struct {
 	// "--bazel-force-enabled-modules"
 	bazelForceEnabledModules map[string]struct{}
 
+	// Names of Bazel targets as defined by BUILD files in the source tree,
+	// keyed by the directory in which they are defined.
+	bazelTargetsByDir map[string][]string
+
 	// If true, for any requests to Bazel, communicate with a Bazel proxy using
 	// unix sockets, instead of spawning Bazel as a subprocess.
 	UseBazelProxy bool
@@ -516,6 +520,8 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 	config.deviceConfig = &deviceConfig{
 		config: config,
 	}
+
+	config.productVariables.Build_from_text_stub = boolPtr(config.buildFromTextStub)
 
 	// Soundness check of the build and source directories. This won't catch strange
 	// configurations with symlinks, but at least checks the obvious case.
@@ -1710,10 +1716,6 @@ func (c *config) ProductPrivateSepolicyDirs() []string {
 	return c.productVariables.ProductPrivateSepolicyDirs
 }
 
-func (c *config) MissingUsesLibraries() []string {
-	return c.productVariables.MissingUsesLibraries
-}
-
 func (c *config) TargetMultitreeUpdateMeta() bool {
 	return c.productVariables.MultitreeUpdateMeta
 }
@@ -1929,6 +1931,10 @@ func (c *deviceConfig) BuildBrokenInputDir(name string) bool {
 	return InList(name, c.config.productVariables.BuildBrokenInputDirModules)
 }
 
+func (c *config) BuildWarningBadOptionalUsesLibsAllowlist() []string {
+	return c.productVariables.BuildWarningBadOptionalUsesLibsAllowlist
+}
+
 func (c *deviceConfig) GenruleSandboxing() bool {
 	return Bool(c.config.productVariables.GenruleSandboxing)
 }
@@ -1939,10 +1945,6 @@ func (c *deviceConfig) RequiresInsecureExecmemForSwiftshader() bool {
 
 func (c *config) SelinuxIgnoreNeverallows() bool {
 	return c.productVariables.SelinuxIgnoreNeverallows
-}
-
-func (c *deviceConfig) SepolicySplit() bool {
-	return c.config.productVariables.SepolicySplit
 }
 
 func (c *deviceConfig) SepolicyFreezeTestExtraDirs() []string {
@@ -2004,6 +2006,20 @@ func (c *config) LogMixedBuild(ctx BaseModuleContext, useBazel bool) {
 	}
 }
 
+func (c *config) HasBazelBuildTargetInSource(ctx BaseModuleContext) bool {
+	moduleName := ctx.Module().Name()
+	for _, buildTarget := range c.bazelTargetsByDir[ctx.ModuleDir()] {
+		if moduleName == buildTarget {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *config) SetBazelBuildFileTargets(bazelTargetsByDir map[string][]string) {
+	c.bazelTargetsByDir = bazelTargetsByDir
+}
+
 // ApiSurfaces directory returns the source path inside the api_surfaces repo
 // (relative to workspace root).
 func (c *config) ApiSurfacesDir(s ApiSurface, version string) string {
@@ -2021,6 +2037,7 @@ func (c *config) BuildFromTextStub() bool {
 
 func (c *config) SetBuildFromTextStub(b bool) {
 	c.buildFromTextStub = b
+	c.productVariables.Build_from_text_stub = boolPtr(b)
 }
 
 func (c *config) AddForceEnabledModules(forceEnabled []string) {

@@ -220,6 +220,13 @@ type apexBundleProperties struct {
 	// imageApex or flattenedApex depending on Config.FlattenApex(). When payload_type is zip,
 	// this becomes zipApex.
 	ApexType apexPackaging `blueprint:"mutated"`
+
+	// Name that dependencies can specify in their apex_available properties to refer to this module.
+	// If not specified, this defaults to Soong module name. This must be the name of a Soong module.
+	Apex_available_name *string
+
+	// Variant version of the mainline module. Must be an integer between 0-9
+	Variant_version *string
 }
 
 type ApexNativeDependencies struct {
@@ -3134,6 +3141,13 @@ func (a *apexBundle) checkApexAvailability(ctx android.ModuleContext) {
 		}
 
 		apexName := ctx.ModuleName()
+		for _, props := range ctx.Module().GetProperties() {
+			if apexProps, ok := props.(*apexBundleProperties); ok {
+				if apexProps.Apex_available_name != nil {
+					apexName = *apexProps.Apex_available_name
+				}
+			}
+		}
 		fromName := ctx.OtherModuleName(from)
 		toName := ctx.OtherModuleName(to)
 
@@ -3516,6 +3530,8 @@ type bazelApexBundleAttributes struct {
 	Logging_parent        *string
 	Tests                 bazel.LabelListAttribute
 	Base_apex_name        *string
+	Apex_available_name   *string
+	Variant_version       *string
 }
 
 type convertedNativeSharedLibs struct {
@@ -3666,6 +3682,8 @@ func convertWithBp2build(a *apexBundle, ctx android.TopDownMutatorContext) (baze
 		Package_name:          packageName,
 		Logging_parent:        loggingParent,
 		Tests:                 testsAttrs,
+		Apex_available_name:   a.properties.Apex_available_name,
+		Variant_version:       a.properties.Variant_version,
 	}
 
 	props := bazel.BazelTargetModuleProperties{

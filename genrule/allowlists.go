@@ -14,10 +14,6 @@
 
 package genrule
 
-import (
-	"android/soong/android"
-)
-
 var (
 	DepfileAllowList = []string{
 		"depfile_allowed_for_test",
@@ -51,7 +47,6 @@ var (
 	}
 
 	SandboxingDenyModuleList = []string{
-		"framework-javastream-protos",
 		"RsBalls-rscript",
 		"CtsRsBlasTestCases-rscript",
 		"pvmfw_fdt_template_rs",
@@ -92,7 +87,6 @@ var (
 		"vm-tests-tf-lib",
 		"hidl_cpp_impl_test_gen-headers",
 		"pandora_experimental-python-gen-src",
-		"framework-cppstream-protos",
 		"Refocus-rscript",
 		"RSTest_v11-rscript",
 		"RSTest_v16-rscript",
@@ -136,12 +130,3 @@ var (
 		"external/perfetto",
 	}
 )
-var DepfileAllowSet = map[string]bool{}
-var SandboxingDenyModuleSet = map[string]bool{}
-var SandboxingDenyPathSet = map[string]bool{}
-
-func init() {
-	android.AddToStringSet(DepfileAllowSet, DepfileAllowList)
-	android.AddToStringSet(SandboxingDenyModuleSet, append(DepfileAllowList, SandboxingDenyModuleList...))
-	android.AddToStringSet(SandboxingDenyPathSet, SandboxingDenyPathList)
-}
