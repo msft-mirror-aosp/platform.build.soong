@@ -17,8 +17,10 @@ package android
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"strings"
 
+	"android/soong/ui/metrics/bp2build_metrics_proto"
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
@@ -46,6 +48,10 @@ const (
 	// that is not a platform incompatibility. Example: the module-type is not
 	// enabled, or is not bp2build-converted.
 	ModuleIncompatibility
+
+	// Missing dependencies. We can't query Bazel for modules if it has missing dependencies, there
+	// will be failures.
+	ModuleMissingDeps
 )
 
 // FileGroupAsLibrary describes a filegroup module that is converted to some library
@@ -69,6 +75,21 @@ type BazelConversionStatus struct {
 
 	// MissingBp2buildDep stores the module names of direct dependency that were not found
 	MissingDeps []string `blueprint:"mutated"`
+
+	// If non-nil, indicates that the module could not be converted successfully
+	// with bp2build. This will describe the reason the module could not be converted.
+	UnconvertedReason *UnconvertedReason
+}
+
+// The reason a module could not be converted to a BUILD target via bp2build.
+// This should match bp2build_metrics_proto.UnconvertedReason, but omits private
+// proto-related fields that prevent copying this struct.
+type UnconvertedReason struct {
+	// Should correspond to a valid value in bp2build_metrics_proto.UnconvertedReasonType.
+	// A raw int is used here instead, because blueprint logic requires that all transitive
+	// fields of module definitions be primitives.
+	ReasonType int
+	Detail     string
 }
 
 type BazelModuleProperties struct {
@@ -133,6 +154,12 @@ type Bazelable interface {
 	GetBazelLabel(ctx BazelConversionPathContext, module blueprint.Module) string
 	ShouldConvertWithBp2build(ctx BazelConversionContext) bool
 	shouldConvertWithBp2build(ctx bazelOtherModuleContext, module blueprint.Module) bool
+
+	// ConvertWithBp2build either converts the module to a Bazel build target or
+	// declares the module as unconvertible (for logging and metrics).
+	// Modules must implement this function to be bp2build convertible. The function
+	// must either create at least one Bazel target module (using ctx.CreateBazelTargetModule or
+	// its related functions), or declare itself unconvertible using ctx.MarkBp2buildUnconvertible.
 	ConvertWithBp2build(ctx TopDownMutatorContext)
 
 	// namespacedVariableProps is a map from a soong config variable namespace
@@ -228,7 +255,7 @@ func (b *BazelModuleBase) GetBazelLabel(ctx BazelConversionPathContext, module b
 	if b.ShouldConvertWithBp2build(ctx) {
 		return bp2buildModuleLabel(ctx, module)
 	}
-	return "" // no label for unconverted module
+	panic(fmt.Errorf("requested non-existent label for module ", module.Name()))
 }
 
 type Bp2BuildConversionAllowlist struct {
@@ -367,16 +394,26 @@ func GetBp2BuildAllowList() Bp2BuildConversionAllowlist {
 // As a side effect, calling this method will also log whether this module is
 // mixed build enabled for metrics reporting.
 func MixedBuildsEnabled(ctx BaseModuleContext) MixedBuildEnabledStatus {
-	module := ctx.Module()
-	apexInfo := ctx.Provider(ApexInfoProvider).(ApexInfo)
-	withinApex := !apexInfo.IsForPlatform()
-
 	platformIncompatible := isPlatformIncompatible(ctx.Os(), ctx.Arch().ArchType)
 	if platformIncompatible {
 		ctx.Config().LogMixedBuild(ctx, false)
 		return TechnicalIncompatibility
 	}
 
+	if ctx.Config().AllowMissingDependencies() {
+		missingDeps := ctx.getMissingDependencies()
+		// If there are missing dependencies, querying Bazel will fail. Soong instead fails at execution
+		// time, not loading/analysis. disable mixed builds and fall back to Soong to maintain that
+		// behavior.
+		if len(missingDeps) > 0 {
+			ctx.Config().LogMixedBuild(ctx, false)
+			return ModuleMissingDeps
+		}
+	}
+
+	module := ctx.Module()
+	apexInfo := ctx.Provider(ApexInfoProvider).(ApexInfo)
+	withinApex := !apexInfo.IsForPlatform()
 	mixedBuildEnabled := ctx.Config().IsMixedBuildsEnabled() &&
 		module.Enabled() &&
 		convertedToBazel(ctx, module) &&
@@ -519,16 +556,32 @@ func bp2buildDefaultTrueRecursively(packagePath string, config allowlists.Bp2Bui
 }
 
 func registerBp2buildConversionMutator(ctx RegisterMutatorsContext) {
-	ctx.TopDown("bp2build_conversion", convertWithBp2build).Parallel()
+	ctx.TopDown("bp2build_conversion", bp2buildConversionMutator).Parallel()
 }
 
-func convertWithBp2build(ctx TopDownMutatorContext) {
-	bModule, ok := ctx.Module().(Bazelable)
-	if !ok || !bModule.shouldConvertWithBp2build(ctx, ctx.Module()) {
+func bp2buildConversionMutator(ctx TopDownMutatorContext) {
+	if ctx.Config().HasBazelBuildTargetInSource(ctx) {
+		// Defer to the BUILD target. Generating an additional target would
+		// cause a BUILD file conflict.
+		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_DEFINED_IN_BUILD_FILE, "")
 		return
 	}
 
+	bModule, ok := ctx.Module().(Bazelable)
+	if !ok {
+		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_TYPE_UNSUPPORTED, "")
+		return
+	}
+	// TODO: b/285631638 - Differentiate between denylisted modules and missing bp2build capabilities.
+	if !bModule.shouldConvertWithBp2build(ctx, ctx.Module()) {
+		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_UNSUPPORTED, "")
+		return
+	}
 	bModule.ConvertWithBp2build(ctx)
+
+	if !ctx.Module().base().IsConvertedByBp2build() && ctx.Module().base().GetUnconvertedReason() == nil {
+		panic(fmt.Errorf("illegal bp2build invariant: module '%s' was neither converted nor marked unconvertible", ctx.ModuleName()))
+	}
 }
 
 func registerApiBp2buildConversionMutator(ctx RegisterMutatorsContext) {

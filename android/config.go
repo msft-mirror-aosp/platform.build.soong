@@ -80,9 +80,10 @@ type SoongBuildMode int
 
 type CmdArgs struct {
 	bootstrap.Args
-	RunGoTests  bool
-	OutDir      string
-	SoongOutDir string
+	RunGoTests     bool
+	OutDir         string
+	SoongOutDir    string
+	SoongVariables string
 
 	SymlinkForestMarker string
 	Bp2buildMarker      string
@@ -95,7 +96,6 @@ type CmdArgs struct {
 	MultitreeBuild bool
 
 	BazelMode                bool
-	BazelModeDev             bool
 	BazelModeStaging         bool
 	BazelForceEnabledModules string
 
@@ -130,11 +130,6 @@ const (
 
 	// Generate a documentation file for module type definitions and exit.
 	GenerateDocFile
-
-	// Use bazel during analysis of many allowlisted build modules. The allowlist
-	// is considered a "developer mode" allowlist, as some modules may be
-	// allowlisted on an experimental basis.
-	BazelDevMode
 
 	// Use bazel during analysis of a few allowlisted build modules. The allowlist
 	// is considered "staging, as these are modules being prepared to be released
@@ -289,6 +284,10 @@ type config struct {
 	// specified modules. They are passed via the command-line flag
 	// "--bazel-force-enabled-modules"
 	bazelForceEnabledModules map[string]struct{}
+
+	// Names of Bazel targets as defined by BUILD files in the source tree,
+	// keyed by the directory in which they are defined.
+	bazelTargetsByDir map[string][]string
 
 	// If true, for any requests to Bazel, communicate with a Bazel proxy using
 	// unix sockets, instead of spawning Bazel as a subprocess.
@@ -491,7 +490,7 @@ func NullConfig(outDir, soongOutDir string) Config {
 func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) {
 	// Make a config with default options.
 	config := &config{
-		ProductVariablesFileName: filepath.Join(cmdArgs.SoongOutDir, productVariablesFileName),
+		ProductVariablesFileName: cmdArgs.SoongVariables,
 
 		env: availableEnv,
 
@@ -515,6 +514,8 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 	config.deviceConfig = &deviceConfig{
 		config: config,
 	}
+
+	config.productVariables.Build_from_text_stub = boolPtr(config.buildFromTextStub)
 
 	// Soundness check of the build and source directories. This won't catch strange
 	// configurations with symlinks, but at least checks the obvious case.
@@ -615,7 +616,6 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 	setBuildMode(cmdArgs.BazelApiBp2buildDir, ApiBp2build)
 	setBuildMode(cmdArgs.ModuleGraphFile, GenerateModuleGraph)
 	setBuildMode(cmdArgs.DocFile, GenerateDocFile)
-	setBazelMode(cmdArgs.BazelModeDev, "--bazel-mode-dev", BazelDevMode)
 	setBazelMode(cmdArgs.BazelMode, "--bazel-mode", BazelProdMode)
 	setBazelMode(cmdArgs.BazelModeStaging, "--bazel-mode-staging", BazelStagingMode)
 
@@ -719,7 +719,7 @@ func (c *config) IsMixedBuildsEnabled() bool {
 		return true
 	}).(bool)
 
-	bazelModeEnabled := c.BuildMode == BazelProdMode || c.BuildMode == BazelDevMode || c.BuildMode == BazelStagingMode
+	bazelModeEnabled := c.BuildMode == BazelProdMode || c.BuildMode == BazelStagingMode
 	return globalMixedBuildsSupport && bazelModeEnabled
 }
 
@@ -754,6 +754,14 @@ func (c *config) HostJNIToolPath(ctx PathContext, lib string) Path {
 func (c *config) HostJavaToolPath(ctx PathContext, tool string) Path {
 	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "framework", false, tool)
 	return path
+}
+
+func (c *config) HostCcSharedLibPath(ctx PathContext, lib string) Path {
+	libDir := "lib"
+	if ctx.Config().BuildArch.Multilib == "lib64" {
+		libDir = "lib64"
+	}
+	return pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, libDir, false, lib+".so")
 }
 
 // PrebuiltOS returns the name of the host OS used in prebuilts directories.
@@ -1701,10 +1709,6 @@ func (c *config) ProductPrivateSepolicyDirs() []string {
 	return c.productVariables.ProductPrivateSepolicyDirs
 }
 
-func (c *config) MissingUsesLibraries() []string {
-	return c.productVariables.MissingUsesLibraries
-}
-
 func (c *config) TargetMultitreeUpdateMeta() bool {
 	return c.productVariables.MultitreeUpdateMeta
 }
@@ -1880,6 +1884,10 @@ func (c *deviceConfig) ShippingApiLevel() ApiLevel {
 	return uncheckedFinalApiLevel(apiLevel)
 }
 
+func (c *deviceConfig) BuildBrokenPluginValidation() []string {
+	return c.config.productVariables.BuildBrokenPluginValidation
+}
+
 func (c *deviceConfig) BuildBrokenClangAsFlags() bool {
 	return c.config.productVariables.BuildBrokenClangAsFlags
 }
@@ -1916,8 +1924,12 @@ func (c *deviceConfig) BuildBrokenInputDir(name string) bool {
 	return InList(name, c.config.productVariables.BuildBrokenInputDirModules)
 }
 
-func (c *deviceConfig) BuildBrokenDepfile() bool {
-	return Bool(c.config.productVariables.BuildBrokenDepfile)
+func (c *config) BuildWarningBadOptionalUsesLibsAllowlist() []string {
+	return c.productVariables.BuildWarningBadOptionalUsesLibsAllowlist
+}
+
+func (c *deviceConfig) GenruleSandboxing() bool {
+	return Bool(c.config.productVariables.GenruleSandboxing)
 }
 
 func (c *deviceConfig) RequiresInsecureExecmemForSwiftshader() bool {
@@ -1926,10 +1938,6 @@ func (c *deviceConfig) RequiresInsecureExecmemForSwiftshader() bool {
 
 func (c *config) SelinuxIgnoreNeverallows() bool {
 	return c.productVariables.SelinuxIgnoreNeverallows
-}
-
-func (c *deviceConfig) SepolicySplit() bool {
-	return c.config.productVariables.SepolicySplit
 }
 
 func (c *deviceConfig) SepolicyFreezeTestExtraDirs() []string {
@@ -1991,6 +1999,20 @@ func (c *config) LogMixedBuild(ctx BaseModuleContext, useBazel bool) {
 	}
 }
 
+func (c *config) HasBazelBuildTargetInSource(ctx BaseModuleContext) bool {
+	moduleName := ctx.Module().Name()
+	for _, buildTarget := range c.bazelTargetsByDir[ctx.ModuleDir()] {
+		if moduleName == buildTarget {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *config) SetBazelBuildFileTargets(bazelTargetsByDir map[string][]string) {
+	c.bazelTargetsByDir = bazelTargetsByDir
+}
+
 // ApiSurfaces directory returns the source path inside the api_surfaces repo
 // (relative to workspace root).
 func (c *config) ApiSurfacesDir(s ApiSurface, version string) string {
@@ -2008,6 +2030,7 @@ func (c *config) BuildFromTextStub() bool {
 
 func (c *config) SetBuildFromTextStub(b bool) {
 	c.buildFromTextStub = b
+	c.productVariables.Build_from_text_stub = boolPtr(b)
 }
 
 func (c *config) AddForceEnabledModules(forceEnabled []string) {

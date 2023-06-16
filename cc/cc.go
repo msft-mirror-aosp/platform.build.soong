@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 
+	"android/soong/ui/metrics/bp2build_metrics_proto"
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
@@ -524,6 +525,7 @@ type ModuleContextIntf interface {
 	isAfdoCompile() bool
 	isPgoCompile() bool
 	isCfi() bool
+	isFuzzer() bool
 	isNDKStubLibrary() bool
 	useClangLld(actx ModuleContext) bool
 	isForPlatform() bool
@@ -1076,6 +1078,10 @@ func (c *Module) CcLibraryInterface() bool {
 	return false
 }
 
+func (c *Module) RustLibraryInterface() bool {
+	return false
+}
+
 func (c *Module) IsFuzzModule() bool {
 	if _, ok := c.compiler.(*fuzzBinary); ok {
 		return true
@@ -1361,6 +1367,13 @@ func (c *Module) isPgoCompile() bool {
 func (c *Module) isCfi() bool {
 	if sanitize := c.sanitize; sanitize != nil {
 		return Bool(sanitize.Properties.Sanitize.Cfi)
+	}
+	return false
+}
+
+func (c *Module) isFuzzer() bool {
+	if sanitize := c.sanitize; sanitize != nil {
+		return Bool(sanitize.Properties.SanitizeMutated.Fuzzer)
 	}
 	return false
 }
@@ -1660,6 +1673,10 @@ func (ctx *moduleContextImpl) isCfi() bool {
 	return ctx.mod.isCfi()
 }
 
+func (ctx *moduleContextImpl) isFuzzer() bool {
+	return ctx.mod.isFuzzer()
+}
+
 func (ctx *moduleContextImpl) isNDKStubLibrary() bool {
 	return ctx.mod.isNDKStubLibrary()
 }
@@ -1901,14 +1918,14 @@ func (c *Module) QueueBazelCall(ctx android.BaseModuleContext) {
 // IsMixedBuildSupported returns true if the module should be analyzed by Bazel
 // in any of the --bazel-mode(s).
 func (c *Module) IsMixedBuildSupported(ctx android.BaseModuleContext) bool {
-	if !allEnabledSanitizersSupportedByBazel(c) {
+	if !allEnabledSanitizersSupportedByBazel(ctx, c) {
 		//TODO(b/278772861) support sanitizers in Bazel rules
 		return false
 	}
 	return c.bazelHandler != nil
 }
 
-func allEnabledSanitizersSupportedByBazel(c *Module) bool {
+func allEnabledSanitizersSupportedByBazel(ctx android.BaseModuleContext, c *Module) bool {
 	if c.sanitize == nil {
 		return true
 	}
@@ -1916,10 +1933,8 @@ func allEnabledSanitizersSupportedByBazel(c *Module) bool {
 
 	unsupportedSanitizers := []*bool{
 		sanitizeProps.Safestack,
-		sanitizeProps.Cfi,
 		sanitizeProps.Scudo,
 		BoolPtr(len(c.sanitize.Properties.Sanitize.Recover) > 0),
-		BoolPtr(c.sanitize.Properties.Sanitize.Blocklist != nil),
 	}
 	for _, san := range unsupportedSanitizers {
 		if Bool(san) {
@@ -1932,10 +1947,17 @@ func allEnabledSanitizersSupportedByBazel(c *Module) bool {
 			// TODO(b/261058727): enable mixed builds for all modules with UBSan
 			// Currently we can only support ubsan when minimum runtime is used.
 			ubsanEnabled := Bool(sanitizeProps.Integer_overflow) || len(sanitizeProps.Misc_undefined) > 0
-			if ubsanEnabled && !c.MinimalRuntimeNeeded() {
-				return false
+			if !ubsanEnabled || c.MinimalRuntimeNeeded() {
+				continue
 			}
-		} else if c.sanitize.isSanitizerEnabled(san) {
+		} else if san == cfi {
+			apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+			// Only allow cfi if this is an apex variant
+			if !apexInfo.IsForPlatform() {
+				continue
+			}
+		}
+		if c.sanitize.isSanitizerEnabled(san) {
 			return false
 		}
 	}
@@ -4082,6 +4104,8 @@ func (c *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 		} else {
 			sharedOrStaticLibraryBp2Build(ctx, c, false)
 		}
+	default:
+		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_TYPE_UNSUPPORTED, "")
 	}
 }
 
@@ -4100,8 +4124,6 @@ func (c *Module) ConvertWithApiBp2build(ctx android.TopDownMutatorContext) {
 		// Aggressively generate api targets for all header modules
 		// This is necessary since the header module does not know if it is a dep of API surface stub library
 		apiLibraryHeadersBp2Build(ctx, c)
-	case ndkLibrary:
-		ndkLibraryBp2build(ctx, c)
 	}
 }
 

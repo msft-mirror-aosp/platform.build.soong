@@ -15,6 +15,9 @@
 package android
 
 import (
+	"crypto/md5"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -27,6 +30,7 @@ import (
 	"text/scanner"
 
 	"android/soong/bazel"
+	"android/soong/ui/metrics/bp2build_metrics_proto"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -354,6 +358,10 @@ type BaseModuleContext interface {
 
 	AddMissingDependencies(missingDeps []string)
 
+	// getMissingDependencies returns the list of missing dependencies.
+	// Calling this function prevents adding new dependencies.
+	getMissingDependencies() []string
+
 	// AddUnconvertedBp2buildDep stores module name of a direct dependency that was not converted via bp2build
 	AddUnconvertedBp2buildDep(dep string)
 
@@ -476,6 +484,7 @@ type ModuleContext interface {
 	TargetRequiredModuleNames() []string
 
 	ModuleSubDir() string
+	SoongConfigTraceHash() string
 
 	Variable(pctx PackageContext, name, value string)
 	Rule(pctx PackageContext, name string, params blueprint.RuleParams, argNames ...string) blueprint.Rule
@@ -558,6 +567,8 @@ type Module interface {
 
 	// IsConvertedByBp2build returns whether this module was converted via bp2build
 	IsConvertedByBp2build() bool
+	GetUnconvertedReason() *UnconvertedReason
+
 	// Bp2buildTargets returns the target(s) generated for Bazel via bp2build for this module
 	Bp2buildTargets() []bp2buildInfo
 	GetUnconvertedBp2buildDeps() []string
@@ -708,6 +719,31 @@ func SortedUniqueNamedPaths(l NamedPaths) NamedPaths {
 		}
 	}
 	return l[:k+1]
+}
+
+// soongConfigTrace holds all references to VendorVars. Uses []string for blueprint:"mutated"
+type soongConfigTrace struct {
+	Bools   []string `json:",omitempty"`
+	Strings []string `json:",omitempty"`
+	IsSets  []string `json:",omitempty"`
+}
+
+func (c *soongConfigTrace) isEmpty() bool {
+	return len(c.Bools) == 0 && len(c.Strings) == 0 && len(c.IsSets) == 0
+}
+
+// Returns hash of serialized trace records (empty string if there's no trace recorded)
+func (c *soongConfigTrace) hash() string {
+	// Use MD5 for speed. We don't care collision or preimage attack
+	if c.isEmpty() {
+		return ""
+	}
+	j, err := json.Marshal(c)
+	if err != nil {
+		panic(fmt.Errorf("json marshal of %#v failed: %#v", *c, err))
+	}
+	hash := md5.Sum(j)
+	return hex.EncodeToString(hash[:])
 }
 
 type nameProperties struct {
@@ -939,7 +975,8 @@ type commonProperties struct {
 
 	NamespaceExportedToMake bool `blueprint:"mutated"`
 
-	MissingDeps []string `blueprint:"mutated"`
+	MissingDeps        []string `blueprint:"mutated"`
+	CheckedMissingDeps bool     `blueprint:"mutated"`
 
 	// Name and variant strings stored by mutators to enable Module.String()
 	DebugName       string   `blueprint:"mutated"`
@@ -953,6 +990,14 @@ type commonProperties struct {
 
 	// Bazel conversion status
 	BazelConversionStatus BazelConversionStatus `blueprint:"mutated"`
+
+	// SoongConfigTrace records accesses to VendorVars (soong_config). The trace will be hashed
+	// and used as a subdir of PathForModuleOut.  Note that we mainly focus on incremental
+	// builds among similar products (e.g. aosp_cf_x86_64_phone and aosp_cf_x86_64_foldable),
+	// and there are variables other than soong_config, which isn't captured by soong config
+	// trace, but influence modules among products.
+	SoongConfigTrace     soongConfigTrace `blueprint:"mutated"`
+	SoongConfigTraceHash string           `blueprint:"mutated"`
 }
 
 // CommonAttributes represents the common Bazel attributes from which properties
@@ -1554,12 +1599,29 @@ func (b bp2buildInfo) BazelAttributes() []interface{} {
 }
 
 func (m *ModuleBase) addBp2buildInfo(info bp2buildInfo) {
+	if m.commonProperties.BazelConversionStatus.UnconvertedReason != nil {
+		panic(fmt.Errorf("bp2build: module '%s' marked unconvertible and also is converted", m.Name()))
+	}
 	m.commonProperties.BazelConversionStatus.Bp2buildInfo = append(m.commonProperties.BazelConversionStatus.Bp2buildInfo, info)
+}
+
+func (m *ModuleBase) setBp2buildUnconvertible(reasonType bp2build_metrics_proto.UnconvertedReasonType, detail string) {
+	if len(m.commonProperties.BazelConversionStatus.Bp2buildInfo) > 0 {
+		panic(fmt.Errorf("bp2build: module '%s' marked unconvertible and also is converted", m.Name()))
+	}
+	m.commonProperties.BazelConversionStatus.UnconvertedReason = &UnconvertedReason{
+		ReasonType: int(reasonType),
+		Detail:     detail,
+	}
 }
 
 // IsConvertedByBp2build returns whether this module was converted via bp2build.
 func (m *ModuleBase) IsConvertedByBp2build() bool {
 	return len(m.commonProperties.BazelConversionStatus.Bp2buildInfo) > 0
+}
+
+func (m *ModuleBase) GetUnconvertedReason() *UnconvertedReason {
+	return m.commonProperties.BazelConversionStatus.UnconvertedReason
 }
 
 // Bp2buildTargets returns the Bazel targets bp2build generated for this module.
@@ -2862,6 +2924,20 @@ func (b *baseModuleContext) AddMissingDependencies(deps []string) {
 	}
 }
 
+func (b *baseModuleContext) checkedMissingDeps() bool {
+	return b.Module().base().commonProperties.CheckedMissingDeps
+}
+
+func (b *baseModuleContext) getMissingDependencies() []string {
+	checked := &b.Module().base().commonProperties.CheckedMissingDeps
+	*checked = true
+	var missingDeps []string
+	missingDeps = append(missingDeps, b.Module().base().commonProperties.MissingDeps...)
+	missingDeps = append(missingDeps, b.bp.EarlyGetMissingDependencies()...)
+	missingDeps = FirstUniqueStrings(missingDeps)
+	return missingDeps
+}
+
 type AllowDisabledModuleDependency interface {
 	blueprint.DependencyTag
 	AllowDisabledModuleDependency(target Module) bool
@@ -3139,6 +3215,10 @@ func (b *baseModuleContext) GetPathString(skipFirst bool) string {
 
 func (m *moduleContext) ModuleSubDir() string {
 	return m.bp.ModuleSubDir()
+}
+
+func (m *moduleContext) SoongConfigTraceHash() string {
+	return m.module.base().commonProperties.SoongConfigTraceHash
 }
 
 func (b *baseModuleContext) Target() Target {
@@ -3725,6 +3805,8 @@ func (m *moduleContext) TargetRequiredModuleNames() []string {
 
 func init() {
 	RegisterParallelSingletonType("buildtarget", BuildTargetSingleton)
+	RegisterParallelSingletonType("soongconfigtrace", soongConfigTraceSingletonFunc)
+	FinalDepsMutators(registerSoongConfigTraceMutator)
 }
 
 func BuildTargetSingleton() Singleton {
@@ -3905,4 +3987,105 @@ func (d *installPathsDepSet) ToList() InstallPaths {
 		return nil
 	}
 	return d.depSet.ToList().(InstallPaths)
+}
+
+func registerSoongConfigTraceMutator(ctx RegisterMutatorsContext) {
+	ctx.BottomUp("soongconfigtrace", soongConfigTraceMutator).Parallel()
+}
+
+// soongConfigTraceMutator accumulates recorded soong_config trace from children. Also it normalizes
+// SoongConfigTrace to make it consistent.
+func soongConfigTraceMutator(ctx BottomUpMutatorContext) {
+	trace := &ctx.Module().base().commonProperties.SoongConfigTrace
+	ctx.VisitDirectDeps(func(m Module) {
+		childTrace := &m.base().commonProperties.SoongConfigTrace
+		trace.Bools = append(trace.Bools, childTrace.Bools...)
+		trace.Strings = append(trace.Strings, childTrace.Strings...)
+		trace.IsSets = append(trace.IsSets, childTrace.IsSets...)
+	})
+	trace.Bools = SortedUniqueStrings(trace.Bools)
+	trace.Strings = SortedUniqueStrings(trace.Strings)
+	trace.IsSets = SortedUniqueStrings(trace.IsSets)
+
+	ctx.Module().base().commonProperties.SoongConfigTraceHash = trace.hash()
+}
+
+// soongConfigTraceSingleton writes a map from each module's config hash value to trace data.
+func soongConfigTraceSingletonFunc() Singleton {
+	return &soongConfigTraceSingleton{}
+}
+
+type soongConfigTraceSingleton struct {
+}
+
+func (s *soongConfigTraceSingleton) GenerateBuildActions(ctx SingletonContext) {
+	outFile := PathForOutput(ctx, "soong_config_trace.json")
+
+	traces := make(map[string]*soongConfigTrace)
+	ctx.VisitAllModules(func(module Module) {
+		trace := &module.base().commonProperties.SoongConfigTrace
+		if !trace.isEmpty() {
+			hash := module.base().commonProperties.SoongConfigTraceHash
+			traces[hash] = trace
+		}
+	})
+
+	j, err := json.Marshal(traces)
+	if err != nil {
+		ctx.Errorf("json marshal to %q failed: %#v", outFile, err)
+		return
+	}
+
+	WriteFileRule(ctx, outFile, string(j))
+	ctx.Phony("soong_config_trace", outFile)
+}
+
+// Interface implemented by xsd_config which has 1:many mappings in bp2build workspace
+// This interface exists because we want to
+// 1. Determine the name of the additional targets generated by the primary soong module
+// 2. Enable distinguishing an xsd_config module from other Soong modules using type assertion
+type XsdConfigBp2buildTargets interface {
+	CppBp2buildTargetName() string
+	JavaBp2buildTargetName() string
+}
+
+// PartitionXsdSrcs partitions srcs into xsd_config modules and others
+// Since xsd_config are soong modules, we cannot use file extension for partitioning
+func PartitionXsdSrcs(ctx BazelConversionPathContext, srcs []string) ([]string, []string) {
+	//isXsd returns true if src is a soong module of type xsd_config
+	isXsd := func(src string) bool {
+		mod, exists := ctx.ModuleFromName(src)
+		if !exists {
+			return false
+		}
+		_, _isXsd := mod.(XsdConfigBp2buildTargets)
+		return _isXsd
+	}
+	nonXsd := []string{}
+	xsd := []string{}
+
+	for _, src := range srcs {
+		if isXsd(src) {
+			xsd = append(xsd, src)
+		} else {
+			nonXsd = append(nonXsd, src)
+		}
+	}
+
+	return nonXsd, xsd
+}
+
+// Replaces //a/b/my_xsd_config with //a/b/my_xsd_config-{cpp|java}
+// The new target name is provided by the `targetName` callback function
+func XsdConfigBp2buildTarget(ctx BazelConversionPathContext, mod blueprint.Module, targetName func(xsd XsdConfigBp2buildTargets) string) string {
+	xsd, isXsd := mod.(XsdConfigBp2buildTargets)
+	if !isXsd {
+		ctx.ModuleErrorf("xsdConfigJavaTarget called on %v, which is not an xsd_config", mod)
+	}
+	ret := BazelModuleLabel(ctx, mod)
+	// Remove the base module name
+	ret = strings.TrimSuffix(ret, mod.Name())
+	// Append the language specific target name
+	ret += targetName(xsd)
+	return ret
 }

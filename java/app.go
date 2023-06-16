@@ -18,6 +18,7 @@ package java
 // related module types, including their override variants.
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -288,7 +289,13 @@ func (a *AndroidApp) OverridablePropertiesDepsMutator(ctx android.BottomUpMutato
 	}
 
 	if a.appProperties.Privapp_allowlist != nil && !Bool(a.appProperties.Privileged) {
-		ctx.PropertyErrorf("privapp_allowlist", "privileged must be set in order to use privapp_allowlist")
+		// There are a few uids that are explicitly considered privileged regardless of their
+		// app's location. Bluetooth is one such app. It should arguably be moved to priv-app,
+		// but for now, allow it not to be in priv-app.
+		privilegedBecauseOfUid := ctx.ModuleName() == "Bluetooth"
+		if !privilegedBecauseOfUid {
+			ctx.PropertyErrorf("privapp_allowlist", "privileged must be set in order to use privapp_allowlist (with a few exceptions)")
+		}
 	}
 
 	for _, cert := range a.appProperties.Additional_certificates {
@@ -613,7 +620,6 @@ func processMainCert(m android.ModuleBase, certPropValue string, certificates []
 		}
 	}
 
-
 	return mainCertificate, certificates
 }
 
@@ -621,13 +627,21 @@ func (a *AndroidApp) InstallApkName() string {
 	return a.installApkName
 }
 
-func (a *AndroidApp) createPrivappAllowlist(ctx android.ModuleContext) *android.OutputPath {
+func (a *AndroidApp) createPrivappAllowlist(ctx android.ModuleContext) android.Path {
 	if a.appProperties.Privapp_allowlist == nil {
 		return nil
 	}
+
+	isOverrideApp := a.GetOverriddenBy() != ""
+	if !isOverrideApp {
+		// if this is not an override, we don't need to rewrite the existing privapp allowlist
+		return android.PathForModuleSrc(ctx, *a.appProperties.Privapp_allowlist)
+	}
+
 	if a.overridableAppProperties.Package_name == nil {
 		ctx.PropertyErrorf("privapp_allowlist", "package_name must be set to use privapp_allowlist")
 	}
+
 	packageName := *a.overridableAppProperties.Package_name
 	fileName := "privapp_allowlist_" + packageName + ".xml"
 	outPath := android.PathForModuleOut(ctx, fileName).OutputPath
@@ -787,17 +801,18 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	// Install the app package.
 	shouldInstallAppPackage := (Bool(a.Module.properties.Installable) || ctx.Host()) && apexInfo.IsForPlatform() && !a.appProperties.PreventInstall
 	if shouldInstallAppPackage {
+		if a.privAppAllowlist.Valid() {
+			allowlistInstallPath := android.PathForModuleInstall(ctx, "etc", "permissions")
+			allowlistInstallFilename := a.installApkName + ".xml"
+			ctx.InstallFile(allowlistInstallPath, allowlistInstallFilename, a.privAppAllowlist.Path())
+		}
+
 		var extraInstalledPaths android.Paths
 		for _, extra := range a.extraOutputFiles {
 			installed := ctx.InstallFile(a.installDir, extra.Base(), extra)
 			extraInstalledPaths = append(extraInstalledPaths, installed)
 		}
 		ctx.InstallFile(a.installDir, a.outputFile.Base(), a.outputFile, extraInstalledPaths...)
-
-		if a.privAppAllowlist.Valid() {
-			installPath := android.PathForModuleInstall(ctx, "etc", "permissions")
-			ctx.InstallFile(installPath, a.privAppAllowlist.Path().Base(), a.privAppAllowlist.Path())
-		}
 	}
 
 	a.buildAppDependencyInfo(ctx)
@@ -1383,10 +1398,15 @@ func (u *usesLibrary) deps(ctx android.BottomUpMutatorContext, addCompatDeps boo
 	}
 }
 
-// presentOptionalUsesLibs returns optional_uses_libs after filtering out MissingUsesLibraries, which don't exist in the
-// build.
+// presentOptionalUsesLibs returns optional_uses_libs after filtering out libraries that don't exist in the source tree.
 func (u *usesLibrary) presentOptionalUsesLibs(ctx android.BaseModuleContext) []string {
-	optionalUsesLibs, _ := android.FilterList(u.usesLibraryProperties.Optional_uses_libs, ctx.Config().MissingUsesLibraries())
+	optionalUsesLibs := android.FilterListPred(u.usesLibraryProperties.Optional_uses_libs, func(s string) bool {
+		exists := ctx.OtherModuleExists(s)
+		if !exists && !android.InList(ctx.ModuleName(), ctx.Config().BuildWarningBadOptionalUsesLibsAllowlist()) {
+			fmt.Printf("Warning: Module '%s' depends on non-existing optional_uses_libs '%s'\n", ctx.ModuleName(), s)
+		}
+		return exists
+	})
 	return optionalUsesLibs
 }
 

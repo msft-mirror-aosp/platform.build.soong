@@ -2645,7 +2645,7 @@ func TestUsesLibraries(t *testing.T) {
 		PrepareForTestWithJavaSdkLibraryFiles,
 		FixtureWithLastReleaseApis("runtime-library", "foo", "quuz", "qux", "bar", "fred"),
 		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.MissingUsesLibraries = []string{"baz"}
+			variables.BuildWarningBadOptionalUsesLibsAllowlist = []string{"app", "prebuilt"}
 		}),
 	).RunTestWithBp(t, bp)
 
@@ -2693,52 +2693,11 @@ func TestUsesLibraries(t *testing.T) {
 		`--optional-uses-library baz `
 	android.AssertStringDoesContain(t, "verify apk cmd args", verifyApkCmd, verifyApkArgs)
 
-	// Test that all present libraries are preopted, including implicit SDK dependencies, possibly stubs
+	// Test that necessary args are passed for constructing CLC in Ninja phase.
 	cmd := app.Rule("dexpreopt").RuleParams.Command
-	w := `--target-context-for-sdk any ` +
-		`PCL[/system/framework/qux.jar]#` +
-		`PCL[/system/framework/quuz.jar]#` +
-		`PCL[/system/framework/foo.jar]#` +
-		`PCL[/system/framework/non-sdk-lib.jar]#` +
-		`PCL[/system/framework/bar.jar]#` +
-		`PCL[/system/framework/runtime-library.jar]#` +
-		`PCL[/system/framework/runtime-required-x.jar]#` +
-		`PCL[/system/framework/runtime-optional-x.jar]#` +
-		`PCL[/system/framework/runtime-required-y.jar]#` +
-		`PCL[/system/framework/runtime-optional-y.jar] `
-	android.AssertStringDoesContain(t, "dexpreopt app cmd args", cmd, w)
-
-	// Test conditional context for target SDK version 28.
-	android.AssertStringDoesContain(t, "dexpreopt app cmd 28", cmd,
-		`--target-context-for-sdk 28`+
-			` PCL[/system/framework/org.apache.http.legacy.jar] `)
-
-	// Test conditional context for target SDK version 29.
-	android.AssertStringDoesContain(t, "dexpreopt app cmd 29", cmd,
-		`--target-context-for-sdk 29`+
-			` PCL[/system/framework/android.hidl.manager-V1.0-java.jar]`+
-			`#PCL[/system/framework/android.hidl.base-V1.0-java.jar] `)
-
-	// Test conditional context for target SDK version 30.
-	// "android.test.mock" is absent because "android.test.runner" is not used.
-	android.AssertStringDoesContain(t, "dexpreopt app cmd 30", cmd,
-		`--target-context-for-sdk 30`+
-			` PCL[/system/framework/android.test.base.jar] `)
-
-	cmd = prebuilt.Rule("dexpreopt").RuleParams.Command
-	android.AssertStringDoesContain(t, "dexpreopt prebuilt cmd", cmd,
-		`--target-context-for-sdk any`+
-			` PCL[/system/framework/foo.jar]`+
-			`#PCL[/system/framework/non-sdk-lib.jar]`+
-			`#PCL[/system/framework/android.test.runner.jar]`+
-			`#PCL[/system/framework/bar.jar] `)
-
-	// Test conditional context for target SDK version 30.
-	// "android.test.mock" is present because "android.test.runner" is used.
-	android.AssertStringDoesContain(t, "dexpreopt prebuilt cmd 30", cmd,
-		`--target-context-for-sdk 30`+
-			` PCL[/system/framework/android.test.base.jar]`+
-			`#PCL[/system/framework/android.test.mock.jar] `)
+	android.AssertStringDoesContain(t, "dexpreopt app cmd context", cmd, "--context-json=")
+	android.AssertStringDoesContain(t, "dexpreopt app cmd product_packages", cmd,
+		"--product-packages=out/soong/target/product/test_device/product_packages.txt")
 }
 
 func TestDexpreoptBcp(t *testing.T) {
@@ -3563,9 +3522,8 @@ func TestPrivappAllowlist(t *testing.T) {
 		android_app {
 			name: "foo",
 			srcs: ["a.java"],
-			privapp_allowlist: "perms.xml",
+			privapp_allowlist: "privapp_allowlist_com.android.foo.xml",
 			privileged: true,
-			package_name: "com.android.foo",
 			sdk_version: "current",
 		}
 		override_android_app {
@@ -3578,20 +3536,94 @@ func TestPrivappAllowlist(t *testing.T) {
 	app := result.ModuleForTests("foo", "android_common")
 	overrideApp := result.ModuleForTests("foo", "android_common_bar")
 
-	// verify that privapp allowlist is created
-	app.Output("out/soong/.intermediates/foo/android_common/privapp_allowlist_com.android.foo.xml")
+	// verify that privapp allowlist is created for override apps
 	overrideApp.Output("out/soong/.intermediates/foo/android_common_bar/privapp_allowlist_com.google.android.foo.xml")
-	expectedAllowlist := "perms.xml"
-	actualAllowlist := app.Rule("modifyAllowlist").Input.String()
-	if expectedAllowlist != actualAllowlist {
-		t.Errorf("expected allowlist to be %q; got %q", expectedAllowlist, actualAllowlist)
-	}
-	overrideActualAllowlist := overrideApp.Rule("modifyAllowlist").Input.String()
-	if expectedAllowlist != overrideActualAllowlist {
-		t.Errorf("expected override allowlist to be %q; got %q", expectedAllowlist, overrideActualAllowlist)
+	expectedAllowlistInput := "privapp_allowlist_com.android.foo.xml"
+	overrideActualAllowlistInput := overrideApp.Rule("modifyAllowlist").Input.String()
+	if expectedAllowlistInput != overrideActualAllowlistInput {
+		t.Errorf("expected override allowlist to be %q; got %q", expectedAllowlistInput, overrideActualAllowlistInput)
 	}
 
 	// verify that permissions are copied to device
-	app.Output("out/soong/target/product/test_device/system/etc/permissions/privapp_allowlist_com.android.foo.xml")
-	overrideApp.Output("out/soong/target/product/test_device/system/etc/permissions/privapp_allowlist_com.google.android.foo.xml")
+	app.Output("out/soong/target/product/test_device/system/etc/permissions/foo.xml")
+	overrideApp.Output("out/soong/target/product/test_device/system/etc/permissions/bar.xml")
+}
+
+func TestPrivappAllowlistAndroidMk(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+		android.PrepareForTestWithAndroidMk,
+	).RunTestWithBp(
+		t,
+		`
+		android_app {
+			name: "foo",
+			srcs: ["a.java"],
+			privapp_allowlist: "privapp_allowlist_com.android.foo.xml",
+			privileged: true,
+			sdk_version: "current",
+		}
+		override_android_app {
+			name: "bar",
+			base: "foo",
+			package_name: "com.google.android.foo",
+		}
+		`,
+	)
+	baseApp := result.ModuleForTests("foo", "android_common")
+	overrideApp := result.ModuleForTests("foo", "android_common_bar")
+
+	baseAndroidApp := baseApp.Module().(*AndroidApp)
+	baseEntries := android.AndroidMkEntriesForTest(t, result.TestContext, baseAndroidApp)[0]
+	android.AssertStringMatches(
+		t,
+		"androidmk has incorrect LOCAL_SOONG_INSTALLED_MODULE; expected to find foo.apk",
+		baseEntries.EntryMap["LOCAL_SOONG_INSTALLED_MODULE"][0],
+		"\\S+foo.apk",
+	)
+	android.AssertStringMatches(
+		t,
+		"androidmk has incorrect LOCAL_SOONG_INSTALL_PAIRS; expected to it to include foo.apk",
+		baseEntries.EntryMap["LOCAL_SOONG_INSTALL_PAIRS"][0],
+		"\\S+foo.apk",
+	)
+	android.AssertStringMatches(
+		t,
+		"androidmk has incorrect LOCAL_SOONG_INSTALL_PAIRS; expected to it to include app",
+		baseEntries.EntryMap["LOCAL_SOONG_INSTALL_PAIRS"][0],
+		"\\S+foo.apk:\\S+/target/product/test_device/system/priv-app/foo/foo.apk",
+	)
+	android.AssertStringMatches(
+		t,
+		"androidmk has incorrect LOCAL_SOONG_INSTALL_PAIRS; expected to it to include privapp_allowlist",
+		baseEntries.EntryMap["LOCAL_SOONG_INSTALL_PAIRS"][0],
+		"privapp_allowlist_com.android.foo.xml:\\S+/target/product/test_device/system/etc/permissions/foo.xml",
+	)
+
+	overrideAndroidApp := overrideApp.Module().(*AndroidApp)
+	overrideEntries := android.AndroidMkEntriesForTest(t, result.TestContext, overrideAndroidApp)[0]
+	android.AssertStringMatches(
+		t,
+		"androidmk has incorrect LOCAL_SOONG_INSTALLED_MODULE; expected to find bar.apk",
+		overrideEntries.EntryMap["LOCAL_SOONG_INSTALLED_MODULE"][0],
+		"\\S+bar.apk",
+	)
+	android.AssertStringMatches(
+		t,
+		"androidmk has incorrect LOCAL_SOONG_INSTALL_PAIRS; expected to it to include bar.apk",
+		overrideEntries.EntryMap["LOCAL_SOONG_INSTALL_PAIRS"][0],
+		"\\S+bar.apk",
+	)
+	android.AssertStringMatches(
+		t,
+		"androidmk has incorrect LOCAL_SOONG_INSTALL_PAIRS; expected to it to include app",
+		overrideEntries.EntryMap["LOCAL_SOONG_INSTALL_PAIRS"][0],
+		"\\S+bar.apk:\\S+/target/product/test_device/system/priv-app/bar/bar.apk",
+	)
+	android.AssertStringMatches(
+		t,
+		"androidmk has incorrect LOCAL_SOONG_INSTALL_PAIRS; expected to it to include privapp_allowlist",
+		overrideEntries.EntryMap["LOCAL_SOONG_INSTALL_PAIRS"][0],
+		"\\S+soong/.intermediates/foo/android_common_bar/privapp_allowlist_com.google.android.foo.xml:\\S+/target/product/test_device/system/etc/permissions/bar.xml",
+	)
 }

@@ -62,8 +62,7 @@ var fuzzerFlags = []string{
 	"-C llvm-args=-sanitizer-coverage-level=3",
 	"-C llvm-args=-sanitizer-coverage-trace-compares",
 	"-C llvm-args=-sanitizer-coverage-inline-8bit-counters",
-	"-C llvm-args=-sanitizer-coverage-trace-geps",
-	"-C llvm-args=-sanitizer-coverage-prune-blocks=0",
+	"-C llvm-args=-sanitizer-coverage-pc-table",
 
 	// See https://github.com/rust-fuzz/cargo-fuzz/pull/193
 	"-C link-dead-code",
@@ -226,11 +225,6 @@ func (sanitize *sanitize) flags(ctx ModuleContext, flags Flags, deps PathDeps) (
 	}
 	if Bool(sanitize.Properties.Sanitize.Fuzzer) {
 		flags.RustFlags = append(flags.RustFlags, fuzzerFlags...)
-		if ctx.Arch().ArchType == android.Arm64 && ctx.Os().Bionic() {
-			flags.RustFlags = append(flags.RustFlags, hwasanFlags...)
-		} else {
-			flags.RustFlags = append(flags.RustFlags, asanFlags...)
-		}
 	} else if Bool(sanitize.Properties.Sanitize.Hwaddress) {
 		flags.RustFlags = append(flags.RustFlags, hwasanFlags...)
 	} else if Bool(sanitize.Properties.Sanitize.Address) {
@@ -422,14 +416,6 @@ func (mod *Module) IsSanitizerEnabled(t cc.SanitizerType) bool {
 func (mod *Module) IsSanitizerExplicitlyDisabled(t cc.SanitizerType) bool {
 	if mod.Host() {
 		return true
-	}
-
-	// TODO(b/178365482): Rust/CC interop doesn't work just yet; don't sanitize rust_ffi modules until
-	// linkage issues are resolved.
-	if lib, ok := mod.compiler.(libraryInterface); ok {
-		if lib.shared() || lib.static() {
-			return true
-		}
 	}
 
 	return mod.sanitize.isSanitizerExplicitlyDisabled(t)

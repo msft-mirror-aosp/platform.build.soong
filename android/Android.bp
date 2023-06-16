@@ -19,6 +19,7 @@ bootstrap_go_package {
         "soong-shared",
         "soong-starlark",
         "soong-starlark-format",
+        "soong-ui-bp2build_metrics_proto",
         "soong-ui-metrics_proto",
         "soong-android-allowlists",
 
@@ -77,6 +78,7 @@ bootstrap_go_package {
         "path_properties.go",
         "paths.go",
         "phony.go",
+        "plugin.go",
         "prebuilt.go",
         "prebuilt_build_tool.go",
         "proto.go",

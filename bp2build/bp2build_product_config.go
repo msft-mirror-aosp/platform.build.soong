@@ -68,6 +68,19 @@ package(default_visibility = [
 	"@//build/bazel/product_config:__subpackages__",
 	"@soong_injection//product_config_platforms:__subpackages__",
 ])
+
+load("//{PRODUCT_FOLDER}:soong.variables.bzl", _soong_variables = "variables")
+load("@//build/bazel/product_config:android_product.bzl", "android_product")
+
+# Bazel will qualify its outputs by the platform name. When switching between products, this
+# means that soong-built files that depend on bazel-built files will suddenly get different
+# dependency files, because the path changes, and they will be rebuilt. In order to avoid this
+# extra rebuilding, make mixed builds always use a single platform so that the bazel artifacts
+# are always under the same path.
+android_product(
+    name = "mixed_builds_product-{VARIANT}",
+    soong_variables = _soong_variables,
+)
 `)),
 		newFile(
 			"product_config_platforms",
@@ -78,6 +91,7 @@ package(default_visibility = [
 # TODO: When we start generating the platforms for more than just the
 # currently lunched product, they should all be listed here
 product_labels = [
+  "@soong_injection//product_config_platforms:mixed_builds_product-{VARIANT}",
   "@soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}"
 ]
 `)),
@@ -104,14 +118,6 @@ build --host_platform @soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}_lin
 			"darwin.bazelrc",
 			productReplacer.Replace(`
 build --host_platform @soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}_darwin_x86_64
-`)),
-		newFile(
-			"product_config_platforms",
-			"platform_mappings",
-			productReplacer.Replace(`
-flags:
-  --cpu=k8
-    @soong_injection//{PRODUCT_FOLDER}:{PRODUCT}-{VARIANT}
 `)),
 	}
 

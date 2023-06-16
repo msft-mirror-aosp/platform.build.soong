@@ -196,12 +196,13 @@ var _ android.MixedBuildBuildable = (*Module)(nil)
 type taskFunc func(ctx android.ModuleContext, rawCommand string, srcFiles android.Paths) []generateTask
 
 type generateTask struct {
-	in         android.Paths
-	out        android.WritablePaths
-	depFile    android.WritablePath
-	copyTo     android.WritablePaths // For gensrcs to set on gensrcsMerge rule.
-	genDir     android.WritablePath
-	extraTools android.Paths // dependencies on tools used by the generator
+	in          android.Paths
+	out         android.WritablePaths
+	depFile     android.WritablePath
+	copyTo      android.WritablePaths // For gensrcs to set on gensrcsMerge rule.
+	genDir      android.WritablePath
+	extraTools  android.Paths // dependencies on tools used by the generator
+	extraInputs map[string][]string
 
 	cmd string
 	// For gensrsc sharding.
@@ -395,30 +396,35 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 		addLocationLabel(toolFile, toolLocation{paths})
 	}
 
-	includeDirInPaths := ctx.DeviceConfig().BuildBrokenInputDir(g.Name())
-	var srcFiles android.Paths
-	for _, in := range g.properties.Srcs {
-		paths, missingDeps := android.PathsAndMissingDepsRelativeToModuleSourceDir(android.SourceInput{
-			Context: ctx, Paths: []string{in}, ExcludePaths: g.properties.Exclude_srcs, IncludeDirs: includeDirInPaths,
-		})
-		if len(missingDeps) > 0 {
-			if !ctx.Config().AllowMissingDependencies() {
-				panic(fmt.Errorf("should never get here, the missing dependencies %q should have been reported in DepsMutator",
-					missingDeps))
-			}
+	addLabelsForInputs := func(propName string, include, exclude []string) android.Paths {
 
-			// If AllowMissingDependencies is enabled, the build will not have stopped when
-			// the dependency was added on a missing SourceFileProducer module, which will result in nonsensical
-			// "cmd: label ":..." has no files" errors later.  Add a placeholder file to the local label.
-			// The command that uses this placeholder file will never be executed because the rule will be
-			// replaced with an android.Error rule reporting the missing dependencies.
-			ctx.AddMissingDependencies(missingDeps)
-			addLocationLabel(in, errorLocation{"***missing srcs " + in + "***"})
-		} else {
-			srcFiles = append(srcFiles, paths...)
-			addLocationLabel(in, inputLocation{paths})
+		includeDirInPaths := ctx.DeviceConfig().BuildBrokenInputDir(g.Name())
+		var srcFiles android.Paths
+		for _, in := range include {
+			paths, missingDeps := android.PathsAndMissingDepsRelativeToModuleSourceDir(android.SourceInput{
+				Context: ctx, Paths: []string{in}, ExcludePaths: exclude, IncludeDirs: includeDirInPaths,
+			})
+			if len(missingDeps) > 0 {
+				if !ctx.Config().AllowMissingDependencies() {
+					panic(fmt.Errorf("should never get here, the missing dependencies %q should have been reported in DepsMutator",
+						missingDeps))
+				}
+
+				// If AllowMissingDependencies is enabled, the build will not have stopped when
+				// the dependency was added on a missing SourceFileProducer module, which will result in nonsensical
+				// "cmd: label ":..." has no files" errors later.  Add a placeholder file to the local label.
+				// The command that uses this placeholder file will never be executed because the rule will be
+				// replaced with an android.Error rule reporting the missing dependencies.
+				ctx.AddMissingDependencies(missingDeps)
+				addLocationLabel(in, errorLocation{"***missing " + propName + " " + in + "***"})
+			} else {
+				srcFiles = append(srcFiles, paths...)
+				addLocationLabel(in, inputLocation{paths})
+			}
 		}
+		return srcFiles
 	}
+	srcFiles := addLabelsForInputs("srcs", g.properties.Srcs, g.properties.Exclude_srcs)
 
 	var copyFrom android.Paths
 	var outputFiles android.WritablePaths
@@ -430,10 +436,18 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 	}
 
 	// Generate tasks, either from genrule or gensrcs.
-	for _, task := range g.taskGenerator(ctx, cmd, srcFiles) {
+	for i, task := range g.taskGenerator(ctx, cmd, srcFiles) {
 		if len(task.out) == 0 {
 			ctx.ModuleErrorf("must have at least one output file")
 			return
+		}
+
+		var extraInputs android.Paths
+		// Only handle extra inputs once as these currently are the same across all tasks
+		if i == 0 {
+			for name, values := range task.extraInputs {
+				extraInputs = append(extraInputs, addLabelsForInputs(name, values, []string{})...)
+			}
 		}
 
 		// Pick a unique path outside the task.genDir for the sbox manifest textproto,
@@ -452,7 +466,7 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 		manifestPath := android.PathForModuleOut(ctx, manifestName)
 
 		// Use a RuleBuilder to create a rule that runs the command inside an sbox sandbox.
-		rule := android.NewRuleBuilder(pctx, ctx).Sbox(task.genDir, manifestPath).SandboxTools()
+		rule := getSandboxedRuleBuilder(ctx, android.NewRuleBuilder(pctx, ctx).Sbox(task.genDir, manifestPath))
 		cmd := rule.Command()
 
 		for _, out := range task.out {
@@ -544,6 +558,8 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 		g.rawCommands = append(g.rawCommands, rawCommand)
 
 		cmd.Text(rawCommand)
+		cmd.Implicits(srcFiles) // need to be able to reference other srcs
+		cmd.Implicits(extraInputs)
 		cmd.ImplicitOutputs(task.out)
 		cmd.Implicits(task.in)
 		cmd.ImplicitTools(tools)
@@ -594,14 +610,17 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// Allowlist genrule to use depfile until we have a solution to remove it.
 	// TODO(b/235582219): Remove allowlist for genrule
-	if ctx.ModuleType() == "gensrcs" &&
-		!ctx.DeviceConfig().BuildBrokenDepfile() &&
-		Bool(g.properties.Depfile) {
-		ctx.PropertyErrorf(
-			"depfile",
-			"Deprecated to ensure the module type is convertible to Bazel. "+
-				"Try specifying the dependencies explicitly so that there is no need to use depfile. "+
-				"If not possible, the escape hatch is to use BUILD_BROKEN_DEPFILE to bypass the error.")
+	if Bool(g.properties.Depfile) {
+		sandboxingAllowlistSets := getSandboxingAllowlistSets(ctx)
+		// TODO(b/283852474): Checking the GenruleSandboxing flag is temporary in
+		// order to pass the presubmit before internal master is updated.
+		if ctx.DeviceConfig().GenruleSandboxing() && !sandboxingAllowlistSets.depfileAllowSet[g.Name()] {
+			ctx.PropertyErrorf(
+				"depfile",
+				"Deprecated to ensure the module type is convertible to Bazel. "+
+					"Try specifying the dependencies explicitly so that there is no need to use depfile. "+
+					"If not possible, the escape hatch is to add the module to allowlists.go to bypass the error.")
+		}
 	}
 
 	g.generateCommonBuildActions(ctx)
@@ -737,7 +756,7 @@ func NewGenSrcs() *Module {
 			// TODO(ccross): this RuleBuilder is a hack to be able to call
 			// rule.Command().PathForOutput.  Replace this with passing the rule into the
 			// generator.
-			rule := android.NewRuleBuilder(pctx, ctx).Sbox(genDir, nil).SandboxTools()
+			rule := getSandboxedRuleBuilder(ctx, android.NewRuleBuilder(pctx, ctx).Sbox(genDir, nil))
 
 			for _, in := range shard {
 				outFile := android.GenPathWithExt(ctx, finalSubDir, in, String(properties.Output_extension))
@@ -805,6 +824,9 @@ func NewGenSrcs() *Module {
 				shard:      i,
 				shards:     len(shards),
 				extraTools: extraTools,
+				extraInputs: map[string][]string{
+					"data": properties.Data,
+				},
 			})
 		}
 
@@ -829,6 +851,9 @@ type genSrcsProperties struct {
 
 	// maximum number of files that will be passed on a single command line.
 	Shard_size *int64
+
+	// Additional files needed for build that are not tooling related.
+	Data []string `android:"path"`
 }
 
 type bazelGensrcsAttributes struct {
@@ -836,6 +861,7 @@ type bazelGensrcsAttributes struct {
 	Output_extension *string
 	Tools            bazel.LabelListAttribute
 	Cmd              string
+	Data             bazel.LabelListAttribute
 }
 
 const defaultShardSize = 50
@@ -915,6 +941,23 @@ func (m *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	allReplacements.Append(tools.Value)
 	allReplacements.Append(bazel.FirstUniqueBazelLabelList(srcs_labels))
 
+	// The Output_extension prop is not in an immediately accessible field
+	// in the Module struct, so use GetProperties and cast it
+	// to the known struct prop.
+	var outputExtension *string
+	var data bazel.LabelListAttribute
+	if ctx.ModuleType() == "gensrcs" {
+		for _, propIntf := range m.GetProperties() {
+			if props, ok := propIntf.(*genSrcsProperties); ok {
+				outputExtension = props.Output_extension
+				dataFiles := android.BazelLabelForModuleSrc(ctx, props.Data)
+				allReplacements.Append(bazel.FirstUniqueBazelLabelList(dataFiles))
+				data = bazel.MakeLabelListAttribute(dataFiles)
+				break
+			}
+		}
+	}
+
 	// Replace in and out variables with $< and $@
 	var cmd string
 	if m.properties.Cmd != nil {
@@ -943,16 +986,6 @@ func (m *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	tags := android.ApexAvailableTagsWithoutTestApexes(ctx, m)
 
 	if ctx.ModuleType() == "gensrcs" {
-		// The Output_extension prop is not in an immediately accessible field
-		// in the Module struct, so use GetProperties and cast it
-		// to the known struct prop.
-		var outputExtension *string
-		for _, propIntf := range m.GetProperties() {
-			if props, ok := propIntf.(*genSrcsProperties); ok {
-				outputExtension = props.Output_extension
-				break
-			}
-		}
 		props := bazel.BazelTargetModuleProperties{
 			Rule_class:        "gensrcs",
 			Bzl_load_location: "//build/bazel/rules:gensrcs.bzl",
@@ -962,6 +995,7 @@ func (m *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 			Output_extension: outputExtension,
 			Cmd:              cmd,
 			Tools:            tools,
+			Data:             data,
 		}
 		ctx.CreateBazelTargetModule(props, android.CommonAttributes{
 			Name: m.Name(),
@@ -1019,4 +1053,40 @@ func DefaultsFactory(props ...interface{}) android.Module {
 	android.InitDefaultsModule(module)
 
 	return module
+}
+
+var sandboxingAllowlistKey = android.NewOnceKey("genruleSandboxingAllowlistKey")
+
+type sandboxingAllowlistSets struct {
+	sandboxingDenyModuleSet map[string]bool
+	sandboxingDenyPathSet   map[string]bool
+	depfileAllowSet         map[string]bool
+}
+
+func getSandboxingAllowlistSets(ctx android.PathContext) *sandboxingAllowlistSets {
+	return ctx.Config().Once(sandboxingAllowlistKey, func() interface{} {
+		sandboxingDenyModuleSet := map[string]bool{}
+		sandboxingDenyPathSet := map[string]bool{}
+		depfileAllowSet := map[string]bool{}
+
+		android.AddToStringSet(sandboxingDenyModuleSet, append(DepfileAllowList, SandboxingDenyModuleList...))
+		android.AddToStringSet(sandboxingDenyPathSet, SandboxingDenyPathList)
+		android.AddToStringSet(depfileAllowSet, DepfileAllowList)
+		return &sandboxingAllowlistSets{
+			sandboxingDenyModuleSet: sandboxingDenyModuleSet,
+			sandboxingDenyPathSet:   sandboxingDenyPathSet,
+			depfileAllowSet:         depfileAllowSet,
+		}
+	}).(*sandboxingAllowlistSets)
+}
+func getSandboxedRuleBuilder(ctx android.ModuleContext, r *android.RuleBuilder) *android.RuleBuilder {
+	if !ctx.DeviceConfig().GenruleSandboxing() {
+		return r.SandboxTools()
+	}
+	sandboxingAllowlistSets := getSandboxingAllowlistSets(ctx)
+	if sandboxingAllowlistSets.sandboxingDenyPathSet[ctx.ModuleDir()] ||
+		sandboxingAllowlistSets.sandboxingDenyModuleSet[ctx.ModuleName()] {
+		return r.SandboxTools()
+	}
+	return r.SandboxInputs()
 }

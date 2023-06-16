@@ -16,10 +16,12 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -78,12 +80,12 @@ func init() {
 	flag.StringVar(&cmdlineArgs.Bp2buildMarker, "bp2build_marker", "", "If set, run bp2build, touch the specified marker file then exit")
 	flag.StringVar(&cmdlineArgs.SymlinkForestMarker, "symlink_forest_marker", "", "If set, create the bp2build symlink forest, touch the specified marker file, then exit")
 	flag.StringVar(&cmdlineArgs.OutFile, "o", "build.ninja", "the Ninja file to output")
+	flag.StringVar(&cmdlineArgs.SoongVariables, "soong_variables", "soong.variables", "the file contains all build variables")
 	flag.StringVar(&cmdlineArgs.BazelForceEnabledModules, "bazel-force-enabled-modules", "", "additional modules to build with Bazel. Comma-delimited")
 	flag.BoolVar(&cmdlineArgs.EmptyNinjaFile, "empty-ninja-file", false, "write out a 0-byte ninja file")
 	flag.BoolVar(&cmdlineArgs.MultitreeBuild, "multitree-build", false, "this is a multitree build")
 	flag.BoolVar(&cmdlineArgs.BazelMode, "bazel-mode", false, "use bazel for analysis of certain modules")
 	flag.BoolVar(&cmdlineArgs.BazelModeStaging, "bazel-mode-staging", false, "use bazel for analysis of certain near-ready modules")
-	flag.BoolVar(&cmdlineArgs.BazelModeDev, "bazel-mode-dev", false, "use bazel for analysis of a large number of modules (less stable)")
 	flag.BoolVar(&cmdlineArgs.UseBazelProxy, "use-bazel-proxy", false, "communicate with bazel using unix socket proxy instead of spawning subprocesses")
 	flag.BoolVar(&cmdlineArgs.BuildFromTextStub, "build-from-text-stub", false, "build Java stubs from API text files instead of source files")
 	flag.BoolVar(&cmdlineArgs.EnsureAllowlistIntegrity, "ensure-allowlist-integrity", false, "verify that allowlisted modules are mixed-built")
@@ -134,10 +136,22 @@ func runMixedModeBuild(ctx *android.Context, extraNinjaDeps []string) string {
 
 	writeDepFile(cmdlineArgs.OutFile, ctx.EventHandler, ninjaDeps)
 
-	if ctx.Config().IsEnvTrue("SOONG_GENERATES_NINJA_HINT") {
+	if needToWriteNinjaHint(ctx) {
 		writeNinjaHint(ctx)
 	}
 	return cmdlineArgs.OutFile
+}
+
+func needToWriteNinjaHint(ctx *android.Context) bool {
+	switch ctx.Config().GetenvWithDefault("SOONG_GENERATES_NINJA_HINT", "") {
+	case "always":
+		return true
+	case "depend":
+		if _, err := os.Stat(filepath.Join(ctx.Config().OutDir(), ".ninja_log")); errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+	}
+	return false
 }
 
 // Run the code-generation phase to convert BazelTargetModules to BUILD files.
@@ -459,7 +473,7 @@ func runSoongOnlyBuild(ctx *android.Context, extraNinjaDeps []string) string {
 		// The actual output (build.ninja) was written in the RunBlueprint() call
 		// above
 		writeDepFile(cmdlineArgs.OutFile, ctx.EventHandler, ninjaDeps)
-		if ctx.Config().IsEnvTrue("SOONG_GENERATES_NINJA_HINT") {
+		if needToWriteNinjaHint(ctx) {
 			writeNinjaHint(ctx)
 		}
 		return cmdlineArgs.OutFile
@@ -544,6 +558,12 @@ func main() {
 		}
 		writeMetrics(configuration, ctx.EventHandler, metricsDir)
 	}
+
+	// Register this environment variablesas being an implicit dependencies of
+	// soong_build. Changes to this environment variable will result in
+	// retriggering soong_build.
+	configuration.Getenv("USE_BAZEL_VERSION")
+
 	writeUsedEnvironmentFile(configuration)
 
 	// Touch the output file so that it's the newest file created by soong_build.
@@ -717,6 +737,43 @@ func excludedFromSymlinkForest(ctx *android.Context, verbose bool) []string {
 	return excluded
 }
 
+// buildTargetsByPackage parses Bazel BUILD.bazel and BUILD files under
+// the workspace, and returns a map containing names of Bazel targets defined in
+// these BUILD files.
+// For example, maps "//foo/bar" to ["baz", "qux"] if `//foo/bar:{baz,qux}` exist.
+func buildTargetsByPackage(ctx *android.Context) map[string][]string {
+	existingBazelFiles, err := getExistingBazelRelatedFiles(topDir)
+	maybeQuit(err, "Error determining existing Bazel-related files")
+
+	result := map[string][]string{}
+
+	// Search for instances of `name = "$NAME"` (with arbitrary spacing).
+	targetNameRegex := regexp.MustCompile(`(?m)^\s*name\s*=\s*\"([^\"]+)\"`)
+
+	for _, path := range existingBazelFiles {
+		if !ctx.Config().Bp2buildPackageConfig.ShouldKeepExistingBuildFileForDir(filepath.Dir(path)) {
+			continue
+		}
+		fullPath := shared.JoinPath(topDir, path)
+		sourceDir := filepath.Dir(path)
+		fileInfo, err := os.Stat(fullPath)
+		maybeQuit(err, "Error accessing Bazel file '%s'", fullPath)
+
+		if !fileInfo.IsDir() &&
+			(fileInfo.Name() == "BUILD" || fileInfo.Name() == "BUILD.bazel") {
+			// Process this BUILD file.
+			buildFileContent, err := os.ReadFile(fullPath)
+			maybeQuit(err, "Error reading Bazel file '%s'", fullPath)
+
+			matches := targetNameRegex.FindAllStringSubmatch(string(buildFileContent), -1)
+			for _, match := range matches {
+				result[sourceDir] = append(result[sourceDir], match[1])
+			}
+		}
+	}
+	return result
+}
+
 // Run Soong in the bp2build mode. This creates a standalone context that registers
 // an alternate pipeline of mutators and singletons specifically for generating
 // Bazel BUILD files instead of Ninja files.
@@ -724,12 +781,19 @@ func runBp2Build(ctx *android.Context, extraNinjaDeps []string, metricsDir strin
 	var codegenMetrics *bp2build.CodegenMetrics
 	ctx.EventHandler.Do("bp2build", func() {
 
+		ctx.EventHandler.Do("read_build", func() {
+			ctx.Config().SetBazelBuildFileTargets(buildTargetsByPackage(ctx))
+		})
+
 		// Propagate "allow misssing dependencies" bit. This is normally set in
 		// newContext(), but we create ctx without calling that method.
 		ctx.SetAllowMissingDependencies(ctx.Config().AllowMissingDependencies())
 		ctx.SetNameInterface(newNameResolver(ctx.Config()))
 		ctx.RegisterForBazelConversion()
 		ctx.SetModuleListFile(cmdlineArgs.ModuleListFile)
+		// Skip cloning modules during bp2build's blueprint run. Some mutators set
+		// bp2build-related module values which should be preserved during codegen.
+		ctx.SkipCloneModulesAfterMutators = true
 
 		var ninjaDeps []string
 		ninjaDeps = append(ninjaDeps, extraNinjaDeps...)

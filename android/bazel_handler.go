@@ -28,7 +28,7 @@ import (
 	"android/soong/android/allowlists"
 	"android/soong/bazel/cquery"
 	"android/soong/shared"
-	"android/soong/starlark_fmt"
+	"android/soong/starlark_import"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/metrics"
@@ -44,44 +44,14 @@ var (
 		Description: "",
 		CommandDeps: []string{"${bazelBuildRunfilesTool}"},
 	}, "outDir")
-	allowedBazelEnvironmentVars = []string{
-		// clang-tidy
-		"ALLOW_LOCAL_TIDY_TRUE",
-		"DEFAULT_TIDY_HEADER_DIRS",
-		"TIDY_TIMEOUT",
-		"WITH_TIDY",
-		"WITH_TIDY_FLAGS",
-		"TIDY_EXTERNAL_VENDOR",
-
-		"SKIP_ABI_CHECKS",
-		"UNSAFE_DISABLE_APEX_ALLOWED_DEPS_CHECK",
-		"AUTO_ZERO_INITIALIZE",
-		"AUTO_PATTERN_INITIALIZE",
-		"AUTO_UNINITIALIZE",
-		"USE_CCACHE",
-		"LLVM_NEXT",
-		"LLVM_PREBUILTS_VERSION",
-		"LLVM_RELEASE_VERSION",
-		"ALLOW_UNKNOWN_WARNING_OPTION",
-
-		"UNBUNDLED_BUILD_TARGET_SDK_WITH_API_FINGERPRINT",
-
-		// Overrides the version in the apex_manifest.json. The version is unique for
-		// each branch (internal, aosp, mainline releases, dessert releases).  This
-		// enables modules built on an older branch to be installed against a newer
-		// device for development purposes.
-		"OVERRIDE_APEX_MANIFEST_DEFAULT_VERSION",
-	}
 )
 
-func init() {
-	RegisterMixedBuildsMutator(InitRegistrationContext)
+func registerMixedBuildsMutator(ctx RegisterMutatorsContext) {
+	ctx.BottomUp("mixed_builds_prep", mixedBuildsPrepareMutator).Parallel()
 }
 
 func RegisterMixedBuildsMutator(ctx RegistrationContext) {
-	ctx.FinalDepsMutators(func(ctx RegisterMutatorsContext) {
-		ctx.BottomUp("mixed_builds_prep", mixedBuildsPrepareMutator).Parallel()
-	})
+	ctx.FinalDepsMutators(registerMixedBuildsMutator)
 }
 
 func mixedBuildsPrepareMutator(ctx BottomUpMutatorContext) {
@@ -183,15 +153,14 @@ type BazelContext interface {
 	// Returns the results of GetOutputFiles and GetCcObjectFiles in a single query (in that order).
 	GetCcInfo(label string, cfgKey configKey) (cquery.CcInfo, error)
 
-	// Returns the executable binary resultant from building together the python sources
-	// TODO(b/232976601): Remove.
-	GetPythonBinary(label string, cfgKey configKey) (string, error)
-
 	// Returns the results of the GetApexInfo query (including output files)
 	GetApexInfo(label string, cfgkey configKey) (cquery.ApexInfo, error)
 
 	// Returns the results of the GetCcUnstrippedInfo query
 	GetCcUnstrippedInfo(label string, cfgkey configKey) (cquery.CcUnstrippedInfo, error)
+
+	// Returns the results of the GetPrebuiltFileInfo query
+	GetPrebuiltFileInfo(label string, cfgKey configKey) (cquery.PrebuiltFileInfo, error)
 
 	// ** end Cquery Results Retrieval Functions
 
@@ -260,8 +229,6 @@ type mixedBuildBazelContext struct {
 	bazelEnabledModules map[string]bool
 	// DCLA modules are enabled when used in apex.
 	bazelDclaEnabledModules map[string]bool
-	// If true, modules are bazel-enabled by default, unless present in bazelDisabledModules.
-	modulesDefaultToBazel bool
 
 	targetProduct      string
 	targetBuildVariant string
@@ -278,11 +245,12 @@ var _ BazelContext = noopBazelContext{}
 type MockBazelContext struct {
 	OutputBaseDir string
 
-	LabelToOutputFiles  map[string][]string
-	LabelToCcInfo       map[string]cquery.CcInfo
-	LabelToPythonBinary map[string]string
-	LabelToApexInfo     map[string]cquery.ApexInfo
-	LabelToCcBinary     map[string]cquery.CcUnstrippedInfo
+	LabelToOutputFiles      map[string][]string
+	LabelToCcInfo           map[string]cquery.CcInfo
+	LabelToPythonBinary     map[string]string
+	LabelToApexInfo         map[string]cquery.ApexInfo
+	LabelToCcBinary         map[string]cquery.CcUnstrippedInfo
+	LabelToPrebuiltFileInfo map[string]cquery.PrebuiltFileInfo
 
 	BazelRequests map[string]bool
 }
@@ -315,14 +283,6 @@ func (m MockBazelContext) GetCcInfo(label string, cfgKey configKey) (cquery.CcIn
 	return result, nil
 }
 
-func (m MockBazelContext) GetPythonBinary(label string, _ configKey) (string, error) {
-	result, ok := m.LabelToPythonBinary[label]
-	if !ok {
-		return "", fmt.Errorf("no target with label %q in LabelToPythonBinary", label)
-	}
-	return result, nil
-}
-
 func (m MockBazelContext) GetApexInfo(label string, _ configKey) (cquery.ApexInfo, error) {
 	result, ok := m.LabelToApexInfo[label]
 	if !ok {
@@ -335,6 +295,14 @@ func (m MockBazelContext) GetCcUnstrippedInfo(label string, _ configKey) (cquery
 	result, ok := m.LabelToCcBinary[label]
 	if !ok {
 		return cquery.CcUnstrippedInfo{}, fmt.Errorf("no target with label %q in LabelToCcBinary", label)
+	}
+	return result, nil
+}
+
+func (m MockBazelContext) GetPrebuiltFileInfo(label string, _ configKey) (cquery.PrebuiltFileInfo, error) {
+	result, ok := m.LabelToPrebuiltFileInfo[label]
+	if !ok {
+		return cquery.PrebuiltFileInfo{}, fmt.Errorf("no target with label %q in LabelToPrebuiltFileInfo", label)
 	}
 	return result, nil
 }
@@ -431,15 +399,6 @@ func (bazelCtx *mixedBuildBazelContext) GetCcInfo(label string, cfgKey configKey
 	return cquery.CcInfo{}, fmt.Errorf("no bazel response found for %v", key)
 }
 
-func (bazelCtx *mixedBuildBazelContext) GetPythonBinary(label string, cfgKey configKey) (string, error) {
-	key := makeCqueryKey(label, cquery.GetPythonBinary, cfgKey)
-	if rawString, ok := bazelCtx.results[key]; ok {
-		bazelOutput := strings.TrimSpace(rawString)
-		return cquery.GetPythonBinary.ParseResult(bazelOutput), nil
-	}
-	return "", fmt.Errorf("no bazel response found for %v", key)
-}
-
 func (bazelCtx *mixedBuildBazelContext) GetApexInfo(label string, cfgKey configKey) (cquery.ApexInfo, error) {
 	key := makeCqueryKey(label, cquery.GetApexInfo, cfgKey)
 	if rawString, ok := bazelCtx.results[key]; ok {
@@ -456,6 +415,14 @@ func (bazelCtx *mixedBuildBazelContext) GetCcUnstrippedInfo(label string, cfgKey
 	return cquery.CcUnstrippedInfo{}, fmt.Errorf("no bazel response for %s", key)
 }
 
+func (bazelCtx *mixedBuildBazelContext) GetPrebuiltFileInfo(label string, cfgKey configKey) (cquery.PrebuiltFileInfo, error) {
+	key := makeCqueryKey(label, cquery.GetPrebuiltFileInfo, cfgKey)
+	if rawString, ok := bazelCtx.results[key]; ok {
+		return cquery.GetPrebuiltFileInfo.ParseResult(strings.TrimSpace(rawString))
+	}
+	return cquery.PrebuiltFileInfo{}, fmt.Errorf("no bazel response for %s", key)
+}
+
 func (n noopBazelContext) QueueBazelRequest(_ string, _ cqueryRequest, _ configKey) {
 	panic("unimplemented")
 }
@@ -468,16 +435,16 @@ func (n noopBazelContext) GetCcInfo(_ string, _ configKey) (cquery.CcInfo, error
 	panic("unimplemented")
 }
 
-func (n noopBazelContext) GetPythonBinary(_ string, _ configKey) (string, error) {
-	panic("unimplemented")
-}
-
 func (n noopBazelContext) GetApexInfo(_ string, _ configKey) (cquery.ApexInfo, error) {
 	panic("unimplemented")
 }
 
 func (n noopBazelContext) GetCcUnstrippedInfo(_ string, _ configKey) (cquery.CcUnstrippedInfo, error) {
 	//TODO implement me
+	panic("implement me")
+}
+
+func (n noopBazelContext) GetPrebuiltFileInfo(_ string, _ configKey) (cquery.PrebuiltFileInfo, error) {
 	panic("implement me")
 }
 
@@ -505,7 +472,7 @@ func (m noopBazelContext) AqueryDepsets() []bazel.AqueryDepset {
 	return []bazel.AqueryDepset{}
 }
 
-func addToStringSet(set map[string]bool, items []string) {
+func AddToStringSet(set map[string]bool, items []string) {
 	for _, item := range items {
 		set[item] = true
 	}
@@ -517,21 +484,19 @@ func GetBazelEnabledAndDisabledModules(buildMode SoongBuildMode, forceEnabled ma
 
 	switch buildMode {
 	case BazelProdMode:
-		addToStringSet(enabledModules, allowlists.ProdMixedBuildsEnabledList)
+		AddToStringSet(enabledModules, allowlists.ProdMixedBuildsEnabledList)
 		for enabledAdHocModule := range forceEnabled {
 			enabledModules[enabledAdHocModule] = true
 		}
 	case BazelStagingMode:
 		// Staging mode includes all prod modules plus all staging modules.
-		addToStringSet(enabledModules, allowlists.ProdMixedBuildsEnabledList)
-		addToStringSet(enabledModules, allowlists.StagingMixedBuildsEnabledList)
+		AddToStringSet(enabledModules, allowlists.ProdMixedBuildsEnabledList)
+		AddToStringSet(enabledModules, allowlists.StagingMixedBuildsEnabledList)
 		for enabledAdHocModule := range forceEnabled {
 			enabledModules[enabledAdHocModule] = true
 		}
-	case BazelDevMode:
-		addToStringSet(disabledModules, allowlists.MixedBuildsDisabledList)
 	default:
-		panic("Expected BazelProdMode, BazelStagingMode, or BazelDevMode")
+		panic("Expected BazelProdMode or BazelStagingMode")
 	}
 	return enabledModules, disabledModules
 }
@@ -549,7 +514,7 @@ func GetBazelEnabledModules(buildMode SoongBuildMode) []string {
 }
 
 func NewBazelContext(c *config) (BazelContext, error) {
-	if c.BuildMode != BazelProdMode && c.BuildMode != BazelStagingMode && c.BuildMode != BazelDevMode {
+	if c.BuildMode != BazelProdMode && c.BuildMode != BazelStagingMode {
 		return noopBazelContext{}, nil
 	}
 
@@ -609,11 +574,10 @@ func NewBazelContext(c *config) (BazelContext, error) {
 			allowlists.StagingDclaMixedBuildsEnabledList...)
 	}
 	dclaEnabledModules := map[string]bool{}
-	addToStringSet(dclaEnabledModules, dclaMixedBuildsEnabledList)
+	AddToStringSet(dclaEnabledModules, dclaMixedBuildsEnabledList)
 	return &mixedBuildBazelContext{
 		bazelRunner:             &builtinBazelRunner{c.UseBazelProxy, absolutePath(c.outDir)},
 		paths:                   &paths,
-		modulesDefaultToBazel:   c.BuildMode == BazelDevMode,
 		bazelEnabledModules:     enabledModules,
 		bazelDisabledModules:    disabledModules,
 		bazelDclaEnabledModules: dclaEnabledModules,
@@ -637,7 +601,7 @@ func (context *mixedBuildBazelContext) IsModuleNameAllowed(moduleName string, wi
 		return true
 	}
 
-	return context.modulesDefaultToBazel
+	return false
 }
 
 func (context *mixedBuildBazelContext) IsModuleDclaAllowed(moduleName string) bool {
@@ -692,14 +656,20 @@ func (r *builtinBazelRunner) issueBazelCommand(cmdRequest bazel.CmdRequest, path
 
 func (context *mixedBuildBazelContext) createBazelCommand(config Config, runName bazel.RunName, command bazelCommand,
 	extraFlags ...string) bazel.CmdRequest {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		panic("Unknown GOOS: " + runtime.GOOS)
+	}
 	cmdFlags := []string{
 		"--output_base=" + absolutePath(context.paths.outputBase),
 		command.command,
 		command.expression,
 		"--profile=" + shared.BazelMetricsFilename(context.paths, runName),
 
-		// We don't need to set --host_platforms because it's set in bazelrc files
-		// that the bazel shell script wrapper passes
+		"--host_platform=@soong_injection//product_config_platforms:mixed_builds_product-" + context.targetBuildVariant + "_" + runtime.GOOS + "_x86_64",
+		// Don't specify --platforms, because on some products/branches (like kernel-build-tools)
+		// the main platform for mixed_builds_product-variant doesn't exist because an arch isn't
+		// specified in product config. The derivative platforms that config_node transitions into
+		// will still work.
 
 		// Suppress noise
 		"--ui_event_filters=-INFO",
@@ -719,7 +689,11 @@ func (context *mixedBuildBazelContext) createBazelCommand(config Config, runName
 		// explicitly in BUILD files.
 		"BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1",
 	}
-	for _, envvar := range allowedBazelEnvironmentVars {
+	capturedEnvVars, err := starlark_import.GetStarlarkValue[[]string]("captured_env_vars")
+	if err != nil {
+		panic(err)
+	}
+	for _, envvar := range capturedEnvVars {
 		val := config.Getenv(envvar)
 		if val == "" {
 			continue
@@ -746,9 +720,9 @@ func (context *mixedBuildBazelContext) mainBzlFileContents() []byte {
 #####################################################
 def _config_node_transition_impl(settings, attr):
     if attr.os == "android" and attr.arch == "target":
-        target = "{PRODUCT}-{VARIANT}"
+        target = "mixed_builds_product-{VARIANT}"
     else:
-        target = "{PRODUCT}-{VARIANT}_%s_%s" % (attr.os, attr.arch)
+        target = "mixed_builds_product-{VARIANT}_%s_%s" % (attr.os, attr.arch)
     apex_name = ""
     if attr.within_apex:
         # //build/bazel/rules/apex:apex_name has to be set to a non_empty value,
@@ -759,7 +733,7 @@ def _config_node_transition_impl(settings, attr):
         # value here.
         apex_name = "dcla_apex"
     outputs = {
-        "//command_line_option:platforms": "@soong_injection//product_config_platforms/products/{PRODUCT}-{VARIANT}:%s" % target,
+        "//command_line_option:platforms": "@soong_injection//product_config_platforms:%s" % target,
         "@//build/bazel/rules/apex:within_apex": attr.within_apex,
         "@//build/bazel/rules/apex:min_sdk_version": attr.apex_sdk_version,
         "@//build/bazel/rules/apex:apex_name": apex_name,
@@ -985,9 +959,9 @@ def get_arch(target):
   platform_name = platforms[0].name
   if platform_name == "host":
     return "HOST"
-  if not platform_name.startswith("{TARGET_PRODUCT}-{TARGET_BUILD_VARIANT}"):
-    fail("expected platform name of the form '{TARGET_PRODUCT}-{TARGET_BUILD_VARIANT}_android_<arch>' or '{TARGET_PRODUCT}-{TARGET_BUILD_VARIANT}_linux_<arch>', but was " + str(platforms))
-  platform_name = platform_name.removeprefix("{TARGET_PRODUCT}-{TARGET_BUILD_VARIANT}").removeprefix("_")
+  if not platform_name.startswith("mixed_builds_product-{TARGET_BUILD_VARIANT}"):
+    fail("expected platform name of the form 'mixed_builds_product-{TARGET_BUILD_VARIANT}_android_<arch>' or 'mixed_builds_product-{TARGET_BUILD_VARIANT}_linux_<arch>', but was " + str(platforms))
+  platform_name = platform_name.removeprefix("mixed_builds_product-{TARGET_BUILD_VARIANT}").removeprefix("_")
   config_key = ""
   if not platform_name:
     config_key = "target|android"
@@ -996,7 +970,7 @@ def get_arch(target):
   elif platform_name.startswith("linux_"):
     config_key = platform_name.removeprefix("linux_") + "|linux"
   else:
-    fail("expected platform name of the form '{TARGET_PRODUCT}-{TARGET_BUILD_VARIANT}_android_<arch>' or '{TARGET_PRODUCT}-{TARGET_BUILD_VARIANT}_linux_<arch>', but was " + str(platforms))
+    fail("expected platform name of the form 'mixed_builds_product-{TARGET_BUILD_VARIANT}_android_<arch>' or 'mixed_builds_product-{TARGET_BUILD_VARIANT}_linux_<arch>', but was " + str(platforms))
 
   within_apex = buildoptions.get("//build/bazel/rules/apex:within_apex")
   apex_sdk_version = buildoptions.get("//build/bazel/rules/apex:min_sdk_version")
@@ -1437,14 +1411,4 @@ func GetConfigKeyApexVariant(ctx BaseModuleContext, apexKey *ApexConfigKey) conf
 
 func bazelDepsetName(contentHash string) string {
 	return fmt.Sprintf("bazel_depset_%s", contentHash)
-}
-
-func EnvironmentVarsFile(config Config) string {
-	return fmt.Sprintf(bazel.GeneratedBazelFileWarning+`
-_env = %s
-
-env = _env
-`,
-		starlark_fmt.PrintStringList(allowedBazelEnvironmentVars, 0),
-	)
 }
