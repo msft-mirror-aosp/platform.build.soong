@@ -431,8 +431,6 @@ type productVariables struct {
 	EnforceInterPartitionJavaSdkLibrary *bool    `json:",omitempty"`
 	InterPartitionJavaLibraryAllowList  []string `json:",omitempty"`
 
-	InstallExtraFlattenedApexes *bool `json:",omitempty"`
-
 	BoardUsesRecoveryAsBoot *bool `json:",omitempty"`
 
 	BoardKernelBinaries                []string `json:",omitempty"`
@@ -479,8 +477,8 @@ type productVariables struct {
 	ProductBrand        string   `json:",omitempty"`
 	BuildVersionTags    []string `json:",omitempty"`
 
-	ReleaseVersion               string   `json:",omitempty"`
-	ReleaseDeviceConfigValueSets []string `json:",omitempty"`
+	ReleaseVersion          string   `json:",omitempty"`
+	ReleaseAconfigValueSets []string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
