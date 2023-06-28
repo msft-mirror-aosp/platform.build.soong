@@ -42,7 +42,7 @@ const (
 	jsonSuffix   = "json"
 
 	configFetcher         = "vendor/google/tools/soong/expconfigfetcher"
-	envConfigFetchTimeout = 10 * time.Second
+	envConfigFetchTimeout = 20 * time.Second
 )
 
 var (
@@ -90,8 +90,9 @@ type configImpl struct {
 	skipMetricsUpload        bool
 	buildStartedTime         int64 // For metrics-upload-only - manually specify a build-started time
 	buildFromTextStub        bool
-	ensureAllowlistIntegrity bool  // For CI builds - make sure modules are mixed-built
-	bazelExitCode            int32 // For b-runs - necessary for updating NonZeroExit
+	ensureAllowlistIntegrity bool   // For CI builds - make sure modules are mixed-built
+	bazelExitCode            int32  // For b runs - necessary for updating NonZeroExit
+	besId                    string // For b runs, to identify the BuildEventService logs
 
 	// From the product config
 	katiArgs        []string
@@ -111,7 +112,6 @@ type configImpl struct {
 	pathReplaced bool
 
 	bazelProdMode    bool
-	bazelDevMode     bool
 	bazelStagingMode bool
 
 	// Set by multiproduct_kati
@@ -853,8 +853,6 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			c.multitreeBuild = true
 		} else if arg == "--bazel-mode" {
 			c.bazelProdMode = true
-		} else if arg == "--bazel-mode-dev" {
-			c.bazelDevMode = true
 		} else if arg == "--bazel-mode-staging" {
 			c.bazelStagingMode = true
 		} else if arg == "--search-api-dir" {
@@ -911,6 +909,8 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			} else {
 				ctx.Fatalf("Error parsing bazel-exit-code", err)
 			}
+		} else if strings.HasPrefix(arg, "--bes-id=") {
+			c.besId = strings.TrimPrefix(arg, "--bes-id=")
 		} else if len(arg) > 0 && arg[0] == '-' {
 			parseArgNum := func(def int) int {
 				if len(arg) > 2 {
@@ -960,7 +960,7 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			c.arguments = append(c.arguments, arg)
 		}
 	}
-	if (!c.bazelProdMode) && (!c.bazelDevMode) && (!c.bazelStagingMode) {
+	if (!c.bazelProdMode) && (!c.bazelStagingMode) {
 		c.bazelProdMode = defaultBazelProdMode(c)
 	}
 }
@@ -1124,6 +1124,9 @@ func (c *configImpl) NamedGlobFile(name string) string {
 }
 
 func (c *configImpl) UsedEnvFile(tag string) string {
+	if v, ok := c.environ.Get("TARGET_PRODUCT"); ok {
+		return shared.JoinPath(c.SoongOutDir(), usedEnvFile+"."+v+"."+tag)
+	}
 	return shared.JoinPath(c.SoongOutDir(), usedEnvFile+"."+tag)
 }
 
@@ -1372,6 +1375,12 @@ func (c *configImpl) StartGoma() bool {
 }
 
 func (c *configImpl) UseRBE() bool {
+	authType, _ := c.rbeAuth()
+	// Do not use RBE with prod credentials in scenarios when stubby doesn't exist, since
+	// its unlikely that we will be able to obtain necessary creds without stubby.
+	if !c.StubbyExists() && strings.Contains(authType, "use_google_prod_creds"){
+		return false
+	}
 	if v, ok := c.Environment().Get("USE_RBE"); ok {
 		v = strings.TrimSpace(v)
 		if v != "" && v != "false" {
@@ -1382,7 +1391,7 @@ func (c *configImpl) UseRBE() bool {
 }
 
 func (c *configImpl) BazelBuildEnabled() bool {
-	return c.bazelProdMode || c.bazelDevMode || c.bazelStagingMode
+	return c.bazelProdMode || c.bazelStagingMode
 }
 
 func (c *configImpl) StartRBE() bool {
@@ -1511,7 +1520,7 @@ func (c *configImpl) GoogleProdCredsExist() bool {
 	if googleProdCredsExistCache {
 		return googleProdCredsExistCache
 	}
-	if _, err := exec.Command("/usr/bin/gcertstatus").Output(); err != nil {
+	if _, err := exec.Command("/usr/bin/gcertstatus", "-nocheck_ssh").Output(); err != nil {
 		return false
 	}
 	googleProdCredsExistCache = true

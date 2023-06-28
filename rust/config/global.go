@@ -24,7 +24,7 @@ import (
 var pctx = android.NewPackageContext("android/soong/rust/config")
 
 var (
-	RustDefaultVersion = "1.69.0"
+	RustDefaultVersion = "1.70.0"
 	RustDefaultBase    = "prebuilts/rust/"
 	DefaultEdition     = "2021"
 	Stdlibs            = []string{
@@ -41,6 +41,7 @@ var (
 	}
 
 	GlobalRustFlags = []string{
+		"-Z stack-protector=strong",
 		"-Z remap-cwd-prefix=.",
 		"-C codegen-units=1",
 		"-C debuginfo=2",

@@ -330,7 +330,7 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 // buildFileContexts create build rules to append an entry for apex_manifest.pb to the file_contexts
 // file for this APEX which is either from /systme/sepolicy/apex/<apexname>-file_contexts or from
 // the file_contexts property of this APEX. This is to make sure that the manifest file is correctly
-// labeled as system_file.
+// labeled as system_file or vendor_apex_metadata_file.
 func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.OutputPath {
 	var fileContexts android.Path
 	var fileContextsDir string
@@ -362,6 +362,13 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Output
 	output := android.PathForModuleOut(ctx, "file_contexts")
 	rule := android.NewRuleBuilder(pctx, ctx)
 
+	forceLabel := "u:object_r:system_file:s0"
+	if a.SocSpecific() && !a.vndkApex {
+		// APEX on /vendor should label ./ and ./apex_manifest.pb as vendor_apex_metadata_file.
+		// The reason why we skip VNDK APEX is that aosp_{pixel device} targets install VNDK APEX on /vendor
+		// even though VNDK APEX is supposed to be installed on /system. (See com.android.vndk.current.on_vendor)
+		forceLabel = "u:object_r:vendor_apex_metadata_file:s0"
+	}
 	switch a.properties.ApexType {
 	case imageApex:
 		// remove old file
@@ -371,26 +378,9 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Output
 		// new line
 		rule.Command().Text("echo").Text(">>").Output(output)
 		if !useFileContextsAsIs {
-			// force-label /apex_manifest.pb and / as system_file so that apexd can read them
-			rule.Command().Text("echo").Flag("/apex_manifest\\\\.pb u:object_r:system_file:s0").Text(">>").Output(output)
-			rule.Command().Text("echo").Flag("/ u:object_r:system_file:s0").Text(">>").Output(output)
-		}
-	case flattenedApex:
-		// For flattened apexes, install path should be prepended.
-		// File_contexts file should be emiited to make via LOCAL_FILE_CONTEXTS
-		// so that it can be merged into file_contexts.bin
-		apexPath := android.InstallPathToOnDevicePath(ctx, a.installDir.Join(ctx, a.Name()))
-		apexPath = strings.ReplaceAll(apexPath, ".", `\\.`)
-		// remove old file
-		rule.Command().Text("rm").FlagWithOutput("-f ", output)
-		// copy file_contexts
-		rule.Command().Text("awk").Text(`'/object_r/{printf("` + apexPath + `%s\n", $0)}'`).Input(fileContexts).Text(">").Output(output)
-		// new line
-		rule.Command().Text("echo").Text(">>").Output(output)
-		if !useFileContextsAsIs {
-			// force-label /apex_manifest.pb and / as system_file so that apexd can read them
-			rule.Command().Text("echo").Flag(apexPath + `/apex_manifest\\.pb u:object_r:system_file:s0`).Text(">>").Output(output)
-			rule.Command().Text("echo").Flag(apexPath + "/ u:object_r:system_file:s0").Text(">>").Output(output)
+			// force-label /apex_manifest.pb and /
+			rule.Command().Text("echo").Text("/apex_manifest\\\\.pb").Text(forceLabel).Text(">>").Output(output)
+			rule.Command().Text("echo").Text("/").Text(forceLabel).Text(">>").Output(output)
 		}
 	default:
 		panic(fmt.Errorf("unsupported type %v", a.properties.ApexType))
@@ -472,8 +462,8 @@ func markManifestTestOnly(ctx android.ModuleContext, androidManifestFile android
 	})
 }
 
-// buildUnflattendApex creates build rules to build an APEX using apexer.
-func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
+// buildApex creates build rules to build an APEX using apexer.
+func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 	apexType := a.properties.ApexType
 	suffix := apexType.suffix()
 	apexName := a.BaseModuleName()
@@ -954,49 +944,6 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 
 	// installed-files.txt is dist'ed
 	a.installedFilesFile = a.buildInstalledFilesFile(ctx, a.outputFile, imageDir)
-}
-
-// buildFlattenedApex creates rules for a flattened APEX. Flattened APEX actually doesn't have a
-// single output file. It is a phony target for all the files under /system/apex/<name> directory.
-// This function creates the installation rules for the files.
-func (a *apexBundle) buildFlattenedApex(ctx android.ModuleContext) {
-	bundleName := a.Name()
-	installedSymlinks := append(android.InstallPaths(nil), a.compatSymlinks...)
-	if a.installable() {
-		for _, fi := range a.filesInfo {
-			dir := filepath.Join("apex", bundleName, fi.installDir)
-			installDir := android.PathForModuleInstall(ctx, dir)
-			if a.linkToSystemLib && fi.transitiveDep && fi.availableToPlatform() {
-				pathOnDevice := filepath.Join("/", fi.partition, fi.path())
-				installedSymlinks = append(installedSymlinks,
-					ctx.InstallAbsoluteSymlink(installDir, fi.stem(), pathOnDevice))
-			} else {
-				if fi.class == appSet {
-					as := fi.module.(*java.AndroidAppSet)
-					ctx.InstallFileWithExtraFilesZip(installDir, as.BaseModuleName()+".apk",
-						as.OutputFile(), as.PackedAdditionalOutputs())
-				} else {
-					target := ctx.InstallFile(installDir, fi.stem(), fi.builtFile)
-					for _, sym := range fi.symlinks {
-						installedSymlinks = append(installedSymlinks,
-							ctx.InstallSymlink(installDir, sym, target))
-					}
-				}
-			}
-		}
-
-		// Create install rules for the files added in GenerateAndroidBuildActions after
-		// buildFlattenedApex is called.  Add the links to system libs (if any) as dependencies
-		// of the apex_manifest.pb file since it is always present.
-		dir := filepath.Join("apex", bundleName)
-		installDir := android.PathForModuleInstall(ctx, dir)
-		ctx.InstallFile(installDir, "apex_manifest.pb", a.manifestPbOut, installedSymlinks.Paths()...)
-		ctx.InstallFile(installDir, "apex_pubkey", a.publicKeyFile)
-	}
-
-	a.fileContexts = a.buildFileContexts(ctx)
-
-	a.outputFile = android.PathForModuleInstall(ctx, "apex", bundleName)
 }
 
 // getCertificateAndPrivateKey retrieves the cert and the private key that will be used to sign

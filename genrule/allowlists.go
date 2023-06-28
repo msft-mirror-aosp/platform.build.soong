@@ -47,9 +47,7 @@ var (
 	}
 
 	SandboxingDenyModuleList = []string{
-		"framework-javastream-protos",
 		"RsBalls-rscript",
-		"CtsRsBlasTestCases-rscript",
 		"pvmfw_fdt_template_rs",
 		"RSTest_v14-rscript",
 		"com.android.apex.test.bar_stripped",
@@ -57,7 +55,6 @@ var (
 		"ImageProcessingJB-rscript",
 		"RSTest-rscript",
 		"BluetoothGeneratedDumpsysBinarySchema_bfbs",
-		"WmediumdServerProto_h",
 		"TracingVMProtoStub_h",
 		"FrontendStub_h",
 		"VehicleServerProtoStub_cc",
@@ -87,8 +84,6 @@ var (
 		"ltp_config_x86_64",
 		"vm-tests-tf-lib",
 		"hidl_cpp_impl_test_gen-headers",
-		"pandora_experimental-python-gen-src",
-		"framework-cppstream-protos",
 		"Refocus-rscript",
 		"RSTest_v11-rscript",
 		"RSTest_v16-rscript",
@@ -99,7 +94,6 @@ var (
 		"com.android.apex.test.baz_stripped",
 		"com.android.apex.test.foo_stripped",
 		"com.android.apex.test.sharedlibs_generated",
-		"CtsRenderscriptTestCases-rscript",
 		"BlueberryFacadeAndCertGeneratedStub_py",
 		"BlueberryFacadeGeneratedStub_cc",
 		"BlueberryFacadeGeneratedStub_h",
@@ -107,7 +101,6 @@ var (
 		"FrontendStub_cc",
 		"OpenwrtControlServerProto_cc",
 		"OpenwrtControlServerProto_h",
-		"WmediumdServerProto_cc",
 		"c2hal_test_genc++",
 		"c2hal_test_genc++_headers",
 		"hidl2aidl_test_gen_aidl",
@@ -124,7 +117,6 @@ var (
 		"nos_app_weaver_service_genc++_headers",
 		"nos_app_weaver_service_genc++_mock",
 		"nos_generator_test_service_genc++",
-		"pandora-python-gen-src",
 	}
 
 	SandboxingDenyPathList = []string{

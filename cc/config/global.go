@@ -298,9 +298,9 @@ var (
 		"-w",
 	}
 
-	CStdVersion               = "gnu11"
+	CStdVersion               = "gnu17"
 	CppStdVersion             = "gnu++17"
-	ExperimentalCStdVersion   = "gnu17"
+	ExperimentalCStdVersion   = "gnu2x"
 	ExperimentalCppStdVersion = "gnu++2a"
 
 	// prebuilts/clang default settings.
@@ -448,11 +448,12 @@ func init() {
 	pctx.StaticVariable("RSLLVMPrebuiltsPath", "${RSClangBase}/${HostPrebuiltTag}/${RSClangVersion}/bin")
 	pctx.StaticVariable("RSIncludePath", "${RSLLVMPrebuiltsPath}/../lib64/clang/${RSReleaseVersion}/include")
 
-	pctx.PrefixedExistentPathsForSourcesVariable("RsGlobalIncludes", "-I",
-		[]string{
-			"external/clang/lib/Headers",
-			"frameworks/rs/script_api/include",
-		})
+	rsGlobalIncludes := []string{
+		"external/clang/lib/Headers",
+		"frameworks/rs/script_api/include",
+	}
+	pctx.PrefixedExistentPathsForSourcesVariable("RsGlobalIncludes", "-I", rsGlobalIncludes)
+	exportedVars.ExportStringList("RsGlobalIncludes", rsGlobalIncludes)
 
 	pctx.VariableFunc("CcWrapper", func(ctx android.PackageVarContext) string {
 		if override := ctx.Config().Getenv("CC_WRAPPER"); override != "" {

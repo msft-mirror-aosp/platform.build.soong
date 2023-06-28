@@ -1212,6 +1212,26 @@ cc_library_shared {
 	})
 }
 
+func TestCcLibrarySharedWithSanitizerBlocklist(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_shared has correct features when sanitize.blocklist is provided",
+		Blueprint: `
+cc_library_shared {
+	name: "foo",
+	sanitize: {
+		blocklist: "foo_blocklist.txt",
+	},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features":       `["ubsan_blocklist_foo_blocklist_txt"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
 func TestCcLibrarySharedWithThinLto(t *testing.T) {
 	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
 		Description: "cc_library_shared has correct features when thin lto is enabled",
@@ -1514,4 +1534,54 @@ cc_library_static {
 			}),
 		},
 	})
+}
+
+func TestCcLibrarySharedExplicitlyDisablesCfiWhenFalse(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_shared disables cfi when explciitly set to false in the bp",
+		Blueprint: `
+cc_library_shared {
+	name: "foo",
+	sanitize: {
+		cfi: false,
+	},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features":       `["-android_cfi"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCCLibrarySharedRscriptSrc(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description: ``,
+		Blueprint: `
+cc_library_shared{
+    name : "foo",
+    srcs : [
+        "ccSrc.cc",
+        "rsSrc.rscript",
+    ],
+    include_build_directory: false,
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("rscript_to_cpp", "foo_renderscript", AttrNameToString{
+				"srcs": `["rsSrc.rscript"]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"absolute_includes": `[
+        "frameworks/rs",
+        "frameworks/rs/cpp",
+    ]`,
+				"local_includes": `["."]`,
+				"srcs": `[
+        "ccSrc.cc",
+        "foo_renderscript",
+    ]`,
+			})}})
 }

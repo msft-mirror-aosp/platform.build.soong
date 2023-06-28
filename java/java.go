@@ -231,10 +231,10 @@ type JavaInfo struct {
 	HeaderJars android.Paths
 
 	// set of header jars for all transitive libs deps
-	TransitiveLibsHeaderJars *android.DepSet
+	TransitiveLibsHeaderJars *android.DepSet[android.Path]
 
 	// set of header jars for all transitive static libs deps
-	TransitiveStaticLibsHeaderJars *android.DepSet
+	TransitiveStaticLibsHeaderJars *android.DepSet[android.Path]
 
 	// ImplementationAndResourceJars is a list of jars that contain the implementations of classes
 	// in the module as well as any resources included in the module.
@@ -273,6 +273,8 @@ type JavaInfo struct {
 	// JacocoReportClassesFile is the path to a jar containing uninstrumented classes that will be
 	// instrumented by jacoco.
 	JacocoReportClassesFile android.Path
+
+	// TODO: Add device config declarations here?
 }
 
 var JavaInfoProvider = blueprint.NewProvider(JavaInfo{})
@@ -457,7 +459,7 @@ func sdkDeps(ctx android.BottomUpMutatorContext, sdkContext android.SdkContext, 
 		ctx.AddVariationDependencies(nil, sdkLibTag, sdkDep.classpath...)
 		if d.effectiveOptimizeEnabled() && sdkDep.hasStandardLibs() {
 			ctx.AddVariationDependencies(nil, proguardRaiseTag,
-				android.JavaApiLibraryNames(ctx.Config(), config.LegacyCorePlatformBootclasspathLibraries)...,
+				config.LegacyCorePlatformBootclasspathLibraries...,
 			)
 		}
 		if d.effectiveOptimizeEnabled() && sdkDep.hasFrameworkLibs() {
@@ -3104,24 +3106,15 @@ func javaBinaryHostBp2Build(ctx android.TopDownMutatorContext, m *Binary) {
 	// Attribute jvm_flags
 	var jvmFlags bazel.StringListAttribute
 	if m.binaryProperties.Jni_libs != nil {
-		jniLibPackages := map[string]bool{}
-		for _, jniLibLabel := range android.BazelLabelForModuleDeps(ctx, m.binaryProperties.Jni_libs).Includes {
-			jniLibPackage := jniLibLabel.Label
-			indexOfColon := strings.Index(jniLibLabel.Label, ":")
-			if indexOfColon > 0 {
-				// JNI lib from other package
-				jniLibPackage = jniLibLabel.Label[2:indexOfColon]
-			} else if indexOfColon == 0 {
-				// JNI lib in the same package of java_binary
-				packageOfCurrentModule := m.GetBazelLabel(ctx, m)
-				jniLibPackage = packageOfCurrentModule[2:strings.Index(packageOfCurrentModule, ":")]
-			}
-			if _, inMap := jniLibPackages[jniLibPackage]; !inMap {
-				jniLibPackages[jniLibPackage] = true
+		jniLibPackages := []string{}
+		for _, jniLib := range m.binaryProperties.Jni_libs {
+			if jniLibModule, exists := ctx.ModuleFromName(jniLib); exists {
+				otherDir := ctx.OtherModuleDir(jniLibModule)
+				jniLibPackages = append(jniLibPackages, filepath.Join(otherDir, jniLib))
 			}
 		}
 		jniLibPaths := []string{}
-		for jniLibPackage, _ := range jniLibPackages {
+		for _, jniLibPackage := range jniLibPackages {
 			// See cs/f:.*/third_party/bazel/.*java_stub_template.txt for the use of RUNPATH
 			jniLibPaths = append(jniLibPaths, "$${RUNPATH}"+jniLibPackage)
 		}
@@ -3145,9 +3138,9 @@ func javaBinaryHostBp2Build(ctx android.TopDownMutatorContext, m *Binary) {
 	}
 
 	libInfo := libraryCreationInfo{
-		deps: deps,
-		attrs: commonAttrs,
-		baseName: m.Name(),
+		deps:      deps,
+		attrs:     commonAttrs,
+		baseName:  m.Name(),
 		hasKotlin: bp2BuildInfo.hasKotlin,
 	}
 	libName := createLibraryTarget(ctx, libInfo)
@@ -3189,9 +3182,9 @@ func javaTestHostBp2Build(ctx android.TopDownMutatorContext, m *TestHost) {
 	}
 
 	libInfo := libraryCreationInfo{
-		deps: deps,
-		attrs: commonAttrs,
-		baseName: m.Name(),
+		deps:      deps,
+		attrs:     commonAttrs,
+		baseName:  m.Name(),
 		hasKotlin: bp2BuildInfo.hasKotlin,
 	}
 	libName := createLibraryTarget(ctx, libInfo)
@@ -3204,9 +3197,9 @@ func javaTestHostBp2Build(ctx android.TopDownMutatorContext, m *TestHost) {
 // libraryCreationInfo encapsulates the info needed to create java_library target from
 // java_binary_host or java_test_host.
 type libraryCreationInfo struct {
-	deps bazel.LabelListAttribute
-	attrs *javaCommonAttributes
-	baseName string
+	deps      bazel.LabelListAttribute
+	attrs     *javaCommonAttributes
+	baseName  string
 	hasKotlin bool
 }
 

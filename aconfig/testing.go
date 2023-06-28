@@ -12,8 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package device_config
+package aconfig
 
-import "android/soong/android"
+import (
+	"testing"
 
-var PrepareForTestWithSyspropBuildComponents = android.FixtureRegisterWithContext(registerBuildComponents)
+	"android/soong/android"
+)
+
+var PrepareForTestWithAconfigBuildComponents = android.FixtureRegisterWithContext(registerBuildComponents)
+
+func runTest(t *testing.T, errorHandler android.FixtureErrorHandler, bp string) *android.TestResult {
+	return android.GroupFixturePreparers(PrepareForTestWithAconfigBuildComponents).
+		ExtendWithErrorHandler(errorHandler).
+		RunTestWithBp(t, bp)
+}

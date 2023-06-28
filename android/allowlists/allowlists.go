@@ -131,6 +131,7 @@ var (
 		"external/brotli":                        Bp2BuildDefaultTrue,
 		"external/bsdiff":                        Bp2BuildDefaultTrueRecursively,
 		"external/bzip2":                         Bp2BuildDefaultTrueRecursively,
+		"external/clang/lib":                     Bp2BuildDefaultTrue,
 		"external/conscrypt":                     Bp2BuildDefaultTrue,
 		"external/e2fsprogs":                     Bp2BuildDefaultTrueRecursively,
 		"external/eigen":                         Bp2BuildDefaultTrueRecursively,
@@ -141,6 +142,7 @@ var (
 		"external/f2fs-tools":                    Bp2BuildDefaultTrue,
 		"external/flac":                          Bp2BuildDefaultTrueRecursively,
 		"external/fmtlib":                        Bp2BuildDefaultTrueRecursively,
+		"external/fsverity-utils":                Bp2BuildDefaultTrueRecursively,
 		"external/guava":                         Bp2BuildDefaultTrueRecursively,
 		"external/google-benchmark":              Bp2BuildDefaultTrueRecursively,
 		"external/googletest":                    Bp2BuildDefaultTrueRecursively,
@@ -189,6 +191,7 @@ var (
 		"external/python/six":                    Bp2BuildDefaultTrueRecursively,
 		"external/rappor":                        Bp2BuildDefaultTrueRecursively,
 		"external/scudo":                         Bp2BuildDefaultTrueRecursively,
+		"external/selinux/checkpolicy":           Bp2BuildDefaultTrueRecursively,
 		"external/selinux/libselinux":            Bp2BuildDefaultTrueRecursively,
 		"external/selinux/libsepol":              Bp2BuildDefaultTrueRecursively,
 		"external/speex":                         Bp2BuildDefaultTrueRecursively,
@@ -333,6 +336,7 @@ var (
 		"system/apex":                                            Bp2BuildDefaultFalse, // TODO(b/207466993): flaky failures
 		"system/apex/apexer":                                     Bp2BuildDefaultTrue,
 		"system/apex/libs":                                       Bp2BuildDefaultTrueRecursively,
+		"system/apex/libs/libapexsupport":                        Bp2BuildDefaultFalseRecursively, // TODO(b/267572288): depends on rust
 		"system/apex/proto":                                      Bp2BuildDefaultTrueRecursively,
 		"system/apex/tools":                                      Bp2BuildDefaultTrueRecursively,
 		"system/core/debuggerd":                                  Bp2BuildDefaultTrueRecursively,
@@ -346,6 +350,7 @@ var (
 		"system/core/libprocessgroup":                            Bp2BuildDefaultTrue,
 		"system/core/libprocessgroup/cgrouprc":                   Bp2BuildDefaultTrue,
 		"system/core/libprocessgroup/cgrouprc_format":            Bp2BuildDefaultTrue,
+		"system/core/libsparse":                                  Bp2BuildDefaultTrueRecursively,
 		"system/core/libsuspend":                                 Bp2BuildDefaultTrue,
 		"system/core/libsystem":                                  Bp2BuildDefaultTrueRecursively,
 		"system/core/libsysutils":                                Bp2BuildDefaultTrueRecursively,
@@ -354,7 +359,9 @@ var (
 		"system/core/mkbootfs":                                   Bp2BuildDefaultTrueRecursively,
 		"system/core/property_service/libpropertyinfoparser":     Bp2BuildDefaultTrueRecursively,
 		"system/core/property_service/libpropertyinfoserializer": Bp2BuildDefaultTrueRecursively,
+		"system/extras/f2fs_utils":                               Bp2BuildDefaultTrueRecursively,
 		"system/extras/toolchain-extras":                         Bp2BuildDefaultTrue,
+		"system/extras/verity":                                   Bp2BuildDefaultTrueRecursively,
 		"system/hardware/interfaces/media":                       Bp2BuildDefaultTrueRecursively,
 		"system/incremental_delivery/incfs":                      Bp2BuildDefaultTrue,
 		"system/libartpalette":                                   Bp2BuildDefaultTrueRecursively,
@@ -384,6 +391,7 @@ var (
 		"system/memory/libion":                                   Bp2BuildDefaultTrueRecursively,
 		"system/memory/libmemunreachable":                        Bp2BuildDefaultTrueRecursively,
 		"system/sepolicy/apex":                                   Bp2BuildDefaultTrueRecursively,
+		"system/security/fsverity":                               Bp2BuildDefaultTrueRecursively,
 		"system/testing/gtest_extras":                            Bp2BuildDefaultTrueRecursively,
 		"system/timezone/apex":                                   Bp2BuildDefaultTrueRecursively,
 		"system/timezone/output_data":                            Bp2BuildDefaultTrueRecursively,
@@ -422,6 +430,7 @@ var (
 		// e.g. ERROR: Analysis of target '@soong_injection//mixed_builds:buildroot' failed
 		"external/bazelbuild-rules_android":/* recursive = */ true,
 		"external/bazelbuild-rules_license":/* recursive = */ true,
+		"external/bazelbuild-rules_go":/* recursive = */ true,
 		"external/bazelbuild-kotlin-rules":/* recursive = */ true,
 		"external/bazel-skylib":/* recursive = */ true,
 		"external/protobuf":/* recursive = */ false,
@@ -456,6 +465,9 @@ var (
 
 		// TODO(b/266459895): remove this and the placeholder BUILD file after re-enabling libunwindstack
 		"external/rust/crates/rustc-demangle-capi":/* recursive = */ false,
+
+		// Used for testing purposes only. Should not actually exist in the real source tree.
+		"testpkg/keep_build_file":/* recursive = */ false,
 	}
 
 	Bp2buildModuleAlwaysConvertList = []string{
@@ -577,22 +589,17 @@ var (
 		//frameworks/base/core/java
 		"IDropBoxManagerService_aidl",
 
-		//system/core/libsparse
-		"libsparse",
-
 		//system/extras/ext4_utils
 		"libext4_utils",
 		"mke2fs_conf",
+		"mkuserimg_mke2fs",
+		"blk_alloc_to_base_fs",
 
 		//system/extras/libfec
 		"libfec",
 
 		//system/extras/squashfs_utils
 		"libsquashfs_utils",
-
-		//system/extras/verity/fec
-		"fec",
-		"boot_signer",
 
 		//packages/apps/Car/libs/car-ui-lib/car-ui-androidx
 		// genrule dependencies for java_imports
@@ -788,6 +795,16 @@ var (
 		"binderUtilsHostTest",
 		"run_dex2oat_test",
 		"bluetooth-address-unit-tests",
+
+		// for platform_compat_config
+		"process-compat-config",
+
+		// cc_* modules with rscript srcs
+		"rstest-latency",
+		"libRScpp_static",
+		"rs-headers",
+		"rs_script_api",
+		"libRSDispatch",
 	}
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
@@ -834,7 +851,6 @@ var (
 
 		"linker",    // TODO(b/228316882): cc_binary uses link_crt
 		"versioner", // TODO(b/228313961):  depends on prebuilt shared library libclang-cpp_host as a shared library, which does not supply expected providers for a shared library
-		"tjbench",   // TODO(b/240563612): Stem property
 
 		// requires host tools for apexer
 		"apexer_test", "apexer_test_host_tools", "host_apex_verifier",
@@ -842,9 +858,6 @@ var (
 		// java bugs
 		"libbase_ndk",  // TODO(b/186826477): fails to link libctscamera2_jni for device (required for CtsCameraTestCases)
 		"bouncycastle", // TODO(b/274474005): Need support for custom system_modules.
-
-		// python protos
-		"libprotobuf-python", // Has a handcrafted alternative
 
 		// genrule incompatibilities
 		"brotli-fuzzer-corpus",                                       // TODO(b/202015218): outputs are in location incompatible with bazel genrule handling.
@@ -936,12 +949,8 @@ var (
 
 		//system/libvintf
 		// depends on apex-info-list-tinyxml, unconverted xsd_config Soong module type.
-		"libvintf",
-		"vintf",
 		"libassemblevintf",
 		"assemble_vintf",
-		"libvintffm",
-		"vintffm",
 		"checkvintf",
 
 		// depends on audio_policy_configuration_aidl_default, xsd_config module.
@@ -1425,16 +1434,12 @@ var (
 		"merge_ota",
 
 		// releasetools
-		"releasetools_fsverity_metadata_generator",
 		"verity_utils",
 		"check_ota_package_signature",
 		"check_target_files_vintf",
 		"releasetools_check_target_files_vintf",
-		"releasetools_verity_utils",
-		"build_image",
 		"ota_from_target_files",
 		"releasetools_ota_from_target_files",
-		"releasetools_build_image",
 		"add_img_to_target_files",
 		"releasetools_add_img_to_target_files",
 		"fsverity_metadata_generator",
@@ -1486,8 +1491,22 @@ var (
 		"tradefed",
 		"permissive_mte_test",
 		"ICU4CTestRunner",
+		"DeviceLongPollingStubTest",
 
 		"HelloWorldHostTest", // TODO(b/280452825): Convert HelloWorldHostTest to b test
+
+		"libprotobuf-full-test", // TODO(b/246997908): cannot convert proto_libraries which implicitly include other srcs in the same directory
+		"libprotobuf-lite-test", // TODO(b/246997908): cannot convert proto_libraries which implicitly include other srcs in the same directory
+
+		"logcat", // TODO(b/246997908): cannot convert proto_libraries which implicitly include other srcs in the same directory
+
+		"expresscatalogvalidator", // TODO(b/246997908): cannot convert proto_libraries which implicitly include other srcs in the same directory
+
+		// depends on other //art modules
+		"libart-for-test",
+		"libart_generated_headers",
+		"libart-runtime-gtest",
+		"libartd-runtime-gtest",
 	}
 
 	MixedBuildsDisabledList = []string{
@@ -1506,9 +1525,6 @@ var (
 		"libadb_pairing_connection",
 		"libadb_pairing_connection_static",
 		"libadb_pairing_server", "libadb_pairing_server_static",
-
-		// TODO(b/240563612) Needing `stem` selection support for cc_binary
-		"crasher",
 
 		// java_import[_host] issues
 		// tradefed prebuilts depend on libprotobuf

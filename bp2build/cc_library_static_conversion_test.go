@@ -1905,6 +1905,26 @@ cc_library_static {
 	})
 }
 
+func TestCcLibraryStaticWithSanitizerBlocklist(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static has correct features when sanitize.blocklist is provided",
+		Blueprint: `
+cc_library_static {
+	name: "foo",
+	sanitize: {
+		blocklist: "foo_blocklist.txt",
+	},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"features":       `["ubsan_blocklist_foo_blocklist_txt"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
 func TestCcLibraryStaticWithThinLto(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
 		Description: "cc_library_static has correct features when thin lto is enabled",
@@ -2144,4 +2164,54 @@ cc_library_static {
 			}),
 		},
 	})
+}
+
+func TestCcLibraryStaticExplicitlyDisablesCfiWhenFalse(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: "cc_library_static disables cfi when explciitly set to false in the bp",
+		Blueprint: `
+cc_library_static {
+	name: "foo",
+	sanitize: {
+		cfi: false,
+	},
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"features":       `["-android_cfi"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCCLibraryStaticRscriptSrc(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description: `cc_library_static with rscript files in sources`,
+		Blueprint: `
+cc_library_static{
+    name : "foo",
+    srcs : [
+        "ccSrc.cc",
+        "rsSrc.rscript",
+    ],
+    include_build_directory: false,
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("rscript_to_cpp", "foo_renderscript", AttrNameToString{
+				"srcs": `["rsSrc.rscript"]`,
+			}),
+			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
+				"absolute_includes": `[
+        "frameworks/rs",
+        "frameworks/rs/cpp",
+    ]`,
+				"local_includes": `["."]`,
+				"srcs": `[
+        "ccSrc.cc",
+        "foo_renderscript",
+    ]`,
+			})}})
 }

@@ -101,6 +101,19 @@ function create_mock_soong {
   symlink_directory external/spdx-tools
   symlink_directory libcore
 
+  # TODO: b/286872909 - Remove these when the blocking bug is completed
+  symlink_directory external/libavc
+  symlink_directory external/libaom
+  symlink_directory external/libvpx
+  symlink_directory frameworks/base/libs/androidfw
+  symlink_directory external/libhevc
+  symlink_directory external/libexif
+  symlink_directory external/libopus
+  symlink_directory external/libmpeg2
+  symlink_directory external/expat
+  symlink_directory external/flac
+  symlink_directory system/extras/toolchain-extras
+
   touch "$MOCK_TOP/Android.bp"
 }
 
@@ -131,6 +144,7 @@ function create_mock_bazel {
   symlink_directory prebuilts/jdk
   symlink_directory external/bazel-skylib
   symlink_directory external/bazelbuild-rules_android
+  symlink_directory external/bazelbuild-rules_go
   symlink_directory external/bazelbuild-rules_license
   symlink_directory external/bazelbuild-kotlin-rules
 
