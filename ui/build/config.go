@@ -1375,6 +1375,12 @@ func (c *configImpl) StartGoma() bool {
 }
 
 func (c *configImpl) UseRBE() bool {
+	authType, _ := c.rbeAuth()
+	// Do not use RBE with prod credentials in scenarios when stubby doesn't exist, since
+	// its unlikely that we will be able to obtain necessary creds without stubby.
+	if !c.StubbyExists() && strings.Contains(authType, "use_google_prod_creds"){
+		return false
+	}
 	if v, ok := c.Environment().Get("USE_RBE"); ok {
 		v = strings.TrimSpace(v)
 		if v != "" && v != "false" {
@@ -1514,7 +1520,7 @@ func (c *configImpl) GoogleProdCredsExist() bool {
 	if googleProdCredsExistCache {
 		return googleProdCredsExistCache
 	}
-	if _, err := exec.Command("/usr/bin/gcertstatus").Output(); err != nil {
+	if _, err := exec.Command("/usr/bin/gcertstatus", "-nocheck_ssh").Output(); err != nil {
 		return false
 	}
 	googleProdCredsExistCache = true
