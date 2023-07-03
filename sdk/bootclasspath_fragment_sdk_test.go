@@ -27,6 +27,11 @@ import (
 // fixtureAddPlatformBootclasspathForBootclasspathFragment adds a platform_bootclasspath module that
 // references the bootclasspath fragment.
 func fixtureAddPlatformBootclasspathForBootclasspathFragment(apex, fragment string) android.FixturePreparer {
+	return fixtureAddPlatformBootclasspathForBootclasspathFragmentWithExtra(apex, fragment, "")
+}
+
+// fixtureAddPlatformBootclasspathForBootclasspathFragmentWithExtra is the same as above, but also adds extra fragments.
+func fixtureAddPlatformBootclasspathForBootclasspathFragmentWithExtra(apex, fragment, extraFragments string) android.FixturePreparer {
 	return android.GroupFixturePreparers(
 		// Add a platform_bootclasspath module.
 		android.FixtureAddTextFile("frameworks/base/boot/Android.bp", fmt.Sprintf(`
@@ -37,9 +42,10 @@ func fixtureAddPlatformBootclasspathForBootclasspathFragment(apex, fragment stri
 						apex: "%s",
 						module: "%s",
 					},
+					%s
 				],
 			}
-		`, apex, fragment)),
+		`, apex, fragment, extraFragments)),
 		android.FixtureAddFile("frameworks/base/config/boot-profile.txt", nil),
 		android.FixtureAddFile("frameworks/base/config/boot-image-profile.txt", nil),
 		android.FixtureAddFile("build/soong/scripts/check_boot_jars/package_allowed_list.txt", nil),
@@ -68,7 +74,7 @@ func fixtureAddPrebuiltApexForBootclasspathFragment(apex, fragment string) andro
 func TestSnapshotWithBootclasspathFragment_ImageName(t *testing.T) {
 	result := android.GroupFixturePreparers(
 		prepareForSdkTestWithJava,
-		java.PrepareForTestWithJavaDefaultModules,
+		java.PrepareForTestWithDexpreopt,
 		prepareForSdkTestWithApex,
 
 		// Some additional files needed for the art apex.
@@ -79,9 +85,11 @@ func TestSnapshotWithBootclasspathFragment_ImageName(t *testing.T) {
 		}),
 
 		// Add a platform_bootclasspath that depends on the fragment.
-		fixtureAddPlatformBootclasspathForBootclasspathFragment("com.android.art", "mybootclasspathfragment"),
+		fixtureAddPlatformBootclasspathForBootclasspathFragmentWithExtra(
+			"com.android.art", "mybootclasspathfragment", java.ApexBootJarFragmentsForPlatformBootclasspath),
 
 		java.PrepareForBootImageConfigTest,
+		java.PrepareApexBootJarConfigsAndModules,
 		android.FixtureWithRootAndroidBp(`
 			sdk {
 				name: "mysdk",
@@ -196,9 +204,15 @@ java_import {
 		snapshotTestChecker(checkSnapshotWithoutSource, func(t *testing.T, result *android.TestResult) {
 			// Make sure that the boot jars package check rule includes the dex jars retrieved from the prebuilt apex.
 			checkBootJarsPackageCheckRule(t, result,
-				"out/soong/.intermediates/prebuilts/apex/com.android.art.deapexer/android_common/deapexer/javalib/core1.jar",
-				"out/soong/.intermediates/prebuilts/apex/com.android.art.deapexer/android_common/deapexer/javalib/core2.jar",
-				"out/soong/.intermediates/default/java/framework/android_common/aligned/framework.jar")
+				append(
+					[]string{
+						"out/soong/.intermediates/prebuilts/apex/com.android.art.deapexer/android_common/deapexer/javalib/core1.jar",
+						"out/soong/.intermediates/prebuilts/apex/com.android.art.deapexer/android_common/deapexer/javalib/core2.jar",
+						"out/soong/.intermediates/default/java/framework/android_common/aligned/framework.jar",
+					},
+					java.ApexBootJarDexJarPaths...,
+				)...,
+			)
 			java.CheckMutatedArtBootImageConfig(t, result, "out/soong/.intermediates/snapshot/mybootclasspathfragment/android_common_com.android.art/meta_lic")
 			java.CheckMutatedFrameworkBootImageConfig(t, result, "out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/meta_lic")
 		}),
@@ -222,9 +236,15 @@ java_import {
 
 	// Make sure that the boot jars package check rule includes the dex jars created from the source.
 	checkBootJarsPackageCheckRule(t, result,
-		"out/soong/.intermediates/core1/android_common_apex10000/aligned/core1.jar",
-		"out/soong/.intermediates/core2/android_common_apex10000/aligned/core2.jar",
-		"out/soong/.intermediates/default/java/framework/android_common/aligned/framework.jar")
+		append(
+			[]string{
+				"out/soong/.intermediates/core1/android_common_apex10000/aligned/core1.jar",
+				"out/soong/.intermediates/core2/android_common_apex10000/aligned/core2.jar",
+				"out/soong/.intermediates/default/java/framework/android_common/aligned/framework.jar",
+			},
+			java.ApexBootJarDexJarPaths...,
+		)...,
+	)
 }
 
 // checkBootJarsPackageCheckRule checks that the supplied module is an input to the boot jars
@@ -358,6 +378,7 @@ java_import {
     visibility: ["//visibility:public"],
     apex_available: ["myapex"],
     jars: ["java_boot_libs/snapshot/jars/are/invalid/mybootlib.jar"],
+    min_sdk_version: "2",
     permitted_packages: ["mybootlib"],
 }
 
@@ -663,7 +684,15 @@ func TestBasicSdkWithBootclasspathFragment(t *testing.T) {
 	android.GroupFixturePreparers(
 		prepareForSdkTestWithApex,
 		prepareForSdkTestWithJava,
-		android.FixtureAddFile("java/mybootlib.jar", nil),
+		android.FixtureMergeMockFs(android.MockFS{
+			"java/mybootlib.jar":                nil,
+			"hiddenapi/annotation-flags.csv":    nil,
+			"hiddenapi/index.csv":               nil,
+			"hiddenapi/metadata.csv":            nil,
+			"hiddenapi/signature-patterns.csv":  nil,
+			"hiddenapi/filtered-stub-flags.csv": nil,
+			"hiddenapi/filtered-flags.csv":      nil,
+		}),
 		android.FixtureWithRootAndroidBp(`
 		sdk {
 			name: "mysdk",
@@ -690,26 +719,27 @@ func TestBasicSdkWithBootclasspathFragment(t *testing.T) {
 			compile_dex: true,
 		}
 
-		sdk_snapshot {
-			name: "mysdk@1",
-			bootclasspath_fragments: ["mysdk_mybootclasspathfragment@1"],
-		}
-
 		prebuilt_bootclasspath_fragment {
-			name: "mysdk_mybootclasspathfragment@1",
-			sdk_member_name: "mybootclasspathfragment",
+			name: "mybootclasspathfragment",
 			prefer: false,
 			visibility: ["//visibility:public"],
 			apex_available: [
 				"myapex",
 			],
 			image_name: "art",
-			contents: ["mysdk_mybootlib@1"],
+			contents: ["mybootlib"],
+			hidden_api: {
+				annotation_flags: "hiddenapi/annotation-flags.csv",
+				metadata: "hiddenapi/metadata.csv",
+				index: "hiddenapi/index.csv",
+				signature_patterns: "hiddenapi/signature-patterns.csv",
+				filtered_stub_flags: "hiddenapi/filtered-stub-flags.csv",
+				filtered_flags: "hiddenapi/filtered-flags.csv",
+			},
 		}
 
 		java_import {
-			name: "mysdk_mybootlib@1",
-			sdk_member_name: "mybootlib",
+			name: "mybootlib",
 			visibility: ["//visibility:public"],
 			apex_available: ["com.android.art"],
 			jars: ["java/mybootlib.jar"],
@@ -809,6 +839,7 @@ func TestSnapshotWithBootclasspathFragment_HiddenAPI(t *testing.T) {
 				compile_dex: true,
 				public: {enabled: true},
 				permitted_packages: ["mysdklibrary"],
+				min_sdk_version: "current",
 			}
 
 			java_sdk_library {
@@ -877,6 +908,7 @@ java_import {
     visibility: ["//visibility:public"],
     apex_available: ["myapex"],
     jars: ["java_boot_libs/snapshot/jars/are/invalid/mybootlib.jar"],
+    min_sdk_version: "1",
     permitted_packages: ["mybootlib"],
 }
 

@@ -171,9 +171,9 @@ func (s *sdk) collectMembers(ctx android.ModuleContext) {
 				exportedComponentsInfo = ctx.OtherModuleProvider(child, android.ExportedComponentsInfoProvider).(android.ExportedComponentsInfo)
 			}
 
-			var container android.SdkAware
+			var container android.Module
 			if parent != ctx.Module() {
-				container = parent.(android.SdkAware)
+				container = parent.(android.Module)
 			}
 
 			minApiLevel := android.MinApiLevelForSdkSnapshot(ctx, child)
@@ -182,7 +182,7 @@ func (s *sdk) collectMembers(ctx android.ModuleContext) {
 			s.memberVariantDeps = append(s.memberVariantDeps, sdkMemberVariantDep{
 				sdkVariant:             s,
 				memberType:             memberType,
-				variant:                child.(android.SdkAware),
+				variant:                child.(android.Module),
 				minApiLevel:            minApiLevel,
 				container:              container,
 				export:                 export,
@@ -269,7 +269,7 @@ func isMemberTypeSupportedByTargetBuildRelease(memberType android.SdkMemberType,
 	return supportedByTargetBuildRelease
 }
 
-func appendUniqueVariants(variants []android.SdkAware, newVariant android.SdkAware) []android.SdkAware {
+func appendUniqueVariants(variants []android.Module, newVariant android.Module) []android.Module {
 	for _, v := range variants {
 		if v == newVariant {
 			return variants
@@ -357,6 +357,12 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) {
 		// If the minApiLevel of the member is greater than the target API level then exclude it from
 		// this snapshot.
 		exclude := memberVariantDep.minApiLevel.GreaterThan(targetApiLevel)
+		// Always include host variants (e.g. host tools) in the snapshot.
+		// Host variants should not be guarded by a min_sdk_version check. In fact, host variants
+		// do not have a `min_sdk_version`.
+		if memberVariantDep.Host() {
+			exclude = false
+		}
 
 		addMember(name, export, exclude)
 
@@ -565,7 +571,7 @@ func (m *moduleInfo) MarshalJSON() ([]byte, error) {
 	if m.deps != nil {
 		writeObjectPair("@deps", m.deps)
 	}
-	for _, k := range android.SortedStringKeys(m.memberSpecific) {
+	for _, k := range android.SortedKeys(m.memberSpecific) {
 		v := m.memberSpecific[k]
 		writeObjectPair(k, v)
 	}
@@ -626,7 +632,7 @@ func (s *sdk) generateInfoData(ctx android.ModuleContext, memberVariantDeps []sd
 		getModuleInfo(memberVariantDep.variant)
 	}
 
-	for _, memberName := range android.SortedStringKeys(name2Info) {
+	for _, memberName := range android.SortedKeys(name2Info) {
 		info := name2Info[memberName]
 		modules = append(modules, info)
 	}
@@ -1246,12 +1252,12 @@ type sdkMemberVariantDep struct {
 	memberType android.SdkMemberType
 
 	// The variant that is added to the sdk.
-	variant android.SdkAware
+	variant android.Module
 
 	// The optional container of this member, i.e. the module that is depended upon by the sdk
 	// (possibly transitively) and whose dependency on this module is why it was added to the sdk.
 	// Is nil if this a direct dependency of the sdk.
-	container android.SdkAware
+	container android.Module
 
 	// True if the member should be exported, i.e. accessible, from outside the sdk.
 	export bool
@@ -1263,6 +1269,11 @@ type sdkMemberVariantDep struct {
 	minApiLevel android.ApiLevel
 }
 
+// Host returns true if the sdk member is a host variant (e.g. host tool)
+func (s *sdkMemberVariantDep) Host() bool {
+	return s.variant.Target().Os.Class == android.Host
+}
+
 var _ android.SdkMember = (*sdkMember)(nil)
 
 // sdkMember groups all the variants of a specific member module together along with the name of the
@@ -1270,14 +1281,14 @@ var _ android.SdkMember = (*sdkMember)(nil)
 type sdkMember struct {
 	memberType android.SdkMemberType
 	name       string
-	variants   []android.SdkAware
+	variants   []android.Module
 }
 
 func (m *sdkMember) Name() string {
 	return m.name
 }
 
-func (m *sdkMember) Variants() []android.SdkAware {
+func (m *sdkMember) Variants() []android.Module {
 	return m.variants
 }
 
@@ -1362,24 +1373,24 @@ func getVariantCoordinate(ctx *memberContext, variant android.Module) variantCoo
 // by apex variant, where one is the default/platform variant and one is the APEX variant. In that
 // case it picks the APEX variant. It picks the APEX variant because that is the behavior that would
 // be expected
-func selectApexVariantsWhereAvailable(ctx *memberContext, variants []android.SdkAware) []android.SdkAware {
+func selectApexVariantsWhereAvailable(ctx *memberContext, variants []android.Module) []android.Module {
 	moduleCtx := ctx.sdkMemberContext
 
 	// Group the variants by coordinates.
-	variantsByCoord := make(map[variantCoordinate][]android.SdkAware)
+	variantsByCoord := make(map[variantCoordinate][]android.Module)
 	for _, variant := range variants {
 		coord := getVariantCoordinate(ctx, variant)
 		variantsByCoord[coord] = append(variantsByCoord[coord], variant)
 	}
 
-	toDiscard := make(map[android.SdkAware]struct{})
+	toDiscard := make(map[android.Module]struct{})
 	for coord, list := range variantsByCoord {
 		count := len(list)
 		if count == 1 {
 			continue
 		}
 
-		variantsByApex := make(map[string]android.SdkAware)
+		variantsByApex := make(map[string]android.Module)
 		conflictDetected := false
 		for _, variant := range list {
 			apexInfo := moduleCtx.OtherModuleProvider(variant, android.ApexInfoProvider).(android.ApexInfo)
@@ -1421,7 +1432,7 @@ func selectApexVariantsWhereAvailable(ctx *memberContext, variants []android.Sdk
 	// If there are any variants to discard then remove them from the list of variants, while
 	// preserving the order.
 	if len(toDiscard) > 0 {
-		filtered := []android.SdkAware{}
+		filtered := []android.Module{}
 		for _, variant := range variants {
 			if _, ok := toDiscard[variant]; !ok {
 				filtered = append(filtered, variant)
@@ -1708,7 +1719,7 @@ func newArchSpecificInfo(ctx android.SdkMemberContext, archId archId, osType and
 		}
 
 		// Create the image variant info in a fixed order.
-		for _, imageVariantName := range android.SortedStringKeys(variantsByImage) {
+		for _, imageVariantName := range android.SortedKeys(variantsByImage) {
 			variants := variantsByImage[imageVariantName]
 			archInfo.imageVariantInfos = append(archInfo.imageVariantInfos, newImageVariantSpecificInfo(ctx, imageVariantName, variantPropertiesFactory, variants))
 		}
