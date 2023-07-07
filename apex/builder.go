@@ -275,6 +275,22 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 
 	manifestJsonFullOut := android.PathForModuleOut(ctx, "apex_manifest_full.json")
 	defaultVersion := android.DefaultUpdatableModuleVersion
+	if a.properties.Variant_version != nil {
+		defaultVersionInt, err := strconv.Atoi(defaultVersion)
+		if err != nil {
+			ctx.ModuleErrorf("expected DefaultUpdatableModuleVersion to be an int, but got %s", defaultVersion)
+		}
+		if defaultVersionInt%10 != 0 {
+			ctx.ModuleErrorf("expected DefaultUpdatableModuleVersion to end in a zero, but got %s", defaultVersion)
+		}
+		variantVersion := []rune(*a.properties.Variant_version)
+		if len(variantVersion) != 1 || variantVersion[0] < '0' || variantVersion[0] > '9' {
+			ctx.PropertyErrorf("variant_version", "expected an integer between 0-9; got %s", *a.properties.Variant_version)
+		}
+		defaultVersionRunes := []rune(defaultVersion)
+		defaultVersionRunes[len(defaultVersion)-1] = []rune(variantVersion)[0]
+		defaultVersion = string(defaultVersionRunes)
+	}
 	if override := ctx.Config().Getenv("OVERRIDE_APEX_MANIFEST_DEFAULT_VERSION"); override != "" {
 		defaultVersion = override
 	}
@@ -517,9 +533,6 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 				}
 			}
 			implicitInputs = append(implicitInputs, fi.builtFile)
-			if installSymbolFiles {
-				implicitInputs = append(implicitInputs, installedPath)
-			}
 
 			// Create additional symlinks pointing the file inside the APEX (if any). Note that
 			// this is independent from the symlink optimization.
@@ -527,8 +540,7 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 				symlinkDest := imageDir.Join(ctx, symlinkPath).String()
 				copyCommands = append(copyCommands, "ln -sfn "+filepath.Base(destPath)+" "+symlinkDest)
 				if installSymbolFiles {
-					installedSymlink := ctx.InstallSymlink(apexDir.Join(ctx, filepath.Dir(symlinkPath)), filepath.Base(symlinkPath), installedPath)
-					implicitInputs = append(implicitInputs, installedSymlink)
+					ctx.InstallSymlink(apexDir.Join(ctx, filepath.Dir(symlinkPath)), filepath.Base(symlinkPath), installedPath)
 				}
 			}
 
@@ -553,11 +565,6 @@ func (a *apexBundle) buildUnflattenedApex(ctx android.ModuleContext) {
 		installMapSet[installMapPath.String()+":"+fi.installDir+"/"+fi.builtFile.Base()] = true
 	}
 	implicitInputs = append(implicitInputs, a.manifestPbOut)
-	if installSymbolFiles {
-		installedManifest := ctx.InstallFile(apexDir, "apex_manifest.pb", a.manifestPbOut)
-		installedKey := ctx.InstallFile(apexDir, "apex_pubkey", a.publicKeyFile)
-		implicitInputs = append(implicitInputs, installedManifest, installedKey)
-	}
 
 	if len(installMapSet) > 0 {
 		var installs []string

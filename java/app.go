@@ -33,7 +33,16 @@ import (
 
 func init() {
 	RegisterAppBuildComponents(android.InitRegistrationContext)
+	pctx.HostBinToolVariable("ModifyAllowlistCmd", "modify_permissions_allowlist")
 }
+
+var (
+	modifyAllowlist = pctx.AndroidStaticRule("modifyAllowlist",
+		blueprint.RuleParams{
+			Command:     "${ModifyAllowlistCmd} $in $packageName $out",
+			CommandDeps: []string{"${ModifyAllowlistCmd}"},
+		}, "packageName")
+)
 
 func RegisterAppBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("android_app", AndroidAppFactory)
@@ -115,6 +124,9 @@ type appProperties struct {
 	// Prefer using other specific properties if build behaviour must be changed; avoid using this
 	// flag for anything but neverallow rules (unless the behaviour change is invisible to owners).
 	Updatable *bool
+
+	// Specifies the file that contains the allowlist for this app.
+	Privapp_allowlist *string `android:"path"`
 }
 
 // android_app properties that can be overridden by override_android_app
@@ -179,6 +191,8 @@ type AndroidApp struct {
 	android.ApexBundleDepsInfo
 
 	javaApiUsedByOutputFile android.ModuleOutPath
+
+	privAppAllowlist android.OptionalPath
 }
 
 func (a *AndroidApp) IsInstallable() bool {
@@ -203,6 +217,10 @@ func (a *AndroidApp) Certificate() Certificate {
 
 func (a *AndroidApp) JniCoverageOutputs() android.Paths {
 	return a.jniCoverageOutputs
+}
+
+func (a *AndroidApp) PrivAppAllowlist() android.OptionalPath {
+	return a.privAppAllowlist
 }
 
 var _ AndroidLibraryDependency = (*AndroidApp)(nil)
@@ -267,6 +285,16 @@ func (a *AndroidApp) OverridablePropertiesDepsMutator(ctx android.BottomUpMutato
 	cert := android.SrcIsModule(a.getCertString(ctx))
 	if cert != "" {
 		ctx.AddDependency(ctx.Module(), certificateTag, cert)
+	}
+
+	if a.appProperties.Privapp_allowlist != nil && !Bool(a.appProperties.Privileged) {
+		// There are a few uids that are explicitly considered privileged regardless of their
+		// app's location. Bluetooth is one such app. It should arguably be moved to priv-app,
+		// but for now, allow it not to be in priv-app.
+		privilegedBecauseOfUid := ctx.ModuleName() == "Bluetooth"
+		if !privilegedBecauseOfUid {
+			ctx.PropertyErrorf("privapp_allowlist", "privileged must be set in order to use privapp_allowlist (with a few exceptions)")
+		}
 	}
 
 	for _, cert := range a.appProperties.Additional_certificates {
@@ -563,19 +591,6 @@ func processMainCert(m android.ModuleBase, certPropValue string, certificates []
 		certificates = append([]Certificate{mainCert}, certificates...)
 	}
 
-	if !m.Platform() {
-		certPath := certificates[0].Pem.String()
-		systemCertPath := ctx.Config().DefaultAppCertificateDir(ctx).String()
-		if strings.HasPrefix(certPath, systemCertPath) {
-			enforceSystemCert := ctx.Config().EnforceSystemCertificate()
-			allowed := ctx.Config().EnforceSystemCertificateAllowList()
-
-			if enforceSystemCert && !inList(m.Name(), allowed) {
-				ctx.PropertyErrorf("certificate", "The module in product partition cannot be signed with certificate in system.")
-			}
-		}
-	}
-
 	if len(certificates) > 0 {
 		mainCertificate = certificates[0]
 	} else {
@@ -591,11 +606,53 @@ func processMainCert(m android.ModuleBase, certPropValue string, certificates []
 		}
 	}
 
+	if !m.Platform() {
+		certPath := mainCertificate.Pem.String()
+		systemCertPath := ctx.Config().DefaultAppCertificateDir(ctx).String()
+		if strings.HasPrefix(certPath, systemCertPath) {
+			enforceSystemCert := ctx.Config().EnforceSystemCertificate()
+			allowed := ctx.Config().EnforceSystemCertificateAllowList()
+
+			if enforceSystemCert && !inList(m.Name(), allowed) {
+				ctx.PropertyErrorf("certificate", "The module in product partition cannot be signed with certificate in system.")
+			}
+		}
+	}
+
 	return mainCertificate, certificates
 }
 
 func (a *AndroidApp) InstallApkName() string {
 	return a.installApkName
+}
+
+func (a *AndroidApp) createPrivappAllowlist(ctx android.ModuleContext) android.Path {
+	if a.appProperties.Privapp_allowlist == nil {
+		return nil
+	}
+
+	isOverrideApp := a.GetOverriddenBy() != ""
+	if !isOverrideApp {
+		// if this is not an override, we don't need to rewrite the existing privapp allowlist
+		return android.PathForModuleSrc(ctx, *a.appProperties.Privapp_allowlist)
+	}
+
+	if a.overridableAppProperties.Package_name == nil {
+		ctx.PropertyErrorf("privapp_allowlist", "package_name must be set to use privapp_allowlist")
+	}
+
+	packageName := *a.overridableAppProperties.Package_name
+	fileName := "privapp_allowlist_" + packageName + ".xml"
+	outPath := android.PathForModuleOut(ctx, fileName).OutputPath
+	ctx.Build(pctx, android.BuildParams{
+		Rule:   modifyAllowlist,
+		Input:  android.PathForModuleSrc(ctx, *a.appProperties.Privapp_allowlist),
+		Output: outPath,
+		Args: map[string]string{
+			"packageName": packageName,
+		},
+	})
+	return &outPath
 }
 
 func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
@@ -733,11 +790,21 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	BuildBundleModule(ctx, bundleFile, a.exportPackage, jniJarFile, dexJarFile)
 	a.bundleFile = bundleFile
 
+	allowlist := a.createPrivappAllowlist(ctx)
+	if allowlist != nil {
+		a.privAppAllowlist = android.OptionalPathForPath(allowlist)
+	}
+
 	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
 
 	// Install the app package.
-	if (Bool(a.Module.properties.Installable) || ctx.Host()) && apexInfo.IsForPlatform() &&
-		!a.appProperties.PreventInstall {
+	shouldInstallAppPackage := (Bool(a.Module.properties.Installable) || ctx.Host()) && apexInfo.IsForPlatform() && !a.appProperties.PreventInstall
+	if shouldInstallAppPackage {
+		if a.privAppAllowlist.Valid() {
+			allowlistInstallPath := android.PathForModuleInstall(ctx, "etc", "permissions")
+			allowlistInstallFilename := a.installApkName + ".xml"
+			ctx.InstallFile(allowlistInstallPath, allowlistInstallFilename, a.privAppAllowlist.Path())
+		}
 
 		var extraInstalledPaths android.Paths
 		for _, extra := range a.extraOutputFiles {
@@ -924,6 +991,10 @@ func (a *AndroidApp) DepIsInSameApex(ctx android.BaseModuleContext, dep android.
 // For OutputFileProducer interface
 func (a *AndroidApp) OutputFiles(tag string) (android.Paths, error) {
 	switch tag {
+	// In some instances, it can be useful to reference the aapt-generated flags from another
+	// target, e.g., system server implements services declared in the framework-res manifest.
+	case ".aapt.proguardOptionsFile":
+		return []android.Path{a.proguardOptionsFile}, nil
 	case ".aapt.srcjar":
 		return []android.Path{a.aaptSrcJar}, nil
 	case ".export-package.apk":

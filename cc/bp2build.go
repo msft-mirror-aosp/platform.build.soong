@@ -268,7 +268,7 @@ func bp2buildParseStaticOrSharedProps(ctx android.BazelConversionPathContext, mo
 	attrs.Srcs_c = partitionedSrcs[cSrcPartition]
 	attrs.Srcs_as = partitionedSrcs[asSrcPartition]
 
-	attrs.Apex_available = android.ConvertApexAvailableToTags(apexAvailable)
+	attrs.Apex_available = android.ConvertApexAvailableToTagsWithoutTestApexes(ctx.(android.TopDownMutatorContext), apexAvailable)
 
 	if !partitionedSrcs[protoSrcPartition].IsEmpty() {
 		// TODO(b/208815215): determine whether this is used and add support if necessary
@@ -517,7 +517,7 @@ func (ca *compilerAttributes) convertProductVariables(ctx android.BazelConversio
 	productVarPropNameToAttribute := map[string]*bazel.StringListAttribute{
 		"Cflags":   &ca.copts,
 		"Asflags":  &ca.asFlags,
-		"CppFlags": &ca.cppFlags,
+		"Cppflags": &ca.cppFlags,
 	}
 	for propName, attr := range productVarPropNameToAttribute {
 		if productConfigProps, exists := productVariableProps[propName]; exists {
@@ -717,6 +717,8 @@ func bp2BuildParseBaseProps(ctx android.Bp2buildMutatorContext, module *Module) 
 	compilerAttrs := compilerAttributes{}
 	linkerAttrs := linkerAttributes{}
 
+	var aidlLibs bazel.LabelList
+
 	// Iterate through these axes in a deterministic order. This is required
 	// because processing certain dependencies may result in concatenating
 	// elements along other axes. (For example, processing NoConfig may result
@@ -732,6 +734,7 @@ func bp2BuildParseBaseProps(ctx android.Bp2buildMutatorContext, module *Module) 
 					compilerAttrs.lexopts.SetSelectValue(axis, cfg, baseCompilerProps.Lex.Flags)
 				}
 				(&compilerAttrs).bp2buildForAxisAndConfig(ctx, axis, cfg, baseCompilerProps)
+				aidlLibs.Append(android.BazelLabelForModuleDeps(ctx, baseCompilerProps.Aidl.Libs))
 			}
 
 			var exportHdrs []string
@@ -762,8 +765,13 @@ func bp2BuildParseBaseProps(ctx android.Bp2buildMutatorContext, module *Module) 
 
 			if libraryProps, ok := archVariantLibraryProperties[axis][cfg].(*LibraryProperties); ok {
 				if axis == bazel.NoConfigAxis {
-					compilerAttrs.stubsSymbolFile = libraryProps.Stubs.Symbol_file
-					compilerAttrs.stubsVersions.SetSelectValue(axis, cfg, libraryProps.Stubs.Versions)
+					if libraryProps.Stubs.Symbol_file != nil {
+						compilerAttrs.stubsSymbolFile = libraryProps.Stubs.Symbol_file
+						versions := android.CopyOf(libraryProps.Stubs.Versions)
+						normalizeVersions(ctx, versions)
+						versions = addCurrentVersionIfNotPresent(versions)
+						compilerAttrs.stubsVersions.SetSelectValue(axis, cfg, versions)
+					}
 				}
 				if suffix := libraryProps.Suffix; suffix != nil {
 					compilerAttrs.suffix.SetSelectValue(axis, cfg, suffix)
@@ -799,7 +807,15 @@ func bp2BuildParseBaseProps(ctx android.Bp2buildMutatorContext, module *Module) 
 	(&linkerAttrs).wholeArchiveDeps.Add(protoDep.wholeStaticLib)
 	(&linkerAttrs).implementationWholeArchiveDeps.Add(protoDep.implementationWholeStaticLib)
 
-	aidlDep := bp2buildCcAidlLibrary(ctx, module, compilerAttrs.aidlSrcs, linkerAttrs)
+	aidlDep := bp2buildCcAidlLibrary(
+		ctx, module,
+		compilerAttrs.aidlSrcs,
+		bazel.LabelListAttribute{
+			Value: aidlLibs,
+		},
+		linkerAttrs,
+		compilerAttrs,
+	)
 	if aidlDep != nil {
 		if lib, ok := module.linker.(*libraryDecorator); ok {
 			if proptools.Bool(lib.Properties.Aidl.Export_aidl_headers) {
@@ -895,11 +911,16 @@ func bp2buildFdoProfile(
 func bp2buildCcAidlLibrary(
 	ctx android.Bp2buildMutatorContext,
 	m *Module,
-	aidlLabelList bazel.LabelListAttribute,
+	aidlSrcs bazel.LabelListAttribute,
+	aidlLibs bazel.LabelListAttribute,
 	linkerAttrs linkerAttributes,
+	compilerAttrs compilerAttributes,
 ) *bazel.LabelAttribute {
-	if !aidlLabelList.IsEmpty() {
-		aidlLibs, aidlSrcs := aidlLabelList.Partition(func(src bazel.Label) bool {
+	var aidlLibsFromSrcs, aidlFiles bazel.LabelListAttribute
+	apexAvailableTags := android.ApexAvailableTagsWithoutTestApexes(ctx.(android.TopDownMutatorContext), ctx.Module())
+
+	if !aidlSrcs.IsEmpty() {
+		aidlLibsFromSrcs, aidlFiles = aidlSrcs.Partition(func(src bazel.Label) bool {
 			if fg, ok := android.ToFileGroupAsLibrary(ctx, src.OriginalModuleName); ok &&
 				fg.ShouldConvertToAidlLibrary(ctx) {
 				return true
@@ -907,55 +928,69 @@ func bp2buildCcAidlLibrary(
 			return false
 		})
 
-		apexAvailableTags := android.ApexAvailableTags(ctx.Module())
-		sdkAttrs := bp2BuildParseSdkAttributes(m)
-
-		if !aidlSrcs.IsEmpty() {
+		if !aidlFiles.IsEmpty() {
 			aidlLibName := m.Name() + "_aidl_library"
 			ctx.CreateBazelTargetModule(
 				bazel.BazelTargetModuleProperties{
 					Rule_class:        "aidl_library",
 					Bzl_load_location: "//build/bazel/rules/aidl:aidl_library.bzl",
 				},
-				android.CommonAttributes{Name: aidlLibName},
-				&aidlLibraryAttributes{
-					Srcs: aidlSrcs,
+				android.CommonAttributes{
+					Name: aidlLibName,
 					Tags: apexAvailableTags,
 				},
-			)
-			aidlLibs.Add(&bazel.LabelAttribute{Value: &bazel.Label{Label: ":" + aidlLibName}})
-		}
-
-		if !aidlLibs.IsEmpty() {
-			ccAidlLibrarylabel := m.Name() + "_cc_aidl_library"
-			// Since parent cc_library already has these dependencies, we can add them as implementation
-			// deps so that they don't re-export
-			implementationDeps := linkerAttrs.deps.Clone()
-			implementationDeps.Append(linkerAttrs.implementationDeps)
-			implementationDynamicDeps := linkerAttrs.dynamicDeps.Clone()
-			implementationDynamicDeps.Append(linkerAttrs.implementationDynamicDeps)
-
-			ctx.CreateBazelTargetModule(
-				bazel.BazelTargetModuleProperties{
-					Rule_class:        "cc_aidl_library",
-					Bzl_load_location: "//build/bazel/rules/cc:cc_aidl_library.bzl",
-				},
-				android.CommonAttributes{Name: ccAidlLibrarylabel},
-				&ccAidlLibraryAttributes{
-					Deps:                        aidlLibs,
-					Implementation_deps:         *implementationDeps,
-					Implementation_dynamic_deps: *implementationDynamicDeps,
-					Tags:                        apexAvailableTags,
-					sdkAttributes:               sdkAttrs,
+				&aidlLibraryAttributes{
+					Srcs: aidlFiles,
 				},
 			)
-			label := &bazel.LabelAttribute{
-				Value: &bazel.Label{
-					Label: ":" + ccAidlLibrarylabel,
-				},
-			}
-			return label
+			aidlLibsFromSrcs.Add(&bazel.LabelAttribute{Value: &bazel.Label{Label: ":" + aidlLibName}})
 		}
+	}
+
+	allAidlLibs := aidlLibs.Clone()
+	allAidlLibs.Append(aidlLibsFromSrcs)
+
+	if !allAidlLibs.IsEmpty() {
+		ccAidlLibrarylabel := m.Name() + "_cc_aidl_library"
+		// Since parent cc_library already has these dependencies, we can add them as implementation
+		// deps so that they don't re-export
+		implementationDeps := linkerAttrs.deps.Clone()
+		implementationDeps.Append(linkerAttrs.implementationDeps)
+		implementationDynamicDeps := linkerAttrs.dynamicDeps.Clone()
+		implementationDynamicDeps.Append(linkerAttrs.implementationDynamicDeps)
+
+		sdkAttrs := bp2BuildParseSdkAttributes(m)
+
+		exportedIncludes := bp2BuildParseExportedIncludes(ctx, m, &compilerAttrs.includes)
+		includeAttrs := includesAttributes{
+			Export_includes:          exportedIncludes.Includes,
+			Export_absolute_includes: exportedIncludes.AbsoluteIncludes,
+			Export_system_includes:   exportedIncludes.SystemIncludes,
+			Local_includes:           compilerAttrs.localIncludes,
+			Absolute_includes:        compilerAttrs.absoluteIncludes,
+		}
+
+		ctx.CreateBazelTargetModule(
+			bazel.BazelTargetModuleProperties{
+				Rule_class:        "cc_aidl_library",
+				Bzl_load_location: "//build/bazel/rules/cc:cc_aidl_library.bzl",
+			},
+			android.CommonAttributes{Name: ccAidlLibrarylabel},
+			&ccAidlLibraryAttributes{
+				Deps:                        *allAidlLibs,
+				Implementation_deps:         *implementationDeps,
+				Implementation_dynamic_deps: *implementationDynamicDeps,
+				Tags:                        apexAvailableTags,
+				sdkAttributes:               sdkAttrs,
+				includesAttributes:          includeAttrs,
+			},
+		)
+		label := &bazel.LabelAttribute{
+			Value: &bazel.Label{
+				Label: ":" + ccAidlLibrarylabel,
+			},
+		}
+		return label
 	}
 
 	return nil

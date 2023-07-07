@@ -146,7 +146,7 @@ var prepareForApexTest = android.GroupFixturePreparers(
 	android.PrepareForTestWithAndroidBuildComponents,
 	bpf.PrepareForTestWithBpf,
 	cc.PrepareForTestWithCcBuildComponents,
-	java.PrepareForTestWithJavaDefaultModules,
+	java.PrepareForTestWithDexpreopt,
 	prebuilt_etc.PrepareForTestWithPrebuiltEtc,
 	rust.PrepareForTestWithRustDefaultModules,
 	sh.PrepareForTestWithShBuildComponents,
@@ -4102,6 +4102,174 @@ func TestVndkApexShouldNotProvideNativeLibs(t *testing.T) {
 	})
 }
 
+func TestVendorApexWithVndkPrebuilts(t *testing.T) {
+	ctx := testApex(t, "",
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.DeviceVndkVersion = proptools.StringPtr("27")
+		}),
+		android.FixtureRegisterWithContext(func(ctx android.RegistrationContext) {
+			cc.RegisterVendorSnapshotModules(ctx)
+		}),
+		withFiles(map[string][]byte{
+			"vendor/foo/Android.bp": []byte(`
+				apex {
+					name: "myapex",
+					binaries: ["foo"],
+					key: "myapex.key",
+					min_sdk_version: "27",
+					vendor: true,
+				}
+
+				cc_binary {
+					name: "foo",
+					vendor: true,
+					srcs: ["abc.cpp"],
+					shared_libs: [
+						"libllndk",
+						"libvndk",
+					],
+					nocrt: true,
+					system_shared_libs: [],
+					min_sdk_version: "27",
+				}
+
+				apex_key {
+					name: "myapex.key",
+					public_key: "testkey.avbpubkey",
+					private_key: "testkey.pem",
+				}
+			`),
+			// Simulate VNDK prebuilts with vendor_snapshot
+			"prebuilts/vndk/Android.bp": []byte(`
+				vndk_prebuilt_shared {
+					name: "libllndk",
+					version: "27",
+					vendor_available: true,
+					product_available: true,
+					target_arch: "arm64",
+					arch: {
+						arm64: {
+							srcs: ["libllndk.so"],
+						},
+					},
+				}
+
+				vndk_prebuilt_shared {
+					name: "libvndk",
+					version: "27",
+					vendor_available: true,
+					product_available: true,
+					target_arch: "arm64",
+					arch: {
+						arm64: {
+							srcs: ["libvndk.so"],
+						},
+					},
+					vndk: {
+						enabled: true,
+					},
+					min_sdk_version: "27",
+				}
+
+				vndk_prebuilt_shared {
+					name: "libc++",
+					version: "27",
+					target_arch: "arm64",
+					vendor_available: true,
+					product_available: true,
+					vndk: {
+						enabled: true,
+						support_system_process: true,
+					},
+					arch: {
+						arm64: {
+							srcs: ["libc++.so"],
+						},
+					},
+					min_sdk_version: "apex_inherit",
+				}
+
+				vendor_snapshot {
+					name: "vendor_snapshot",
+					version: "27",
+					arch: {
+						arm64: {
+							vndk_libs: [
+								"libc++",
+								"libllndk",
+								"libvndk",
+							],
+							static_libs: [
+								"libc++demangle",
+								"libclang_rt.builtins",
+								"libunwind",
+							],
+						},
+					}
+				}
+
+				vendor_snapshot_static {
+					name: "libclang_rt.builtins",
+					version: "27",
+					target_arch: "arm64",
+					vendor: true,
+					arch: {
+						arm64: {
+							src: "libclang_rt.builtins-aarch64-android.a",
+						},
+					},
+				}
+
+				vendor_snapshot_static {
+					name: "libc++demangle",
+					version: "27",
+					target_arch: "arm64",
+					compile_multilib: "64",
+					vendor: true,
+					arch: {
+						arm64: {
+							src: "libc++demangle.a",
+						},
+					},
+					min_sdk_version: "apex_inherit",
+				}
+
+				vendor_snapshot_static {
+					name: "libunwind",
+					version: "27",
+					target_arch: "arm64",
+					compile_multilib: "64",
+					vendor: true,
+					arch: {
+						arm64: {
+							src: "libunwind.a",
+						},
+					},
+					min_sdk_version: "apex_inherit",
+				}
+			`),
+		}))
+
+	// Should embed the prebuilt VNDK libraries in the apex
+	ensureExactContents(t, ctx, "myapex", "android_common_myapex_image", []string{
+		"bin/foo",
+		"prebuilts/vndk/libc++.so:lib64/libc++.so",
+		"prebuilts/vndk/libvndk.so:lib64/libvndk.so",
+	})
+
+	// Should link foo with prebuilt libraries (shared/static)
+	ldRule := ctx.ModuleForTests("foo", "android_vendor.27_arm64_armv8-a_myapex").Rule("ld")
+	android.AssertStringDoesContain(t, "should link to prebuilt llndk", ldRule.Args["libFlags"], "prebuilts/vndk/libllndk.so")
+	android.AssertStringDoesContain(t, "should link to prebuilt vndk", ldRule.Args["libFlags"], "prebuilts/vndk/libvndk.so")
+	android.AssertStringDoesContain(t, "should link to prebuilt libc++demangle", ldRule.Args["libFlags"], "prebuilts/vndk/libc++demangle.a")
+	android.AssertStringDoesContain(t, "should link to prebuilt libunwind", ldRule.Args["libFlags"], "prebuilts/vndk/libunwind.a")
+
+	// Should declare the LLNDK library as a "required" external dependency
+	manifestRule := ctx.ModuleForTests("myapex", "android_common_myapex_image").Rule("apexManifestRule")
+	requireNativeLibs := names(manifestRule.Args["requireNativeLibs"])
+	ensureListContains(t, requireNativeLibs, "libllndk.so")
+}
+
 func TestDependenciesInApexManifest(t *testing.T) {
 	ctx := testApex(t, `
 		apex {
@@ -5716,6 +5884,7 @@ func TestPrebuiltSkipsSymbols(t *testing.T) {
 				// Source module
 				apex {
 					name: "myapex",
+					binaries: ["foo"],
 					key: "myapex.key",
 					updatable: false,
 				}
@@ -5731,11 +5900,19 @@ func TestPrebuiltSkipsSymbols(t *testing.T) {
 					set: "myapex.apks",
 					`+preferProperty+`
 				}
+
+				cc_binary {
+					name: "foo",
+					srcs: ["mylib.cpp"],
+					system_shared_libs: [],
+					stl: "none",
+					apex_available: [ "myapex" ],
+				}
 			`)
 			// Symbol files are installed by installing entries under ${OUT}/apex/{apex name}
-			android.AssertStringListContainsEquals(t, "Implicits",
-				ctx.ModuleForTests("myapex", "android_common_myapex_image").Rule("apexRule").Implicits.Strings(),
-				"out/soong/target/product/test_device/apex/myapex/apex_manifest.pb",
+			android.AssertStringListContainsEquals(t, "Installs",
+				ctx.ModuleForTests("myapex", "android_common_myapex_image").Module().FilesToInstall().Strings(),
+				filepath.Join(ctx.Config().SoongOutDir(), "target/product/test_device/apex/myapex/bin/foo"),
 				tc.installSymbolFiles)
 		})
 	}
@@ -5988,6 +6165,7 @@ func TestApexWithApps(t *testing.T) {
 			sdk_version: "current",
 			system_modules: "none",
 			privileged: true,
+			privapp_allowlist: "privapp_allowlist_com.android.AppFooPriv.xml",
 			stl: "none",
 			apex_available: [ "myapex" ],
 		}
@@ -6017,6 +6195,7 @@ func TestApexWithApps(t *testing.T) {
 
 	ensureContains(t, copyCmds, "image.apex/app/AppFoo@TEST.BUILD_ID/AppFoo.apk")
 	ensureContains(t, copyCmds, "image.apex/priv-app/AppFooPriv@TEST.BUILD_ID/AppFooPriv.apk")
+	ensureContains(t, copyCmds, "image.apex/etc/permissions/privapp_allowlist_com.android.AppFooPriv.xml")
 
 	appZipRule := ctx.ModuleForTests("AppFoo", "android_common_apex10000").Description("zip jni libs")
 	// JNI libraries are uncompressed
@@ -6031,6 +6210,18 @@ func TestApexWithApps(t *testing.T) {
 		// ... and not directly inside the APEX
 		ensureNotContains(t, copyCmds, "image.apex/lib64/"+jni+".so")
 	}
+
+	apexBundle := module.Module().(*apexBundle)
+	data := android.AndroidMkDataForTest(t, ctx, apexBundle)
+	var builder strings.Builder
+	data.Custom(&builder, apexBundle.Name(), "TARGET_", "", data)
+	androidMk := builder.String()
+	ensureContains(t, androidMk, "LOCAL_MODULE := AppFooPriv.myapex")
+	ensureContains(t, androidMk, "LOCAL_MODULE := AppFoo.myapex")
+	ensureMatches(t, androidMk, "LOCAL_SOONG_INSTALLED_MODULE := \\S+AppFooPriv.apk")
+	ensureMatches(t, androidMk, "LOCAL_SOONG_INSTALLED_MODULE := \\S+AppFoo.apk")
+	ensureMatches(t, androidMk, "LOCAL_SOONG_INSTALL_PAIRS := \\S+AppFooPriv.apk")
+	ensureContains(t, androidMk, "LOCAL_SOONG_INSTALL_PAIRS := privapp_allowlist_com.android.AppFooPriv.xml:$(PRODUCT_OUT)/apex/myapex/etc/permissions/privapp_allowlist_com.android.AppFooPriv.xml")
 }
 
 func TestApexWithAppImportBuildId(t *testing.T) {
@@ -6362,6 +6553,266 @@ func TestApexAvailable_InvalidApexName(t *testing.T) {
 		stubs: {
 			versions: ["10", "20", "30"],
 		},
+	}`)
+}
+
+func TestApexAvailable_ApexAvailableNameWithVersionCodeError(t *testing.T) {
+	t.Run("negative variant_version produces error", func(t *testing.T) {
+		testApexError(t, "expected an integer between 0-9; got -1", `
+			apex {
+				name: "myapex",
+				key: "myapex.key",
+				apex_available_name: "com.android.foo",
+				variant_version: "-1",
+				updatable: false,
+			}
+			apex_key {
+				name: "myapex.key",
+				public_key: "testkey.avbpubkey",
+				private_key: "testkey.pem",
+			}
+		`)
+	})
+
+	t.Run("variant_version greater than 9 produces error", func(t *testing.T) {
+		testApexError(t, "expected an integer between 0-9; got 10", `
+			apex {
+				name: "myapex",
+				key: "myapex.key",
+				apex_available_name: "com.android.foo",
+				variant_version: "10",
+				updatable: false,
+			}
+			apex_key {
+				name: "myapex.key",
+				public_key: "testkey.avbpubkey",
+				private_key: "testkey.pem",
+			}
+		`)
+	})
+}
+
+func TestApexAvailable_ApexAvailableNameWithVersionCode(t *testing.T) {
+	context := android.GroupFixturePreparers(
+		android.PrepareForIntegrationTestWithAndroid,
+		PrepareForTestWithApexBuildComponents,
+		android.FixtureMergeMockFs(android.MockFS{
+			"system/sepolicy/apex/foo-file_contexts": nil,
+			"system/sepolicy/apex/bar-file_contexts": nil,
+		}),
+	)
+	result := context.RunTestWithBp(t, `
+		apex {
+			name: "foo",
+			key: "myapex.key",
+			apex_available_name: "com.android.foo",
+			variant_version: "0",
+			updatable: false,
+		}
+		apex {
+			name: "bar",
+			key: "myapex.key",
+			apex_available_name: "com.android.foo",
+			variant_version: "3",
+			updatable: false,
+		}
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`)
+
+	fooManifestRule := result.ModuleForTests("foo", "android_common_foo_image").Rule("apexManifestRule")
+	fooExpectedDefaultVersion := android.DefaultUpdatableModuleVersion
+	fooActualDefaultVersion := fooManifestRule.Args["default_version"]
+	if fooActualDefaultVersion != fooExpectedDefaultVersion {
+		t.Errorf("expected to find defaultVersion %q; got %q", fooExpectedDefaultVersion, fooActualDefaultVersion)
+	}
+
+	barManifestRule := result.ModuleForTests("bar", "android_common_bar_image").Rule("apexManifestRule")
+	defaultVersionInt, _ := strconv.Atoi(android.DefaultUpdatableModuleVersion)
+	barExpectedDefaultVersion := fmt.Sprint(defaultVersionInt + 3)
+	barActualDefaultVersion := barManifestRule.Args["default_version"]
+	if barActualDefaultVersion != barExpectedDefaultVersion {
+		t.Errorf("expected to find defaultVersion %q; got %q", barExpectedDefaultVersion, barActualDefaultVersion)
+	}
+}
+
+func TestApexAvailable_ApexAvailableName(t *testing.T) {
+	t.Run("using name of apex that sets apex_available_name is not allowed", func(t *testing.T) {
+		testApexError(t, "Consider adding \"myapex\" to 'apex_available' property of \"AppFoo\"", `
+			apex {
+				name: "myapex_sminus",
+				key: "myapex.key",
+				apps: ["AppFoo"],
+				apex_available_name: "myapex",
+				updatable: false,
+			}
+			apex {
+				name: "myapex",
+				key: "myapex.key",
+				apps: ["AppFoo"],
+				updatable: false,
+			}
+			apex_key {
+				name: "myapex.key",
+				public_key: "testkey.avbpubkey",
+				private_key: "testkey.pem",
+			}
+			android_app {
+				name: "AppFoo",
+				srcs: ["foo/bar/MyClass.java"],
+				sdk_version: "none",
+				system_modules: "none",
+				apex_available: [ "myapex_sminus" ],
+			}`,
+			android.FixtureMergeMockFs(android.MockFS{
+				"system/sepolicy/apex/myapex_sminus-file_contexts": nil,
+			}),
+		)
+	})
+
+	t.Run("apex_available_name allows module to be used in two different apexes", func(t *testing.T) {
+		testApex(t, `
+			apex {
+				name: "myapex_sminus",
+				key: "myapex.key",
+				apps: ["AppFoo"],
+				apex_available_name: "myapex",
+				updatable: false,
+			}
+			apex {
+				name: "myapex",
+				key: "myapex.key",
+				apps: ["AppFoo"],
+				updatable: false,
+			}
+			apex_key {
+				name: "myapex.key",
+				public_key: "testkey.avbpubkey",
+				private_key: "testkey.pem",
+			}
+			android_app {
+				name: "AppFoo",
+				srcs: ["foo/bar/MyClass.java"],
+				sdk_version: "none",
+				system_modules: "none",
+				apex_available: [ "myapex" ],
+			}`,
+			android.FixtureMergeMockFs(android.MockFS{
+				"system/sepolicy/apex/myapex_sminus-file_contexts": nil,
+			}),
+		)
+	})
+
+	t.Run("override_apexes work with apex_available_name", func(t *testing.T) {
+		testApex(t, `
+			override_apex {
+				name: "myoverrideapex_sminus",
+				base: "myapex_sminus",
+				key: "myapex.key",
+				apps: ["AppFooOverride"],
+			}
+			override_apex {
+				name: "myoverrideapex",
+				base: "myapex",
+				key: "myapex.key",
+				apps: ["AppFooOverride"],
+			}
+			apex {
+				name: "myapex_sminus",
+				key: "myapex.key",
+				apps: ["AppFoo"],
+				apex_available_name: "myapex",
+				updatable: false,
+			}
+			apex {
+				name: "myapex",
+				key: "myapex.key",
+				apps: ["AppFoo"],
+				updatable: false,
+			}
+			apex_key {
+				name: "myapex.key",
+				public_key: "testkey.avbpubkey",
+				private_key: "testkey.pem",
+			}
+			android_app {
+				name: "AppFooOverride",
+				srcs: ["foo/bar/MyClass.java"],
+				sdk_version: "none",
+				system_modules: "none",
+				apex_available: [ "myapex" ],
+			}
+			android_app {
+				name: "AppFoo",
+				srcs: ["foo/bar/MyClass.java"],
+				sdk_version: "none",
+				system_modules: "none",
+				apex_available: [ "myapex" ],
+			}`,
+			android.FixtureMergeMockFs(android.MockFS{
+				"system/sepolicy/apex/myapex_sminus-file_contexts": nil,
+			}),
+		)
+	})
+}
+
+func TestApexAvailable_ApexAvailableNameWithOverrides(t *testing.T) {
+	context := android.GroupFixturePreparers(
+		android.PrepareForIntegrationTestWithAndroid,
+		PrepareForTestWithApexBuildComponents,
+		java.PrepareForTestWithDexpreopt,
+		android.FixtureMergeMockFs(android.MockFS{
+			"system/sepolicy/apex/myapex-file_contexts":        nil,
+			"system/sepolicy/apex/myapex_sminus-file_contexts": nil,
+		}),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildId = proptools.StringPtr("buildid")
+		}),
+	)
+	context.RunTestWithBp(t, `
+	override_apex {
+		name: "myoverrideapex_sminus",
+		base: "myapex_sminus",
+	}
+	override_apex {
+		name: "myoverrideapex",
+		base: "myapex",
+	}
+	apex {
+		name: "myapex",
+		key: "myapex.key",
+		apps: ["AppFoo"],
+		updatable: false,
+	}
+	apex {
+		name: "myapex_sminus",
+		apex_available_name: "myapex",
+		key: "myapex.key",
+		apps: ["AppFoo_sminus"],
+		updatable: false,
+	}
+	apex_key {
+		name: "myapex.key",
+		public_key: "testkey.avbpubkey",
+		private_key: "testkey.pem",
+	}
+	android_app {
+		name: "AppFoo",
+		srcs: ["foo/bar/MyClass.java"],
+		sdk_version: "none",
+		system_modules: "none",
+		apex_available: [ "myapex" ],
+	}
+	android_app {
+		name: "AppFoo_sminus",
+		srcs: ["foo/bar/MyClass.java"],
+		sdk_version: "none",
+		min_sdk_version: "29",
+		system_modules: "none",
+		apex_available: [ "myapex" ],
 	}`)
 }
 
@@ -8112,8 +8563,8 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, "", preparer, fragments...)
 	})
 
-	t.Run("updatable jar from ART apex in the framework boot image => error", func(t *testing.T) {
-		err := `module "some-art-lib" from updatable apexes \["com.android.art.debug"\] is not allowed in the framework boot image`
+	t.Run("updatable jar from ART apex in the platform bootclasspath => error", func(t *testing.T) {
+		err := `module "some-art-lib" from updatable apexes \["com.android.art.debug"\] is not allowed in the platform bootclasspath`
 		// Update the dexpreopt BootJars directly.
 		preparer := android.GroupFixturePreparers(
 			prepareSetBootJars("com.android.art.debug:some-art-lib"),
@@ -8136,8 +8587,8 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, err, preparer)
 	})
 
-	t.Run("updatable jar from some other apex in the framework boot image => error", func(t *testing.T) {
-		err := `module "some-updatable-apex-lib" from updatable apexes \["some-updatable-apex"\] is not allowed in the framework boot image`
+	t.Run("updatable jar from some other apex in the platform bootclasspath => error", func(t *testing.T) {
+		err := `module "some-updatable-apex-lib" from updatable apexes \["some-updatable-apex"\] is not allowed in the platform bootclasspath`
 		preparer := android.GroupFixturePreparers(
 			java.FixtureConfigureBootJars("some-updatable-apex:some-updatable-apex-lib"),
 			java.FixtureConfigureApexBootJars("some-non-updatable-apex:some-non-updatable-apex-lib"),
@@ -8145,7 +8596,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, err, preparer)
 	})
 
-	t.Run("non-updatable jar from some other apex in the framework boot image => ok", func(t *testing.T) {
+	t.Run("non-updatable jar from some other apex in the platform bootclasspath => ok", func(t *testing.T) {
 		preparer := java.FixtureConfigureApexBootJars("some-non-updatable-apex:some-non-updatable-apex-lib")
 		fragment := java.ApexVariantReference{
 			Apex:   proptools.StringPtr("some-non-updatable-apex"),
@@ -8160,7 +8611,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, err, preparer)
 	})
 
-	t.Run("nonexistent jar in the framework boot image => error", func(t *testing.T) {
+	t.Run("nonexistent jar in the platform bootclasspath => error", func(t *testing.T) {
 		err := `"platform-bootclasspath" depends on undefined module "nonexistent"`
 		preparer := java.FixtureConfigureBootJars("platform:nonexistent")
 		testNoUpdatableJarsInBootImage(t, err, preparer)
@@ -8173,7 +8624,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, err, preparer)
 	})
 
-	t.Run("platform jar in the framework boot image => ok", func(t *testing.T) {
+	t.Run("platform jar in the platform bootclasspath => ok", func(t *testing.T) {
 		preparer := android.GroupFixturePreparers(
 			java.FixtureConfigureBootJars("platform:some-platform-lib"),
 			java.FixtureConfigureApexBootJars("some-non-updatable-apex:some-non-updatable-apex-lib"),

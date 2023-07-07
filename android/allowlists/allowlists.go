@@ -59,7 +59,9 @@ var (
 
 		"build/bazel":                        Bp2BuildDefaultTrueRecursively,
 		"build/make/target/product/security": Bp2BuildDefaultTrue,
+		"build/make/tools/protos":            Bp2BuildDefaultTrue,
 		"build/make/tools/releasetools":      Bp2BuildDefaultTrue,
+		"build/make/tools/sbom":              Bp2BuildDefaultTrue,
 		"build/make/tools/signapk":           Bp2BuildDefaultTrue,
 		"build/make/tools/zipalign":          Bp2BuildDefaultTrueRecursively,
 		"build/soong":                        Bp2BuildDefaultTrue,
@@ -199,6 +201,7 @@ var (
 		"frameworks/av/media/module/minijail":                Bp2BuildDefaultTrueRecursively,
 		"frameworks/av/services/minijail":                    Bp2BuildDefaultTrueRecursively,
 		"frameworks/base/libs/androidfw":                     Bp2BuildDefaultTrue,
+		"frameworks/base/libs/services":                      Bp2BuildDefaultTrue,
 		"frameworks/base/media/tests/MediaDump":              Bp2BuildDefaultTrue,
 		"frameworks/base/services/tests/servicestests/aidl":  Bp2BuildDefaultTrue,
 		"frameworks/base/proto":                              Bp2BuildDefaultTrue,
@@ -556,6 +559,9 @@ var (
 
 		//external/fec
 		"libfec_rs",
+
+		//frameworks/base/core/java
+		"IDropBoxManagerService_aidl",
 
 		//system/core/libsparse
 		"libsparse",
@@ -1427,6 +1433,9 @@ var (
 		"styleprotoslite",
 		"CtsPkgInstallerConstants",
 		"guava-android-testlib",
+
+		// python_test_host with test data
+		"sbom_writers_test",
 	}
 
 	MixedBuildsDisabledList = []string{
