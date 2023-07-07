@@ -18,14 +18,12 @@ import (
 	"testing"
 
 	"android/soong/android"
-	"android/soong/dexpreopt"
 )
 
 // Contains some simple tests for platform_bootclasspath.
 
 var prepareForTestWithPlatformBootclasspath = android.GroupFixturePreparers(
 	PrepareForTestWithJavaDefaultModules,
-	dexpreopt.PrepareForTestByEnablingDexpreopt,
 )
 
 func TestPlatformBootclasspath(t *testing.T) {
@@ -51,6 +49,7 @@ func TestPlatformBootclasspath(t *testing.T) {
 	var addSourceBootclassPathModule = android.FixtureAddTextFile("source/Android.bp", `
 		java_library {
 			name: "foo",
+			host_supported: true, // verify that b/232106778 is fixed
 			srcs: ["a.java"],
 			system_modules: "none",
 			sdk_version: "none",
