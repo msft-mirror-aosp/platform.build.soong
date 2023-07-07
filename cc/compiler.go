@@ -120,6 +120,9 @@ type BaseCompilerProperties struct {
 	Lex  *LexProperties
 
 	Aidl struct {
+		// List of aidl_library modules
+		Libs []string
+
 		// list of directories that will be added to the aidl include paths.
 		Include_dirs []string
 
@@ -272,6 +275,7 @@ func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 	deps.GeneratedSources = append(deps.GeneratedSources, compiler.Properties.Generated_sources...)
 	deps.GeneratedSources = removeListFromList(deps.GeneratedSources, compiler.Properties.Exclude_generated_sources)
 	deps.GeneratedHeaders = append(deps.GeneratedHeaders, compiler.Properties.Generated_headers...)
+	deps.AidlLibs = append(deps.AidlLibs, compiler.Properties.Aidl.Libs...)
 
 	android.ProtoDeps(ctx, &compiler.Proto)
 	if compiler.hasSrcExt(".proto") {
@@ -295,8 +299,12 @@ func addToModuleList(ctx ModuleContext, key android.OnceKey, module string) {
 	getNamedMapForConfig(ctx.Config(), key).Store(module, true)
 }
 
+func useGnuExtensions(gnuExtensions *bool) bool {
+	return proptools.BoolDefault(gnuExtensions, true)
+}
+
 func maybeReplaceGnuToC(gnuExtensions *bool, cStd string, cppStd string) (string, string) {
-	if gnuExtensions != nil && *gnuExtensions == false {
+	if !useGnuExtensions(gnuExtensions) {
 		cStd = gnuToCReplacer.Replace(cStd)
 		cppStd = gnuToCReplacer.Replace(cppStd)
 	}
@@ -412,11 +420,6 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 
 	if ctx.apexVariationName() != "" {
 		flags.Global.CommonFlags = append(flags.Global.CommonFlags, "-D__ANDROID_APEX__")
-		if ctx.Device() {
-			flags.Global.CommonFlags = append(flags.Global.CommonFlags,
-				fmt.Sprintf("-D__ANDROID_APEX_MIN_SDK_VERSION__=%d",
-					ctx.apexSdkVersion().FinalOrFutureInt()))
-		}
 	}
 
 	if ctx.Target().NativeBridge == android.NativeBridgeEnabled {
@@ -437,12 +440,24 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 	// TODO: debug
 	flags.Local.CFlags = append(flags.Local.CFlags, esc(compiler.Properties.Release.Cflags)...)
 
-	CheckBadCompilerFlags(ctx, "clang_cflags", compiler.Properties.Clang_cflags)
-	CheckBadCompilerFlags(ctx, "clang_asflags", compiler.Properties.Clang_asflags)
+	if !ctx.DeviceConfig().BuildBrokenClangCFlags() && len(compiler.Properties.Clang_cflags) != 0 {
+		ctx.PropertyErrorf("clang_cflags", "property is deprecated, see Changes.md file")
+	} else {
+		CheckBadCompilerFlags(ctx, "clang_cflags", compiler.Properties.Clang_cflags)
+	}
+	if !ctx.DeviceConfig().BuildBrokenClangAsFlags() && len(compiler.Properties.Clang_asflags) != 0 {
+		ctx.PropertyErrorf("clang_asflags", "property is deprecated, see Changes.md file")
+	} else {
+		CheckBadCompilerFlags(ctx, "clang_asflags", compiler.Properties.Clang_asflags)
+	}
 
 	flags.Local.CFlags = config.ClangFilterUnknownCflags(flags.Local.CFlags)
-	flags.Local.CFlags = append(flags.Local.CFlags, esc(compiler.Properties.Clang_cflags)...)
-	flags.Local.AsFlags = append(flags.Local.AsFlags, esc(compiler.Properties.Clang_asflags)...)
+	if !ctx.DeviceConfig().BuildBrokenClangCFlags() {
+		flags.Local.CFlags = append(flags.Local.CFlags, esc(compiler.Properties.Clang_cflags)...)
+	}
+	if !ctx.DeviceConfig().BuildBrokenClangAsFlags() {
+		flags.Local.AsFlags = append(flags.Local.AsFlags, esc(compiler.Properties.Clang_asflags)...)
+	}
 	flags.Local.CppFlags = config.ClangFilterUnknownCflags(flags.Local.CppFlags)
 	flags.Local.ConlyFlags = config.ClangFilterUnknownCflags(flags.Local.ConlyFlags)
 	flags.Local.LdFlags = config.ClangFilterUnknownCflags(flags.Local.LdFlags)
@@ -453,7 +468,8 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		if version == "" || version == "current" {
 			target += strconv.Itoa(android.FutureApiLevelInt)
 		} else {
-			target += version
+			apiLevel := nativeApiLevelOrPanic(ctx, version)
+			target += apiLevel.String()
 		}
 	}
 
@@ -489,11 +505,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		}
 	}
 
-	flags.Global.AsFlags = append(flags.Global.AsFlags, "-D__ASSEMBLY__")
-
-	// TODO(b/235105792): override global -fdebug-default-version=5, it is causing $TMPDIR to
-	// end up in the dwarf data for crtend_so.S.
-	flags.Global.AsFlags = append(flags.Global.AsFlags, "-fdebug-default-version=4")
+	flags.Global.AsFlags = append(flags.Global.AsFlags, "${config.CommonGlobalAsflags}")
 
 	flags.Global.CppFlags = append(flags.Global.CppFlags, tc.Cppflags())
 
@@ -553,7 +565,12 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 			"-I"+android.PathForModuleGen(ctx, "yacc", ctx.ModuleDir()).String())
 	}
 
-	if compiler.hasSrcExt(".aidl") {
+	if len(compiler.Properties.Aidl.Libs) > 0 &&
+		(len(compiler.Properties.Aidl.Include_dirs) > 0 || len(compiler.Properties.Aidl.Local_include_dirs) > 0) {
+		ctx.ModuleErrorf("aidl.libs and (aidl.include_dirs or aidl.local_include_dirs) can't be set at the same time. For aidl headers, please only use aidl.libs prop")
+	}
+
+	if compiler.hasAidl(deps) {
 		flags.aidlFlags = append(flags.aidlFlags, compiler.Properties.Aidl.Flags...)
 		if len(compiler.Properties.Aidl.Local_include_dirs) > 0 {
 			localAidlIncludeDirs := android.PathsForModuleSrc(ctx, compiler.Properties.Aidl.Local_include_dirs)
@@ -564,7 +581,15 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 			flags.aidlFlags = append(flags.aidlFlags, includeDirsToFlags(rootAidlIncludeDirs))
 		}
 
-		if Bool(compiler.Properties.Aidl.Generate_traces) {
+		var rootAidlIncludeDirs android.Paths
+		for _, aidlLibraryInfo := range deps.AidlLibraryInfos {
+			rootAidlIncludeDirs = append(rootAidlIncludeDirs, aidlLibraryInfo.IncludeDirs.ToList()...)
+		}
+		if len(rootAidlIncludeDirs) > 0 {
+			flags.aidlFlags = append(flags.aidlFlags, includeDirsToFlags(rootAidlIncludeDirs))
+		}
+
+		if proptools.BoolDefault(compiler.Properties.Aidl.Generate_traces, true) {
 			flags.aidlFlags = append(flags.aidlFlags, "-t")
 		}
 
@@ -574,8 +599,14 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		}
 		flags.aidlFlags = append(flags.aidlFlags, "--min_sdk_version="+aidlMinSdkVersion)
 
-		flags.Local.CommonFlags = append(flags.Local.CommonFlags,
-			"-I"+android.PathForModuleGen(ctx, "aidl").String())
+		if compiler.hasSrcExt(".aidl") {
+			flags.Local.CommonFlags = append(flags.Local.CommonFlags,
+				"-I"+android.PathForModuleGen(ctx, "aidl").String())
+		}
+		if len(deps.AidlLibraryInfos) > 0 {
+			flags.Local.CommonFlags = append(flags.Local.CommonFlags,
+				"-I"+android.PathForModuleGen(ctx, "aidl_library").String())
+		}
 	}
 
 	if compiler.hasSrcExt(".rscript") || compiler.hasSrcExt(".fs") {
@@ -593,10 +624,9 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 			addToModuleList(ctx, modulesUsingWnoErrorKey, module)
 		} else if !inList("-Werror", flags.Local.CFlags) && !inList("-Werror", flags.Local.CppFlags) {
 			if warningsAreAllowed(ctx.ModuleDir()) {
-				addToModuleList(ctx, modulesAddedWallKey, module)
-				flags.Local.CFlags = append([]string{"-Wall"}, flags.Local.CFlags...)
+				addToModuleList(ctx, modulesWarningsAllowedKey, module)
 			} else {
-				flags.Local.CFlags = append([]string{"-Wall", "-Werror"}, flags.Local.CFlags...)
+				flags.Local.CFlags = append([]string{"-Werror"}, flags.Local.CFlags...)
 			}
 		}
 	}
@@ -653,6 +683,10 @@ func ndkPathDeps(ctx ModuleContext) android.Paths {
 	return nil
 }
 
+func (compiler *baseCompiler) hasAidl(deps PathDeps) bool {
+	return len(deps.AidlLibraryInfos) > 0 || compiler.hasSrcExt(".aidl")
+}
+
 func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathDeps) Objects {
 	pathDeps := deps.GeneratedDeps
 	pathDeps = append(pathDeps, ndkPathDeps(ctx)...)
@@ -661,7 +695,7 @@ func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathD
 
 	srcs := append(android.Paths(nil), compiler.srcsBeforeGen...)
 
-	srcs, genDeps, info := genSources(ctx, srcs, buildFlags)
+	srcs, genDeps, info := genSources(ctx, deps.AidlLibraryInfos, srcs, buildFlags)
 	pathDeps = append(pathDeps, genDeps...)
 
 	compiler.pathDeps = pathDeps
