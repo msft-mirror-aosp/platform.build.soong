@@ -34,41 +34,6 @@ import (
 // Environment variables that affect the generated snapshot
 // ========================================================
 //
-// SOONG_SDK_SNAPSHOT_PREFER
-//     By default every module in the generated snapshot has prefer: false. Building it
-//     with SOONG_SDK_SNAPSHOT_PREFER=true will force them to use prefer: true.
-//
-// SOONG_SDK_SNAPSHOT_USE_SOURCE_CONFIG_VAR
-//     If set this specifies the Soong config var that can be used to control whether the prebuilt
-//     modules from the generated snapshot or the original source modules. Values must be a colon
-//     separated pair of strings, the first of which is the Soong config namespace, and the second
-//     is the name of the variable within that namespace.
-//
-//     The config namespace and var name are used to set the `use_source_config_var` property. That
-//     in turn will cause the generated prebuilts to use the soong config variable to select whether
-//     source or the prebuilt is used.
-//     e.g. If an sdk snapshot is built using:
-//       m SOONG_SDK_SNAPSHOT_USE_SOURCE_CONFIG_VAR=acme:build_from_source sdkextensions-sdk
-//     Then the resulting snapshot will include:
-//       use_source_config_var: {
-//         config_namespace: "acme",
-//         var_name: "build_from_source",
-//       }
-//
-//     Assuming that the config variable is defined in .mk using something like:
-//       $(call add_soong_config_namespace,acme)
-//       $(call add_soong_config_var_value,acme,build_from_source,true)
-//
-//     Then when the snapshot is unpacked in the repository it will have the following behavior:
-//       m droid - will use the sdkextensions-sdk prebuilts if present. Otherwise, it will use the
-//           sources.
-//       m SOONG_CONFIG_acme_build_from_source=true droid - will use the sdkextensions-sdk
-//            sources, if present. Otherwise, it will use the prebuilts.
-//
-//     This is a temporary mechanism to control the prefer flags and will be removed once a more
-//     maintainable solution has been implemented.
-//     TODO(b/174997203): Remove when no longer necessary.
-//
 // SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE
 //     This allows the target build release (i.e. the release version of the build within which
 //     the snapshot will be used) of the snapshot to be specified. If unspecified then it defaults
@@ -206,16 +171,19 @@ func (s *sdk) collectMembers(ctx android.ModuleContext) {
 				exportedComponentsInfo = ctx.OtherModuleProvider(child, android.ExportedComponentsInfoProvider).(android.ExportedComponentsInfo)
 			}
 
-			var container android.SdkAware
+			var container android.Module
 			if parent != ctx.Module() {
-				container = parent.(android.SdkAware)
+				container = parent.(android.Module)
 			}
+
+			minApiLevel := android.MinApiLevelForSdkSnapshot(ctx, child)
 
 			export := memberTag.ExportMember()
 			s.memberVariantDeps = append(s.memberVariantDeps, sdkMemberVariantDep{
 				sdkVariant:             s,
 				memberType:             memberType,
-				variant:                child.(android.SdkAware),
+				variant:                child.(android.Module),
+				minApiLevel:            minApiLevel,
 				container:              container,
 				export:                 export,
 				exportedComponentsInfo: exportedComponentsInfo,
@@ -301,7 +269,7 @@ func isMemberTypeSupportedByTargetBuildRelease(memberType android.SdkMemberType,
 	return supportedByTargetBuildRelease
 }
 
-func appendUniqueVariants(variants []android.SdkAware, newVariant android.SdkAware) []android.SdkAware {
+func appendUniqueVariants(variants []android.Module, newVariant android.Module) []android.Module {
 	for _, v := range variants {
 		if v == newVariant {
 			return variants
@@ -332,9 +300,27 @@ const BUILD_NUMBER_FILE = "snapshot-creation-build-number.txt"
 //         <arch>/lib/
 //            libFoo.so   : a stub library
 
+func (s sdk) targetBuildRelease(ctx android.ModuleContext) *buildRelease {
+	config := ctx.Config()
+	targetBuildReleaseEnv := config.GetenvWithDefault("SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE", buildReleaseCurrent.name)
+	targetBuildRelease, err := nameToRelease(targetBuildReleaseEnv)
+	if err != nil {
+		ctx.ModuleErrorf("invalid SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE: %s", err)
+		targetBuildRelease = buildReleaseCurrent
+	}
+
+	return targetBuildRelease
+}
+
 // buildSnapshot is the main function in this source file. It creates rules to copy
 // the contents (header files, stub libraries, etc) into the zip file.
 func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) {
+
+	targetBuildRelease := s.targetBuildRelease(ctx)
+	targetApiLevel, err := android.ApiLevelFromUser(ctx, targetBuildRelease.name)
+	if err != nil {
+		targetApiLevel = android.FutureApiLevel
+	}
 
 	// Aggregate all the sdkMemberVariantDep instances from all the sdk variants.
 	hasLicenses := false
@@ -346,12 +332,18 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) {
 	// Filter out any sdkMemberVariantDep that is a component of another.
 	memberVariantDeps = filterOutComponents(ctx, memberVariantDeps)
 
-	// Record the names of all the members, both explicitly specified and implicitly
-	// included.
+	// Record the names of all the members, both explicitly specified and implicitly included. Also,
+	// record the names of any members that should be excluded from this snapshot.
 	allMembersByName := make(map[string]struct{})
 	exportedMembersByName := make(map[string]struct{})
+	excludedMembersByName := make(map[string]struct{})
 
-	addMember := func(name string, export bool) {
+	addMember := func(name string, export bool, exclude bool) {
+		if exclude {
+			excludedMembersByName[name] = struct{}{}
+			return
+		}
+
 		allMembersByName[name] = struct{}{}
 		if export {
 			exportedMembersByName[name] = struct{}{}
@@ -362,11 +354,21 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) {
 		name := memberVariantDep.variant.Name()
 		export := memberVariantDep.export
 
-		addMember(name, export)
+		// If the minApiLevel of the member is greater than the target API level then exclude it from
+		// this snapshot.
+		exclude := memberVariantDep.minApiLevel.GreaterThan(targetApiLevel)
+		// Always include host variants (e.g. host tools) in the snapshot.
+		// Host variants should not be guarded by a min_sdk_version check. In fact, host variants
+		// do not have a `min_sdk_version`.
+		if memberVariantDep.Host() {
+			exclude = false
+		}
+
+		addMember(name, export, exclude)
 
 		// Add any components provided by the module.
 		for _, component := range memberVariantDep.exportedComponentsInfo.Components {
-			addMember(component, export)
+			addMember(component, export, exclude)
 		}
 
 		if memberVariantDep.memberType == android.LicenseModuleSdkMemberType {
@@ -382,17 +384,8 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) {
 		modules: make(map[string]*bpModule),
 	}
 
-	config := ctx.Config()
-
 	// Always add -current to the end
 	snapshotFileSuffix := "-current"
-
-	targetBuildReleaseEnv := config.GetenvWithDefault("SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE", buildReleaseCurrent.name)
-	targetBuildRelease, err := nameToRelease(targetBuildReleaseEnv)
-	if err != nil {
-		ctx.ModuleErrorf("invalid SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE: %s", err)
-		targetBuildRelease = buildReleaseCurrent
-	}
 
 	builder := &snapshotBuilder{
 		ctx:                   ctx,
@@ -404,6 +397,7 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) {
 		prebuiltModules:       make(map[string]*bpModule),
 		allMembersByName:      allMembersByName,
 		exportedMembersByName: exportedMembersByName,
+		excludedMembersByName: excludedMembersByName,
 		targetBuildRelease:    targetBuildRelease,
 	}
 	s.builderForTests = builder
@@ -437,6 +431,10 @@ be unnecessary as every module in the sdk already has its own licenses property.
 		}
 
 		name := member.name
+		if _, ok := excludedMembersByName[name]; ok {
+			continue
+		}
+
 		requiredTraits := traits[name]
 		if requiredTraits == nil {
 			requiredTraits = android.EmptySdkMemberTraitSet()
@@ -457,11 +455,14 @@ be unnecessary as every module in the sdk already has its own licenses property.
 
 	for _, module := range builder.prebuiltOrder {
 		// Prune any empty property sets.
-		module = module.transform(pruneEmptySetTransformer{})
+		module = transformModule(module, pruneEmptySetTransformer{})
 
 		// Transform the module module to make it suitable for use in the snapshot.
-		module.transform(snapshotTransformer)
-		bpFile.AddModule(module)
+		module = transformModule(module, snapshotTransformer)
+		module = transformModule(module, emptyClasspathContentsTransformation{})
+		if module != nil {
+			bpFile.AddModule(module)
+		}
 	}
 
 	// generate Android.bp
@@ -573,7 +574,7 @@ func (m *moduleInfo) MarshalJSON() ([]byte, error) {
 	if m.deps != nil {
 		writeObjectPair("@deps", m.deps)
 	}
-	for _, k := range android.SortedStringKeys(m.memberSpecific) {
+	for _, k := range android.SortedKeys(m.memberSpecific) {
 		v := m.memberSpecific[k]
 		writeObjectPair(k, v)
 	}
@@ -634,7 +635,7 @@ func (s *sdk) generateInfoData(ctx android.ModuleContext, memberVariantDeps []sd
 		getModuleInfo(memberVariantDep.variant)
 	}
 
-	for _, memberName := range android.SortedStringKeys(name2Info) {
+	for _, memberName := range android.SortedKeys(name2Info) {
 		info := name2Info[memberName]
 		modules = append(modules, info)
 	}
@@ -837,9 +838,11 @@ type snapshotTransformation struct {
 }
 
 func (t snapshotTransformation) transformModule(module *bpModule) *bpModule {
-	// If the module is an internal member then use a unique name for it.
-	name := module.Name()
-	module.setProperty("name", t.builder.snapshotSdkMemberName(name, true))
+	if module != nil {
+		// If the module is an internal member then use a unique name for it.
+		name := module.Name()
+		module.setProperty("name", t.builder.snapshotSdkMemberName(name, true))
+	}
 	return module
 }
 
@@ -850,6 +853,25 @@ func (t snapshotTransformation) transformProperty(_ string, value interface{}, t
 	} else {
 		return value, tag
 	}
+}
+
+type emptyClasspathContentsTransformation struct {
+	identityTransformation
+}
+
+func (t emptyClasspathContentsTransformation) transformModule(module *bpModule) *bpModule {
+	classpathModuleTypes := []string{
+		"prebuilt_bootclasspath_fragment",
+		"prebuilt_systemserverclasspath_fragment",
+	}
+	if module != nil && android.InList(module.moduleType, classpathModuleTypes) {
+		if contents, ok := module.bpPropertySet.properties["contents"].([]string); ok {
+			if len(contents) == 0 {
+				return nil
+			}
+		}
+	}
+	return module
 }
 
 type pruneEmptySetTransformer struct {
@@ -1033,6 +1055,9 @@ type snapshotBuilder struct {
 
 	// The set of exported members by name.
 	exportedMembersByName map[string]struct{}
+
+	// The set of members which have been excluded from this snapshot; by name.
+	excludedMembersByName map[string]struct{}
 
 	// The target build release for which the snapshot is to be generated.
 	targetBuildRelease *buildRelease
@@ -1218,6 +1243,9 @@ func (s *snapshotBuilder) snapshotSdkMemberName(name string, required bool) stri
 func (s *snapshotBuilder) snapshotSdkMemberNames(members []string, required bool) []string {
 	var references []string = nil
 	for _, m := range members {
+		if _, ok := s.excludedMembersByName[m]; ok {
+			continue
+		}
 		references = append(references, s.snapshotSdkMemberName(m, required))
 	}
 	return references
@@ -1248,18 +1276,26 @@ type sdkMemberVariantDep struct {
 	memberType android.SdkMemberType
 
 	// The variant that is added to the sdk.
-	variant android.SdkAware
+	variant android.Module
 
 	// The optional container of this member, i.e. the module that is depended upon by the sdk
 	// (possibly transitively) and whose dependency on this module is why it was added to the sdk.
 	// Is nil if this a direct dependency of the sdk.
-	container android.SdkAware
+	container android.Module
 
 	// True if the member should be exported, i.e. accessible, from outside the sdk.
 	export bool
 
 	// The names of additional component modules provided by the variant.
 	exportedComponentsInfo android.ExportedComponentsInfo
+
+	// The minimum API level on which this module is supported.
+	minApiLevel android.ApiLevel
+}
+
+// Host returns true if the sdk member is a host variant (e.g. host tool)
+func (s *sdkMemberVariantDep) Host() bool {
+	return s.variant.Target().Os.Class == android.Host
 }
 
 var _ android.SdkMember = (*sdkMember)(nil)
@@ -1269,14 +1305,14 @@ var _ android.SdkMember = (*sdkMember)(nil)
 type sdkMember struct {
 	memberType android.SdkMemberType
 	name       string
-	variants   []android.SdkAware
+	variants   []android.Module
 }
 
 func (m *sdkMember) Name() string {
 	return m.name
 }
 
-func (m *sdkMember) Variants() []android.SdkAware {
+func (m *sdkMember) Variants() []android.Module {
 	return m.variants
 }
 
@@ -1361,24 +1397,24 @@ func getVariantCoordinate(ctx *memberContext, variant android.Module) variantCoo
 // by apex variant, where one is the default/platform variant and one is the APEX variant. In that
 // case it picks the APEX variant. It picks the APEX variant because that is the behavior that would
 // be expected
-func selectApexVariantsWhereAvailable(ctx *memberContext, variants []android.SdkAware) []android.SdkAware {
+func selectApexVariantsWhereAvailable(ctx *memberContext, variants []android.Module) []android.Module {
 	moduleCtx := ctx.sdkMemberContext
 
 	// Group the variants by coordinates.
-	variantsByCoord := make(map[variantCoordinate][]android.SdkAware)
+	variantsByCoord := make(map[variantCoordinate][]android.Module)
 	for _, variant := range variants {
 		coord := getVariantCoordinate(ctx, variant)
 		variantsByCoord[coord] = append(variantsByCoord[coord], variant)
 	}
 
-	toDiscard := make(map[android.SdkAware]struct{})
+	toDiscard := make(map[android.Module]struct{})
 	for coord, list := range variantsByCoord {
 		count := len(list)
 		if count == 1 {
 			continue
 		}
 
-		variantsByApex := make(map[string]android.SdkAware)
+		variantsByApex := make(map[string]android.Module)
 		conflictDetected := false
 		for _, variant := range list {
 			apexInfo := moduleCtx.OtherModuleProvider(variant, android.ApexInfoProvider).(android.ApexInfo)
@@ -1420,7 +1456,7 @@ func selectApexVariantsWhereAvailable(ctx *memberContext, variants []android.Sdk
 	// If there are any variants to discard then remove them from the list of variants, while
 	// preserving the order.
 	if len(toDiscard) > 0 {
-		filtered := []android.SdkAware{}
+		filtered := []android.Module{}
 		for _, variant := range variants {
 			if _, ok := toDiscard[variant]; !ok {
 				filtered = append(filtered, variant)
@@ -1707,7 +1743,7 @@ func newArchSpecificInfo(ctx android.SdkMemberContext, archId archId, osType and
 		}
 
 		// Create the image variant info in a fixed order.
-		for _, imageVariantName := range android.SortedStringKeys(variantsByImage) {
+		for _, imageVariantName := range android.SortedKeys(variantsByImage) {
 			variants := variantsByImage[imageVariantName]
 			archInfo.imageVariantInfos = append(archInfo.imageVariantInfos, newImageVariantSpecificInfo(ctx, imageVariantName, variantPropertiesFactory, variants))
 		}
@@ -1983,29 +2019,12 @@ func (s *sdk) createMemberSnapshot(ctx *memberContext, member *sdkMember, bpModu
 
 	// Do not add the prefer property if the member snapshot module is a source module type.
 	moduleCtx := ctx.sdkMemberContext
-	config := moduleCtx.Config()
 	if !memberType.UsesSourceModuleTypeInSnapshot() {
-		// Set the prefer based on the environment variable. This is a temporary work around to allow a
-		// snapshot to be created that sets prefer: true.
-		// TODO(b/174997203): Remove once the ability to select the modules to prefer can be done
-		//  dynamically at build time not at snapshot generation time.
-		prefer := config.IsEnvTrue("SOONG_SDK_SNAPSHOT_PREFER")
-
 		// Set prefer. Setting this to false is not strictly required as that is the default but it does
 		// provide a convenient hook to post-process the generated Android.bp file, e.g. in tests to
 		// check the behavior when a prebuilt is preferred. It also makes it explicit what the default
 		// behavior is for the module.
-		bpModule.insertAfter("name", "prefer", prefer)
-
-		configVar := config.Getenv("SOONG_SDK_SNAPSHOT_USE_SOURCE_CONFIG_VAR")
-		if configVar != "" {
-			parts := strings.Split(configVar, ":")
-			cfp := android.ConfigVarProperties{
-				Config_namespace: proptools.StringPtr(parts[0]),
-				Var_name:         proptools.StringPtr(parts[1]),
-			}
-			bpModule.insertAfter("prefer", "use_source_config_var", cfp)
-		}
+		bpModule.insertAfter("name", "prefer", false)
 	}
 
 	variants := selectApexVariantsWhereAvailable(ctx, member.variants)
@@ -2136,6 +2155,11 @@ type extractorProperty struct {
 	// Retrieves the value on which common value optimization will be performed.
 	getter fieldAccessorFunc
 
+	// True if the field should never be cleared.
+	//
+	// This is set to true if and only if the field is annotated with `sdk:"keep"`.
+	keep bool
+
 	// The empty value for the field.
 	emptyValue reflect.Value
 
@@ -2181,8 +2205,8 @@ func (e *commonValueExtractor) gatherFields(structType reflect.Type, containingS
 			continue
 		}
 
-		// Ignore fields whose value should be kept.
-		if proptools.HasTag(field, "sdk", "keep") {
+		// Ignore fields tagged with sdk:"ignore".
+		if proptools.HasTag(field, "sdk", "ignore") {
 			continue
 		}
 
@@ -2199,6 +2223,8 @@ func (e *commonValueExtractor) gatherFields(structType reflect.Type, containingS
 				return true
 			}
 		}
+
+		keep := proptools.HasTag(field, "sdk", "keep")
 
 		// Save a copy of the field index for use in the function.
 		fieldIndex := f
@@ -2239,6 +2265,7 @@ func (e *commonValueExtractor) gatherFields(structType reflect.Type, containingS
 				name,
 				filter,
 				fieldGetter,
+				keep,
 				reflect.Zero(field.Type),
 				proptools.HasTag(field, "android", "arch_variant"),
 			}
@@ -2358,11 +2385,13 @@ func (e *commonValueExtractor) extractCommonProperties(commonProperties interfac
 		if commonValue != nil {
 			emptyValue := property.emptyValue
 			fieldGetter(commonStructValue).Set(*commonValue)
-			for i := 0; i < sliceValue.Len(); i++ {
-				container := sliceValue.Index(i).Interface().(propertiesContainer)
-				itemValue := reflect.ValueOf(container.optimizableProperties())
-				fieldValue := fieldGetter(itemValue)
-				fieldValue.Set(emptyValue)
+			if !property.keep {
+				for i := 0; i < sliceValue.Len(); i++ {
+					container := sliceValue.Index(i).Interface().(propertiesContainer)
+					itemValue := reflect.ValueOf(container.optimizableProperties())
+					fieldValue := fieldGetter(itemValue)
+					fieldValue.Set(emptyValue)
+				}
 			}
 		}
 
