@@ -19,12 +19,14 @@ import (
 	"testing"
 
 	"android/soong/android"
+	"android/soong/dexpreopt"
 	"android/soong/java"
 )
 
 var prepareForSdkTestWithJava = android.GroupFixturePreparers(
 	java.PrepareForTestWithJavaBuildComponents,
 	PrepareForTestWithSdkBuildComponents,
+	dexpreopt.PrepareForTestWithFakeDex2oatd,
 
 	// Ensure that all source paths are provided. This helps ensure that the snapshot generation is
 	// consistent and all files referenced from the snapshot's Android.bp file have actually been
@@ -33,7 +35,8 @@ var prepareForSdkTestWithJava = android.GroupFixturePreparers(
 
 	// Files needs by most of the tests.
 	android.MockFS{
-		"Test.java": nil,
+		"Test.java":   nil,
+		"art-profile": nil,
 	}.AddToFixture(),
 )
 
@@ -349,6 +352,73 @@ java_import {
 		runTest(t, "Tiramisu", "java_boot_libs/snapshot/jars/are/invalid/updatable-media.jar", `
 .intermediates/mysdk/common_os/empty -> java_boot_libs/snapshot/jars/are/invalid/updatable-media.jar
 `)
+	})
+}
+
+func TestSnapshotWithJavaLibrary_MinSdkVersion(t *testing.T) {
+	runTest := func(t *testing.T, targetBuildRelease, minSdkVersion, expectedMinSdkVersion string) {
+		result := android.GroupFixturePreparers(
+			prepareForSdkTestWithJava,
+			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+				variables.Platform_version_active_codenames = []string{"S", "Tiramisu", "Unfinalized"}
+			}),
+			android.FixtureMergeEnv(map[string]string{
+				"SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE": targetBuildRelease,
+			}),
+		).RunTestWithBp(t, fmt.Sprintf(`
+		sdk {
+			name: "mysdk",
+			java_header_libs: ["mylib"],
+		}
+
+		java_library {
+			name: "mylib",
+			srcs: ["Test.java"],
+			system_modules: "none",
+			sdk_version: "none",
+			compile_dex: true,
+			min_sdk_version: "%s",
+		}
+	`, minSdkVersion))
+
+		expectedMinSdkVersionLine := ""
+		if expectedMinSdkVersion != "" {
+			expectedMinSdkVersionLine = fmt.Sprintf("    min_sdk_version: %q,\n", expectedMinSdkVersion)
+		}
+
+		CheckSnapshot(t, result, "mysdk", "",
+			checkAndroidBpContents(fmt.Sprintf(`
+// This is auto-generated. DO NOT EDIT.
+
+java_import {
+    name: "mylib",
+    prefer: false,
+    visibility: ["//visibility:public"],
+    apex_available: ["//apex_available:platform"],
+    jars: ["java/mylib.jar"],
+%s}
+`, expectedMinSdkVersionLine)),
+		)
+	}
+
+	t.Run("min_sdk_version=S in S", func(t *testing.T) {
+		// min_sdk_version was not added to java_import until Tiramisu.
+		runTest(t, "S", "S", "")
+	})
+
+	t.Run("min_sdk_version=S in Tiramisu", func(t *testing.T) {
+		// The canonical form of S is 31.
+		runTest(t, "Tiramisu", "S", "31")
+	})
+
+	t.Run("min_sdk_version=24 in Tiramisu", func(t *testing.T) {
+		// A numerical min_sdk_version is already in canonical form.
+		runTest(t, "Tiramisu", "24", "24")
+	})
+
+	t.Run("min_sdk_version=Unfinalized in latest", func(t *testing.T) {
+		// An unfinalized min_sdk_version has no numeric value yet.
+		runTest(t, "", "Unfinalized", "Unfinalized")
 	})
 }
 

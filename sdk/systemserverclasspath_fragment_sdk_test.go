@@ -62,6 +62,9 @@ func testSnapshotWithSystemServerClasspathFragment(t *testing.T, sdk string, tar
 				min_sdk_version: "2",
 				compile_dex: true,
 				permitted_packages: ["mylib"],
+				dex_preopt: {
+					profile: "art-profile",
+				},
 			}
 
 			java_sdk_library {
@@ -71,6 +74,9 @@ func testSnapshotWithSystemServerClasspathFragment(t *testing.T, sdk string, tar
 				shared_library: false,
 				public: {enabled: true},
 				min_sdk_version: "2",
+				dex_preopt: {
+					profile: "art-profile",
+				},
 			}
 		`),
 	).RunTest(t)
@@ -78,6 +84,51 @@ func testSnapshotWithSystemServerClasspathFragment(t *testing.T, sdk string, tar
 	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(expectedSdkSnapshot),
 	)
+}
+
+func TestSnapshotWithEmptySystemServerClasspathFragment(t *testing.T) {
+	commonSdk := `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			min_sdk_version: "Tiramisu",
+			systemserverclasspath_fragments: ["mysystemserverclasspathfragment"],
+		}
+		systemserverclasspath_fragment {
+			name: "mysystemserverclasspathfragment",
+			apex_available: ["myapex"],
+			contents: ["mysdklibrary"],
+		}
+		java_sdk_library {
+			name: "mysdklibrary",
+			apex_available: ["myapex"],
+			srcs: ["Test.java"],
+			min_sdk_version: "34", // UpsideDownCake
+		}
+		sdk {
+			name: "mysdk",
+			apexes: ["myapex"],
+		}
+	`
+
+	result := android.GroupFixturePreparers(
+		prepareForSdkTestWithJava,
+		java.PrepareForTestWithJavaDefaultModules,
+		java.PrepareForTestWithJavaSdkLibraryFiles,
+		java.FixtureWithLastReleaseApis("mysdklibrary"),
+		dexpreopt.FixtureSetApexSystemServerJars("myapex:mysdklibrary"),
+		android.FixtureModifyEnv(func(env map[string]string) {
+			// targeting Tiramisu here means that we won't export mysdklibrary
+			env["SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE"] = "Tiramisu"
+		}),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.Platform_version_active_codenames = []string{"UpsideDownCake"}
+		}),
+		prepareForSdkTestWithApex,
+		android.FixtureWithRootAndroidBp(commonSdk),
+	).RunTest(t)
+
+	CheckSnapshot(t, result, "mysdk", "", checkAndroidBpContents(`// This is auto-generated. DO NOT EDIT.`))
 }
 
 func TestSnapshotWithSystemServerClasspathFragment(t *testing.T) {
@@ -105,6 +156,9 @@ java_sdk_library_import {
     visibility: ["//visibility:public"],
     apex_available: ["myapex"],
     shared_library: false,
+    dex_preopt: {
+        profile_guided: true,
+    },
     public: {
         jars: ["sdk_library/public/mysdklibrary-stubs.jar"],
         stub_srcs: ["sdk_library/public/mysdklibrary_stub_sources"],
@@ -120,7 +174,11 @@ java_import {
     visibility: ["//visibility:public"],
     apex_available: ["myapex"],
     jars: ["java_systemserver_libs/snapshot/jars/are/invalid/mylib.jar"],
+    min_sdk_version: "2",
     permitted_packages: ["mylib"],
+    dex_preopt: {
+        profile_guided: true,
+    },
 }
 
 prebuilt_systemserverclasspath_fragment {
@@ -181,7 +239,56 @@ java_import {
     visibility: ["//visibility:public"],
     apex_available: ["myapex"],
     jars: ["java_systemserver_libs/snapshot/jars/are/invalid/mylib.jar"],
+    min_sdk_version: "2",
     permitted_packages: ["mylib"],
+}
+
+prebuilt_systemserverclasspath_fragment {
+    name: "mysystemserverclasspathfragment",
+    prefer: false,
+    visibility: ["//visibility:public"],
+    apex_available: ["myapex"],
+    contents: [
+        "mylib",
+        "mysdklibrary",
+    ],
+}
+`)
+	})
+
+	t.Run("target-u", func(t *testing.T) {
+		testSnapshotWithSystemServerClasspathFragment(t, commonSdk, "UpsideDownCake", `
+// This is auto-generated. DO NOT EDIT.
+
+java_sdk_library_import {
+    name: "mysdklibrary",
+    prefer: false,
+    visibility: ["//visibility:public"],
+    apex_available: ["myapex"],
+    shared_library: false,
+    dex_preopt: {
+        profile_guided: true,
+    },
+    public: {
+        jars: ["sdk_library/public/mysdklibrary-stubs.jar"],
+        stub_srcs: ["sdk_library/public/mysdklibrary_stub_sources"],
+        current_api: "sdk_library/public/mysdklibrary.txt",
+        removed_api: "sdk_library/public/mysdklibrary-removed.txt",
+        sdk_version: "current",
+    },
+}
+
+java_import {
+    name: "mylib",
+    prefer: false,
+    visibility: ["//visibility:public"],
+    apex_available: ["myapex"],
+    jars: ["java_systemserver_libs/snapshot/jars/are/invalid/mylib.jar"],
+    min_sdk_version: "2",
+    permitted_packages: ["mylib"],
+    dex_preopt: {
+        profile_guided: true,
+    },
 }
 
 prebuilt_systemserverclasspath_fragment {
