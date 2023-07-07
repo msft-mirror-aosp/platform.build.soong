@@ -120,6 +120,7 @@ func TestJavaSdkLibrary(t *testing.T) {
 	result.ModuleForTests(apiScopePublic.stubsSourceModuleName("foo"), "android_common")
 	result.ModuleForTests(apiScopeSystem.stubsSourceModuleName("foo"), "android_common")
 	result.ModuleForTests(apiScopeTest.stubsSourceModuleName("foo"), "android_common")
+	result.ModuleForTests(apiScopePublic.stubsSourceModuleName("foo")+".api.contribution", "")
 	result.ModuleForTests("foo"+sdkXmlFileSuffix, "android_common")
 	result.ModuleForTests("foo.api.public.28", "")
 	result.ModuleForTests("foo.api.system.28", "")
@@ -1384,4 +1385,30 @@ func TestSdkLibrary_CheckMinSdkVersion(t *testing.T) {
 				min_sdk_version: "31",
 			}
 		`)
+}
+
+func TestJavaSdkLibrary_StubOnlyLibs_PassedToDroidstubs(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		PrepareForTestWithJavaSdkLibraryFiles,
+		FixtureWithLastReleaseApis("foo"),
+	).RunTestWithBp(t, `
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java"],
+			public: {
+				enabled: true,
+			},
+			stub_only_libs: ["bar-lib"],
+		}
+
+		java_library {
+			name: "bar-lib",
+			srcs: ["b.java"],
+		}
+		`)
+
+	// The foo.stubs.source should depend on bar-lib
+	fooStubsSources := result.ModuleForTests("foo.stubs.source", "android_common").Module().(*Droidstubs)
+	android.AssertStringListContains(t, "foo stubs should depend on bar-lib", fooStubsSources.Javadoc.properties.Libs, "bar-lib")
 }
