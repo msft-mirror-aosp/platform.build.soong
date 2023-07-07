@@ -16,7 +16,6 @@ package android
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -39,6 +38,7 @@ type PathContext interface {
 }
 
 type PathGlobContext interface {
+	PathContext
 	GlobWithDeps(globPattern string, excludes []string) ([]string, error)
 }
 
@@ -56,7 +56,6 @@ func (ctx NullPathContext) Config() Config         { return ctx.config }
 // EarlyModulePathContext is a subset of EarlyModuleContext methods required by the
 // Path methods. These path methods can be called before any mutators have run.
 type EarlyModulePathContext interface {
-	PathContext
 	PathGlobContext
 
 	ModuleDir() string
@@ -375,7 +374,7 @@ func PathsForSource(ctx PathContext, paths []string) Paths {
 // ExistentPathsForSources returns a list of Paths rooted from SrcDir, *not* rooted from the
 // module's local source directory, that are found in the tree. If any are not found, they are
 // omitted from the list, and dependencies are added so that we're re-run when they are added.
-func ExistentPathsForSources(ctx PathContext, paths []string) Paths {
+func ExistentPathsForSources(ctx PathGlobContext, paths []string) Paths {
 	ret := make(Paths, 0, len(paths))
 	for _, path := range paths {
 		p := ExistentPathForSource(ctx, path)
@@ -1033,9 +1032,6 @@ func (p basePath) withRel(rel string) basePath {
 // SourcePath is a Path representing a file path rooted from SrcDir
 type SourcePath struct {
 	basePath
-
-	// The sources root, i.e. Config.SrcDir()
-	srcDir string
 }
 
 func (p SourcePath) RelativeToTop() Path {
@@ -1054,13 +1050,14 @@ func (p SourcePath) withRel(rel string) SourcePath {
 // code that is embedding ninja variables in paths
 func safePathForSource(ctx PathContext, pathComponents ...string) (SourcePath, error) {
 	p, err := validateSafePath(pathComponents...)
-	ret := SourcePath{basePath{p, ""}, "."}
+	ret := SourcePath{basePath{p, ""}}
 	if err != nil {
 		return ret, err
 	}
 
 	// absolute path already checked by validateSafePath
-	if strings.HasPrefix(ret.String(), ctx.Config().soongOutDir) {
+	// special-case api surface gen files for now
+	if strings.HasPrefix(ret.String(), ctx.Config().soongOutDir) && !strings.Contains(ret.String(), ctx.Config().soongOutDir+"/.export") {
 		return ret, fmt.Errorf("source path %q is in output", ret.String())
 	}
 
@@ -1070,13 +1067,14 @@ func safePathForSource(ctx PathContext, pathComponents ...string) (SourcePath, e
 // pathForSource creates a SourcePath from pathComponents, but does not check that it exists.
 func pathForSource(ctx PathContext, pathComponents ...string) (SourcePath, error) {
 	p, err := validatePath(pathComponents...)
-	ret := SourcePath{basePath{p, ""}, "."}
+	ret := SourcePath{basePath{p, ""}}
 	if err != nil {
 		return ret, err
 	}
 
 	// absolute path already checked by validatePath
-	if strings.HasPrefix(ret.String(), ctx.Config().soongOutDir) {
+	// special-case for now
+	if strings.HasPrefix(ret.String(), ctx.Config().soongOutDir) && !strings.Contains(ret.String(), ctx.Config().soongOutDir+"/.export") {
 		return ret, fmt.Errorf("source path %q is in output", ret.String())
 	}
 
@@ -1085,21 +1083,12 @@ func pathForSource(ctx PathContext, pathComponents ...string) (SourcePath, error
 
 // existsWithDependencies returns true if the path exists, and adds appropriate dependencies to rerun if the
 // path does not exist.
-func existsWithDependencies(ctx PathContext, path SourcePath) (exists bool, err error) {
+func existsWithDependencies(ctx PathGlobContext, path SourcePath) (exists bool, err error) {
 	var files []string
 
-	if gctx, ok := ctx.(PathGlobContext); ok {
-		// Use glob to produce proper dependencies, even though we only want
-		// a single file.
-		files, err = gctx.GlobWithDeps(path.String(), nil)
-	} else {
-		var result pathtools.GlobResult
-		// We cannot add build statements in this context, so we fall back to
-		// AddNinjaFileDeps
-		result, err = ctx.Config().fs.Glob(path.String(), nil, pathtools.FollowSymlinks)
-		ctx.AddNinjaFileDeps(result.Deps...)
-		files = result.Matches
-	}
+	// Use glob to produce proper dependencies, even though we only want
+	// a single file.
+	files, err = ctx.GlobWithDeps(path.String(), nil)
 
 	if err != nil {
 		return false, fmt.Errorf("glob: %s", err.Error())
@@ -1122,7 +1111,7 @@ func PathForSource(ctx PathContext, pathComponents ...string) SourcePath {
 	}
 
 	if modCtx, ok := ctx.(ModuleMissingDepsPathContext); ok && ctx.Config().AllowMissingDependencies() {
-		exists, err := existsWithDependencies(ctx, path)
+		exists, err := existsWithDependencies(modCtx, path)
 		if err != nil {
 			reportPathError(ctx, err)
 		}
@@ -1137,11 +1126,26 @@ func PathForSource(ctx PathContext, pathComponents ...string) SourcePath {
 	return path
 }
 
+// MaybeExistentPathForSource joins the provided path components and validates that the result
+// neither escapes the source dir nor is in the out dir.
+// It does not validate whether the path exists.
+func MaybeExistentPathForSource(ctx PathContext, pathComponents ...string) SourcePath {
+	path, err := pathForSource(ctx, pathComponents...)
+	if err != nil {
+		reportPathError(ctx, err)
+	}
+
+	if pathtools.IsGlob(path.String()) {
+		ReportPathErrorf(ctx, "path may not contain a glob: %s", path.String())
+	}
+	return path
+}
+
 // ExistentPathForSource returns an OptionalPath with the SourcePath, rooted from SrcDir, *not*
 // rooted from the module's local source directory, if the path exists, or an empty OptionalPath if
 // it doesn't exist. Dependencies are added so that the ninja file will be regenerated if the state
 // of the path changes.
-func ExistentPathForSource(ctx PathContext, pathComponents ...string) OptionalPath {
+func ExistentPathForSource(ctx PathGlobContext, pathComponents ...string) OptionalPath {
 	path, err := pathForSource(ctx, pathComponents...)
 	if err != nil {
 		reportPathError(ctx, err)
@@ -1166,7 +1170,10 @@ func ExistentPathForSource(ctx PathContext, pathComponents ...string) OptionalPa
 }
 
 func (p SourcePath) String() string {
-	return filepath.Join(p.srcDir, p.path)
+	if p.path == "" {
+		return "."
+	}
+	return p.path
 }
 
 // Join creates a new SourcePath with paths... joined with the current path. The
@@ -1199,7 +1206,7 @@ func (p SourcePath) OverlayPath(ctx ModuleMissingDepsPathContext, path Path) Opt
 		// No need to put the error message into the returned path since it has been reported already.
 		return OptionalPath{}
 	}
-	dir := filepath.Join(p.srcDir, p.path, relDir)
+	dir := filepath.Join(p.path, relDir)
 	// Use Glob so that we are run again if the directory is added.
 	if pathtools.IsGlob(dir) {
 		ReportPathErrorf(ctx, "Path may not contain a glob: %s", dir)
@@ -1212,8 +1219,7 @@ func (p SourcePath) OverlayPath(ctx ModuleMissingDepsPathContext, path Path) Opt
 	if len(paths) == 0 {
 		return InvalidOptionalPath(dir + " does not exist")
 	}
-	relPath := Rel(ctx, p.srcDir, paths[0])
-	return OptionalPathForPath(PathForSource(ctx, relPath))
+	return OptionalPathForPath(PathForSource(ctx, paths[0]))
 }
 
 // OutputPath is a Path representing an intermediates file path rooted from the build directory
@@ -1472,41 +1478,6 @@ func pathForModuleOut(ctx ModuleOutPathContext) OutputPath {
 	return PathForOutput(ctx, ".intermediates", ctx.ModuleDir(), ctx.ModuleName(), ctx.ModuleSubDir())
 }
 
-// PathForVndkRefAbiDump returns an OptionalPath representing the path of the
-// reference abi dump for the given module. This is not guaranteed to be valid.
-func PathForVndkRefAbiDump(ctx ModuleInstallPathContext, version, fileName string,
-	isNdk, isLlndkOrVndk, isGzip bool) OptionalPath {
-
-	currentArchType := ctx.Arch().ArchType
-	primaryArchType := ctx.Config().DevicePrimaryArchType()
-	archName := currentArchType.String()
-	if currentArchType != primaryArchType {
-		archName += "_" + primaryArchType.String()
-	}
-
-	var dirName string
-	if isNdk {
-		dirName = "ndk"
-	} else if isLlndkOrVndk {
-		dirName = "vndk"
-	} else {
-		dirName = "platform" // opt-in libs
-	}
-
-	binderBitness := ctx.DeviceConfig().BinderBitness()
-
-	var ext string
-	if isGzip {
-		ext = ".lsdump.gz"
-	} else {
-		ext = ".lsdump"
-	}
-
-	return ExistentPathForSource(ctx, "prebuilts", "abi-dumps", dirName,
-		version, binderBitness, archName, "source-based",
-		fileName+ext)
-}
-
 // PathForModuleOut returns a Path representing the paths... under the module's
 // output directory.
 func PathForModuleOut(ctx ModuleOutPathContext, paths ...string) ModuleOutPath {
@@ -1671,6 +1642,10 @@ func (p InstallPath) PartitionDir() string {
 	}
 }
 
+func (p InstallPath) Partition() string {
+	return p.partition
+}
+
 // Join creates a new InstallPath with paths... joined with the current path. The
 // provided paths... may not use '..' to escape from the current path.
 func (p InstallPath) Join(ctx PathContext, paths ...string) InstallPath {
@@ -1734,16 +1709,22 @@ func makePathForInstall(ctx ModuleInstallPathContext, os OsType, arch ArchType, 
 func pathForInstall(ctx PathContext, os OsType, arch ArchType, partition string, debug bool,
 	pathComponents ...string) InstallPath {
 
-	var partionPaths []string
+	var partitionPaths []string
 
 	if os.Class == Device {
-		partionPaths = []string{"target", "product", ctx.Config().DeviceName(), partition}
+		partitionPaths = []string{"target", "product", ctx.Config().DeviceName(), partition}
 	} else {
 		osName := os.String()
-		if os == Linux || os == LinuxMusl {
+		if os == Linux {
 			// instead of linux_glibc
 			osName = "linux"
 		}
+		if os == LinuxMusl && ctx.Config().UseHostMusl() {
+			// When using musl instead of glibc, use "linux" instead of "linux_musl".  When cross
+			// compiling we will still use "linux_musl".
+			osName = "linux"
+		}
+
 		// SOONG_HOST_OUT is set to out/host/$(HOST_OS)-$(HOST_PREBUILT_ARCH)
 		// and HOST_PREBUILT_ARCH is forcibly set to x86 even on x86_64 hosts. We don't seem
 		// to have a plan to fix it (see the comment in build/make/core/envsetup.mk).
@@ -1753,21 +1734,21 @@ func pathForInstall(ctx PathContext, os OsType, arch ArchType, partition string,
 		if os.Class == Host && (arch == X86_64 || arch == Common) {
 			archName = "x86"
 		}
-		partionPaths = []string{"host", osName + "-" + archName, partition}
+		partitionPaths = []string{"host", osName + "-" + archName, partition}
 	}
 	if debug {
-		partionPaths = append([]string{"debug"}, partionPaths...)
+		partitionPaths = append([]string{"debug"}, partitionPaths...)
 	}
 
-	partionPath, err := validatePath(partionPaths...)
+	partitionPath, err := validatePath(partitionPaths...)
 	if err != nil {
 		reportPathError(ctx, err)
 	}
 
 	base := InstallPath{
-		basePath:     basePath{partionPath, ""},
+		basePath:     basePath{partitionPath, ""},
 		soongOutDir:  ctx.Config().soongOutDir,
-		partitionDir: partionPath,
+		partitionDir: partitionPath,
 		partition:    partition,
 	}
 
@@ -1886,10 +1867,14 @@ func (p InstallPaths) Strings() []string {
 	return ret
 }
 
-// validateSafePath validates a path that we trust (may contain ninja variables).
-// Ensures that each path component does not attempt to leave its component.
-func validateSafePath(pathComponents ...string) (string, error) {
+// validatePathInternal ensures that a path does not leave its component, and
+// optionally doesn't contain Ninja variables.
+func validatePathInternal(allowNinjaVariables bool, pathComponents ...string) (string, error) {
 	for _, path := range pathComponents {
+		if !allowNinjaVariables && strings.Contains(path, "$") {
+			return "", fmt.Errorf("Path contains invalid character($): %s", path)
+		}
+
 		path := filepath.Clean(path)
 		if path == ".." || strings.HasPrefix(path, "../") || strings.HasPrefix(path, "/") {
 			return "", fmt.Errorf("Path is outside directory: %s", path)
@@ -1901,16 +1886,18 @@ func validateSafePath(pathComponents ...string) (string, error) {
 	return filepath.Join(pathComponents...), nil
 }
 
+// validateSafePath validates a path that we trust (may contain ninja
+// variables).  Ensures that each path component does not attempt to leave its
+// component. Returns a joined version of each path component.
+func validateSafePath(pathComponents ...string) (string, error) {
+	return validatePathInternal(true, pathComponents...)
+}
+
 // validatePath validates that a path does not include ninja variables, and that
 // each path component does not attempt to leave its component. Returns a joined
 // version of each path component.
 func validatePath(pathComponents ...string) (string, error) {
-	for _, path := range pathComponents {
-		if strings.Contains(path, "$") {
-			return "", fmt.Errorf("Path contains invalid character($): %s", path)
-		}
-	}
-	return validateSafePath(pathComponents...)
+	return validatePathInternal(false, pathComponents...)
 }
 
 func PathForPhony(ctx PathContext, phony string) WritablePath {
@@ -1968,6 +1955,18 @@ func PathForTesting(paths ...string) Path {
 		panic(err)
 	}
 	return testPath{basePath{path: p, rel: p}}
+}
+
+func PathForTestingWithRel(path, rel string) Path {
+	p, err := validateSafePath(path, rel)
+	if err != nil {
+		panic(err)
+	}
+	r, err := validatePath(rel)
+	if err != nil {
+		panic(err)
+	}
+	return testPath{basePath{path: p, rel: r}}
 }
 
 // PathsForTesting returns a Path constructed from each element in strs. It should only be used from within tests.
@@ -2099,13 +2098,16 @@ func maybeRelErr(basePath string, targetPath string) (string, bool, error) {
 
 // Writes a file to the output directory.  Attempting to write directly to the output directory
 // will fail due to the sandbox of the soong_build process.
+// Only writes the file if the file doesn't exist or if it has different contents, to prevent
+// updating the timestamp if no changes would be made. (This is better for incremental
+// performance.)
 func WriteFileToOutputDir(path WritablePath, data []byte, perm os.FileMode) error {
 	absPath := absolutePath(path.String())
 	err := os.MkdirAll(filepath.Dir(absPath), 0777)
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(absPath, data, perm)
+	return pathtools.WriteFileIfChanged(absPath, data, perm)
 }
 
 func RemoveAllOutputDir(path WritablePath) error {
