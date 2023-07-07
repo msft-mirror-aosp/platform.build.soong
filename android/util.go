@@ -26,7 +26,20 @@ import (
 
 // CopyOf returns a new slice that has the same contents as s.
 func CopyOf(s []string) []string {
-	return append([]string(nil), s...)
+	// If the input is nil, return nil and not an empty list
+	if s == nil {
+		return s
+	}
+	return append([]string{}, s...)
+}
+
+// Concat returns a new slice concatenated from the two input slices. It does not change the input
+// slices.
+func Concat[T any](s1, s2 []T) []T {
+	res := make([]T, 0, len(s1)+len(s2))
+	res = append(res, s1...)
+	res = append(res, s2...)
+	return res
 }
 
 // JoinWithPrefix prepends the prefix to each string in the list and
@@ -53,40 +66,33 @@ func JoinWithPrefixAndSeparator(strs []string, prefix string, sep string) string
 	return buf.String()
 }
 
-// JoinWithSuffix appends the suffix to each string in the list and
-// returns them joined together with given separator.
-func JoinWithSuffix(strs []string, suffix string, separator string) string {
-	if len(strs) == 0 {
-		return ""
-	}
-
-	var buf strings.Builder
-	buf.WriteString(strs[0])
-	buf.WriteString(suffix)
-	for i := 1; i < len(strs); i++ {
-		buf.WriteString(separator)
-		buf.WriteString(strs[i])
-		buf.WriteString(suffix)
-	}
-	return buf.String()
+// SortedStringKeys returns the keys of the given map in the ascending order.
+//
+// Deprecated: Use SortedKeys instead.
+func SortedStringKeys[V any](m map[string]V) []string {
+	return SortedKeys(m)
 }
 
-// SorterStringKeys returns the keys of the given string-keyed map in the ascending order.
-func SortedStringKeys(m interface{}) []string {
-	v := reflect.ValueOf(m)
-	if v.Kind() != reflect.Map {
-		panic(fmt.Sprintf("%#v is not a map", m))
-	}
-	if v.Len() == 0 {
+type Ordered interface {
+	~string |
+		~float32 | ~float64 |
+		~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr
+}
+
+// SortedKeys returns the keys of the given map in the ascending order.
+func SortedKeys[T Ordered, V any](m map[T]V) []T {
+	if len(m) == 0 {
 		return nil
 	}
-	iter := v.MapRange()
-	s := make([]string, 0, v.Len())
-	for iter.Next() {
-		s = append(s, iter.Key().String())
+	ret := make([]T, 0, len(m))
+	for k := range m {
+		ret = append(ret, k)
 	}
-	sort.Strings(s)
-	return s
+	sort.Slice(ret, func(i, j int) bool {
+		return ret[i] < ret[j]
+	})
+	return ret
 }
 
 // stringValues returns the values of the given string-valued map in randomized map order.
@@ -274,6 +280,8 @@ func RemoveFromList(s string, list []string) (bool, []string) {
 // FirstUniqueStrings returns all unique elements of a slice of strings, keeping the first copy of
 // each.  It modifies the slice contents in place, and returns a subslice of the original slice.
 func FirstUniqueStrings(list []string) []string {
+	// Do not moodify the input in-place, operate on a copy instead.
+	list = CopyOf(list)
 	// 128 was chosen based on BenchmarkFirstUniqueStrings results.
 	if len(list) > 128 {
 		return firstUniqueStringsMap(list)
@@ -330,6 +338,7 @@ func LastUniqueStrings(list []string) []string {
 
 // SortedUniqueStrings returns what the name says
 func SortedUniqueStrings(list []string) []string {
+	// FirstUniqueStrings creates a copy of `list`, so the input remains untouched.
 	unique := FirstUniqueStrings(list)
 	sort.Strings(unique)
 	return unique

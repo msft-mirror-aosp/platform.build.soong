@@ -357,6 +357,12 @@ func (s *sdk) buildSnapshot(ctx android.ModuleContext, sdkVariants []*sdk) {
 		// If the minApiLevel of the member is greater than the target API level then exclude it from
 		// this snapshot.
 		exclude := memberVariantDep.minApiLevel.GreaterThan(targetApiLevel)
+		// Always include host variants (e.g. host tools) in the snapshot.
+		// Host variants should not be guarded by a min_sdk_version check. In fact, host variants
+		// do not have a `min_sdk_version`.
+		if memberVariantDep.Host() {
+			exclude = false
+		}
 
 		addMember(name, export, exclude)
 
@@ -449,11 +455,14 @@ be unnecessary as every module in the sdk already has its own licenses property.
 
 	for _, module := range builder.prebuiltOrder {
 		// Prune any empty property sets.
-		module = module.transform(pruneEmptySetTransformer{})
+		module = transformModule(module, pruneEmptySetTransformer{})
 
 		// Transform the module module to make it suitable for use in the snapshot.
-		module.transform(snapshotTransformer)
-		bpFile.AddModule(module)
+		module = transformModule(module, snapshotTransformer)
+		module = transformModule(module, emptyClasspathContentsTransformation{})
+		if module != nil {
+			bpFile.AddModule(module)
+		}
 	}
 
 	// generate Android.bp
@@ -565,7 +574,7 @@ func (m *moduleInfo) MarshalJSON() ([]byte, error) {
 	if m.deps != nil {
 		writeObjectPair("@deps", m.deps)
 	}
-	for _, k := range android.SortedStringKeys(m.memberSpecific) {
+	for _, k := range android.SortedKeys(m.memberSpecific) {
 		v := m.memberSpecific[k]
 		writeObjectPair(k, v)
 	}
@@ -626,7 +635,7 @@ func (s *sdk) generateInfoData(ctx android.ModuleContext, memberVariantDeps []sd
 		getModuleInfo(memberVariantDep.variant)
 	}
 
-	for _, memberName := range android.SortedStringKeys(name2Info) {
+	for _, memberName := range android.SortedKeys(name2Info) {
 		info := name2Info[memberName]
 		modules = append(modules, info)
 	}
@@ -829,9 +838,11 @@ type snapshotTransformation struct {
 }
 
 func (t snapshotTransformation) transformModule(module *bpModule) *bpModule {
-	// If the module is an internal member then use a unique name for it.
-	name := module.Name()
-	module.setProperty("name", t.builder.snapshotSdkMemberName(name, true))
+	if module != nil {
+		// If the module is an internal member then use a unique name for it.
+		name := module.Name()
+		module.setProperty("name", t.builder.snapshotSdkMemberName(name, true))
+	}
 	return module
 }
 
@@ -842,6 +853,25 @@ func (t snapshotTransformation) transformProperty(_ string, value interface{}, t
 	} else {
 		return value, tag
 	}
+}
+
+type emptyClasspathContentsTransformation struct {
+	identityTransformation
+}
+
+func (t emptyClasspathContentsTransformation) transformModule(module *bpModule) *bpModule {
+	classpathModuleTypes := []string{
+		"prebuilt_bootclasspath_fragment",
+		"prebuilt_systemserverclasspath_fragment",
+	}
+	if module != nil && android.InList(module.moduleType, classpathModuleTypes) {
+		if contents, ok := module.bpPropertySet.properties["contents"].([]string); ok {
+			if len(contents) == 0 {
+				return nil
+			}
+		}
+	}
+	return module
 }
 
 type pruneEmptySetTransformer struct {
@@ -1261,6 +1291,11 @@ type sdkMemberVariantDep struct {
 
 	// The minimum API level on which this module is supported.
 	minApiLevel android.ApiLevel
+}
+
+// Host returns true if the sdk member is a host variant (e.g. host tool)
+func (s *sdkMemberVariantDep) Host() bool {
+	return s.variant.Target().Os.Class == android.Host
 }
 
 var _ android.SdkMember = (*sdkMember)(nil)
@@ -1708,7 +1743,7 @@ func newArchSpecificInfo(ctx android.SdkMemberContext, archId archId, osType and
 		}
 
 		// Create the image variant info in a fixed order.
-		for _, imageVariantName := range android.SortedStringKeys(variantsByImage) {
+		for _, imageVariantName := range android.SortedKeys(variantsByImage) {
 			variants := variantsByImage[imageVariantName]
 			archInfo.imageVariantInfos = append(archInfo.imageVariantInfos, newImageVariantSpecificInfo(ctx, imageVariantName, variantPropertiesFactory, variants))
 		}

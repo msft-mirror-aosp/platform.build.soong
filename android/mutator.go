@@ -268,6 +268,11 @@ type TopDownMutatorContext interface {
 	// platforms, as dictated by a given bool attribute: the target will not be buildable in
 	// any platform for which this bool attribute is false.
 	CreateBazelTargetModuleWithRestrictions(bazel.BazelTargetModuleProperties, CommonAttributes, interface{}, bazel.BoolAttribute)
+
+	// CreateBazelTargetAliasInDir creates an alias definition in `dir` directory.
+	// This function can be used to create alias definitions in a directory that is different
+	// from the directory of the visited Soong module.
+	CreateBazelTargetAliasInDir(dir string, name string, actual bazel.Label)
 }
 
 type topDownMutatorContext struct {
@@ -705,6 +710,34 @@ func (t *topDownMutatorContext) CreateBazelTargetModuleWithRestrictions(
 	t.createBazelTargetModule(bazelProps, commonAttrs, attrs, enabledProperty)
 }
 
+var (
+	bazelAliasModuleProperties = bazel.BazelTargetModuleProperties{
+		Rule_class: "alias",
+	}
+)
+
+type bazelAliasAttributes struct {
+	Actual *bazel.LabelAttribute
+}
+
+func (t *topDownMutatorContext) CreateBazelTargetAliasInDir(
+	dir string,
+	name string,
+	actual bazel.Label) {
+	mod := t.Module()
+	attrs := &bazelAliasAttributes{
+		Actual: bazel.MakeLabelAttribute(actual.Label),
+	}
+	info := bp2buildInfo{
+		Dir:             dir,
+		BazelProps:      bazelAliasModuleProperties,
+		CommonAttrs:     CommonAttributes{Name: name},
+		ConstraintAttrs: constraintAttributes{},
+		Attrs:           attrs,
+	}
+	mod.base().addBp2buildInfo(info)
+}
+
 // ApexAvailableTags converts the apex_available property value of an ApexModule
 // module and returns it as a list of keyed tags.
 func ApexAvailableTags(mod Module) bazel.StringListAttribute {
@@ -714,9 +747,44 @@ func ApexAvailableTags(mod Module) bazel.StringListAttribute {
 		// TODO(b/218841706): hidl_interface has the apex_available prop, but it's
 		// defined directly as a prop and not via ApexModule, so this doesn't
 		// pick those props up.
-		attr.Value = ConvertApexAvailableToTags(am.apexModuleBase().ApexAvailable())
+		apexAvailable := am.apexModuleBase().ApexAvailable()
+		// If a user does not specify apex_available in Android.bp, then soong provides a default.
+		// To avoid verbosity of BUILD files, remove this default from user-facing BUILD files.
+		if len(am.apexModuleBase().ApexProperties.Apex_available) == 0 {
+			apexAvailable = []string{}
+		}
+		attr.Value = ConvertApexAvailableToTags(apexAvailable)
 	}
 	return attr
+}
+
+func ApexAvailableTagsWithoutTestApexes(ctx BaseModuleContext, mod Module) bazel.StringListAttribute {
+	attr := bazel.StringListAttribute{}
+	if am, ok := mod.(ApexModule); ok {
+		apexAvailableWithoutTestApexes := removeTestApexes(ctx, am.apexModuleBase().ApexAvailable())
+		// If a user does not specify apex_available in Android.bp, then soong provides a default.
+		// To avoid verbosity of BUILD files, remove this default from user-facing BUILD files.
+		if len(am.apexModuleBase().ApexProperties.Apex_available) == 0 {
+			apexAvailableWithoutTestApexes = []string{}
+		}
+		attr.Value = ConvertApexAvailableToTags(apexAvailableWithoutTestApexes)
+	}
+	return attr
+}
+
+func removeTestApexes(ctx BaseModuleContext, apex_available []string) []string {
+	testApexes := []string{}
+	for _, aa := range apex_available {
+		// ignore the wildcards
+		if InList(aa, AvailableToRecognziedWildcards) {
+			continue
+		}
+		mod, _ := ctx.ModuleFromName(aa)
+		if apex, ok := mod.(ApexTestInterface); ok && apex.IsTestApex() {
+			testApexes = append(testApexes, aa)
+		}
+	}
+	return RemoveListFromList(CopyOf(apex_available), testApexes)
 }
 
 func ConvertApexAvailableToTags(apexAvailable []string) []string {
@@ -730,6 +798,13 @@ func ConvertApexAvailableToTags(apexAvailable []string) []string {
 		result = append(result, "apex_available="+a)
 	}
 	return result
+}
+
+// ConvertApexAvailableToTagsWithoutTestApexes converts a list of apex names to a list of bazel tags
+// This function drops any test apexes from the input.
+func ConvertApexAvailableToTagsWithoutTestApexes(ctx BaseModuleContext, apexAvailable []string) []string {
+	noTestApexes := removeTestApexes(ctx, apexAvailable)
+	return ConvertApexAvailableToTags(noTestApexes)
 }
 
 func (t *topDownMutatorContext) createBazelTargetModule(

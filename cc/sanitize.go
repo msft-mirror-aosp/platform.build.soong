@@ -62,14 +62,19 @@ var (
 		"-fast-isel=false",
 	}
 
-	cfiCflags = []string{"-flto", "-fsanitize-cfi-cross-dso",
-		"-fsanitize-ignorelist=external/compiler-rt/lib/cfi/cfi_blocklist.txt"}
+	cfiBlocklistPath     = "external/compiler-rt/lib/cfi"
+	cfiBlocklistFilename = "cfi_blocklist.txt"
+	cfiCrossDsoFlag      = "-fsanitize-cfi-cross-dso"
+	cfiCflags            = []string{"-flto", cfiCrossDsoFlag,
+		"-fsanitize-ignorelist=" + cfiBlocklistPath + "/" + cfiBlocklistFilename}
 	// -flto and -fvisibility are required by clang when -fsanitize=cfi is
 	// used, but have no effect on assembly files
 	cfiAsflags = []string{"-flto", "-fvisibility=default"}
-	cfiLdflags = []string{"-flto", "-fsanitize-cfi-cross-dso", "-fsanitize=cfi",
+	cfiLdflags = []string{"-flto", cfiCrossDsoFlag, "-fsanitize=cfi",
 		"-Wl,-plugin-opt,O1"}
-	cfiExportsMapPath = "build/soong/cc/config/cfi_exports.map"
+	cfiExportsMapPath      = "build/soong/cc/config"
+	cfiExportsMapFilename  = "cfi_exports.map"
+	cfiAssemblySupportFlag = "-fno-sanitize-cfi-canonical-jump-tables"
 
 	intOverflowCflags = []string{"-fsanitize-ignorelist=build/soong/cc/config/integer_overflow_blocklist.txt"}
 
@@ -77,7 +82,7 @@ var (
 		"-fno-sanitize-recover=integer,undefined"}
 	hwasanGlobalOptions = []string{"heap_history_size=1023", "stack_history_size=512",
 		"export_memory_stats=0", "max_malloc_fill_size=131072", "malloc_fill_byte=0"}
-	memtagStackCommonFlags = []string{"-march=armv8-a+memtag"}
+	memtagStackCommonFlags = []string{"-march=armv8-a+memtag", "-mllvm", "-dom-tree-reachability-max-bbs-to-explore=128"}
 
 	hostOnlySanitizeFlags   = []string{"-fno-sanitize-recover=all"}
 	deviceOnlySanitizeFlags = []string{"-fsanitize-trap=all", "-ftrap-function=abort"}
@@ -94,6 +99,7 @@ const (
 	Fuzzer
 	Memtag_heap
 	Memtag_stack
+	Memtag_globals
 	cfi // cfi is last to prevent it running before incompatible mutators
 )
 
@@ -106,6 +112,7 @@ var Sanitizers = []SanitizerType{
 	Fuzzer,
 	Memtag_heap,
 	Memtag_stack,
+	Memtag_globals,
 	cfi, // cfi is last to prevent it running before incompatible mutators
 }
 
@@ -128,6 +135,8 @@ func (t SanitizerType) variationName() string {
 		return "memtag_heap"
 	case Memtag_stack:
 		return "memtag_stack"
+	case Memtag_globals:
+		return "memtag_globals"
 	case Fuzzer:
 		return "fuzzer"
 	default:
@@ -146,6 +155,8 @@ func (t SanitizerType) name() string {
 		return "memtag_heap"
 	case Memtag_stack:
 		return "memtag_stack"
+	case Memtag_globals:
+		return "memtag_globals"
 	case tsan:
 		return "thread"
 	case intOverflow:
@@ -167,7 +178,7 @@ func (t SanitizerType) registerMutators(ctx android.RegisterMutatorsContext) {
 		sanitizer := &sanitizerSplitMutator{t}
 		ctx.TopDown(t.variationName()+"_markapexes", sanitizer.markSanitizableApexesMutator)
 		ctx.Transition(t.variationName(), sanitizer)
-	case Memtag_heap, Memtag_stack, intOverflow:
+	case Memtag_heap, Memtag_stack, Memtag_globals, intOverflow:
 		// do nothing
 	default:
 		panic(fmt.Errorf("unknown SanitizerType %d", t))
@@ -207,6 +218,8 @@ func (*Module) SanitizerSupported(t SanitizerType) bool {
 	case Memtag_heap:
 		return true
 	case Memtag_stack:
+		return true
+	case Memtag_globals:
 		return true
 	default:
 		return false
@@ -254,7 +267,7 @@ type SanitizeUserProps struct {
 	// This should not be used in Android 11+ : https://source.android.com/devices/tech/debug/scudo
 	// deprecated
 	Scudo *bool `android:"arch_variant"`
-	// shadow-call-stack sanitizer, only available on arm64
+	// shadow-call-stack sanitizer, only available on arm64/riscv64.
 	Scs *bool `android:"arch_variant"`
 	// Memory-tagging, only available on arm64
 	// if diag.memtag unset or false, enables async memory tagging
@@ -262,6 +275,9 @@ type SanitizeUserProps struct {
 	// Memory-tagging stack instrumentation, only available on arm64
 	// Adds instrumentation to detect stack buffer overflows and use-after-scope using MTE.
 	Memtag_stack *bool `android:"arch_variant"`
+	// Memory-tagging globals instrumentation, only available on arm64
+	// Adds instrumentation to detect global buffer overflows using MTE.
+	Memtag_globals *bool `android:"arch_variant"`
 
 	// A modifier for ASAN and HWASAN for write only instrumentation
 	Writeonly *bool `android:"arch_variant"`
@@ -337,6 +353,8 @@ type sanitizeMutatedProperties struct {
 	Memtag_heap *bool `blueprint:"mutated"`
 	// Whether Memory-tagging stack instrumentation is enabled for this module
 	Memtag_stack *bool `blueprint:"mutated"`
+	// Whether Memory-tagging globals instrumentation is enabled for this module
+	Memtag_globals *bool `android:"arch_variant"`
 
 	// Whether a modifier for ASAN and HWASAN for write only instrumentation is enabled for this
 	// module
@@ -388,6 +406,20 @@ func init() {
 	exportedVars.ExportStringListStaticVariable("HostOnlySanitizeFlags", hostOnlySanitizeFlags)
 	exportedVars.ExportStringList("DeviceOnlySanitizeFlags", deviceOnlySanitizeFlags)
 
+	// Leave out "-flto" from the slices exported to bazel, as we will use the
+	// dedicated LTO feature for this. For C Flags and Linker Flags, also leave
+	// out the cross DSO flag which will be added separately by transitions.
+	exportedVars.ExportStringList("CfiCFlags", cfiCflags[2:])
+	exportedVars.ExportStringList("CfiLdFlags", cfiLdflags[2:])
+	exportedVars.ExportStringList("CfiAsFlags", cfiAsflags[1:])
+
+	exportedVars.ExportString("CfiCrossDsoFlag", cfiCrossDsoFlag)
+	exportedVars.ExportString("CfiBlocklistPath", cfiBlocklistPath)
+	exportedVars.ExportString("CfiBlocklistFilename", cfiBlocklistFilename)
+	exportedVars.ExportString("CfiExportsMapPath", cfiExportsMapPath)
+	exportedVars.ExportString("CfiExportsMapFilename", cfiExportsMapFilename)
+	exportedVars.ExportString("CfiAssemblySupportFlag", cfiAssemblySupportFlag)
+
 	android.RegisterMakeVarsProvider(pctx, cfiMakeVarsProvider)
 	android.RegisterMakeVarsProvider(pctx, hwasanMakeVarsProvider)
 }
@@ -406,6 +438,7 @@ func (p *sanitizeMutatedProperties) copyUserPropertiesToMutated(userProps *Sanit
 	p.Integer_overflow = userProps.Integer_overflow
 	p.Memtag_heap = userProps.Memtag_heap
 	p.Memtag_stack = userProps.Memtag_stack
+	p.Memtag_globals = userProps.Memtag_globals
 	p.Safestack = userProps.Safestack
 	p.Scs = userProps.Scs
 	p.Scudo = userProps.Scudo
@@ -533,6 +566,10 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 			s.Memtag_stack = proptools.BoolPtr(true)
 		}
 
+		if found, globalSanitizers = removeFromList("memtag_globals", globalSanitizers); found && s.Memtag_globals == nil {
+			s.Memtag_globals = proptools.BoolPtr(true)
+		}
+
 		if len(globalSanitizers) > 0 {
 			ctx.ModuleErrorf("unknown global sanitizer option %s", globalSanitizers[0])
 		}
@@ -574,6 +611,12 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		}
 	}
 
+	// Enable HWASan for all components in the include paths (for Aarch64 only)
+	if s.Hwaddress == nil && ctx.Config().HWASanEnabledForPath(ctx.ModuleDir()) &&
+		ctx.Arch().ArchType == android.Arm64 && ctx.toolchain().Bionic() {
+		s.Hwaddress = proptools.BoolPtr(true)
+	}
+
 	// Enable CFI for non-host components in the include paths
 	if s.Cfi == nil && ctx.Config().CFIEnabledForPath(ctx.ModuleDir()) && !ctx.Host() {
 		s.Cfi = proptools.BoolPtr(true)
@@ -593,8 +636,12 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		s.Hwaddress = nil
 	}
 
-	// SCS is only implemented on AArch64.
-	if ctx.Arch().ArchType != android.Arm64 || !ctx.toolchain().Bionic() {
+	// SCS is only implemented on AArch64/riscv64.
+	if (ctx.Arch().ArchType != android.Arm64 && ctx.Arch().ArchType != android.Riscv64) || !ctx.toolchain().Bionic() {
+		s.Scs = nil
+	}
+	// ...but temporarily globally disabled on riscv64 (http://b/277909695).
+	if ctx.Arch().ArchType == android.Riscv64 {
 		s.Scs = nil
 	}
 
@@ -603,6 +650,7 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 	if ctx.Arch().ArchType != android.Arm64 || !ctx.toolchain().Bionic() || ctx.Host() {
 		s.Memtag_heap = nil
 		s.Memtag_stack = nil
+		s.Memtag_globals = nil
 	}
 
 	// Also disable CFI if ASAN is enabled.
@@ -612,6 +660,7 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		// HWASAN and ASAN win against MTE.
 		s.Memtag_heap = nil
 		s.Memtag_stack = nil
+		s.Memtag_globals = nil
 	}
 
 	// Disable sanitizers that depend on the UBSan runtime for windows/darwin builds.
@@ -667,7 +716,8 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 
 	if ctx.Os() != android.Windows && (Bool(s.All_undefined) || Bool(s.Undefined) || Bool(s.Address) || Bool(s.Thread) ||
 		Bool(s.Fuzzer) || Bool(s.Safestack) || Bool(s.Cfi) || Bool(s.Integer_overflow) || len(s.Misc_undefined) > 0 ||
-		Bool(s.Scudo) || Bool(s.Hwaddress) || Bool(s.Scs) || Bool(s.Memtag_heap) || Bool(s.Memtag_stack)) {
+		Bool(s.Scudo) || Bool(s.Hwaddress) || Bool(s.Scs) || Bool(s.Memtag_heap) || Bool(s.Memtag_stack) ||
+		Bool(s.Memtag_globals)) {
 		sanitize.Properties.SanitizerEnabled = true
 	}
 
@@ -769,6 +819,13 @@ func (s *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 		if Bool(sanProps.Writeonly) {
 			flags.Local.CFlags = append(flags.Local.CFlags, "-mllvm", "-hwasan-instrument-reads=0")
 		}
+		if !ctx.staticBinary() && !ctx.Host() {
+			if ctx.bootstrap() {
+				flags.DynamicLinker = "/system/bin/bootstrap/linker_hwasan64"
+			} else {
+				flags.DynamicLinker = "/system/bin/linker_hwasan64"
+			}
+		}
 	}
 
 	if Bool(sanProps.Fuzzer) {
@@ -810,7 +867,7 @@ func (s *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 		flags.Local.CFlags = append(flags.Local.CFlags, cfiCflags...)
 		flags.Local.AsFlags = append(flags.Local.AsFlags, cfiAsflags...)
 		if Bool(s.Properties.Sanitize.Config.Cfi_assembly_support) {
-			flags.Local.CFlags = append(flags.Local.CFlags, "-fno-sanitize-cfi-canonical-jump-tables")
+			flags.Local.CFlags = append(flags.Local.CFlags, cfiAssemblySupportFlag)
 		}
 		// Only append the default visibility flag if -fvisibility has not already been set
 		// to hidden.
@@ -836,7 +893,7 @@ func (s *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 		flags.Local.LdFlags = append(flags.Local.LdFlags, "-Wl,--no-fatal-warnings")
 	}
 
-	if (Bool(sanProps.Memtag_heap) || Bool(sanProps.Memtag_stack)) && ctx.binary() {
+	if (Bool(sanProps.Memtag_heap) || Bool(sanProps.Memtag_stack) || Bool(sanProps.Memtag_globals)) && ctx.binary() {
 		if Bool(sanProps.Diag.Memtag_heap) {
 			flags.Local.LdFlags = append(flags.Local.LdFlags, "-fsanitize-memtag-mode=sync")
 		} else {
@@ -959,6 +1016,8 @@ func (s *sanitize) getSanitizerBoolPtr(t SanitizerType) *bool {
 		return s.Properties.SanitizeMutated.Memtag_heap
 	case Memtag_stack:
 		return s.Properties.SanitizeMutated.Memtag_stack
+	case Memtag_globals:
+		return s.Properties.SanitizeMutated.Memtag_globals
 	case Fuzzer:
 		return s.Properties.SanitizeMutated.Fuzzer
 	default:
@@ -975,6 +1034,7 @@ func (sanitize *sanitize) isUnsanitizedVariant() bool {
 		!sanitize.isSanitizerEnabled(scs) &&
 		!sanitize.isSanitizerEnabled(Memtag_heap) &&
 		!sanitize.isSanitizerEnabled(Memtag_stack) &&
+		!sanitize.isSanitizerEnabled(Memtag_globals) &&
 		!sanitize.isSanitizerEnabled(Fuzzer)
 }
 
@@ -996,10 +1056,12 @@ func (sanitize *sanitize) SetSanitizer(t SanitizerType, b bool) {
 		sanitize.Properties.SanitizeMutated.Address = bPtr
 		// For ASAN variant, we need to disable Memtag_stack
 		sanitize.Properties.SanitizeMutated.Memtag_stack = nil
+		sanitize.Properties.SanitizeMutated.Memtag_globals = nil
 	case Hwasan:
 		sanitize.Properties.SanitizeMutated.Hwaddress = bPtr
 		// For HWAsan variant, we need to disable Memtag_stack
 		sanitize.Properties.SanitizeMutated.Memtag_stack = nil
+		sanitize.Properties.SanitizeMutated.Memtag_globals = nil
 	case tsan:
 		sanitize.Properties.SanitizeMutated.Thread = bPtr
 	case intOverflow:
@@ -1013,6 +1075,8 @@ func (sanitize *sanitize) SetSanitizer(t SanitizerType, b bool) {
 	case Memtag_stack:
 		sanitize.Properties.SanitizeMutated.Memtag_stack = bPtr
 		// We do not need to disable ASAN or HWASan here, as there is no Memtag_stack variant.
+	case Memtag_globals:
+		sanitize.Properties.Sanitize.Memtag_globals = bPtr
 	case Fuzzer:
 		sanitize.Properties.SanitizeMutated.Fuzzer = bPtr
 	default:
@@ -1500,6 +1564,13 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 			sanitizers = append(sanitizers, "memtag-stack")
 		}
 
+		if Bool(sanProps.Memtag_globals) {
+			sanitizers = append(sanitizers, "memtag-globals")
+			// TODO(mitchp): For now, enable memtag-heap with memtag-globals because the linker
+			// isn't new enough (https://reviews.llvm.org/differential/changeset/?ref=4243566).
+			sanitizers = append(sanitizers, "memtag-heap")
+		}
+
 		if Bool(sanProps.Fuzzer) {
 			sanitizers = append(sanitizers, "fuzzer-no-link")
 		}
@@ -1514,56 +1585,15 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 			diagSanitizers = sanitizers
 		}
 
-		// Determine the runtime library required
-		runtimeLibrary := ""
-		alwaysStaticRuntime := false
-		var extraStaticDeps []string
-		toolchain := c.toolchain(mctx)
-		if Bool(sanProps.Address) {
-			runtimeLibrary = config.AddressSanitizerRuntimeLibrary(toolchain)
-		} else if Bool(sanProps.Hwaddress) {
-			if c.staticBinary() {
-				runtimeLibrary = config.HWAddressSanitizerStaticLibrary(toolchain)
-				extraStaticDeps = []string{"libdl"}
-			} else {
-				runtimeLibrary = config.HWAddressSanitizerRuntimeLibrary(toolchain)
-			}
-		} else if Bool(sanProps.Thread) {
-			runtimeLibrary = config.ThreadSanitizerRuntimeLibrary(toolchain)
-		} else if Bool(sanProps.Scudo) {
-			if len(diagSanitizers) == 0 && !c.sanitize.Properties.UbsanRuntimeDep {
-				runtimeLibrary = config.ScudoMinimalRuntimeLibrary(toolchain)
-			} else {
-				runtimeLibrary = config.ScudoRuntimeLibrary(toolchain)
-			}
-		} else if len(diagSanitizers) > 0 || c.sanitize.Properties.UbsanRuntimeDep ||
-			Bool(sanProps.Fuzzer) ||
-			Bool(sanProps.Undefined) ||
-			Bool(sanProps.All_undefined) {
-			runtimeLibrary = config.UndefinedBehaviorSanitizerRuntimeLibrary(toolchain)
-			if c.staticBinary() || toolchain.Musl() {
-				// Use a static runtime for static binaries.
-				// Also use a static runtime for musl to match
-				// what clang does for glibc.  Otherwise dlopening
-				// libraries that depend on libclang_rt.ubsan_standalone.so
-				// fails with:
-				// Error relocating ...: initial-exec TLS resolves to dynamic definition
-				runtimeLibrary += ".static"
-				alwaysStaticRuntime = true
-			}
-		}
-
-		addStaticDeps := func(deps ...string) {
+		addStaticDeps := func(dep string, hideSymbols bool) {
 			// If we're using snapshots, redirect to snapshot whenever possible
 			snapshot := mctx.Provider(SnapshotInfoProvider).(SnapshotInfo)
-			for idx, dep := range deps {
-				if lib, ok := snapshot.StaticLibs[dep]; ok {
-					deps[idx] = lib
-				}
+			if lib, ok := snapshot.StaticLibs[dep]; ok {
+				dep = lib
 			}
 
 			// static executable gets static runtime libs
-			depTag := libraryDependencyTag{Kind: staticLibraryDependency, unexportedSymbols: true}
+			depTag := libraryDependencyTag{Kind: staticLibraryDependency, unexportedSymbols: hideSymbols}
 			variations := append(mctx.Target().Variations(),
 				blueprint.Variation{Mutator: "link", Variation: "static"})
 			if c.Device() {
@@ -1573,17 +1603,60 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 				variations = append(variations,
 					blueprint.Variation{Mutator: "sdk", Variation: "sdk"})
 			}
-			mctx.AddFarVariationDependencies(variations, depTag, deps...)
-
+			mctx.AddFarVariationDependencies(variations, depTag, dep)
 		}
+
+		// Determine the runtime library required
+		runtimeSharedLibrary := ""
+		toolchain := c.toolchain(mctx)
+		if Bool(sanProps.Address) {
+			if toolchain.Musl() || (c.staticBinary() && toolchain.Bionic()) {
+				// Use a static runtime for musl to match what clang does for glibc.
+				addStaticDeps(config.AddressSanitizerStaticRuntimeLibrary(toolchain), false)
+				addStaticDeps(config.AddressSanitizerCXXStaticRuntimeLibrary(toolchain), false)
+			} else {
+				runtimeSharedLibrary = config.AddressSanitizerRuntimeLibrary(toolchain)
+			}
+		} else if Bool(sanProps.Hwaddress) {
+			if c.staticBinary() {
+				addStaticDeps(config.HWAddressSanitizerStaticLibrary(toolchain), true)
+				addStaticDeps("libdl", false)
+			} else {
+				runtimeSharedLibrary = config.HWAddressSanitizerRuntimeLibrary(toolchain)
+			}
+		} else if Bool(sanProps.Thread) {
+			runtimeSharedLibrary = config.ThreadSanitizerRuntimeLibrary(toolchain)
+		} else if Bool(sanProps.Scudo) {
+			if len(diagSanitizers) == 0 && !c.sanitize.Properties.UbsanRuntimeDep {
+				runtimeSharedLibrary = config.ScudoMinimalRuntimeLibrary(toolchain)
+			} else {
+				runtimeSharedLibrary = config.ScudoRuntimeLibrary(toolchain)
+			}
+		} else if len(diagSanitizers) > 0 || c.sanitize.Properties.UbsanRuntimeDep ||
+			Bool(sanProps.Fuzzer) ||
+			Bool(sanProps.Undefined) ||
+			Bool(sanProps.All_undefined) {
+			if toolchain.Musl() || (c.staticBinary() && toolchain.Bionic()) {
+				// Use a static runtime for static binaries.
+				// Also use a static runtime for musl to match
+				// what clang does for glibc.  Otherwise dlopening
+				// libraries that depend on libclang_rt.ubsan_standalone.so
+				// fails with:
+				// Error relocating ...: initial-exec TLS resolves to dynamic definition
+				addStaticDeps(config.UndefinedBehaviorSanitizerRuntimeLibrary(toolchain)+".static", true)
+			} else {
+				runtimeSharedLibrary = config.UndefinedBehaviorSanitizerRuntimeLibrary(toolchain)
+			}
+		}
+
 		if enableMinimalRuntime(c.sanitize) || c.sanitize.Properties.MinimalRuntimeDep {
-			addStaticDeps(config.UndefinedBehaviorSanitizerMinimalRuntimeLibrary(toolchain))
+			addStaticDeps(config.UndefinedBehaviorSanitizerMinimalRuntimeLibrary(toolchain), true)
 		}
 		if c.sanitize.Properties.BuiltinsDep {
-			addStaticDeps(config.BuiltinsRuntimeLibrary(toolchain))
+			addStaticDeps(config.BuiltinsRuntimeLibrary(toolchain), true)
 		}
 
-		if runtimeLibrary != "" && (toolchain.Bionic() || toolchain.Musl() || c.sanitize.Properties.UbsanRuntimeDep) {
+		if runtimeSharedLibrary != "" && (toolchain.Bionic() || toolchain.Musl() || c.sanitize.Properties.UbsanRuntimeDep) {
 			// UBSan is supported on non-bionic linux host builds as well
 
 			// Adding dependency to the runtime library. We are using *FarVariation*
@@ -1593,14 +1666,17 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 			//
 			// Note that by adding dependency with {static|shared}DepTag, the lib is
 			// added to libFlags and LOCAL_SHARED_LIBRARIES by cc.Module
-			if c.staticBinary() || alwaysStaticRuntime {
-				addStaticDeps(runtimeLibrary)
-				addStaticDeps(extraStaticDeps...)
+			if c.staticBinary() {
+				// Most sanitizers are either disabled for static binaries or have already
+				// handled the static binary case above through a direct call to addStaticDeps.
+				// If not, treat the runtime shared library as a static library and hope for
+				// the best.
+				addStaticDeps(runtimeSharedLibrary, true)
 			} else if !c.static() && !c.Header() {
 				// If we're using snapshots, redirect to snapshot whenever possible
 				snapshot := mctx.Provider(SnapshotInfoProvider).(SnapshotInfo)
-				if lib, ok := snapshot.SharedLibs[runtimeLibrary]; ok {
-					runtimeLibrary = lib
+				if lib, ok := snapshot.SharedLibs[runtimeSharedLibrary]; ok {
+					runtimeSharedLibrary = lib
 				}
 
 				// Skip apex dependency check for sharedLibraryDependency
@@ -1624,7 +1700,7 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 					variations = append(variations,
 						blueprint.Variation{Mutator: "sdk", Variation: "sdk"})
 				}
-				AddSharedLibDependenciesWithVersions(mctx, c, variations, depTag, runtimeLibrary, "", true)
+				AddSharedLibDependenciesWithVersions(mctx, c, variations, depTag, runtimeSharedLibrary, "", true)
 			}
 			// static lib does not have dependency to the runtime library. The
 			// dependency will be added to the executables or shared libs using
@@ -1716,9 +1792,9 @@ func (s *sanitizerStaticLibsMap) add(c LinkableInterface, name string) {
 // These are to be used by use_soong_sanitized_static_libraries.
 // See build/make/core/binary.mk for more details.
 func (s *sanitizerStaticLibsMap) exportToMake(ctx android.MakeVarsContext) {
-	for _, image := range android.SortedStringKeys(s.libsMap) {
+	for _, image := range android.SortedKeys(s.libsMap) {
 		archMap := s.libsMap[ImageVariantType(image)]
-		for _, arch := range android.SortedStringKeys(archMap) {
+		for _, arch := range android.SortedKeys(archMap) {
 			libs := archMap[arch]
 			sort.Strings(libs)
 

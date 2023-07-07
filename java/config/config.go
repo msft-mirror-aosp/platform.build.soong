@@ -93,9 +93,15 @@ func init() {
 		"-JXmx4096M",
 		"-JXX:+TieredCompilation",
 		"-JXX:TieredStopAtLevel=1",
+		"-JDcom.android.tools.r8.emitRecordAnnotationsInDex",
+		"-JDcom.android.tools.r8.emitPermittedSubclassesAnnotationsInDex",
+		"-JDcom.android.tools.r8.emitRecordAnnotationsExInDex",
 	}, dexerJavaVmFlagsList...))
 	exportedVars.ExportStringListStaticVariable("R8Flags", append([]string{
 		"-JXmx2048M",
+		"-JDcom.android.tools.r8.emitRecordAnnotationsInDex",
+		"-JDcom.android.tools.r8.emitPermittedSubclassesAnnotationsInDex",
+		"-JDcom.android.tools.r8.emitRecordAnnotationsExInDex",
 	}, dexerJavaVmFlagsList...))
 
 	exportedVars.ExportStringListStaticVariable("CommonJdkFlags", []string{

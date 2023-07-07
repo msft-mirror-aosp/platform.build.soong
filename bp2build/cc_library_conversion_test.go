@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"testing"
 
+	"android/soong/aidl_library"
 	"android/soong/android"
 	"android/soong/cc"
 )
@@ -63,6 +64,7 @@ func registerCcLibraryModuleTypes(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("cc_library_static", cc.LibraryStaticFactory)
 	ctx.RegisterModuleType("cc_prebuilt_library_static", cc.PrebuiltStaticLibraryFactory)
 	ctx.RegisterModuleType("cc_library_headers", cc.LibraryHeaderFactory)
+	ctx.RegisterModuleType("aidl_library", aidl_library.AidlLibraryFactory)
 }
 
 func TestCcLibrarySimple(t *testing.T) {
@@ -2425,7 +2427,10 @@ cc_library {
 				"whole_archive_deps": `[":a_cc_proto_lite"]`,
 			}), MakeBazelTargetNoRestrictions("proto_library", "a_fg_proto_bp2build_converted", AttrNameToString{
 				"srcs": `["a_fg.proto"]`,
-				"tags": `["manual"]`,
+				"tags": `[
+        "apex_available=//apex_available:anyapex",
+        "manual",
+    ]`,
 			}), MakeBazelTargetNoRestrictions("filegroup", "a_fg_proto", AttrNameToString{
 				"srcs": `["a_fg.proto"]`,
 			}),
@@ -2464,7 +2469,10 @@ cc_library {
 				"whole_archive_deps": `[":a_cc_proto_lite"]`,
 			}), MakeBazelTargetNoRestrictions("proto_library", "a_fg_proto_bp2build_converted", AttrNameToString{
 				"srcs": `["a_fg.proto"]`,
-				"tags": `["manual"]`,
+				"tags": `[
+        "apex_available=//apex_available:anyapex",
+        "manual",
+    ]`,
 			}), MakeBazelTargetNoRestrictions("filegroup", "a_fg_proto", AttrNameToString{
 				"srcs": `["a_fg.proto"]`,
 			}),
@@ -2780,9 +2788,9 @@ func TestCcLibraryStubs(t *testing.T) {
 		"stubs_symbol_file": `"a.map.txt"`,
 	})
 	expectedBazelTargets = append(expectedBazelTargets, makeCcStubSuiteTargets("a", AttrNameToString{
-		"soname":            `"a.so"`,
-		"source_library":    `":a"`,
-		"stubs_symbol_file": `"a.map.txt"`,
+		"soname":               `"a.so"`,
+		"source_library_label": `"//foo/bar:a"`,
+		"stubs_symbol_file":    `"a.map.txt"`,
 		"stubs_versions": `[
         "28",
         "29",
@@ -3032,13 +3040,15 @@ cc_library {
 		},
 	},
 	bazel_module: { bp2build_available: true },
+	apex_available: ["foo"],
 }`,
 		ExpectedBazelTargets: makeCcLibraryTargets("foolib", AttrNameToString{
 			"implementation_dynamic_deps": `select({
-        "//build/bazel/rules/apex:android-in_apex": [":barlib_stub_libs_current"],
+        "//build/bazel/rules/apex:android-in_apex": ["@api_surfaces//module-libapi/current:barlib"],
         "//conditions:default": [":barlib"],
     })`,
 			"local_includes": `["."]`,
+			"tags":           `["apex_available=foo"]`,
 		}),
 	})
 }
@@ -3072,6 +3082,7 @@ cc_library {
 	},
 	include_build_directory: false,
 	bazel_module: { bp2build_available: true },
+	apex_available: ["foo"],
 }`,
 		ExpectedBazelTargets: makeCcLibraryTargets("foolib", AttrNameToString{
 			"implementation_dynamic_deps": `select({
@@ -3088,14 +3099,15 @@ cc_library {
         "//build/bazel/platforms/os:linux_musl": [":quxlib"],
         "//build/bazel/platforms/os:windows": [":quxlib"],
         "//build/bazel/rules/apex:android-in_apex": [
-            ":barlib_stub_libs_current",
-            ":quxlib_stub_libs_current",
+            "@api_surfaces//module-libapi/current:barlib",
+            "@api_surfaces//module-libapi/current:quxlib",
         ],
         "//conditions:default": [
             ":barlib",
             ":quxlib",
         ],
     })`,
+			"tags": `["apex_available=foo"]`,
 		}),
 	})
 }
@@ -3300,6 +3312,51 @@ func TestCcLibraryArchVariantSuffix(t *testing.T) {
 	})
 }
 
+func TestCcLibraryWithAidlLibrary(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library with aidl_library",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+aidl_library {
+    name: "A_aidl",
+    srcs: ["aidl/A.aidl"],
+	hdrs: ["aidl/Header.aidl"],
+	strip_import_prefix: "aidl",
+}
+cc_library {
+	name: "foo",
+	aidl: {
+		libs: ["A_aidl"],
+	},
+	export_include_dirs: ["include"],
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTargetNoRestrictions("aidl_library", "A_aidl", AttrNameToString{
+				"srcs":                `["aidl/A.aidl"]`,
+				"hdrs":                `["aidl/Header.aidl"]`,
+				"strip_import_prefix": `"aidl"`,
+				"tags":                `["apex_available=//apex_available:anyapex"]`,
+			}),
+			MakeBazelTarget("cc_aidl_library", "foo_cc_aidl_library", AttrNameToString{
+				"deps":            `[":A_aidl"]`,
+				"local_includes":  `["."]`,
+				"export_includes": `["include"]`,
+			}),
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"implementation_whole_archive_deps": `[":foo_cc_aidl_library"]`,
+				"local_includes":                    `["."]`,
+				"export_includes":                   `["include"]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"implementation_whole_archive_deps": `[":foo_cc_aidl_library"]`,
+				"local_includes":                    `["."]`,
+				"export_includes":                   `["include"]`,
+			}),
+		},
+	})
+}
+
 func TestCcLibraryWithAidlSrcs(t *testing.T) {
 	runCcLibraryTestCase(t, Bp2buildTestCase{
 		Description:                "cc_library with aidl srcs",
@@ -3322,11 +3379,13 @@ cc_library {
 			MakeBazelTargetNoRestrictions("aidl_library", "A_aidl", AttrNameToString{
 				"srcs":                `["aidl/A.aidl"]`,
 				"strip_import_prefix": `"aidl"`,
+				"tags":                `["apex_available=//apex_available:anyapex"]`,
 			}),
 			MakeBazelTarget("aidl_library", "foo_aidl_library", AttrNameToString{
 				"srcs": `["B.aidl"]`,
 			}),
 			MakeBazelTarget("cc_aidl_library", "foo_cc_aidl_library", AttrNameToString{
+				"local_includes": `["."]`,
 				"deps": `[
         ":A_aidl",
         ":foo_aidl_library",
@@ -3366,7 +3425,8 @@ cc_library {
 }`,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_aidl_library", "foo_cc_aidl_library", AttrNameToString{
-				"deps": `["//path/to/A:A_aidl"]`,
+				"local_includes": `["."]`,
+				"deps":           `["//path/to/A:A_aidl"]`,
 			}),
 			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
 				"implementation_whole_archive_deps": `[":foo_cc_aidl_library"]`,
@@ -3381,37 +3441,78 @@ cc_library {
 }
 
 func TestCcLibraryWithExportAidlHeaders(t *testing.T) {
-	runCcLibraryTestCase(t, Bp2buildTestCase{
-		Description:                "cc_library with export aidl headers",
-		ModuleTypeUnderTest:        "cc_library",
-		ModuleTypeUnderTestFactory: cc.LibraryFactory,
-		Blueprint: `
-cc_library {
-    name: "foo",
-    srcs: [
-        "Foo.aidl",
-    ],
-    aidl: {
-        export_aidl_headers: true,
-    }
-}`,
-		ExpectedBazelTargets: []string{
-			MakeBazelTarget("aidl_library", "foo_aidl_library", AttrNameToString{
-				"srcs": `["Foo.aidl"]`,
-			}),
-			MakeBazelTarget("cc_aidl_library", "foo_cc_aidl_library", AttrNameToString{
-				"deps": `[":foo_aidl_library"]`,
-			}),
-			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
-				"whole_archive_deps": `[":foo_cc_aidl_library"]`,
-				"local_includes":     `["."]`,
-			}),
-			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
-				"whole_archive_deps": `[":foo_cc_aidl_library"]`,
-				"local_includes":     `["."]`,
-			}),
+	t.Parallel()
+
+	expectedBazelTargets := []string{
+		MakeBazelTarget("cc_aidl_library", "foo_cc_aidl_library", AttrNameToString{
+			"local_includes": `["."]`,
+			"deps":           `[":foo_aidl_library"]`,
+		}),
+		MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+			"whole_archive_deps": `[":foo_cc_aidl_library"]`,
+			"local_includes":     `["."]`,
+		}),
+		MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+			"whole_archive_deps": `[":foo_cc_aidl_library"]`,
+			"local_includes":     `["."]`,
+		}),
+	}
+	testCases := []struct {
+		description          string
+		bp                   string
+		expectedBazelTargets []string
+	}{
+		{
+			description: "cc_library with aidl srcs and aidl.export_aidl_headers set",
+			bp: `
+			cc_library {
+				name: "foo",
+				srcs: [
+					"Foo.aidl",
+				],
+				aidl: {
+					export_aidl_headers: true,
+				}
+			}`,
+			expectedBazelTargets: append(
+				expectedBazelTargets,
+				MakeBazelTarget("aidl_library", "foo_aidl_library", AttrNameToString{
+					"srcs": `["Foo.aidl"]`,
+				})),
 		},
-	})
+		{
+			description: "cc_library with aidl.libs and aidl.export_aidl_headers set",
+			bp: `
+			aidl_library {
+				name: "foo_aidl_library",
+				srcs: ["Foo.aidl"],
+			}
+			cc_library {
+				name: "foo",
+				aidl: {
+					libs: ["foo_aidl_library"],
+					export_aidl_headers: true,
+				}
+			}`,
+			expectedBazelTargets: append(
+				expectedBazelTargets,
+				MakeBazelTargetNoRestrictions("aidl_library", "foo_aidl_library", AttrNameToString{
+					"srcs": `["Foo.aidl"]`,
+					"tags": `["apex_available=//apex_available:anyapex"]`,
+				}),
+			),
+		},
+	}
+
+	for _, testCase := range testCases {
+		runCcLibraryTestCase(t, Bp2buildTestCase{
+			Description:                "cc_library with export aidl headers",
+			ModuleTypeUnderTest:        "cc_library",
+			ModuleTypeUnderTestFactory: cc.LibraryFactory,
+			Blueprint:                  testCase.bp,
+			ExpectedBazelTargets:       testCase.expectedBazelTargets,
+		})
+	}
 }
 
 func TestCcLibraryWithTargetApex(t *testing.T) {
@@ -3591,42 +3692,58 @@ cc_library {
 	})
 }
 
-func TestCcLibraryWithAidlAndSharedLibs(t *testing.T) {
+func TestCcLibraryWithAidlAndLibs(t *testing.T) {
 	runCcLibraryTestCase(t, Bp2buildTestCase{
-		Description:                "cc_aidl_library depends on shared libs from parent cc_library_static",
+		Description:                "cc_aidl_library depends on libs from parent cc_library_static",
 		ModuleTypeUnderTest:        "cc_library",
 		ModuleTypeUnderTestFactory: cc.LibraryFactory,
 		Blueprint: `
 cc_library_static {
-    name: "foo",
-    srcs: [
-        "Foo.aidl",
-    ],
+	name: "foo",
+	srcs: [
+		"Foo.aidl",
+	],
+	static_libs: [
+		"bar-static",
+		"baz-static",
+	],
 	shared_libs: [
-		"bar",
-		"baz",
+		"bar-shared",
+		"baz-shared",
+	],
+	export_static_lib_headers: [
+		"baz-static",
 	],
 	export_shared_lib_headers: [
-		"baz",
+		"baz-shared",
 	],
 }` +
-			simpleModuleDoNotConvertBp2build("cc_library", "bar") +
-			simpleModuleDoNotConvertBp2build("cc_library", "baz"),
+			simpleModuleDoNotConvertBp2build("cc_library_static", "bar-static") +
+			simpleModuleDoNotConvertBp2build("cc_library_static", "baz-static") +
+			simpleModuleDoNotConvertBp2build("cc_library", "bar-shared") +
+			simpleModuleDoNotConvertBp2build("cc_library", "baz-shared"),
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("aidl_library", "foo_aidl_library", AttrNameToString{
 				"srcs": `["Foo.aidl"]`,
 			}),
 			MakeBazelTarget("cc_aidl_library", "foo_cc_aidl_library", AttrNameToString{
-				"deps": `[":foo_aidl_library"]`,
+				"local_includes": `["."]`,
+				"deps":           `[":foo_aidl_library"]`,
+				"implementation_deps": `[
+        ":baz-static",
+        ":bar-static",
+    ]`,
 				"implementation_dynamic_deps": `[
-        ":baz",
-        ":bar",
+        ":baz-shared",
+        ":bar-shared",
     ]`,
 			}),
 			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
 				"implementation_whole_archive_deps": `[":foo_cc_aidl_library"]`,
-				"dynamic_deps":                      `[":baz"]`,
-				"implementation_dynamic_deps":       `[":bar"]`,
+				"deps":                              `[":baz-static"]`,
+				"implementation_deps":               `[":bar-static"]`,
+				"dynamic_deps":                      `[":baz-shared"]`,
+				"implementation_dynamic_deps":       `[":bar-shared"]`,
 				"local_includes":                    `["."]`,
 			}),
 		},
@@ -3640,8 +3757,17 @@ func TestCcLibraryWithTidy(t *testing.T) {
 		ModuleTypeUnderTestFactory: cc.LibraryFactory,
 		Blueprint: `
 cc_library_static {
-    name: "foo",
-    srcs: ["foo.cpp"],
+	name: "foo",
+	srcs: ["foo.cpp"],
+}
+cc_library_static {
+	name: "foo-no-tidy",
+	srcs: ["foo.cpp"],
+	tidy: false,
+}
+cc_library_static {
+	name: "foo-tidy",
+	srcs: ["foo.cpp"],
 	tidy: true,
 	tidy_checks: ["check1", "check2"],
 	tidy_checks_as_errors: ["check1error", "check2error"],
@@ -3652,7 +3778,16 @@ cc_library_static {
 			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
 				"local_includes": `["."]`,
 				"srcs":           `["foo.cpp"]`,
-				"tidy":           `True`,
+			}),
+			MakeBazelTarget("cc_library_static", "foo-no-tidy", AttrNameToString{
+				"local_includes": `["."]`,
+				"srcs":           `["foo.cpp"]`,
+				"tidy":           `"never"`,
+			}),
+			MakeBazelTarget("cc_library_static", "foo-tidy", AttrNameToString{
+				"local_includes": `["."]`,
+				"srcs":           `["foo.cpp"]`,
+				"tidy":           `"local"`,
 				"tidy_checks": `[
         "check1",
         "check2",
@@ -4083,4 +4218,266 @@ cc_library {
 			}),
 		},
 	})
+}
+
+func TestCcLibraryInApexWithStubSharedLibs(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library with in apex with stub shared_libs and export_shared_lib_headers",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "barlib",
+	stubs: { symbol_file: "bar.map.txt", versions: ["28", "29", "current"] },
+	bazel_module: { bp2build_available: false },
+}
+cc_library {
+	name: "bazlib",
+	stubs: { symbol_file: "bar.map.txt", versions: ["28", "29", "current"] },
+	bazel_module: { bp2build_available: false },
+}
+cc_library {
+    name: "foo",
+	  shared_libs: ["barlib", "bazlib"],
+    export_shared_lib_headers: ["bazlib"],
+    apex_available: [
+        "apex_available:platform",
+    ],
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"implementation_dynamic_deps": `select({
+        "//build/bazel/rules/apex:android-in_apex": ["@api_surfaces//module-libapi/current:barlib"],
+        "//conditions:default": [":barlib"],
+    })`,
+				"dynamic_deps": `select({
+        "//build/bazel/rules/apex:android-in_apex": ["@api_surfaces//module-libapi/current:bazlib"],
+        "//conditions:default": [":bazlib"],
+    })`,
+				"local_includes": `["."]`,
+				"tags":           `["apex_available=apex_available:platform"]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"implementation_dynamic_deps": `select({
+        "//build/bazel/rules/apex:android-in_apex": ["@api_surfaces//module-libapi/current:barlib"],
+        "//conditions:default": [":barlib"],
+    })`,
+				"dynamic_deps": `select({
+        "//build/bazel/rules/apex:android-in_apex": ["@api_surfaces//module-libapi/current:bazlib"],
+        "//conditions:default": [":bazlib"],
+    })`,
+				"local_includes": `["."]`,
+				"tags":           `["apex_available=apex_available:platform"]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryWithThinLto(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library has correct features when thin LTO is enabled",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	lto: {
+		thin: true,
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"features":       `["android_thin_lto"]`,
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features":       `["android_thin_lto"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryWithLtoNever(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library has correct features when LTO is explicitly disabled",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	lto: {
+		never: true,
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"features":       `["-android_thin_lto"]`,
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features":       `["-android_thin_lto"]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryWithThinLtoArchSpecific(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library has correct features when LTO differs across arch and os variants",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	target: {
+		android: {
+			lto: {
+				thin: true,
+			},
+		},
+	},
+	arch: {
+		riscv64: {
+			lto: {
+				thin: false,
+			},
+		},
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `select({
+        "//build/bazel/platforms/os_arch:android_arm": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_arm64": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_riscv64": ["-android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_x86": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_x86_64": ["android_thin_lto"],
+        "//conditions:default": [],
+    })`}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `select({
+        "//build/bazel/platforms/os_arch:android_arm": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_arm64": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_riscv64": ["-android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_x86": ["android_thin_lto"],
+        "//build/bazel/platforms/os_arch:android_x86_64": ["android_thin_lto"],
+        "//conditions:default": [],
+    })`}),
+		},
+	})
+}
+
+func TestCcLibraryWithThinLtoDisabledDefaultEnabledVariant(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library has correct features when LTO disabled by default but enabled on a particular variant",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	lto: {
+		never: true,
+	},
+	target: {
+		android: {
+			lto: {
+				thin: true,
+				never: false,
+			},
+		},
+	},
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `select({
+        "//build/bazel/platforms/os:android": ["android_thin_lto"],
+        "//conditions:default": ["-android_thin_lto"],
+    })`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"local_includes": `["."]`,
+				"features": `select({
+        "//build/bazel/platforms/os:android": ["android_thin_lto"],
+        "//conditions:default": ["-android_thin_lto"],
+    })`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryWithThinLtoWholeProgramVtables(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library has correct features when thin LTO is enabled with whole_program_vtables",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+cc_library {
+	name: "foo",
+	lto: {
+		thin: true,
+	},
+	whole_program_vtables: true,
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
+				"features": `[
+        "android_thin_lto",
+        "android_thin_lto_whole_program_vtables",
+    ]`,
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
+				"features": `[
+        "android_thin_lto",
+        "android_thin_lto_whole_program_vtables",
+    ]`,
+				"local_includes": `["."]`,
+			}),
+		},
+	})
+}
+
+func TestCcLibraryCppFlagsInProductVariables(t *testing.T) {
+	runCcLibraryTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library cppflags in product variables",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: soongCcLibraryPreamble + `cc_library {
+    name: "a",
+    srcs: ["a.cpp"],
+    cppflags: [
+        "-Wextra",
+        "-DDEBUG_ONLY_CODE=0",
+    ],
+    product_variables: {
+        eng: {
+            cppflags: [
+                "-UDEBUG_ONLY_CODE",
+                "-DDEBUG_ONLY_CODE=1",
+            ],
+        },
+    },
+    include_build_directory: false,
+}
+`,
+		ExpectedBazelTargets: makeCcLibraryTargets("a", AttrNameToString{
+			"cppflags": `[
+        "-Wextra",
+        "-DDEBUG_ONLY_CODE=0",
+    ] + select({
+        "//build/bazel/product_variables:eng": [
+            "-UDEBUG_ONLY_CODE",
+            "-DDEBUG_ONLY_CODE=1",
+        ],
+        "//conditions:default": [],
+    })`,
+			"srcs": `["a.cpp"]`,
+		}),
+	},
+	)
 }
