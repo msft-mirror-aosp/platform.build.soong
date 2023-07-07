@@ -27,6 +27,7 @@ import (
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
+	"android/soong/aidl_library"
 	"android/soong/android"
 	"android/soong/bazel/cquery"
 	"android/soong/cc/config"
@@ -110,6 +111,9 @@ type Deps struct {
 	// Used by DepsMutator to pass system_shared_libs information to check_elf_file.py.
 	SystemSharedLibs []string
 
+	// Used by DepMutator to pass aidl_library modules to aidl compiler
+	AidlLibs []string
+
 	// If true, statically link the unwinder into native libraries/binaries.
 	StaticUnwinderIfLegacy bool
 
@@ -182,6 +186,9 @@ type PathDeps struct {
 	// For Darwin builds, the path to the second architecture's output that should
 	// be combined with this architectures's output into a FAT MachO file.
 	DarwinSecondArchOutput android.OptionalPath
+
+	// Paths to direct srcs and transitive include dirs from direct aidl_library deps
+	AidlLibraryInfos []aidl_library.AidlLibraryInfo
 }
 
 // LocalOrGlobalFlags contains flags that need to have values set globally by the build system or locally by the module
@@ -765,6 +772,7 @@ var (
 	stubImplDepTag        = dependencyTag{name: "stub_impl"}
 	JniFuzzLibTag         = dependencyTag{name: "jni_fuzz_lib_tag"}
 	FdoProfileTag         = dependencyTag{name: "fdo_profile"}
+	aidlLibraryTag        = dependencyTag{name: "aidl_library"}
 )
 
 func IsSharedDepTag(depTag blueprint.DependencyTag) bool {
@@ -1964,6 +1972,17 @@ func (c *Module) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 	c.maybeInstall(mctx, apexInfo)
 }
 
+func moduleContextFromAndroidModuleContext(actx android.ModuleContext, c *Module) ModuleContext {
+	ctx := &moduleContext{
+		ModuleContext: actx,
+		moduleContextImpl: moduleContextImpl{
+			mod: c,
+		},
+	}
+	ctx.ctx = ctx
+	return ctx
+}
+
 func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	// Handle the case of a test module split by `test_per_src` mutator.
 	//
@@ -1983,13 +2002,7 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 
 	c.makeLinkType = GetMakeLinkType(actx, c)
 
-	ctx := &moduleContext{
-		ModuleContext: actx,
-		moduleContextImpl: moduleContextImpl{
-			mod: c,
-		},
-	}
-	ctx.ctx = ctx
+	ctx := moduleContextFromAndroidModuleContext(actx, c)
 
 	deps := c.depsToPaths(ctx)
 	if ctx.Failed() {
@@ -2680,6 +2693,14 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		}
 	}
 
+	if len(deps.AidlLibs) > 0 {
+		actx.AddDependency(
+			c,
+			aidlLibraryTag,
+			deps.AidlLibs...,
+		)
+	}
+
 	updateImportedLibraryDependency(ctx)
 }
 
@@ -2982,6 +3003,17 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		if depTag == android.DarwinUniversalVariantTag {
 			depPaths.DarwinSecondArchOutput = dep.(*Module).OutputFile()
 			return
+		}
+
+		if depTag == aidlLibraryTag {
+			if ctx.OtherModuleHasProvider(dep, aidl_library.AidlLibraryProvider) {
+				depPaths.AidlLibraryInfos = append(
+					depPaths.AidlLibraryInfos,
+					ctx.OtherModuleProvider(
+						dep,
+						aidl_library.AidlLibraryProvider).(aidl_library.AidlLibraryInfo),
+				)
+			}
 		}
 
 		ccDep, ok := dep.(LinkableInterface)

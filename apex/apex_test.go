@@ -146,7 +146,7 @@ var prepareForApexTest = android.GroupFixturePreparers(
 	android.PrepareForTestWithAndroidBuildComponents,
 	bpf.PrepareForTestWithBpf,
 	cc.PrepareForTestWithCcBuildComponents,
-	java.PrepareForTestWithJavaDefaultModules,
+	java.PrepareForTestWithDexpreopt,
 	prebuilt_etc.PrepareForTestWithPrebuiltEtc,
 	rust.PrepareForTestWithRustDefaultModules,
 	sh.PrepareForTestWithShBuildComponents,
@@ -6165,6 +6165,7 @@ func TestApexWithApps(t *testing.T) {
 			sdk_version: "current",
 			system_modules: "none",
 			privileged: true,
+			privapp_allowlist: "privapp_allowlist_com.android.AppFooPriv.xml",
 			stl: "none",
 			apex_available: [ "myapex" ],
 		}
@@ -6194,6 +6195,7 @@ func TestApexWithApps(t *testing.T) {
 
 	ensureContains(t, copyCmds, "image.apex/app/AppFoo@TEST.BUILD_ID/AppFoo.apk")
 	ensureContains(t, copyCmds, "image.apex/priv-app/AppFooPriv@TEST.BUILD_ID/AppFooPriv.apk")
+	ensureContains(t, copyCmds, "image.apex/etc/permissions/privapp_allowlist_com.android.AppFooPriv.xml")
 
 	appZipRule := ctx.ModuleForTests("AppFoo", "android_common_apex10000").Description("zip jni libs")
 	// JNI libraries are uncompressed
@@ -6208,6 +6210,18 @@ func TestApexWithApps(t *testing.T) {
 		// ... and not directly inside the APEX
 		ensureNotContains(t, copyCmds, "image.apex/lib64/"+jni+".so")
 	}
+
+	apexBundle := module.Module().(*apexBundle)
+	data := android.AndroidMkDataForTest(t, ctx, apexBundle)
+	var builder strings.Builder
+	data.Custom(&builder, apexBundle.Name(), "TARGET_", "", data)
+	androidMk := builder.String()
+	ensureContains(t, androidMk, "LOCAL_MODULE := AppFooPriv.myapex")
+	ensureContains(t, androidMk, "LOCAL_MODULE := AppFoo.myapex")
+	ensureMatches(t, androidMk, "LOCAL_SOONG_INSTALLED_MODULE := \\S+AppFooPriv.apk")
+	ensureMatches(t, androidMk, "LOCAL_SOONG_INSTALLED_MODULE := \\S+AppFoo.apk")
+	ensureMatches(t, androidMk, "LOCAL_SOONG_INSTALL_PAIRS := \\S+AppFooPriv.apk")
+	ensureContains(t, androidMk, "LOCAL_SOONG_INSTALL_PAIRS := privapp_allowlist_com.android.AppFooPriv.xml:$(PRODUCT_OUT)/apex/myapex/etc/permissions/privapp_allowlist_com.android.AppFooPriv.xml")
 }
 
 func TestApexWithAppImportBuildId(t *testing.T) {
@@ -6539,6 +6553,266 @@ func TestApexAvailable_InvalidApexName(t *testing.T) {
 		stubs: {
 			versions: ["10", "20", "30"],
 		},
+	}`)
+}
+
+func TestApexAvailable_ApexAvailableNameWithVersionCodeError(t *testing.T) {
+	t.Run("negative variant_version produces error", func(t *testing.T) {
+		testApexError(t, "expected an integer between 0-9; got -1", `
+			apex {
+				name: "myapex",
+				key: "myapex.key",
+				apex_available_name: "com.android.foo",
+				variant_version: "-1",
+				updatable: false,
+			}
+			apex_key {
+				name: "myapex.key",
+				public_key: "testkey.avbpubkey",
+				private_key: "testkey.pem",
+			}
+		`)
+	})
+
+	t.Run("variant_version greater than 9 produces error", func(t *testing.T) {
+		testApexError(t, "expected an integer between 0-9; got 10", `
+			apex {
+				name: "myapex",
+				key: "myapex.key",
+				apex_available_name: "com.android.foo",
+				variant_version: "10",
+				updatable: false,
+			}
+			apex_key {
+				name: "myapex.key",
+				public_key: "testkey.avbpubkey",
+				private_key: "testkey.pem",
+			}
+		`)
+	})
+}
+
+func TestApexAvailable_ApexAvailableNameWithVersionCode(t *testing.T) {
+	context := android.GroupFixturePreparers(
+		android.PrepareForIntegrationTestWithAndroid,
+		PrepareForTestWithApexBuildComponents,
+		android.FixtureMergeMockFs(android.MockFS{
+			"system/sepolicy/apex/foo-file_contexts": nil,
+			"system/sepolicy/apex/bar-file_contexts": nil,
+		}),
+	)
+	result := context.RunTestWithBp(t, `
+		apex {
+			name: "foo",
+			key: "myapex.key",
+			apex_available_name: "com.android.foo",
+			variant_version: "0",
+			updatable: false,
+		}
+		apex {
+			name: "bar",
+			key: "myapex.key",
+			apex_available_name: "com.android.foo",
+			variant_version: "3",
+			updatable: false,
+		}
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`)
+
+	fooManifestRule := result.ModuleForTests("foo", "android_common_foo_image").Rule("apexManifestRule")
+	fooExpectedDefaultVersion := android.DefaultUpdatableModuleVersion
+	fooActualDefaultVersion := fooManifestRule.Args["default_version"]
+	if fooActualDefaultVersion != fooExpectedDefaultVersion {
+		t.Errorf("expected to find defaultVersion %q; got %q", fooExpectedDefaultVersion, fooActualDefaultVersion)
+	}
+
+	barManifestRule := result.ModuleForTests("bar", "android_common_bar_image").Rule("apexManifestRule")
+	defaultVersionInt, _ := strconv.Atoi(android.DefaultUpdatableModuleVersion)
+	barExpectedDefaultVersion := fmt.Sprint(defaultVersionInt + 3)
+	barActualDefaultVersion := barManifestRule.Args["default_version"]
+	if barActualDefaultVersion != barExpectedDefaultVersion {
+		t.Errorf("expected to find defaultVersion %q; got %q", barExpectedDefaultVersion, barActualDefaultVersion)
+	}
+}
+
+func TestApexAvailable_ApexAvailableName(t *testing.T) {
+	t.Run("using name of apex that sets apex_available_name is not allowed", func(t *testing.T) {
+		testApexError(t, "Consider adding \"myapex\" to 'apex_available' property of \"AppFoo\"", `
+			apex {
+				name: "myapex_sminus",
+				key: "myapex.key",
+				apps: ["AppFoo"],
+				apex_available_name: "myapex",
+				updatable: false,
+			}
+			apex {
+				name: "myapex",
+				key: "myapex.key",
+				apps: ["AppFoo"],
+				updatable: false,
+			}
+			apex_key {
+				name: "myapex.key",
+				public_key: "testkey.avbpubkey",
+				private_key: "testkey.pem",
+			}
+			android_app {
+				name: "AppFoo",
+				srcs: ["foo/bar/MyClass.java"],
+				sdk_version: "none",
+				system_modules: "none",
+				apex_available: [ "myapex_sminus" ],
+			}`,
+			android.FixtureMergeMockFs(android.MockFS{
+				"system/sepolicy/apex/myapex_sminus-file_contexts": nil,
+			}),
+		)
+	})
+
+	t.Run("apex_available_name allows module to be used in two different apexes", func(t *testing.T) {
+		testApex(t, `
+			apex {
+				name: "myapex_sminus",
+				key: "myapex.key",
+				apps: ["AppFoo"],
+				apex_available_name: "myapex",
+				updatable: false,
+			}
+			apex {
+				name: "myapex",
+				key: "myapex.key",
+				apps: ["AppFoo"],
+				updatable: false,
+			}
+			apex_key {
+				name: "myapex.key",
+				public_key: "testkey.avbpubkey",
+				private_key: "testkey.pem",
+			}
+			android_app {
+				name: "AppFoo",
+				srcs: ["foo/bar/MyClass.java"],
+				sdk_version: "none",
+				system_modules: "none",
+				apex_available: [ "myapex" ],
+			}`,
+			android.FixtureMergeMockFs(android.MockFS{
+				"system/sepolicy/apex/myapex_sminus-file_contexts": nil,
+			}),
+		)
+	})
+
+	t.Run("override_apexes work with apex_available_name", func(t *testing.T) {
+		testApex(t, `
+			override_apex {
+				name: "myoverrideapex_sminus",
+				base: "myapex_sminus",
+				key: "myapex.key",
+				apps: ["AppFooOverride"],
+			}
+			override_apex {
+				name: "myoverrideapex",
+				base: "myapex",
+				key: "myapex.key",
+				apps: ["AppFooOverride"],
+			}
+			apex {
+				name: "myapex_sminus",
+				key: "myapex.key",
+				apps: ["AppFoo"],
+				apex_available_name: "myapex",
+				updatable: false,
+			}
+			apex {
+				name: "myapex",
+				key: "myapex.key",
+				apps: ["AppFoo"],
+				updatable: false,
+			}
+			apex_key {
+				name: "myapex.key",
+				public_key: "testkey.avbpubkey",
+				private_key: "testkey.pem",
+			}
+			android_app {
+				name: "AppFooOverride",
+				srcs: ["foo/bar/MyClass.java"],
+				sdk_version: "none",
+				system_modules: "none",
+				apex_available: [ "myapex" ],
+			}
+			android_app {
+				name: "AppFoo",
+				srcs: ["foo/bar/MyClass.java"],
+				sdk_version: "none",
+				system_modules: "none",
+				apex_available: [ "myapex" ],
+			}`,
+			android.FixtureMergeMockFs(android.MockFS{
+				"system/sepolicy/apex/myapex_sminus-file_contexts": nil,
+			}),
+		)
+	})
+}
+
+func TestApexAvailable_ApexAvailableNameWithOverrides(t *testing.T) {
+	context := android.GroupFixturePreparers(
+		android.PrepareForIntegrationTestWithAndroid,
+		PrepareForTestWithApexBuildComponents,
+		java.PrepareForTestWithDexpreopt,
+		android.FixtureMergeMockFs(android.MockFS{
+			"system/sepolicy/apex/myapex-file_contexts":        nil,
+			"system/sepolicy/apex/myapex_sminus-file_contexts": nil,
+		}),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildId = proptools.StringPtr("buildid")
+		}),
+	)
+	context.RunTestWithBp(t, `
+	override_apex {
+		name: "myoverrideapex_sminus",
+		base: "myapex_sminus",
+	}
+	override_apex {
+		name: "myoverrideapex",
+		base: "myapex",
+	}
+	apex {
+		name: "myapex",
+		key: "myapex.key",
+		apps: ["AppFoo"],
+		updatable: false,
+	}
+	apex {
+		name: "myapex_sminus",
+		apex_available_name: "myapex",
+		key: "myapex.key",
+		apps: ["AppFoo_sminus"],
+		updatable: false,
+	}
+	apex_key {
+		name: "myapex.key",
+		public_key: "testkey.avbpubkey",
+		private_key: "testkey.pem",
+	}
+	android_app {
+		name: "AppFoo",
+		srcs: ["foo/bar/MyClass.java"],
+		sdk_version: "none",
+		system_modules: "none",
+		apex_available: [ "myapex" ],
+	}
+	android_app {
+		name: "AppFoo_sminus",
+		srcs: ["foo/bar/MyClass.java"],
+		sdk_version: "none",
+		min_sdk_version: "29",
+		system_modules: "none",
+		apex_available: [ "myapex" ],
 	}`)
 }
 
@@ -8289,8 +8563,8 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, "", preparer, fragments...)
 	})
 
-	t.Run("updatable jar from ART apex in the framework boot image => error", func(t *testing.T) {
-		err := `module "some-art-lib" from updatable apexes \["com.android.art.debug"\] is not allowed in the framework boot image`
+	t.Run("updatable jar from ART apex in the platform bootclasspath => error", func(t *testing.T) {
+		err := `module "some-art-lib" from updatable apexes \["com.android.art.debug"\] is not allowed in the platform bootclasspath`
 		// Update the dexpreopt BootJars directly.
 		preparer := android.GroupFixturePreparers(
 			prepareSetBootJars("com.android.art.debug:some-art-lib"),
@@ -8313,8 +8587,8 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, err, preparer)
 	})
 
-	t.Run("updatable jar from some other apex in the framework boot image => error", func(t *testing.T) {
-		err := `module "some-updatable-apex-lib" from updatable apexes \["some-updatable-apex"\] is not allowed in the framework boot image`
+	t.Run("updatable jar from some other apex in the platform bootclasspath => error", func(t *testing.T) {
+		err := `module "some-updatable-apex-lib" from updatable apexes \["some-updatable-apex"\] is not allowed in the platform bootclasspath`
 		preparer := android.GroupFixturePreparers(
 			java.FixtureConfigureBootJars("some-updatable-apex:some-updatable-apex-lib"),
 			java.FixtureConfigureApexBootJars("some-non-updatable-apex:some-non-updatable-apex-lib"),
@@ -8322,7 +8596,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, err, preparer)
 	})
 
-	t.Run("non-updatable jar from some other apex in the framework boot image => ok", func(t *testing.T) {
+	t.Run("non-updatable jar from some other apex in the platform bootclasspath => ok", func(t *testing.T) {
 		preparer := java.FixtureConfigureApexBootJars("some-non-updatable-apex:some-non-updatable-apex-lib")
 		fragment := java.ApexVariantReference{
 			Apex:   proptools.StringPtr("some-non-updatable-apex"),
@@ -8337,7 +8611,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, err, preparer)
 	})
 
-	t.Run("nonexistent jar in the framework boot image => error", func(t *testing.T) {
+	t.Run("nonexistent jar in the platform bootclasspath => error", func(t *testing.T) {
 		err := `"platform-bootclasspath" depends on undefined module "nonexistent"`
 		preparer := java.FixtureConfigureBootJars("platform:nonexistent")
 		testNoUpdatableJarsInBootImage(t, err, preparer)
@@ -8350,7 +8624,7 @@ func TestNoUpdatableJarsInBootImage(t *testing.T) {
 		testNoUpdatableJarsInBootImage(t, err, preparer)
 	})
 
-	t.Run("platform jar in the framework boot image => ok", func(t *testing.T) {
+	t.Run("platform jar in the platform bootclasspath => ok", func(t *testing.T) {
 		preparer := android.GroupFixturePreparers(
 			java.FixtureConfigureBootJars("platform:some-platform-lib"),
 			java.FixtureConfigureApexBootJars("some-non-updatable-apex:some-non-updatable-apex-lib"),
