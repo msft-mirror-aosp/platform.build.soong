@@ -356,9 +356,18 @@ func (m *ApexModuleBase) apexModuleBase() *ApexModuleBase {
 	return m
 }
 
+var (
+	availableToPlatformList = []string{AvailableToPlatform}
+)
+
 // Implements ApexModule
 func (m *ApexModuleBase) ApexAvailable() []string {
-	return m.ApexProperties.Apex_available
+	aa := m.ApexProperties.Apex_available
+	if len(aa) > 0 {
+		return aa
+	}
+	// Default is availability to platform
+	return CopyOf(availableToPlatformList)
 }
 
 // Implements ApexModule
@@ -442,6 +451,14 @@ const (
 	AvailableToGkiApex  = "com.android.gki.*"
 )
 
+var (
+	AvailableToRecognziedWildcards = []string{
+		AvailableToPlatform,
+		AvailableToAnyApex,
+		AvailableToGkiApex,
+	}
+)
+
 // CheckAvailableForApex provides the default algorithm for checking the apex availability. When the
 // availability is empty, it defaults to ["//apex_available:platform"] which means "available to the
 // platform but not available to any APEX". When the list is not empty, `what` is matched against
@@ -454,9 +471,9 @@ func CheckAvailableForApex(what string, apex_available []string) bool {
 	}
 	return InList(what, apex_available) ||
 		(what != AvailableToPlatform && InList(AvailableToAnyApex, apex_available)) ||
-		(what == "com.android.btservices" && InList("com.android.bluetooth", apex_available)) || // TODO b/243054261
-		(what == "com.android.bluetooth" && InList("com.android.btservices", apex_available)) || // TODO b/243054261
-		(strings.HasPrefix(what, "com.android.gki.") && InList(AvailableToGkiApex, apex_available))
+		(strings.HasPrefix(what, "com.android.gki.") && InList(AvailableToGkiApex, apex_available)) ||
+		(what == "com.google.mainline.primary.libs") || // TODO b/248601389
+		(what == "com.google.mainline.go.primary.libs") // TODO b/248601389
 }
 
 // Implements ApexModule
@@ -712,8 +729,8 @@ type ApexContents struct {
 
 // NewApexContents creates and initializes an ApexContents that is suitable
 // for use with an apex module.
-// * contents is a map from a module name to information about its membership within
-//   the apex.
+//   - contents is a map from a module name to information about its membership within
+//     the apex.
 func NewApexContents(contents map[string]ApexMembership) *ApexContents {
 	return &ApexContents{
 		contents: contents,
@@ -819,7 +836,7 @@ func (d *ApexBundleDepsInfo) BuildDepsInfoLists(ctx ModuleContext, minSdkVersion
 	var flatContent strings.Builder
 
 	fmt.Fprintf(&fullContent, "%s(minSdkVersion:%s):\n", ctx.ModuleName(), minSdkVersion)
-	for _, key := range FirstUniqueStrings(SortedStringKeys(depInfos)) {
+	for _, key := range FirstUniqueStrings(SortedKeys(depInfos)) {
 		info := depInfos[key]
 		toName := fmt.Sprintf("%s(minSdkVersion:%s)", info.To, info.MinSdkVersion)
 		if info.IsExternal {
@@ -838,64 +855,6 @@ func (d *ApexBundleDepsInfo) BuildDepsInfoLists(ctx ModuleContext, minSdkVersion
 	ctx.Phony(fmt.Sprintf("%s-depsinfo", ctx.ModuleName()), d.fullListPath, d.flatListPath)
 }
 
-// TODO(b/158059172): remove minSdkVersion allowlist
-var minSdkVersionAllowlist = func(apiMap map[string]int) map[string]ApiLevel {
-	list := make(map[string]ApiLevel, len(apiMap))
-	for name, finalApiInt := range apiMap {
-		list[name] = uncheckedFinalApiLevel(finalApiInt)
-	}
-	return list
-}(map[string]int{
-	"android.net.ipsec.ike":                                    30,
-	"androidx.annotation_annotation-nodeps":                    29,
-	"androidx.arch.core_core-common-nodeps":                    29,
-	"androidx.collection_collection-nodeps":                    29,
-	"androidx.collection_collection-ktx-nodeps":                30,
-	"androidx.concurrent_concurrent-futures-nodeps":            30,
-	"androidx.lifecycle_lifecycle-common-java8-nodeps":         30,
-	"androidx.lifecycle_lifecycle-common-nodeps":               29,
-	"androidx.room_room-common-nodeps":                         30,
-	"androidx-constraintlayout_constraintlayout-solver-nodeps": 29,
-	"apache-commons-compress":                                  29,
-	"bouncycastle_ike_digests":                                 30,
-	"brotli-java":                                              29,
-	"captiveportal-lib":                                        28,
-	"error_prone_annotations":                                  30,
-	"flatbuffer_headers":                                       30,
-	"framework-permission":                                     30,
-	"gemmlowp_headers":                                         30,
-	"guava-listenablefuture-prebuilt-jar":                      30,
-	"ike-internals":                                            30,
-	"kotlinx-coroutines-android":                               28,
-	"kotlinx-coroutines-android-nodeps":                        30,
-	"kotlinx-coroutines-core":                                  28,
-	"kotlinx-coroutines-core-nodeps":                           30,
-	"libbrotli":                                                30,
-	"libcrypto_static":                                         30,
-	"libeigen":                                                 30,
-	"liblz4":                                                   30,
-	"libmdnssd":                                                30,
-	"libneuralnetworks_common":                                 30,
-	"libneuralnetworks_headers":                                30,
-	"libneuralnetworks":                                        30,
-	"libprocpartition":                                         30,
-	"libprotobuf-java-lite":                                    30,
-	"libprotoutil":                                             30,
-	"libtextclassifier_hash_headers":                           30,
-	"libtextclassifier_hash_static":                            30,
-	"libtflite_kernel_utils":                                   30,
-	"libwatchdog":                                              29,
-	"libzstd":                                                  30,
-	"metrics-constants-protos":                                 28,
-	"net-utils-framework-common":                               29,
-	"permissioncontroller-statsd":                              28,
-	"philox_random_headers":                                    30,
-	"philox_random":                                            30,
-	"service-permission":                                       30,
-	"tensorflow_headers":                                       30,
-	"xz-java":                                                  29,
-})
-
 // Function called while walking an APEX's payload dependencies.
 //
 // Return true if the `to` module should be visited, false otherwise.
@@ -905,7 +864,7 @@ type WalkPayloadDepsFunc func(ctx ModuleContext, do PayloadDepsCallback)
 // ModuleWithMinSdkVersionCheck represents a module that implements min_sdk_version checks
 type ModuleWithMinSdkVersionCheck interface {
 	Module
-	MinSdkVersion(ctx EarlyModuleContext) SdkSpec
+	MinSdkVersion(ctx EarlyModuleContext) ApiLevel
 	CheckMinSdkVersion(ctx ModuleContext)
 }
 
@@ -947,16 +906,20 @@ func CheckMinSdkVersion(ctx ModuleContext, minSdkVersion ApiLevel, walk WalkPayl
 		}
 		if err := to.ShouldSupportSdkVersion(ctx, minSdkVersion); err != nil {
 			toName := ctx.OtherModuleName(to)
-			if ver, ok := minSdkVersionAllowlist[toName]; !ok || ver.GreaterThan(minSdkVersion) {
-				ctx.OtherModuleErrorf(to, "should support min_sdk_version(%v) for %q: %v."+
-					"\n\nDependency path: %s\n\n"+
-					"Consider adding 'min_sdk_version: %q' to %q",
-					minSdkVersion, ctx.ModuleName(), err.Error(),
-					ctx.GetPathString(false),
-					minSdkVersion, toName)
-				return false
-			}
+			ctx.OtherModuleErrorf(to, "should support min_sdk_version(%v) for %q: %v."+
+				"\n\nDependency path: %s\n\n"+
+				"Consider adding 'min_sdk_version: %q' to %q",
+				minSdkVersion, ctx.ModuleName(), err.Error(),
+				ctx.GetPathString(false),
+				minSdkVersion, toName)
+			return false
 		}
 		return true
 	})
+}
+
+// Implemented by apexBundle.
+type ApexTestInterface interface {
+	// Return true if the apex bundle is an apex_test
+	IsTestApex() bool
 }

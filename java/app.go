@@ -33,7 +33,16 @@ import (
 
 func init() {
 	RegisterAppBuildComponents(android.InitRegistrationContext)
+	pctx.HostBinToolVariable("ModifyAllowlistCmd", "modify_permissions_allowlist")
 }
+
+var (
+	modifyAllowlist = pctx.AndroidStaticRule("modifyAllowlist",
+		blueprint.RuleParams{
+			Command:     "${ModifyAllowlistCmd} $in $packageName $out",
+			CommandDeps: []string{"${ModifyAllowlistCmd}"},
+		}, "packageName")
+)
 
 func RegisterAppBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("android_app", AndroidAppFactory)
@@ -101,11 +110,23 @@ type appProperties struct {
 	PreventInstall    bool `blueprint:"mutated"`
 	IsCoverageVariant bool `blueprint:"mutated"`
 
+	// It can be set to test the behaviour of default target sdk version.
+	// Only required when updatable: false. It is an error if updatable: true and this is false.
+	Enforce_default_target_sdk_version *bool
+
+	// If set, the targetSdkVersion for the target is set to the latest default API level.
+	// This would be by default false, unless updatable: true or
+	// enforce_default_target_sdk_version: true in which case this defaults to true.
+	EnforceDefaultTargetSdkVersion bool `blueprint:"mutated"`
+
 	// Whether this app is considered mainline updatable or not. When set to true, this will enforce
 	// additional rules to make sure an app can safely be updated. Default is false.
 	// Prefer using other specific properties if build behaviour must be changed; avoid using this
 	// flag for anything but neverallow rules (unless the behaviour change is invisible to owners).
 	Updatable *bool
+
+	// Specifies the file that contains the allowlist for this app.
+	Privapp_allowlist *string `android:"path"`
 }
 
 // android_app properties that can be overridden by override_android_app
@@ -170,6 +191,8 @@ type AndroidApp struct {
 	android.ApexBundleDepsInfo
 
 	javaApiUsedByOutputFile android.ModuleOutPath
+
+	privAppAllowlist android.OptionalPath
 }
 
 func (a *AndroidApp) IsInstallable() bool {
@@ -194,6 +217,10 @@ func (a *AndroidApp) Certificate() Certificate {
 
 func (a *AndroidApp) JniCoverageOutputs() android.Paths {
 	return a.jniCoverageOutputs
+}
+
+func (a *AndroidApp) PrivAppAllowlist() android.OptionalPath {
+	return a.privAppAllowlist
 }
 
 var _ AndroidLibraryDependency = (*AndroidApp)(nil)
@@ -260,6 +287,16 @@ func (a *AndroidApp) OverridablePropertiesDepsMutator(ctx android.BottomUpMutato
 		ctx.AddDependency(ctx.Module(), certificateTag, cert)
 	}
 
+	if a.appProperties.Privapp_allowlist != nil && !Bool(a.appProperties.Privileged) {
+		// There are a few uids that are explicitly considered privileged regardless of their
+		// app's location. Bluetooth is one such app. It should arguably be moved to priv-app,
+		// but for now, allow it not to be in priv-app.
+		privilegedBecauseOfUid := ctx.ModuleName() == "Bluetooth"
+		if !privilegedBecauseOfUid {
+			ctx.PropertyErrorf("privapp_allowlist", "privileged must be set in order to use privapp_allowlist (with a few exceptions)")
+		}
+	}
+
 	for _, cert := range a.appProperties.Additional_certificates {
 		cert = android.SrcIsModule(cert)
 		if cert != "" {
@@ -295,6 +332,14 @@ func (a *AndroidApp) checkAppSdkVersions(ctx android.ModuleContext) {
 			android.CheckMinSdkVersion(ctx, minSdkVersion, a.WalkPayloadDeps)
 		} else {
 			ctx.PropertyErrorf("min_sdk_version", "%s", err.Error())
+		}
+
+		if !BoolDefault(a.appProperties.Enforce_default_target_sdk_version, true) {
+			ctx.PropertyErrorf("enforce_default_target_sdk_version", "Updatable apps must enforce default target sdk version")
+		}
+		// TODO(b/227460469) after all the modules removes the target sdk version, throw an error if the target sdk version is explicitly set.
+		if a.deviceProperties.Target_sdk_version == nil {
+			a.SetEnforceDefaultTargetSdkVersion(true)
 		}
 	}
 
@@ -423,8 +468,11 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 
 	a.aapt.splitNames = a.appProperties.Package_splits
 	a.aapt.LoggingParent = String(a.overridableAppProperties.Logging_parent)
+	if a.Updatable() {
+		a.aapt.defaultManifestVersion = android.DefaultUpdatableModuleVersion
+	}
 	a.aapt.buildActions(ctx, android.SdkContext(a), a.classLoaderContexts,
-		a.usesLibraryProperties.Exclude_uses_libs, aaptLinkFlags...)
+		a.usesLibraryProperties.Exclude_uses_libs, a.enforceDefaultTargetSdkVersion(), aaptLinkFlags...)
 
 	// apps manifests are handled by aapt, don't let Module see them
 	a.properties.Manifest = nil
@@ -433,7 +481,7 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 func (a *AndroidApp) proguardBuildActions(ctx android.ModuleContext) {
 	var staticLibProguardFlagFiles android.Paths
 	ctx.VisitDirectDeps(func(m android.Module) {
-		if lib, ok := m.(AndroidLibraryDependency); ok && ctx.OtherModuleDependencyTag(m) == staticLibTag {
+		if lib, ok := m.(LibraryDependency); ok && ctx.OtherModuleDependencyTag(m) == staticLibTag {
 			staticLibProguardFlagFiles = append(staticLibProguardFlagFiles, lib.ExportedProguardFlagFiles()...)
 		}
 	})
@@ -478,14 +526,14 @@ func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext) android.Path {
 	return a.dexJarFile.PathOrNil()
 }
 
-func (a *AndroidApp) jniBuildActions(jniLibs []jniLib, ctx android.ModuleContext) android.WritablePath {
+func (a *AndroidApp) jniBuildActions(jniLibs []jniLib, prebuiltJniPackages android.Paths, ctx android.ModuleContext) android.WritablePath {
 	var jniJarFile android.WritablePath
-	if len(jniLibs) > 0 {
+	if len(jniLibs) > 0 || len(prebuiltJniPackages) > 0 {
 		a.jniLibs = jniLibs
 		if a.shouldEmbedJnis(ctx) {
 			jniJarFile = android.PathForModuleOut(ctx, "jnilibs.zip")
 			a.installPathForJNISymbols = a.installPath(ctx)
-			TransformJniLibsToJar(ctx, jniJarFile, jniLibs, a.useEmbeddedNativeLibs(ctx))
+			TransformJniLibsToJar(ctx, jniJarFile, jniLibs, prebuiltJniPackages, a.useEmbeddedNativeLibs(ctx))
 			for _, jni := range jniLibs {
 				if jni.coverageFile.Valid() {
 					// Only collect coverage for the first target arch if this is a multilib target.
@@ -523,7 +571,8 @@ func (a *AndroidApp) JNISymbolsInstalls(installPath string) android.RuleBuilderI
 
 // Reads and prepends a main cert from the default cert dir if it hasn't been set already, i.e. it
 // isn't a cert module reference. Also checks and enforces system cert restriction if applicable.
-func processMainCert(m android.ModuleBase, certPropValue string, certificates []Certificate, ctx android.ModuleContext) []Certificate {
+func processMainCert(m android.ModuleBase, certPropValue string, certificates []Certificate,
+	ctx android.ModuleContext) (mainCertificate Certificate, allCertificates []Certificate) {
 	if android.SrcIsModule(certPropValue) == "" {
 		var mainCert Certificate
 		if certPropValue != "" {
@@ -542,8 +591,23 @@ func processMainCert(m android.ModuleBase, certPropValue string, certificates []
 		certificates = append([]Certificate{mainCert}, certificates...)
 	}
 
+	if len(certificates) > 0 {
+		mainCertificate = certificates[0]
+	} else {
+		// This can be reached with an empty certificate list if AllowMissingDependencies is set
+		// and the certificate property for this module is a module reference to a missing module.
+		if !ctx.Config().AllowMissingDependencies() && len(ctx.GetMissingDependencies()) > 0 {
+			panic("Should only get here if AllowMissingDependencies set and there are missing dependencies")
+		}
+		// Set a certificate to avoid panics later when accessing it.
+		mainCertificate = Certificate{
+			Key: android.PathForModuleOut(ctx, "missing.pk8"),
+			Pem: android.PathForModuleOut(ctx, "missing.x509.pem"),
+		}
+	}
+
 	if !m.Platform() {
-		certPath := certificates[0].Pem.String()
+		certPath := mainCertificate.Pem.String()
 		systemCertPath := ctx.Config().DefaultAppCertificateDir(ctx).String()
 		if strings.HasPrefix(certPath, systemCertPath) {
 			enforceSystemCert := ctx.Config().EnforceSystemCertificate()
@@ -555,11 +619,40 @@ func processMainCert(m android.ModuleBase, certPropValue string, certificates []
 		}
 	}
 
-	return certificates
+	return mainCertificate, certificates
 }
 
 func (a *AndroidApp) InstallApkName() string {
 	return a.installApkName
+}
+
+func (a *AndroidApp) createPrivappAllowlist(ctx android.ModuleContext) android.Path {
+	if a.appProperties.Privapp_allowlist == nil {
+		return nil
+	}
+
+	isOverrideApp := a.GetOverriddenBy() != ""
+	if !isOverrideApp {
+		// if this is not an override, we don't need to rewrite the existing privapp allowlist
+		return android.PathForModuleSrc(ctx, *a.appProperties.Privapp_allowlist)
+	}
+
+	if a.overridableAppProperties.Package_name == nil {
+		ctx.PropertyErrorf("privapp_allowlist", "package_name must be set to use privapp_allowlist")
+	}
+
+	packageName := *a.overridableAppProperties.Package_name
+	fileName := "privapp_allowlist_" + packageName + ".xml"
+	outPath := android.PathForModuleOut(ctx, fileName).OutputPath
+	ctx.Build(pctx, android.BuildParams{
+		Rule:   modifyAllowlist,
+		Input:  android.PathForModuleSrc(ctx, *a.appProperties.Privapp_allowlist),
+		Output: outPath,
+		Args: map[string]string{
+			"packageName": packageName,
+		},
+	})
+	return &outPath
 }
 
 func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
@@ -599,6 +692,11 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		a.aapt.noticeFile = android.OptionalPathForPath(noticeAssetPath)
 	}
 
+	// For apps targeting latest target_sdk_version
+	if Bool(a.appProperties.Enforce_default_target_sdk_version) {
+		a.SetEnforceDefaultTargetSdkVersion(true)
+	}
+
 	// Process all building blocks, from AAPT to certificates.
 	a.aaptBuildActions(ctx)
 
@@ -629,29 +727,14 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 
 	dexJarFile := a.dexBuildActions(ctx)
 
-	jniLibs, certificateDeps := collectAppDeps(ctx, a, a.shouldEmbedJnis(ctx), !Bool(a.appProperties.Jni_uses_platform_apis))
-	jniJarFile := a.jniBuildActions(jniLibs, ctx)
+	jniLibs, prebuiltJniPackages, certificates := collectAppDeps(ctx, a, a.shouldEmbedJnis(ctx), !Bool(a.appProperties.Jni_uses_platform_apis))
+	jniJarFile := a.jniBuildActions(jniLibs, prebuiltJniPackages, ctx)
 
 	if ctx.Failed() {
 		return
 	}
 
-	certificates := processMainCert(a.ModuleBase, a.getCertString(ctx), certificateDeps, ctx)
-
-	// This can be reached with an empty certificate list if AllowMissingDependencies is set
-	// and the certificate property for this module is a module reference to a missing module.
-	if len(certificates) > 0 {
-		a.certificate = certificates[0]
-	} else {
-		if !ctx.Config().AllowMissingDependencies() && len(ctx.GetMissingDependencies()) > 0 {
-			panic("Should only get here if AllowMissingDependencies set and there are missing dependencies")
-		}
-		// Set a certificate to avoid panics later when accessing it.
-		a.certificate = Certificate{
-			Key: android.PathForModuleOut(ctx, "missing.pk8"),
-			Pem: android.PathForModuleOut(ctx, "missing.pem"),
-		}
-	}
+	a.certificate, certificates = processMainCert(a.ModuleBase, a.getCertString(ctx), certificates, ctx)
 
 	// Build a final signed app package.
 	packageFile := android.PathForModuleOut(ctx, a.installApkName+".apk")
@@ -664,10 +747,9 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	if lineage := String(a.overridableAppProperties.Lineage); lineage != "" {
 		lineageFile = android.PathForModuleSrc(ctx, lineage)
 	}
-
 	rotationMinSdkVersion := String(a.overridableAppProperties.RotationMinSdkVersion)
 
-	CreateAndSignAppPackage(ctx, packageFile, a.exportPackage, jniJarFile, dexJarFile, certificates, apkDeps, v4SignatureFile, lineageFile, rotationMinSdkVersion)
+	CreateAndSignAppPackage(ctx, packageFile, a.exportPackage, jniJarFile, dexJarFile, certificates, apkDeps, v4SignatureFile, lineageFile, rotationMinSdkVersion, Bool(a.dexProperties.Optimize.Shrink_resources))
 	a.outputFile = packageFile
 	if v4SigningRequested {
 		a.extraOutputFiles = append(a.extraOutputFiles, v4SignatureFile)
@@ -696,7 +778,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		if v4SigningRequested {
 			v4SignatureFile = android.PathForModuleOut(ctx, a.installApkName+"_"+split.suffix+".apk.idsig")
 		}
-		CreateAndSignAppPackage(ctx, packageFile, split.path, nil, nil, certificates, apkDeps, v4SignatureFile, lineageFile, rotationMinSdkVersion)
+		CreateAndSignAppPackage(ctx, packageFile, split.path, nil, nil, certificates, apkDeps, v4SignatureFile, lineageFile, rotationMinSdkVersion, false)
 		a.extraOutputFiles = append(a.extraOutputFiles, packageFile)
 		if v4SigningRequested {
 			a.extraOutputFiles = append(a.extraOutputFiles, v4SignatureFile)
@@ -708,11 +790,21 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	BuildBundleModule(ctx, bundleFile, a.exportPackage, jniJarFile, dexJarFile)
 	a.bundleFile = bundleFile
 
+	allowlist := a.createPrivappAllowlist(ctx)
+	if allowlist != nil {
+		a.privAppAllowlist = android.OptionalPathForPath(allowlist)
+	}
+
 	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
 
 	// Install the app package.
-	if (Bool(a.Module.properties.Installable) || ctx.Host()) && apexInfo.IsForPlatform() &&
-		!a.appProperties.PreventInstall {
+	shouldInstallAppPackage := (Bool(a.Module.properties.Installable) || ctx.Host()) && apexInfo.IsForPlatform() && !a.appProperties.PreventInstall
+	if shouldInstallAppPackage {
+		if a.privAppAllowlist.Valid() {
+			allowlistInstallPath := android.PathForModuleInstall(ctx, "etc", "permissions")
+			allowlistInstallFilename := a.installApkName + ".xml"
+			ctx.InstallFile(allowlistInstallPath, allowlistInstallFilename, a.privAppAllowlist.Path())
+		}
 
 		var extraInstalledPaths android.Paths
 		for _, extra := range a.extraOutputFiles {
@@ -727,15 +819,16 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 
 type appDepsInterface interface {
 	SdkVersion(ctx android.EarlyModuleContext) android.SdkSpec
-	MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec
+	MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel
 	RequiresStableAPIs(ctx android.BaseModuleContext) bool
 }
 
 func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 	shouldCollectRecursiveNativeDeps bool,
-	checkNativeSdkVersion bool) ([]jniLib, []Certificate) {
+	checkNativeSdkVersion bool) ([]jniLib, android.Paths, []Certificate) {
 
 	var jniLibs []jniLib
+	var prebuiltJniPackages android.Paths
 	var certificates []Certificate
 	seenModulePaths := make(map[string]bool)
 
@@ -773,7 +866,10 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 						target:         module.Target(),
 						coverageFile:   dep.CoverageOutputFile(),
 						unstrippedFile: dep.UnstrippedOutputFile(),
+						partition:      dep.Partition(),
 					})
+				} else if ctx.Config().AllowMissingDependencies() {
+					ctx.AddMissingDependencies([]string{otherName})
 				} else {
 					ctx.ModuleErrorf("dependency %q missing output file", otherName)
 				}
@@ -782,6 +878,10 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 			}
 
 			return shouldCollectRecursiveNativeDeps
+		}
+
+		if info, ok := ctx.OtherModuleProvider(module, JniPackageProvider).(JniPackageInfo); ok {
+			prebuiltJniPackages = append(prebuiltJniPackages, info.JniPackages...)
 		}
 
 		if tag == certificateTag {
@@ -795,7 +895,7 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 		return false
 	})
 
-	return jniLibs, certificates
+	return jniLibs, prebuiltJniPackages, certificates
 }
 
 func (a *AndroidApp) WalkPayloadDeps(ctx android.ModuleContext, do android.PayloadDepsCallback) {
@@ -832,10 +932,10 @@ func (a *AndroidApp) buildAppDependencyInfo(ctx android.ModuleContext) {
 		} else {
 			toMinSdkVersion := "(no version)"
 			if m, ok := to.(interface {
-				MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec
+				MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel
 			}); ok {
-				if v := m.MinSdkVersion(ctx); !v.ApiLevel.IsNone() {
-					toMinSdkVersion = v.ApiLevel.String()
+				if v := m.MinSdkVersion(ctx); !v.IsNone() {
+					toMinSdkVersion = v.String()
 				}
 			} else if m, ok := to.(interface{ MinSdkVersion() string }); ok {
 				// TODO(b/175678607) eliminate the use of MinSdkVersion returning
@@ -855,6 +955,14 @@ func (a *AndroidApp) buildAppDependencyInfo(ctx android.ModuleContext) {
 	})
 
 	a.ApexBundleDepsInfo.BuildDepsInfoLists(ctx, a.MinSdkVersion(ctx).String(), depsInfo)
+}
+
+func (a *AndroidApp) enforceDefaultTargetSdkVersion() bool {
+	return a.appProperties.EnforceDefaultTargetSdkVersion
+}
+
+func (a *AndroidApp) SetEnforceDefaultTargetSdkVersion(val bool) {
+	a.appProperties.EnforceDefaultTargetSdkVersion = val
 }
 
 func (a *AndroidApp) Updatable() bool {
@@ -883,6 +991,10 @@ func (a *AndroidApp) DepIsInSameApex(ctx android.BaseModuleContext, dep android.
 // For OutputFileProducer interface
 func (a *AndroidApp) OutputFiles(tag string) (android.Paths, error) {
 	switch tag {
+	// In some instances, it can be useful to reference the aapt-generated flags from another
+	// target, e.g., system server implements services declared in the framework-res manifest.
+	case ".aapt.proguardOptionsFile":
+		return []android.Path{a.proguardOptionsFile}, nil
 	case ".aapt.srcjar":
 		return []android.Path{a.aaptSrcJar}, nil
 	case ".export-package.apk":
@@ -943,8 +1055,11 @@ type appTestProperties struct {
 	// The name of the android_app module that the tests will run against.
 	Instrumentation_for *string
 
-	// if specified, the instrumentation target package name in the manifest is overwritten by it.
+	// If specified, the instrumentation target package name in the manifest is overwritten by it.
 	Instrumentation_target_package *string
+
+	// If specified, the mainline module package name in the test config is overwritten by it.
+	Mainline_package_name *string
 }
 
 type AndroidTest struct {
@@ -1022,6 +1137,11 @@ func (a *AndroidTest) FixTestConfig(ctx android.ModuleContext, testConfig androi
 			FlagWithArg("--package-name ", *a.overridableAppProperties.Package_name)
 	}
 
+	if a.appTestProperties.Mainline_package_name != nil {
+		fixNeeded = true
+		command.FlagWithArg("--mainline-package-name ", *a.appTestProperties.Mainline_package_name)
+	}
+
 	if fixNeeded {
 		rule.Build("fix_test_config", "fix test config")
 		return fixedConfig
@@ -1048,7 +1168,7 @@ func (a *AndroidTest) OverridablePropertiesDepsMutator(ctx android.BottomUpMutat
 func AndroidTestFactory() android.Module {
 	module := &AndroidTest{}
 
-	module.Module.dexProperties.Optimize.EnabledByDefault = true
+	module.Module.dexProperties.Optimize.EnabledByDefault = false
 
 	module.Module.properties.Instrument = true
 	module.Module.properties.Supports_static_instrumentation = true
@@ -1056,7 +1176,7 @@ func AndroidTestFactory() android.Module {
 	module.appProperties.Use_embedded_native_libs = proptools.BoolPtr(true)
 	module.appProperties.AlwaysPackageNativeLibs = true
 	module.Module.dexpreopter.isTest = true
-	module.Module.linter.test = true
+	module.Module.linter.properties.Lint.Test = proptools.BoolPtr(true)
 
 	module.addHostAndDeviceProperties()
 	module.AddProperties(
@@ -1102,13 +1222,14 @@ func (a *AndroidTestHelperApp) InstallInTestcases() bool {
 func AndroidTestHelperAppFactory() android.Module {
 	module := &AndroidTestHelperApp{}
 
+	// TODO(b/192032291): Disable by default after auditing downstream usage.
 	module.Module.dexProperties.Optimize.EnabledByDefault = true
 
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 	module.appProperties.Use_embedded_native_libs = proptools.BoolPtr(true)
 	module.appProperties.AlwaysPackageNativeLibs = true
 	module.Module.dexpreopter.isTest = true
-	module.Module.linter.test = true
+	module.Module.linter.properties.Lint.Test = proptools.BoolPtr(true)
 
 	module.addHostAndDeviceProperties()
 	module.AddProperties(
@@ -1256,31 +1377,23 @@ func (u *usesLibrary) addLib(lib string, optional bool) {
 	}
 }
 
-func (u *usesLibrary) deps(ctx android.BottomUpMutatorContext, hasFrameworkLibs bool) {
+func (u *usesLibrary) deps(ctx android.BottomUpMutatorContext, addCompatDeps bool) {
 	if !ctx.Config().UnbundledBuild() || ctx.Config().UnbundledBuildImage() {
-		reqTag := makeUsesLibraryDependencyTag(dexpreopt.AnySdkVersion, false, false)
-		ctx.AddVariationDependencies(nil, reqTag, u.usesLibraryProperties.Uses_libs...)
-
-		optTag := makeUsesLibraryDependencyTag(dexpreopt.AnySdkVersion, true, false)
-		ctx.AddVariationDependencies(nil, optTag, u.presentOptionalUsesLibs(ctx)...)
-
-		// Only add these extra dependencies if the module depends on framework libs. This avoids
-		// creating a cyclic dependency:
+		ctx.AddVariationDependencies(nil, usesLibReqTag, u.usesLibraryProperties.Uses_libs...)
+		ctx.AddVariationDependencies(nil, usesLibOptTag, u.presentOptionalUsesLibs(ctx)...)
+		// Only add these extra dependencies if the module is an app that depends on framework
+		// libs. This avoids creating a cyclic dependency:
 		//     e.g. framework-res -> org.apache.http.legacy -> ... -> framework-res.
-		if hasFrameworkLibs {
-			// Add implicit <uses-library> dependencies on compatibility libraries. Some of them are
-			// optional, and some required --- this depends on the most common usage of the library
-			// and may be wrong for some apps (they need explicit `uses_libs`/`optional_uses_libs`).
-
-			compat28OptTag := makeUsesLibraryDependencyTag(28, true, true)
-			ctx.AddVariationDependencies(nil, compat28OptTag, dexpreopt.OptionalCompatUsesLibs28...)
-
-			compat29ReqTag := makeUsesLibraryDependencyTag(29, false, true)
-			ctx.AddVariationDependencies(nil, compat29ReqTag, dexpreopt.CompatUsesLibs29...)
-
-			compat30OptTag := makeUsesLibraryDependencyTag(30, true, true)
-			ctx.AddVariationDependencies(nil, compat30OptTag, dexpreopt.OptionalCompatUsesLibs30...)
+		if addCompatDeps {
+			// Dexpreopt needs paths to the dex jars of these libraries in order to construct
+			// class loader context for dex2oat. Add them as a dependency with a special tag.
+			ctx.AddVariationDependencies(nil, usesLibCompat29ReqTag, dexpreopt.CompatUsesLibs29...)
+			ctx.AddVariationDependencies(nil, usesLibCompat28OptTag, dexpreopt.OptionalCompatUsesLibs28...)
+			ctx.AddVariationDependencies(nil, usesLibCompat30OptTag, dexpreopt.OptionalCompatUsesLibs30...)
 		}
+	} else {
+		ctx.AddVariationDependencies(nil, r8LibraryJarTag, u.usesLibraryProperties.Uses_libs...)
+		ctx.AddVariationDependencies(nil, r8LibraryJarTag, u.presentOptionalUsesLibs(ctx)...)
 	}
 }
 
@@ -1338,7 +1451,7 @@ func (u *usesLibrary) classLoaderContextForUsesLibDeps(ctx android.ModuleContext
 				replaceInList(u.usesLibraryProperties.Uses_libs, dep, libName)
 				replaceInList(u.usesLibraryProperties.Optional_uses_libs, dep, libName)
 			}
-			clcMap.AddContext(ctx, tag.sdkVersion, libName, tag.optional, tag.implicit,
+			clcMap.AddContext(ctx, tag.sdkVersion, libName, tag.optional,
 				lib.DexJarBuildPath().PathOrNil(), lib.DexJarInstallPath(),
 				lib.ClassLoaderContexts())
 		} else if ctx.Config().AllowMissingDependencies() {
@@ -1388,7 +1501,7 @@ func (u *usesLibrary) verifyUsesLibraries(ctx android.ModuleContext, inputFile a
 		Flag("--enforce-uses-libraries").
 		Input(inputFile).
 		FlagWithOutput("--enforce-uses-libraries-status ", statusFile).
-		FlagWithInput("--aapt ", ctx.Config().HostToolPath(ctx, "aapt"))
+		FlagWithInput("--aapt ", ctx.Config().HostToolPath(ctx, "aapt2"))
 
 	if outputFile != nil {
 		cmd.FlagWithOutput("-o ", outputFile)
@@ -1447,71 +1560,91 @@ func androidAppCertificateBp2Build(ctx android.TopDownMutatorContext, module *An
 
 	props := bazel.BazelTargetModuleProperties{
 		Rule_class:        "android_app_certificate",
-		Bzl_load_location: "//build/bazel/rules/android:android_app_certificate.bzl",
+		Bzl_load_location: "//build/bazel/rules/android:rules.bzl",
 	}
 
 	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: module.Name()}, attrs)
 }
 
+type manifestValueAttribute struct {
+	MinSdkVersion *string
+}
+
 type bazelAndroidAppAttributes struct {
 	*javaCommonAttributes
+	*bazelAapt
 	Deps             bazel.LabelListAttribute
-	Manifest         bazel.Label
 	Custom_package   *string
-	Resource_files   bazel.LabelListAttribute
-	Certificate      *bazel.Label
-	Certificate_name *string
+	Certificate      bazel.LabelAttribute
+	Certificate_name bazel.StringAttribute
+	Manifest_values  *manifestValueAttribute
 }
 
 // ConvertWithBp2build is used to convert android_app to Bazel.
 func (a *AndroidApp) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
-	commonAttrs, depLabels := a.convertLibraryAttrsBp2Build(ctx)
+	commonAttrs, bp2BuildInfo := a.convertLibraryAttrsBp2Build(ctx)
+	depLabels := bp2BuildInfo.DepLabels
 
 	deps := depLabels.Deps
-	if !commonAttrs.Srcs.IsEmpty() {
-		deps.Append(depLabels.StaticDeps) // we should only append these if there are sources to use them
-	} else if !deps.IsEmpty() || !depLabels.StaticDeps.IsEmpty() {
-		ctx.ModuleErrorf("android_app has dynamic or static dependencies but no sources." +
-			" Bazel does not allow direct dependencies without sources nor exported" +
-			" dependencies on android_binary rule.")
+	deps.Append(depLabels.StaticDeps)
+
+	aapt := a.convertAaptAttrsWithBp2Build(ctx)
+
+	certificate, certificateName := android.BazelStringOrLabelFromProp(ctx, a.overridableAppProperties.Certificate)
+
+	manifestValues := &manifestValueAttribute{}
+	// TODO(b/274474008 ): Directly convert deviceProperties.Min_sdk_version in bp2build
+	// MinSdkVersion(ctx) calls SdkVersion(ctx) if no value for min_sdk_version is set
+	minSdkVersion := a.MinSdkVersion(ctx)
+	if !minSdkVersion.IsPreview() && !minSdkVersion.IsInvalid() {
+		minSdkStr, err := minSdkVersion.EffectiveVersionString(ctx)
+		if err == nil {
+			manifestValues.MinSdkVersion = &minSdkStr
+		}
 	}
 
-	manifest := proptools.StringDefault(a.aaptProperties.Manifest, "AndroidManifest.xml")
-
-	resourceFiles := bazel.LabelList{
-		Includes: []bazel.Label{},
-	}
-	for _, dir := range android.PathsWithOptionalDefaultForModuleSrc(ctx, a.aaptProperties.Resource_dirs, "res") {
-		files := android.RootToModuleRelativePaths(ctx, androidResourceGlob(ctx, dir))
-		resourceFiles.Includes = append(resourceFiles.Includes, files...)
-	}
-
-	var certificate *bazel.Label
-	certificateNamePtr := a.overridableAppProperties.Certificate
-	certificateName := proptools.StringDefault(certificateNamePtr, "")
-	certModule := android.SrcIsModule(certificateName)
-	if certModule != "" {
-		c := android.BazelLabelForModuleDepSingle(ctx, certificateName)
-		certificate = &c
-		certificateNamePtr = nil
-	}
-
-	attrs := &bazelAndroidAppAttributes{
-		commonAttrs,
-		deps,
-		android.BazelLabelForModuleSrcSingle(ctx, manifest),
+	appAttrs := &bazelAndroidAppAttributes{
 		// TODO(b/209576404): handle package name override by product variable PRODUCT_MANIFEST_PACKAGE_NAME_OVERRIDES
-		a.overridableAppProperties.Package_name,
-		bazel.MakeLabelListAttribute(resourceFiles),
-		certificate,
-		certificateNamePtr,
+		Custom_package:   a.overridableAppProperties.Package_name,
+		Certificate:      certificate,
+		Certificate_name: certificateName,
+		Manifest_values:  manifestValues,
 	}
 
 	props := bazel.BazelTargetModuleProperties{
 		Rule_class:        "android_binary",
-		Bzl_load_location: "//build/bazel/rules/android:android_binary.bzl",
+		Bzl_load_location: "//build/bazel/rules/android:rules.bzl",
 	}
 
-	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: a.Name()}, attrs)
+	if !bp2BuildInfo.hasKotlin {
+		appAttrs.javaCommonAttributes = commonAttrs
+		appAttrs.bazelAapt = aapt
+		appAttrs.Deps = deps
+	} else {
+		ktName := a.Name() + "_kt"
+		ctx.CreateBazelTargetModule(
+			AndroidLibraryBazelTargetModuleProperties(),
+			android.CommonAttributes{Name: ktName},
+			&bazelAndroidLibrary{
+				javaLibraryAttributes: &javaLibraryAttributes{
+					javaCommonAttributes: commonAttrs,
+					Deps:                 deps,
+				},
+				bazelAapt: aapt,
+			},
+		)
+
+		appAttrs.bazelAapt = &bazelAapt{Manifest: aapt.Manifest}
+		appAttrs.Deps = bazel.MakeSingleLabelListAttribute(bazel.Label{Label: ":" + ktName})
+		appAttrs.javaCommonAttributes = &javaCommonAttributes{
+			Sdk_version: commonAttrs.Sdk_version,
+		}
+	}
+
+	ctx.CreateBazelTargetModule(
+		props,
+		android.CommonAttributes{Name: a.Name()},
+		appAttrs,
+	)
 
 }
