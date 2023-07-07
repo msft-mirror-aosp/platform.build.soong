@@ -25,17 +25,22 @@ var (
 	riscv64Cflags = []string{
 		// Help catch common 32/64-bit errors.
 		"-Werror=implicit-function-declaration",
+		"-fno-emulated-tls",
+		// A temporary fix for SExtWRemoval miscompilation bug.
+		"-mllvm",
+		"-riscv-disable-sextw-removal=true",
 	}
 
 	riscv64ArchVariantCflags = map[string][]string{}
 
 	riscv64Ldflags = []string{
 		"-Wl,--hash-style=gnu",
-		"-Wl,-z,separate-code",
 	}
 
 	riscv64Lldflags = append(riscv64Ldflags,
-		"-Wl,-z,max-page-size=4096")
+		"-Wl,-z,max-page-size=4096",
+		"-Wl,-plugin-opt,-emulated-tls=0",
+	)
 
 	riscv64Cppflags = []string{}
 
