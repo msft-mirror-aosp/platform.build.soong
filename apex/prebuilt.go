@@ -24,6 +24,7 @@ import (
 	"android/soong/android"
 	"android/soong/java"
 	"android/soong/provenance"
+
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 )
@@ -34,11 +35,12 @@ var (
 		blueprint.RuleParams{
 			Command: `rm -rf "$out" && ` +
 				`${extract_apks} -o "${out}" -allow-prereleased=${allow-prereleased} ` +
-				`-sdk-version=${sdk-version} -abis=${abis} -screen-densities=all -extract-single ` +
+				`-sdk-version=${sdk-version} -skip-sdk-check=${skip-sdk-check} -abis=${abis} ` +
+				`-screen-densities=all -extract-single ` +
 				`${in}`,
 			CommandDeps: []string{"${extract_apks}"},
 		},
-		"abis", "allow-prereleased", "sdk-version")
+		"abis", "allow-prereleased", "sdk-version", "skip-sdk-check")
 )
 
 type prebuilt interface {
@@ -197,13 +199,10 @@ func (p *prebuiltCommon) initApexFilesForAndroidMk(ctx android.ModuleContext) {
 				p.apexFilesForAndroidMk = append(p.apexFilesForAndroidMk, af)
 			}
 		} else if tag == exportedBootclasspathFragmentTag {
-			bcpfModule, ok := child.(*java.PrebuiltBootclasspathFragmentModule)
+			_, ok := child.(*java.PrebuiltBootclasspathFragmentModule)
 			if !ok {
 				ctx.PropertyErrorf("exported_bootclasspath_fragments", "%q is not a prebuilt_bootclasspath_fragment module", name)
 				return false
-			}
-			for _, makeModuleName := range bcpfModule.BootImageDeviceInstallMakeModules() {
-				p.requiredModuleNames = append(p.requiredModuleNames, makeModuleName)
 			}
 			// Visit the children of the bootclasspath_fragment.
 			return true
@@ -314,31 +313,29 @@ func prebuiltApexModuleCreatorMutator(ctx android.TopDownMutatorContext) {
 	}
 }
 
-func (p *prebuiltCommon) getExportedDependencies() map[string]exportedDependencyTag {
-	dependencies := make(map[string]exportedDependencyTag)
-
-	for _, dep := range p.prebuiltCommonProperties.Exported_java_libs {
-		dependencies[dep] = exportedJavaLibTag
-	}
-
-	for _, dep := range p.prebuiltCommonProperties.Exported_bootclasspath_fragments {
-		dependencies[dep] = exportedBootclasspathFragmentTag
-	}
-
-	for _, dep := range p.prebuiltCommonProperties.Exported_systemserverclasspath_fragments {
-		dependencies[dep] = exportedSystemserverclasspathFragmentTag
-	}
-
-	return dependencies
+func (p *prebuiltCommon) hasExportedDeps() bool {
+	return len(p.prebuiltCommonProperties.Exported_java_libs) > 0 ||
+		len(p.prebuiltCommonProperties.Exported_bootclasspath_fragments) > 0 ||
+		len(p.prebuiltCommonProperties.Exported_systemserverclasspath_fragments) > 0
 }
 
 // prebuiltApexContentsDeps adds dependencies onto the prebuilt apex module's contents.
 func (p *prebuiltCommon) prebuiltApexContentsDeps(ctx android.BottomUpMutatorContext) {
 	module := ctx.Module()
 
-	for dep, tag := range p.getExportedDependencies() {
+	for _, dep := range p.prebuiltCommonProperties.Exported_java_libs {
 		prebuiltDep := android.PrebuiltNameFromSource(dep)
-		ctx.AddDependency(module, tag, prebuiltDep)
+		ctx.AddDependency(module, exportedJavaLibTag, prebuiltDep)
+	}
+
+	for _, dep := range p.prebuiltCommonProperties.Exported_bootclasspath_fragments {
+		prebuiltDep := android.PrebuiltNameFromSource(dep)
+		ctx.AddDependency(module, exportedBootclasspathFragmentTag, prebuiltDep)
+	}
+
+	for _, dep := range p.prebuiltCommonProperties.Exported_systemserverclasspath_fragments {
+		prebuiltDep := android.PrebuiltNameFromSource(dep)
+		ctx.AddDependency(module, exportedSystemserverclasspathFragmentTag, prebuiltDep)
 	}
 }
 
@@ -532,6 +529,10 @@ func (p *ApexFileProperties) prebuiltApexSelector(ctx android.BaseModuleContext,
 		src = String(p.Arch.Arm64.Src)
 	case android.Riscv64:
 		src = String(p.Arch.Riscv64.Src)
+		// HACK: fall back to arm64 prebuilts, the riscv64 ones don't exist yet.
+		if src == "" {
+			src = String(p.Arch.Arm64.Src)
+		}
 	case android.X86:
 		src = String(p.Arch.X86.Src)
 	case android.X86_64:
@@ -542,7 +543,11 @@ func (p *ApexFileProperties) prebuiltApexSelector(ctx android.BaseModuleContext,
 	}
 
 	if src == "" {
-		ctx.OtherModuleErrorf(prebuilt, "prebuilt_apex does not support %q", multiTargets[0].Arch.String())
+		if ctx.Config().AllowMissingDependencies() {
+			ctx.AddMissingDependencies([]string{ctx.OtherModuleName(prebuilt)})
+		} else {
+			ctx.OtherModuleErrorf(prebuilt, "prebuilt_apex does not support %q", multiTargets[0].Arch.String())
+		}
 		// Drop through to return an empty string as the src (instead of nil) to avoid the prebuilt
 		// logic from reporting a more general, less useful message.
 	}
@@ -598,7 +603,7 @@ func createApexSelectorModule(ctx android.TopDownMutatorContext, name string, ap
 // the listed modules need access to files from within the prebuilt .apex file.
 func (p *prebuiltCommon) createDeapexerModuleIfNeeded(ctx android.TopDownMutatorContext, deapexerName string, apexFileSource string) {
 	// Only create the deapexer module if it is needed.
-	if len(p.getExportedDependencies()) == 0 {
+	if !p.hasExportedDeps() {
 		return
 	}
 
@@ -821,8 +826,11 @@ func (p *prebuiltApexExtractorModule) GenerateAndroidBuildActions(ctx android.Mo
 	srcsSupplier := func(ctx android.BaseModuleContext, prebuilt android.Module) []string {
 		return p.properties.prebuiltSrcs(ctx)
 	}
+	defaultAllowPrerelease := ctx.Config().IsEnvTrue("SOONG_ALLOW_PRERELEASE_APEXES")
 	apexSet := android.SingleSourcePathFromSupplier(ctx, srcsSupplier, "set")
 	p.extractedApex = android.PathForModuleOut(ctx, "extracted", apexSet.Base())
+	// Filter out NativeBridge archs (b/260115309)
+	abis := java.SupportedAbis(ctx, true)
 	ctx.Build(pctx,
 		android.BuildParams{
 			Rule:        extractMatchingApex,
@@ -830,9 +838,10 @@ func (p *prebuiltApexExtractorModule) GenerateAndroidBuildActions(ctx android.Mo
 			Inputs:      android.Paths{apexSet},
 			Output:      p.extractedApex,
 			Args: map[string]string{
-				"abis":              strings.Join(java.SupportedAbis(ctx), ","),
-				"allow-prereleased": strconv.FormatBool(proptools.Bool(p.properties.Prerelease)),
+				"abis":              strings.Join(abis, ","),
+				"allow-prereleased": strconv.FormatBool(proptools.BoolDefault(p.properties.Prerelease, defaultAllowPrerelease)),
 				"sdk-version":       ctx.Config().PlatformSdkVersion().String(),
+				"skip-sdk-check":    strconv.FormatBool(ctx.Config().IsEnvTrue("SOONG_SKIP_APPSET_SDK_CHECK")),
 			},
 		})
 }
@@ -845,17 +854,17 @@ type ApexSet struct {
 
 type ApexExtractorProperties struct {
 	// the .apks file path that contains prebuilt apex files to be extracted.
-	Set *string
+	Set *string `android:"path"`
 
 	Sanitized struct {
 		None struct {
-			Set *string
+			Set *string `android:"path"`
 		}
 		Address struct {
-			Set *string
+			Set *string `android:"path"`
 		}
 		Hwaddress struct {
-			Set *string
+			Set *string `android:"path"`
 		}
 	}
 
@@ -902,6 +911,15 @@ func (a *ApexSet) hasSanitizedSource(sanitizer string) bool {
 	}
 
 	return false
+}
+
+func (a *ApexSet) OutputFiles(tag string) (android.Paths, error) {
+	switch tag {
+	case "":
+		return android.Paths{a.outputApex}, nil
+	default:
+		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
+	}
 }
 
 // prebuilt_apex imports an `.apex` file into the build graph as if it was built with apex.
