@@ -3,6 +3,7 @@ package cc
 import (
 	"android/soong/android"
 	"android/soong/bazel/cquery"
+	"android/soong/fuzz"
 	"android/soong/snapshot"
 
 	"github.com/google/blueprint"
@@ -22,15 +23,8 @@ type PlatformSanitizeable interface {
 	// than left undefined.
 	IsSanitizerExplicitlyDisabled(t SanitizerType) bool
 
-	// SanitizeDep returns the value of the SanitizeDep flag, which is set if a module is a dependency of a
-	// sanitized module.
-	SanitizeDep() bool
-
 	// SetSanitizer enables or disables the specified sanitizer type if it's supported, otherwise this should panic.
 	SetSanitizer(t SanitizerType, b bool)
-
-	// SetSanitizerDep returns true if the module is statically linked.
-	SetSanitizeDep(b bool)
 
 	// StaticallyLinked returns true if the module is statically linked.
 	StaticallyLinked() bool
@@ -126,6 +120,17 @@ type LinkableInterface interface {
 	SetShared()
 	IsPrebuilt() bool
 	Toc() android.OptionalPath
+
+	// IsFuzzModule returns true if this a *_fuzz module.
+	IsFuzzModule() bool
+
+	// FuzzPackagedModule returns the fuzz.FuzzPackagedModule for this module.
+	// Expects that IsFuzzModule returns true.
+	FuzzPackagedModule() fuzz.FuzzPackagedModule
+
+	// FuzzSharedLibraries returns the shared library dependencies for this module.
+	// Expects that IsFuzzModule returns true.
+	FuzzSharedLibraries() android.Paths
 
 	Device() bool
 	Host() bool
@@ -260,6 +265,12 @@ type LinkableInterface interface {
 
 	// VndkVersion returns the VNDK version string for this module.
 	VndkVersion() string
+
+	// Partition returns the partition string for this module.
+	Partition() string
+
+	// FuzzModule returns the fuzz.FuzzModule associated with the module.
+	FuzzModuleStruct() fuzz.FuzzModule
 }
 
 var (
