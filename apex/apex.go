@@ -220,6 +220,13 @@ type apexBundleProperties struct {
 	// imageApex or flattenedApex depending on Config.FlattenApex(). When payload_type is zip,
 	// this becomes zipApex.
 	ApexType apexPackaging `blueprint:"mutated"`
+
+	// Name that dependencies can specify in their apex_available properties to refer to this module.
+	// If not specified, this defaults to Soong module name.
+	Apex_available_name *string
+
+	// Variant version of the mainline module. Must be an integer between 0-9
+	Variant_version *string
 }
 
 type ApexNativeDependencies struct {
@@ -1823,6 +1830,7 @@ type androidApp interface {
 	Certificate() java.Certificate
 	BaseModuleName() string
 	LintDepSets() java.LintDepSets
+	PrivAppAllowlist() android.OptionalPath
 }
 
 var _ androidApp = (*java.AndroidApp)(nil)
@@ -1843,7 +1851,7 @@ func sanitizedBuildIdForPath(ctx android.BaseModuleContext) string {
 	return buildId
 }
 
-func apexFileForAndroidApp(ctx android.BaseModuleContext, aapp androidApp) apexFile {
+func apexFilesForAndroidApp(ctx android.BaseModuleContext, aapp androidApp) []apexFile {
 	appDir := "app"
 	if aapp.Privileged() {
 		appDir = "priv-app"
@@ -1865,7 +1873,18 @@ func apexFileForAndroidApp(ctx android.BaseModuleContext, aapp androidApp) apexF
 	}); ok {
 		af.overriddenPackageName = app.OverriddenManifestPackageName()
 	}
-	return af
+
+	apexFiles := []apexFile{}
+
+	if allowlist := aapp.PrivAppAllowlist(); allowlist.Valid() {
+		dirInApex := filepath.Join("etc", "permissions")
+		privAppAllowlist := newApexFile(ctx, allowlist.Path(), aapp.BaseModuleName()+"_privapp", dirInApex, etc, aapp)
+		apexFiles = append(apexFiles, privAppAllowlist)
+	}
+
+	apexFiles = append(apexFiles, af)
+
+	return apexFiles
 }
 
 func apexFileForRuntimeResourceOverlay(ctx android.BaseModuleContext, rro java.RuntimeResourceOverlayModule) apexFile {
@@ -2310,12 +2329,12 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 		case androidAppTag:
 			switch ap := child.(type) {
 			case *java.AndroidApp:
-				vctx.filesInfo = append(vctx.filesInfo, apexFileForAndroidApp(ctx, ap))
+				vctx.filesInfo = append(vctx.filesInfo, apexFilesForAndroidApp(ctx, ap)...)
 				return true // track transitive dependencies
 			case *java.AndroidAppImport:
-				vctx.filesInfo = append(vctx.filesInfo, apexFileForAndroidApp(ctx, ap))
+				vctx.filesInfo = append(vctx.filesInfo, apexFilesForAndroidApp(ctx, ap)...)
 			case *java.AndroidTestHelperApp:
-				vctx.filesInfo = append(vctx.filesInfo, apexFileForAndroidApp(ctx, ap))
+				vctx.filesInfo = append(vctx.filesInfo, apexFilesForAndroidApp(ctx, ap)...)
 			case *java.AndroidAppSet:
 				appDir := "app"
 				if ap.Privileged() {
@@ -3083,6 +3102,13 @@ func (a *apexBundle) checkApexAvailability(ctx android.ModuleContext) {
 		}
 
 		apexName := ctx.ModuleName()
+		for _, props := range ctx.Module().GetProperties() {
+			if apexProps, ok := props.(*apexBundleProperties); ok {
+				if apexProps.Apex_available_name != nil {
+					apexName = *apexProps.Apex_available_name
+				}
+			}
+		}
 		fromName := ctx.OtherModuleName(from)
 		toName := ctx.OtherModuleName(to)
 
@@ -3789,4 +3815,8 @@ func makeSharedLibsAttributes(config string, libsLabelList bazel.LabelList,
 
 func invalidCompileMultilib(ctx android.TopDownMutatorContext, value string) {
 	ctx.PropertyErrorf("compile_multilib", "Invalid value: %s", value)
+}
+
+func (a *apexBundle) IsTestApex() bool {
+	return a.testApex
 }

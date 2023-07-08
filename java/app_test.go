@@ -3547,3 +3547,124 @@ func TestTargetSdkVersionMtsTests(t *testing.T) {
 		android.AssertStringDoesContain(t, testCase.desc, manifestFixerArgs, "--targetSdkVersion  "+testCase.targetSdkVersionExpected)
 	}
 }
+
+func TestPrivappAllowlist(t *testing.T) {
+	testJavaError(t, "privileged must be set in order to use privapp_allowlist", `
+		android_app {
+			name: "foo",
+			srcs: ["a.java"],
+			privapp_allowlist: "perms.xml",
+		}
+	`)
+
+	result := PrepareForTestWithJavaDefaultModules.RunTestWithBp(
+		t,
+		`
+		android_app {
+			name: "foo",
+			srcs: ["a.java"],
+			privapp_allowlist: "privapp_allowlist_com.android.foo.xml",
+			privileged: true,
+			sdk_version: "current",
+		}
+		override_android_app {
+			name: "bar",
+			base: "foo",
+			package_name: "com.google.android.foo",
+		}
+		`,
+	)
+	app := result.ModuleForTests("foo", "android_common")
+	overrideApp := result.ModuleForTests("foo", "android_common_bar")
+
+	// verify that privapp allowlist is created for override apps
+	overrideApp.Output("out/soong/.intermediates/foo/android_common_bar/privapp_allowlist_com.google.android.foo.xml")
+	expectedAllowlistInput := "privapp_allowlist_com.android.foo.xml"
+	overrideActualAllowlistInput := overrideApp.Rule("modifyAllowlist").Input.String()
+	if expectedAllowlistInput != overrideActualAllowlistInput {
+		t.Errorf("expected override allowlist to be %q; got %q", expectedAllowlistInput, overrideActualAllowlistInput)
+	}
+
+	// verify that permissions are copied to device
+	app.Output("out/soong/target/product/test_device/system/etc/permissions/foo.xml")
+	overrideApp.Output("out/soong/target/product/test_device/system/etc/permissions/bar.xml")
+}
+
+func TestPrivappAllowlistAndroidMk(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+		android.PrepareForTestWithAndroidMk,
+	).RunTestWithBp(
+		t,
+		`
+		android_app {
+			name: "foo",
+			srcs: ["a.java"],
+			privapp_allowlist: "privapp_allowlist_com.android.foo.xml",
+			privileged: true,
+			sdk_version: "current",
+		}
+		override_android_app {
+			name: "bar",
+			base: "foo",
+			package_name: "com.google.android.foo",
+		}
+		`,
+	)
+	baseApp := result.ModuleForTests("foo", "android_common")
+	overrideApp := result.ModuleForTests("foo", "android_common_bar")
+
+	baseAndroidApp := baseApp.Module().(*AndroidApp)
+	baseEntries := android.AndroidMkEntriesForTest(t, result.TestContext, baseAndroidApp)[0]
+	android.AssertStringMatches(
+		t,
+		"androidmk has incorrect LOCAL_SOONG_INSTALLED_MODULE; expected to find foo.apk",
+		baseEntries.EntryMap["LOCAL_SOONG_INSTALLED_MODULE"][0],
+		"\\S+foo.apk",
+	)
+	android.AssertStringMatches(
+		t,
+		"androidmk has incorrect LOCAL_SOONG_INSTALL_PAIRS; expected to it to include foo.apk",
+		baseEntries.EntryMap["LOCAL_SOONG_INSTALL_PAIRS"][0],
+		"\\S+foo.apk",
+	)
+	android.AssertStringMatches(
+		t,
+		"androidmk has incorrect LOCAL_SOONG_INSTALL_PAIRS; expected to it to include app",
+		baseEntries.EntryMap["LOCAL_SOONG_INSTALL_PAIRS"][0],
+		"\\S+foo.apk:\\S+/target/product/test_device/system/priv-app/foo/foo.apk",
+	)
+	android.AssertStringMatches(
+		t,
+		"androidmk has incorrect LOCAL_SOONG_INSTALL_PAIRS; expected to it to include privapp_allowlist",
+		baseEntries.EntryMap["LOCAL_SOONG_INSTALL_PAIRS"][0],
+		"privapp_allowlist_com.android.foo.xml:\\S+/target/product/test_device/system/etc/permissions/foo.xml",
+	)
+
+	overrideAndroidApp := overrideApp.Module().(*AndroidApp)
+	overrideEntries := android.AndroidMkEntriesForTest(t, result.TestContext, overrideAndroidApp)[0]
+	android.AssertStringMatches(
+		t,
+		"androidmk has incorrect LOCAL_SOONG_INSTALLED_MODULE; expected to find bar.apk",
+		overrideEntries.EntryMap["LOCAL_SOONG_INSTALLED_MODULE"][0],
+		"\\S+bar.apk",
+	)
+	android.AssertStringMatches(
+		t,
+		"androidmk has incorrect LOCAL_SOONG_INSTALL_PAIRS; expected to it to include bar.apk",
+		overrideEntries.EntryMap["LOCAL_SOONG_INSTALL_PAIRS"][0],
+		"\\S+bar.apk",
+	)
+	android.AssertStringMatches(
+		t,
+		"androidmk has incorrect LOCAL_SOONG_INSTALL_PAIRS; expected to it to include app",
+		overrideEntries.EntryMap["LOCAL_SOONG_INSTALL_PAIRS"][0],
+		"\\S+bar.apk:\\S+/target/product/test_device/system/priv-app/bar/bar.apk",
+	)
+	android.AssertStringMatches(
+		t,
+		"androidmk has incorrect LOCAL_SOONG_INSTALL_PAIRS; expected to it to include privapp_allowlist",
+		overrideEntries.EntryMap["LOCAL_SOONG_INSTALL_PAIRS"][0],
+		"\\S+soong/.intermediates/foo/android_common_bar/privapp_allowlist_com.google.android.foo.xml:\\S+/target/product/test_device/system/etc/permissions/bar.xml",
+	)
+}
