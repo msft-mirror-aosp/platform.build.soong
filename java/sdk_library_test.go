@@ -411,10 +411,9 @@ func TestJavaSdkLibrary_StubOrImplOnlyLibs(t *testing.T) {
 		android.AssertStringListContainsEquals(t, "bad combined inputs for "+sdklib, combineJarInputs, depPath, combined)
 	}
 	for _, expectation := range expectations {
-		verify("sdklib", expectation.lib, expectation.on_impl_classpath, expectation.in_impl_combined)
 		verify("sdklib.impl", expectation.lib, expectation.on_impl_classpath, expectation.in_impl_combined)
 
-		stubName := apiScopePublic.stubsLibraryModuleName("sdklib")
+		stubName := apiScopePublic.sourceStubLibraryModuleName("sdklib")
 		verify(stubName, expectation.lib, expectation.on_stub_classpath, expectation.in_stub_combined)
 	}
 }
@@ -1443,35 +1442,35 @@ func TestJavaSdkLibrary_ApiLibrary(t *testing.T) {
 	`)
 
 	testCases := []struct {
-		scope            *apiScope
-		apiContributions []string
-		depApiSrcs       string
+		scope              *apiScope
+		apiContributions   []string
+		fullApiSurfaceStub string
 	}{
 		{
-			scope:            apiScopePublic,
-			apiContributions: []string{"foo.stubs.source.api.contribution"},
-			depApiSrcs:       "android_stubs_current.from-text",
+			scope:              apiScopePublic,
+			apiContributions:   []string{"foo.stubs.source.api.contribution"},
+			fullApiSurfaceStub: "android_stubs_current.from-text",
 		},
 		{
-			scope:            apiScopeSystem,
-			apiContributions: []string{"foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
-			depApiSrcs:       "android_system_stubs_current.from-text",
+			scope:              apiScopeSystem,
+			apiContributions:   []string{"foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
+			fullApiSurfaceStub: "android_system_stubs_current.from-text",
 		},
 		{
-			scope:            apiScopeTest,
-			apiContributions: []string{"foo.stubs.source.test.api.contribution", "foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
-			depApiSrcs:       "android_test_stubs_current.from-text",
+			scope:              apiScopeTest,
+			apiContributions:   []string{"foo.stubs.source.test.api.contribution", "foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
+			fullApiSurfaceStub: "android_test_stubs_current.from-text",
 		},
 		{
-			scope:            apiScopeModuleLib,
-			apiContributions: []string{"foo.stubs.source.module_lib.api.contribution", "foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
-			depApiSrcs:       "android_module_lib_stubs_current_full.from-text",
+			scope:              apiScopeModuleLib,
+			apiContributions:   []string{"foo.stubs.source.module_lib.api.contribution", "foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
+			fullApiSurfaceStub: "android_module_lib_stubs_current_full.from-text",
 		},
 	}
 
 	for _, c := range testCases {
 		m := result.ModuleForTests(c.scope.apiLibraryModuleName("foo"), "android_common").Module().(*ApiLibrary)
 		android.AssertArrayString(t, "Module expected to contain api contributions", c.apiContributions, m.properties.Api_contributions)
-		android.AssertStringEquals(t, "Module expected to contain full api surface api library", c.depApiSrcs, *m.properties.Dep_api_srcs)
+		android.AssertStringEquals(t, "Module expected to contain full api surface api library", c.fullApiSurfaceStub, *m.properties.Full_api_surface_stub)
 	}
 }

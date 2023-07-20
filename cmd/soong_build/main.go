@@ -86,7 +86,6 @@ func init() {
 	flag.BoolVar(&cmdlineArgs.MultitreeBuild, "multitree-build", false, "this is a multitree build")
 	flag.BoolVar(&cmdlineArgs.BazelMode, "bazel-mode", false, "use bazel for analysis of certain modules")
 	flag.BoolVar(&cmdlineArgs.BazelModeStaging, "bazel-mode-staging", false, "use bazel for analysis of certain near-ready modules")
-	flag.BoolVar(&cmdlineArgs.BazelModeDev, "bazel-mode-dev", false, "use bazel for analysis of a large number of modules (less stable)")
 	flag.BoolVar(&cmdlineArgs.UseBazelProxy, "use-bazel-proxy", false, "communicate with bazel using unix socket proxy instead of spawning subprocesses")
 	flag.BoolVar(&cmdlineArgs.BuildFromTextStub, "build-from-text-stub", false, "build Java stubs from API text files instead of source files")
 	flag.BoolVar(&cmdlineArgs.EnsureAllowlistIntegrity, "ensure-allowlist-integrity", false, "verify that allowlisted modules are mixed-built")
@@ -125,7 +124,8 @@ func runMixedModeBuild(ctx *android.Context, extraNinjaDeps []string) string {
 		return ctx.Config().BazelContext.InvokeBazel(ctx.Config(), ctx)
 	}
 	ctx.SetBeforePrepareBuildActionsHook(bazelHook)
-	ninjaDeps := bootstrap.RunBlueprint(cmdlineArgs.Args, bootstrap.DoEverything, ctx.Context, ctx.Config())
+	ninjaDeps, err := bootstrap.RunBlueprint(cmdlineArgs.Args, bootstrap.DoEverything, ctx.Context, ctx.Config())
+	maybeQuit(err, "")
 	ninjaDeps = append(ninjaDeps, extraNinjaDeps...)
 
 	bazelPaths, err := readFileLines(ctx.Config().Getenv("BAZEL_DEPS_FILE"))
@@ -186,10 +186,11 @@ func runApiBp2build(ctx *android.Context, extraNinjaDeps []string) string {
 	}
 
 	// Run the loading and analysis phase
-	ninjaDeps := bootstrap.RunBlueprint(cmdlineArgs.Args,
+	ninjaDeps, err := bootstrap.RunBlueprint(cmdlineArgs.Args,
 		bootstrap.StopBeforePrepareBuildActions,
 		ctx.Context,
 		ctx.Config())
+	maybeQuit(err, "")
 	ninjaDeps = append(ninjaDeps, extraNinjaDeps...)
 
 	// Add the globbed dependencies
@@ -219,7 +220,7 @@ func runApiBp2build(ctx *android.Context, extraNinjaDeps []string) string {
 	// }
 	//
 	// If we don't generate f/b/api/BUILD, foo.contribution will be unbuildable.
-	err := createBazelWorkspace(codegenContext, absoluteApiBp2buildDir, true)
+	err = createBazelWorkspace(codegenContext, absoluteApiBp2buildDir, true)
 	maybeQuit(err, "")
 	ninjaDeps = append(ninjaDeps, codegenContext.AdditionalNinjaDeps()...)
 
@@ -413,12 +414,13 @@ func writeBuildGlobsNinjaFile(ctx *android.Context) []string {
 	defer ctx.EventHandler.End("globs_ninja_file")
 
 	globDir := bootstrap.GlobDirectory(ctx.Config().SoongOutDir(), globListDir)
-	bootstrap.WriteBuildGlobsNinjaFile(&bootstrap.GlobSingleton{
+	err := bootstrap.WriteBuildGlobsNinjaFile(&bootstrap.GlobSingleton{
 		GlobLister: ctx.Globs,
 		GlobFile:   globFile,
 		GlobDir:    globDir,
 		SrcDir:     ctx.SrcDir(),
 	}, ctx.Config())
+	maybeQuit(err, "")
 	return bootstrap.GlobFileListFiles(globDir)
 }
 
@@ -445,7 +447,8 @@ func runSoongOnlyBuild(ctx *android.Context, extraNinjaDeps []string) string {
 		stopBefore = bootstrap.DoEverything
 	}
 
-	ninjaDeps := bootstrap.RunBlueprint(cmdlineArgs.Args, stopBefore, ctx.Context, ctx.Config())
+	ninjaDeps, err := bootstrap.RunBlueprint(cmdlineArgs.Args, stopBefore, ctx.Context, ctx.Config())
+	maybeQuit(err, "")
 	ninjaDeps = append(ninjaDeps, extraNinjaDeps...)
 
 	globListFiles := writeBuildGlobsNinjaFile(ctx)
@@ -532,8 +535,6 @@ func main() {
 
 	var finalOutputFile string
 
-	writeSymlink := false
-
 	// Run Soong for a specific activity, like bp2build, queryview
 	// or the actual Soong build for the build.ninja file.
 	switch configuration.BuildMode {
@@ -556,13 +557,8 @@ func main() {
 					maybeQuit(err, "")
 				}
 			}
-			writeSymlink = true
 		} else {
 			finalOutputFile = runSoongOnlyBuild(ctx, extraNinjaDeps)
-
-			if configuration.BuildMode == android.AnalysisNoBazel {
-				writeSymlink = true
-			}
 		}
 		writeMetrics(configuration, ctx.EventHandler, metricsDir)
 	}
@@ -579,24 +575,6 @@ func main() {
 	// are ninja inputs to the main output file, then ninja would superfluously
 	// rebuild this output file on the next build invocation.
 	touch(shared.JoinPath(topDir, finalOutputFile))
-
-	// TODO(b/277029044): Remove this function once build.<product>.ninja lands
-	if writeSymlink {
-		writeBuildNinjaSymlink(configuration, finalOutputFile)
-	}
-}
-
-// TODO(b/277029044): Remove this function once build.<product>.ninja lands
-func writeBuildNinjaSymlink(config android.Config, source string) {
-	targetPath := shared.JoinPath(topDir, config.SoongOutDir(), "build.ninja")
-	sourcePath := shared.JoinPath(topDir, source)
-
-	if targetPath == sourcePath {
-		return
-	}
-
-	os.Remove(targetPath)
-	os.Symlink(sourcePath, targetPath)
 }
 
 func writeUsedEnvironmentFile(configuration android.Config) {
@@ -747,18 +725,6 @@ func excludedFromSymlinkForest(ctx *android.Context, verbose bool) []string {
 
 		// FIXME: 'frameworks/compile/slang' has a filegroup error due to an escaping issue
 		"frameworks/compile/slang",
-
-		// FIXME(b/260809113): 'prebuilts/clang/host/linux-x86/clang-dev' is a tool-generated symlink
-		// directory that contains a BUILD file. The bazel files finder code doesn't traverse into symlink dirs,
-		// and hence is not aware of this BUILD file and exclude it accordingly during symlink forest generation
-		// when checking against keepExistingBuildFiles allowlist.
-		//
-		// This is necessary because globs in //prebuilts/clang/host/linux-x86/BUILD
-		// currently assume no subpackages (keepExistingBuildFile is not recursive for that directory).
-		//
-		// This is a bandaid until we the symlink forest logic can intelligently exclude BUILD files found in
-		// source symlink dirs according to the keepExistingBuildFile allowlist.
-		"prebuilts/clang/host/linux-x86/clang-dev",
 	)
 	return excluded
 }
@@ -817,6 +783,9 @@ func runBp2Build(ctx *android.Context, extraNinjaDeps []string, metricsDir strin
 		ctx.SetNameInterface(newNameResolver(ctx.Config()))
 		ctx.RegisterForBazelConversion()
 		ctx.SetModuleListFile(cmdlineArgs.ModuleListFile)
+		// Skip cloning modules during bp2build's blueprint run. Some mutators set
+		// bp2build-related module values which should be preserved during codegen.
+		ctx.SkipCloneModulesAfterMutators = true
 
 		var ninjaDeps []string
 		ninjaDeps = append(ninjaDeps, extraNinjaDeps...)
@@ -826,8 +795,9 @@ func runBp2Build(ctx *android.Context, extraNinjaDeps []string, metricsDir strin
 		// from the regular Modules.
 		ctx.EventHandler.Do("bootstrap", func() {
 			blueprintArgs := cmdlineArgs
-			bootstrapDeps := bootstrap.RunBlueprint(blueprintArgs.Args,
+			bootstrapDeps, err := bootstrap.RunBlueprint(blueprintArgs.Args,
 				bootstrap.StopBeforePrepareBuildActions, ctx.Context, ctx.Config())
+			maybeQuit(err, "")
 			ninjaDeps = append(ninjaDeps, bootstrapDeps...)
 		})
 

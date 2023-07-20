@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 
+	"android/soong/ui/metrics/bp2build_metrics_proto"
 	"github.com/google/blueprint/pathtools"
 	"github.com/google/blueprint/proptools"
 
@@ -1090,9 +1091,6 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 		srcJars = append(srcJars, aaptSrcJar)
 	}
 	srcJars = append(srcJars, j.properties.Generated_srcjars...)
-	if len(j.properties.Generated_srcjars) > 0 {
-		fmt.Printf("Java module %s Generated_srcjars: %v\n", ctx.ModuleName(), j.properties.Generated_srcjars)
-	}
 	srcFiles = srcFiles.FilterOutByExt(".srcjar")
 
 	if j.properties.Jarjar_rules != nil {
@@ -1388,12 +1386,20 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 		// prebuilt dependencies until we support modules in the platform build, so there shouldn't be
 		// any if len(jars) == 1.
 
+		// moduleStubLinkType determines if the module is the TopLevelStubLibrary generated
+		// from sdk_library. The TopLevelStubLibrary contains only one static lib,
+		// either with .from-source or .from-text suffix.
+		// outputFile should be agnostic to the build configuration,
+		// thus "combine" the single static lib in order to prevent the static lib from being exposed
+		// to the copy rules.
+		stub, _ := moduleStubLinkType(ctx.ModuleName())
+
 		// Transform the single path to the jar into an OutputPath as that is required by the following
 		// code.
-		if moduleOutPath, ok := jars[0].(android.ModuleOutPath); ok {
+		if moduleOutPath, ok := jars[0].(android.ModuleOutPath); ok && !stub {
 			// The path contains an embedded OutputPath so reuse that.
 			outputFile = moduleOutPath.OutputPath
-		} else if outputPath, ok := jars[0].(android.OutputPath); ok {
+		} else if outputPath, ok := jars[0].(android.OutputPath); ok && !stub {
 			// The path is an OutputPath so reuse it directly.
 			outputFile = outputPath
 		} else {
@@ -1750,24 +1756,24 @@ func (j *Module) instrument(ctx android.ModuleContext, flags javaBuilderFlags,
 
 type providesTransitiveHeaderJars struct {
 	// set of header jars for all transitive libs deps
-	transitiveLibsHeaderJars *android.DepSet
+	transitiveLibsHeaderJars *android.DepSet[android.Path]
 	// set of header jars for all transitive static libs deps
-	transitiveStaticLibsHeaderJars *android.DepSet
+	transitiveStaticLibsHeaderJars *android.DepSet[android.Path]
 }
 
-func (j *providesTransitiveHeaderJars) TransitiveLibsHeaderJars() *android.DepSet {
+func (j *providesTransitiveHeaderJars) TransitiveLibsHeaderJars() *android.DepSet[android.Path] {
 	return j.transitiveLibsHeaderJars
 }
 
-func (j *providesTransitiveHeaderJars) TransitiveStaticLibsHeaderJars() *android.DepSet {
+func (j *providesTransitiveHeaderJars) TransitiveStaticLibsHeaderJars() *android.DepSet[android.Path] {
 	return j.transitiveStaticLibsHeaderJars
 }
 
 func (j *providesTransitiveHeaderJars) collectTransitiveHeaderJars(ctx android.ModuleContext) {
 	directLibs := android.Paths{}
 	directStaticLibs := android.Paths{}
-	transitiveLibs := []*android.DepSet{}
-	transitiveStaticLibs := []*android.DepSet{}
+	transitiveLibs := []*android.DepSet[android.Path]{}
+	transitiveStaticLibs := []*android.DepSet[android.Path]{}
 	ctx.VisitDirectDeps(func(module android.Module) {
 		// don't add deps of the prebuilt version of the same library
 		if ctx.ModuleName() == android.RemoveOptionalPrebuiltPrefix(module.Name()) {
@@ -2196,7 +2202,7 @@ var _ ModuleWithStem = (*Module)(nil)
 
 func (j *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	switch ctx.ModuleType() {
-	case "java_library", "java_library_host", "java_library_static":
+	case "java_library", "java_library_host", "java_library_static", "tradefed_java_library_host":
 		if lib, ok := ctx.Module().(*Library); ok {
 			javaLibraryBp2Build(ctx, lib)
 		}
@@ -2208,5 +2214,7 @@ func (j *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 		if testHost, ok := ctx.Module().(*TestHost); ok {
 			javaTestHostBp2Build(ctx, testHost)
 		}
+	default:
+		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_TYPE_UNSUPPORTED, "")
 	}
 }

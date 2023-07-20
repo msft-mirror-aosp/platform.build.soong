@@ -96,7 +96,6 @@ type CmdArgs struct {
 	MultitreeBuild bool
 
 	BazelMode                bool
-	BazelModeDev             bool
 	BazelModeStaging         bool
 	BazelForceEnabledModules string
 
@@ -131,11 +130,6 @@ const (
 
 	// Generate a documentation file for module type definitions and exit.
 	GenerateDocFile
-
-	// Use bazel during analysis of many allowlisted build modules. The allowlist
-	// is considered a "developer mode" allowlist, as some modules may be
-	// allowlisted on an experimental basis.
-	BazelDevMode
 
 	// Use bazel during analysis of a few allowlisted build modules. The allowlist
 	// is considered "staging, as these are modules being prepared to be released
@@ -190,8 +184,8 @@ func (c Config) ReleaseVersion() string {
 }
 
 // The flag values files passed to aconfig, derived from RELEASE_VERSION
-func (c Config) ReleaseDeviceConfigValueSets() []string {
-	return c.config.productVariables.ReleaseDeviceConfigValueSets
+func (c Config) ReleaseAconfigValueSets() []string {
+	return c.config.productVariables.ReleaseAconfigValueSets
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -622,7 +616,6 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 	setBuildMode(cmdArgs.BazelApiBp2buildDir, ApiBp2build)
 	setBuildMode(cmdArgs.ModuleGraphFile, GenerateModuleGraph)
 	setBuildMode(cmdArgs.DocFile, GenerateDocFile)
-	setBazelMode(cmdArgs.BazelModeDev, "--bazel-mode-dev", BazelDevMode)
 	setBazelMode(cmdArgs.BazelMode, "--bazel-mode", BazelProdMode)
 	setBazelMode(cmdArgs.BazelModeStaging, "--bazel-mode-staging", BazelStagingMode)
 
@@ -708,6 +701,10 @@ func (c *config) IsMixedBuildsEnabled() bool {
 		if c.productVariables.DeviceArch != nil && *c.productVariables.DeviceArch == "riscv64" {
 			return false
 		}
+		// Disable Bazel when Kythe is running
+		if c.EmitXrefRules() {
+			return false
+		}
 		if c.IsEnvTrue("GLOBAL_THINLTO") {
 			return false
 		}
@@ -726,7 +723,7 @@ func (c *config) IsMixedBuildsEnabled() bool {
 		return true
 	}).(bool)
 
-	bazelModeEnabled := c.BuildMode == BazelProdMode || c.BuildMode == BazelDevMode || c.BuildMode == BazelStagingMode
+	bazelModeEnabled := c.BuildMode == BazelProdMode || c.BuildMode == BazelStagingMode
 	return globalMixedBuildsSupport && bazelModeEnabled
 }
 
@@ -1652,10 +1649,6 @@ func (c *config) AmlAbis() bool {
 	return Bool(c.productVariables.Aml_abis)
 }
 
-func (c *config) FlattenApex() bool {
-	return Bool(c.productVariables.Flatten_apex)
-}
-
 func (c *config) ForceApexSymlinkOptimization() bool {
 	return Bool(c.productVariables.ForceApexSymlinkOptimization)
 }
@@ -1686,10 +1679,6 @@ func (c *config) EnforceInterPartitionJavaSdkLibrary() bool {
 
 func (c *config) InterPartitionJavaLibraryAllowList() []string {
 	return c.productVariables.InterPartitionJavaLibraryAllowList
-}
-
-func (c *config) InstallExtraFlattenedApexes() bool {
-	return Bool(c.productVariables.InstallExtraFlattenedApexes)
 }
 
 func (c *config) ProductHiddenAPIStubs() []string {

@@ -30,6 +30,7 @@ import (
 	"text/scanner"
 
 	"android/soong/bazel"
+	"android/soong/ui/metrics/bp2build_metrics_proto"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -483,6 +484,7 @@ type ModuleContext interface {
 	TargetRequiredModuleNames() []string
 
 	ModuleSubDir() string
+	SoongConfigTraceHash() string
 
 	Variable(pctx PackageContext, name, value string)
 	Rule(pctx PackageContext, name string, params blueprint.RuleParams, argNames ...string) blueprint.Rule
@@ -565,6 +567,8 @@ type Module interface {
 
 	// IsConvertedByBp2build returns whether this module was converted via bp2build
 	IsConvertedByBp2build() bool
+	GetUnconvertedReason() *UnconvertedReason
+
 	// Bp2buildTargets returns the target(s) generated for Bazel via bp2build for this module
 	Bp2buildTargets() []bp2buildInfo
 	GetUnconvertedBp2buildDeps() []string
@@ -987,7 +991,11 @@ type commonProperties struct {
 	// Bazel conversion status
 	BazelConversionStatus BazelConversionStatus `blueprint:"mutated"`
 
-	// SoongConfigTrace records accesses to VendorVars (soong_config)
+	// SoongConfigTrace records accesses to VendorVars (soong_config). The trace will be hashed
+	// and used as a subdir of PathForModuleOut.  Note that we mainly focus on incremental
+	// builds among similar products (e.g. aosp_cf_x86_64_phone and aosp_cf_x86_64_foldable),
+	// and there are variables other than soong_config, which isn't captured by soong config
+	// trace, but influence modules among products.
 	SoongConfigTrace     soongConfigTrace `blueprint:"mutated"`
 	SoongConfigTraceHash string           `blueprint:"mutated"`
 }
@@ -1517,10 +1525,10 @@ type ModuleBase struct {
 
 	noAddressSanitizer   bool
 	installFiles         InstallPaths
-	installFilesDepSet   *installPathsDepSet
+	installFilesDepSet   *DepSet[InstallPath]
 	checkbuildFiles      Paths
 	packagingSpecs       []PackagingSpec
-	packagingSpecsDepSet *packagingSpecsDepSet
+	packagingSpecsDepSet *DepSet[PackagingSpec]
 	// katiInstalls tracks the install rules that were created by Soong but are being exported
 	// to Make to convert to ninja rules so that Make can add additional dependencies.
 	katiInstalls katiInstalls
@@ -1591,12 +1599,29 @@ func (b bp2buildInfo) BazelAttributes() []interface{} {
 }
 
 func (m *ModuleBase) addBp2buildInfo(info bp2buildInfo) {
+	if m.commonProperties.BazelConversionStatus.UnconvertedReason != nil {
+		panic(fmt.Errorf("bp2build: module '%s' marked unconvertible and also is converted", m.Name()))
+	}
 	m.commonProperties.BazelConversionStatus.Bp2buildInfo = append(m.commonProperties.BazelConversionStatus.Bp2buildInfo, info)
+}
+
+func (m *ModuleBase) setBp2buildUnconvertible(reasonType bp2build_metrics_proto.UnconvertedReasonType, detail string) {
+	if len(m.commonProperties.BazelConversionStatus.Bp2buildInfo) > 0 {
+		panic(fmt.Errorf("bp2build: module '%s' marked unconvertible and also is converted", m.Name()))
+	}
+	m.commonProperties.BazelConversionStatus.UnconvertedReason = &UnconvertedReason{
+		ReasonType: int(reasonType),
+		Detail:     detail,
+	}
 }
 
 // IsConvertedByBp2build returns whether this module was converted via bp2build.
 func (m *ModuleBase) IsConvertedByBp2build() bool {
 	return len(m.commonProperties.BazelConversionStatus.Bp2buildInfo) > 0
+}
+
+func (m *ModuleBase) GetUnconvertedReason() *UnconvertedReason {
+	return m.commonProperties.BazelConversionStatus.UnconvertedReason
 }
 
 // Bp2buildTargets returns the Bazel targets bp2build generated for this module.
@@ -2083,9 +2108,9 @@ func (m *ModuleBase) EffectiveLicenseFiles() Paths {
 
 // computeInstallDeps finds the installed paths of all dependencies that have a dependency
 // tag that is annotated as needing installation via the isInstallDepNeeded method.
-func (m *ModuleBase) computeInstallDeps(ctx ModuleContext) ([]*installPathsDepSet, []*packagingSpecsDepSet) {
-	var installDeps []*installPathsDepSet
-	var packagingSpecs []*packagingSpecsDepSet
+func (m *ModuleBase) computeInstallDeps(ctx ModuleContext) ([]*DepSet[InstallPath], []*DepSet[PackagingSpec]) {
+	var installDeps []*DepSet[InstallPath]
+	var packagingSpecs []*DepSet[PackagingSpec]
 	ctx.VisitDirectDeps(func(dep Module) {
 		if isInstallDepNeeded(dep, ctx.OtherModuleDependencyTag(dep)) {
 			// Installation is still handled by Make, so anything hidden from Make is not
@@ -2380,7 +2405,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	// set m.installFilesDepSet to only the transitive dependencies to be used as the dependencies
 	// of installed files of this module.  It will be replaced by a depset including the installed
 	// files of this module at the end for use by modules that depend on this one.
-	m.installFilesDepSet = newInstallPathsDepSet(nil, dependencyInstallFiles)
+	m.installFilesDepSet = NewDepSet[InstallPath](TOPOLOGICAL, nil, dependencyInstallFiles)
 
 	// Temporarily continue to call blueprintCtx.GetMissingDependencies() to maintain the previous behavior of never
 	// reporting missing dependency errors in Blueprint when AllowMissingDependencies == true.
@@ -2487,8 +2512,8 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		}
 	}
 
-	m.installFilesDepSet = newInstallPathsDepSet(m.installFiles, dependencyInstallFiles)
-	m.packagingSpecsDepSet = newPackagingSpecsDepSet(m.packagingSpecs, dependencyPackagingSpecs)
+	m.installFilesDepSet = NewDepSet[InstallPath](TOPOLOGICAL, m.installFiles, dependencyInstallFiles)
+	m.packagingSpecsDepSet = NewDepSet[PackagingSpec](TOPOLOGICAL, m.packagingSpecs, dependencyPackagingSpecs)
 
 	buildLicenseMetadata(ctx, m.licenseMetadataFile)
 
@@ -3192,7 +3217,7 @@ func (m *moduleContext) ModuleSubDir() string {
 	return m.bp.ModuleSubDir()
 }
 
-func (m *moduleContext) ModuleSoongConfigHash() string {
+func (m *moduleContext) SoongConfigTraceHash() string {
 	return m.module.base().commonProperties.SoongConfigTraceHash
 }
 
@@ -3369,7 +3394,7 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 	m.module.base().hooks.runInstallHooks(m, srcPath, fullInstallPath, false)
 
 	if !m.skipInstall() {
-		deps = append(deps, m.module.base().installFilesDepSet.ToList().Paths()...)
+		deps = append(deps, InstallPaths(m.module.base().installFilesDepSet.ToList()).Paths()...)
 
 		var implicitDeps, orderOnlyDeps Paths
 
@@ -3942,26 +3967,6 @@ type IdeInfo struct {
 func CheckBlueprintSyntax(ctx BaseModuleContext, filename string, contents string) []error {
 	bpctx := ctx.blueprintBaseModuleContext()
 	return blueprint.CheckBlueprintSyntax(bpctx.ModuleFactories(), filename, contents)
-}
-
-// installPathsDepSet is a thin type-safe wrapper around the generic depSet.  It always uses
-// topological order.
-type installPathsDepSet struct {
-	depSet
-}
-
-// newInstallPathsDepSet returns an immutable packagingSpecsDepSet with the given direct and
-// transitive contents.
-func newInstallPathsDepSet(direct InstallPaths, transitive []*installPathsDepSet) *installPathsDepSet {
-	return &installPathsDepSet{*newDepSet(TOPOLOGICAL, direct, transitive)}
-}
-
-// ToList returns the installPathsDepSet flattened to a list in topological order.
-func (d *installPathsDepSet) ToList() InstallPaths {
-	if d == nil {
-		return nil
-	}
-	return d.depSet.ToList().(InstallPaths)
 }
 
 func registerSoongConfigTraceMutator(ctx RegisterMutatorsContext) {

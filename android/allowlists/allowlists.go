@@ -131,6 +131,7 @@ var (
 		"external/brotli":                        Bp2BuildDefaultTrue,
 		"external/bsdiff":                        Bp2BuildDefaultTrueRecursively,
 		"external/bzip2":                         Bp2BuildDefaultTrueRecursively,
+		"external/clang/lib":                     Bp2BuildDefaultTrue,
 		"external/conscrypt":                     Bp2BuildDefaultTrue,
 		"external/e2fsprogs":                     Bp2BuildDefaultTrueRecursively,
 		"external/eigen":                         Bp2BuildDefaultTrueRecursively,
@@ -190,6 +191,7 @@ var (
 		"external/python/six":                    Bp2BuildDefaultTrueRecursively,
 		"external/rappor":                        Bp2BuildDefaultTrueRecursively,
 		"external/scudo":                         Bp2BuildDefaultTrueRecursively,
+		"external/selinux/checkpolicy":           Bp2BuildDefaultTrueRecursively,
 		"external/selinux/libselinux":            Bp2BuildDefaultTrueRecursively,
 		"external/selinux/libsepol":              Bp2BuildDefaultTrueRecursively,
 		"external/speex":                         Bp2BuildDefaultTrueRecursively,
@@ -334,6 +336,7 @@ var (
 		"system/apex":                                            Bp2BuildDefaultFalse, // TODO(b/207466993): flaky failures
 		"system/apex/apexer":                                     Bp2BuildDefaultTrue,
 		"system/apex/libs":                                       Bp2BuildDefaultTrueRecursively,
+		"system/apex/libs/libapexsupport":                        Bp2BuildDefaultFalseRecursively, // TODO(b/267572288): depends on rust
 		"system/apex/proto":                                      Bp2BuildDefaultTrueRecursively,
 		"system/apex/tools":                                      Bp2BuildDefaultTrueRecursively,
 		"system/core/debuggerd":                                  Bp2BuildDefaultTrueRecursively,
@@ -427,6 +430,7 @@ var (
 		// e.g. ERROR: Analysis of target '@soong_injection//mixed_builds:buildroot' failed
 		"external/bazelbuild-rules_android":/* recursive = */ true,
 		"external/bazelbuild-rules_license":/* recursive = */ true,
+		"external/bazelbuild-rules_go":/* recursive = */ true,
 		"external/bazelbuild-kotlin-rules":/* recursive = */ true,
 		"external/bazel-skylib":/* recursive = */ true,
 		"external/protobuf":/* recursive = */ false,
@@ -794,6 +798,13 @@ var (
 
 		// for platform_compat_config
 		"process-compat-config",
+
+		// cc_* modules with rscript srcs
+		"rstest-latency",
+		"libRScpp_static",
+		"rs-headers",
+		"rs_script_api",
+		"libRSDispatch",
 	}
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
@@ -938,12 +949,8 @@ var (
 
 		//system/libvintf
 		// depends on apex-info-list-tinyxml, unconverted xsd_config Soong module type.
-		"libvintf",
-		"vintf",
 		"libassemblevintf",
 		"assemble_vintf",
-		"libvintffm",
-		"vintffm",
 		"checkvintf",
 
 		// depends on audio_policy_configuration_aidl_default, xsd_config module.
@@ -1484,8 +1491,22 @@ var (
 		"tradefed",
 		"permissive_mte_test",
 		"ICU4CTestRunner",
+		"DeviceLongPollingStubTest",
 
 		"HelloWorldHostTest", // TODO(b/280452825): Convert HelloWorldHostTest to b test
+
+		"libprotobuf-full-test", // TODO(b/246997908): cannot convert proto_libraries which implicitly include other srcs in the same directory
+		"libprotobuf-lite-test", // TODO(b/246997908): cannot convert proto_libraries which implicitly include other srcs in the same directory
+
+		"logcat", // TODO(b/246997908): cannot convert proto_libraries which implicitly include other srcs in the same directory
+
+		"expresscatalogvalidator", // TODO(b/246997908): cannot convert proto_libraries which implicitly include other srcs in the same directory
+
+		// depends on other //art modules
+		"libart-for-test",
+		"libart_generated_headers",
+		"libart-runtime-gtest",
+		"libartd-runtime-gtest",
 	}
 
 	MixedBuildsDisabledList = []string{
