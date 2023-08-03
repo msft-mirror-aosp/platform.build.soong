@@ -95,6 +95,10 @@ type variableProperties struct {
 			Cflags []string
 		}
 
+		Device_page_size_agnostic struct {
+			Cflags []string `android:"arch_variant"`
+		} `android:"arch_variant"`
+
 		Override_rs_driver struct {
 			Cflags []string
 		}
@@ -180,12 +184,19 @@ type variableProperties struct {
 			Srcs         []string `android:"arch_variant"`
 			Exclude_srcs []string `android:"arch_variant"`
 		} `android:"arch_variant"`
+
+		// release_aidl_use_unfrozen is "true" when a device can
+		// use the unfrozen versions of AIDL interfaces.
+		Release_aidl_use_unfrozen struct {
+			Cflags []string
+			Cmd    *string
+		}
 	} `android:"arch_variant"`
 }
 
 var defaultProductVariables interface{} = variableProperties{}
 
-type productVariables struct {
+type ProductVariables struct {
 	// Suffix to add to generated Makefiles
 	Make_suffix *string `json:",omitempty"`
 
@@ -275,6 +286,7 @@ type productVariables struct {
 	Safestack                    *bool    `json:",omitempty"`
 	HostStaticBinaries           *bool    `json:",omitempty"`
 	Binder32bit                  *bool    `json:",omitempty"`
+	Device_page_size_agnostic    *bool    `json:",omitempty"`
 	UseGoma                      *bool    `json:",omitempty"`
 	UseRBE                       *bool    `json:",omitempty"`
 	UseRBEJAVAC                  *bool    `json:",omitempty"`
@@ -401,9 +413,10 @@ type productVariables struct {
 
 	WithDexpreopt bool `json:",omitempty"`
 
-	ManifestPackageNameOverrides []string `json:",omitempty"`
-	CertificateOverrides         []string `json:",omitempty"`
-	PackageNameOverrides         []string `json:",omitempty"`
+	ManifestPackageNameOverrides   []string `json:",omitempty"`
+	CertificateOverrides           []string `json:",omitempty"`
+	PackageNameOverrides           []string `json:",omitempty"`
+	ConfiguredJarLocationOverrides []string `json:",omitempty"`
 
 	ApexGlobalMinSdkVersionOverride *string `json:",omitempty"`
 
@@ -456,6 +469,8 @@ type productVariables struct {
 
 	SelinuxIgnoreNeverallows bool `json:",omitempty"`
 
+	Release_aidl_use_unfrozen *bool `json:",omitempty"`
+
 	SepolicyFreezeTestExtraDirs         []string `json:",omitempty"`
 	SepolicyFreezeTestExtraPrebuiltDirs []string `json:",omitempty"`
 
@@ -474,6 +489,8 @@ type productVariables struct {
 
 	ReleaseVersion          string   `json:",omitempty"`
 	ReleaseAconfigValueSets []string `json:",omitempty"`
+
+	KeepVndk *bool `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
@@ -488,8 +505,8 @@ func stringPtr(v string) *string {
 	return &v
 }
 
-func (v *productVariables) SetDefaultConfig() {
-	*v = productVariables{
+func (v *ProductVariables) SetDefaultConfig() {
+	*v = ProductVariables{
 		BuildNumberFile: stringPtr("build_number.txt"),
 
 		Platform_version_name:                  stringPtr("S"),
@@ -526,6 +543,7 @@ func (v *productVariables) SetDefaultConfig() {
 		Safestack:                    boolPtr(false),
 		TrimmedApex:                  boolPtr(false),
 		Build_from_text_stub:         boolPtr(false),
+		Device_page_size_agnostic:    boolPtr(false),
 
 		BootJars:     ConfiguredJarList{apexes: []string{}, jars: []string{}},
 		ApexBootJars: ConfiguredJarList{apexes: []string{}, jars: []string{}},
@@ -725,7 +743,9 @@ func (p *ProductConfigProperties) AddEitherProperty(
 			dst = append(dst, src...)
 			(*p)[propertyName][key] = dst
 		default:
-			panic(fmt.Errorf("TODO: handle merging value %#v", existing))
+			if existing != propertyValue {
+				panic(fmt.Errorf("TODO: handle merging value %#v", existing))
+			}
 		}
 	} else {
 		(*p)[propertyName][key] = propertyValue
@@ -938,7 +958,7 @@ func (productConfigProperties *ProductConfigProperties) AddSoongConfigProperties
 						productConfigProperties.AddSoongConfigProperty(propertyName, namespace, soongConfigVariableName, soongConfigVariableValue, os.Name, property.Interface())
 					}
 				}
-			} else {
+			} else if !archOrOsSpecificStruct.IsZero() {
 				// One problem with supporting additional fields is that if multiple branches of
 				// "target" overlap, we don't want them to be in the same select statement (aka
 				// configuration axis). "android" and "host" are disjoint, so it's ok that we only

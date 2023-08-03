@@ -25,12 +25,12 @@ import (
 )
 
 // CopyOf returns a new slice that has the same contents as s.
-func CopyOf(s []string) []string {
+func CopyOf[T any](s []T) []T {
 	// If the input is nil, return nil and not an empty list
 	if s == nil {
 		return s
 	}
-	return append([]string{}, s...)
+	return append([]T{}, s...)
 }
 
 // Concat returns a new slice concatenated from the two input slices. It does not change the input
@@ -137,19 +137,17 @@ func SortedUniqueStringValues(m interface{}) []string {
 }
 
 // IndexList returns the index of the first occurrence of the given string in the list or -1
-func IndexList(s string, list []string) int {
+func IndexList[T comparable](t T, list []T) int {
 	for i, l := range list {
-		if l == s {
+		if l == t {
 			return i
 		}
 	}
-
 	return -1
 }
 
-// InList checks if the string belongs to the list
-func InList(s string, list []string) bool {
-	return IndexList(s, list) != -1
+func InList[T comparable](t T, list []T) bool {
+	return IndexList(t, list) != -1
 }
 
 func setFromList[T comparable](l []T) map[T]bool {
@@ -288,22 +286,25 @@ func RemoveFromList(s string, list []string) (bool, []string) {
 }
 
 // FirstUniqueStrings returns all unique elements of a slice of strings, keeping the first copy of
-// each.  It modifies the slice contents in place, and returns a subslice of the original slice.
+// each.  It does not modify the input slice.
 func FirstUniqueStrings(list []string) []string {
-	// Do not moodify the input in-place, operate on a copy instead.
-	list = CopyOf(list)
-	// 128 was chosen based on BenchmarkFirstUniqueStrings results.
-	if len(list) > 128 {
-		return firstUnique(list)
-	}
 	return firstUnique(list)
 }
 
 // firstUnique returns all unique elements of a slice, keeping the first copy of each.  It
-// modifies the slice contents in place, and returns a subslice of the original slice.
+// does not modify the input slice.
 func firstUnique[T comparable](slice []T) []T {
-	// 4 was chosen based on Benchmark_firstUnique results.
-	if len(slice) > 4 {
+	// Do not modify the input in-place, operate on a copy instead.
+	slice = CopyOf(slice)
+	return firstUniqueInPlace(slice)
+}
+
+// firstUniqueInPlace returns all unique elements of a slice, keeping the first copy of
+// each.  It modifies the slice contents in place, and returns a subslice of the original
+// slice.
+func firstUniqueInPlace[T comparable](slice []T) []T {
+	// 128 was chosen based on BenchmarkFirstUniqueStrings results.
+	if len(slice) > 128 {
 		return firstUniqueMap(slice)
 	}
 	return firstUniqueList(slice)
@@ -348,15 +349,19 @@ func firstUniqueMap[T comparable](in []T) []T {
 	return in[0:writeIndex]
 }
 
-// reverseSliceInPlace reverses the elements of a slice in place.
-func reverseSliceInPlace[T any](in []T) {
+// ReverseSliceInPlace reverses the elements of a slice in place and returns it.
+func ReverseSliceInPlace[T any](in []T) []T {
 	for i, j := 0, len(in)-1; i < j; i, j = i+1, j-1 {
 		in[i], in[j] = in[j], in[i]
 	}
+	return in
 }
 
-// reverseSlice returns a copy of a slice in reverse order.
-func reverseSlice[T any](in []T) []T {
+// ReverseSlice returns a copy of a slice in reverse order.
+func ReverseSlice[T any](in []T) []T {
+	if in == nil {
+		return in
+	}
 	out := make([]T, len(in))
 	for i := 0; i < len(in); i++ {
 		out[i] = in[len(in)-1-i]

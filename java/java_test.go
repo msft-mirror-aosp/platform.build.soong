@@ -2208,7 +2208,7 @@ func TestJavaApiLibraryStaticLibsLink(t *testing.T) {
 	}
 }
 
-func TestJavaApiLibraryDepApiSrcs(t *testing.T) {
+func TestJavaApiLibraryFullApiSurfaceStub(t *testing.T) {
 	provider_bp_a := `
 	java_api_contribution {
 		name: "foo1",
@@ -2234,7 +2234,7 @@ func TestJavaApiLibraryDepApiSrcs(t *testing.T) {
 			name: "bar1",
 			api_surface: "public",
 			api_contributions: ["foo1"],
-			dep_api_srcs: "lib1",
+			full_api_surface_stub: "lib1",
 		}
 		`,
 		map[string][]byte{
@@ -2247,9 +2247,7 @@ func TestJavaApiLibraryDepApiSrcs(t *testing.T) {
 	manifest := m.Output("metalava.sbox.textproto")
 	sboxProto := android.RuleBuilderSboxProtoForTests(t, manifest)
 	manifestCommand := sboxProto.Commands[0].GetCommand()
-
-	android.AssertStringDoesContain(t, "Command expected to contain module srcjar file", manifestCommand, "bar1-stubs.srcjar")
-	android.AssertStringDoesContain(t, "Command expected to contain output files list text file flag", manifestCommand, "--out __SBOX_SANDBOX_DIR__/out/sources.txt")
+	android.AssertStringDoesContain(t, "Command expected to contain full_api_surface_stub output jar", manifestCommand, "lib1.jar")
 }
 
 func TestJavaApiLibraryFilegroupInput(t *testing.T) {
@@ -2352,4 +2350,23 @@ func TestJavaExcludeStaticLib(t *testing.T) {
 		`stable-core-platform-api-stubs-system-modules`,
 		`stable.core.platform.api.stubs`,
 	})
+}
+
+func TestJavaLibraryWithResourcesStem(t *testing.T) {
+	ctx, _ := testJavaWithFS(t, `
+    java_library {
+        name: "foo",
+        java_resource_dirs: ["test-jar"],
+        stem: "test",
+    }
+    `,
+		map[string][]byte{
+			"test-jar/test/resource.txt": nil,
+		})
+
+	m := ctx.ModuleForTests("foo", "android_common")
+	outputs := fmt.Sprint(m.AllOutputs())
+	if !strings.Contains(outputs, "test.jar") {
+		t.Errorf("Module output does not contain expected jar %s", "test.jar")
+	}
 }
