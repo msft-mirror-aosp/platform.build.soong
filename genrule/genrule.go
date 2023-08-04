@@ -151,6 +151,9 @@ type generatorProperties struct {
 
 	// input files to exclude
 	Exclude_srcs []string `android:"path,arch_variant"`
+
+	// Enable restat to update the output only if the output is changed
+	Write_if_changed *bool
 }
 
 type Module struct {
@@ -293,6 +296,9 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 		for _, dir := range g.properties.Export_include_dirs {
 			g.exportedIncludeDirs = append(g.exportedIncludeDirs,
 				android.PathForModuleGen(ctx, g.subDir, ctx.ModuleDir(), dir))
+			// Also export without ModuleDir for consistency with Export_include_dirs not being set
+			g.exportedIncludeDirs = append(g.exportedIncludeDirs,
+				android.PathForModuleGen(ctx, g.subDir, dir))
 		}
 	} else {
 		g.exportedIncludeDirs = append(g.exportedIncludeDirs, android.PathForModuleGen(ctx, g.subDir))
@@ -435,6 +441,7 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 		cmd = g.CmdModifier(ctx, cmd)
 	}
 
+	var extraInputs android.Paths
 	// Generate tasks, either from genrule or gensrcs.
 	for i, task := range g.taskGenerator(ctx, cmd, srcFiles) {
 		if len(task.out) == 0 {
@@ -442,7 +449,6 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 			return
 		}
 
-		var extraInputs android.Paths
 		// Only handle extra inputs once as these currently are the same across all tasks
 		if i == 0 {
 			for name, values := range task.extraInputs {
@@ -467,6 +473,9 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 
 		// Use a RuleBuilder to create a rule that runs the command inside an sbox sandbox.
 		rule := getSandboxedRuleBuilder(ctx, android.NewRuleBuilder(pctx, ctx).Sbox(task.genDir, manifestPath))
+		if Bool(g.properties.Write_if_changed) {
+			rule.Restat()
+		}
 		cmd := rule.Command()
 
 		for _, out := range task.out {
@@ -985,6 +994,7 @@ func (m *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 
 	tags := android.ApexAvailableTagsWithoutTestApexes(ctx, m)
 
+	bazelName := m.Name()
 	if ctx.ModuleType() == "gensrcs" {
 		props := bazel.BazelTargetModuleProperties{
 			Rule_class:        "gensrcs",
@@ -1002,17 +1012,7 @@ func (m *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 			Tags: tags,
 		}, attrs)
 	} else {
-		// The Out prop is not in an immediately accessible field
-		// in the Module struct, so use GetProperties and cast it
-		// to the known struct prop.
-		var outs []string
-		for _, propIntf := range m.GetProperties() {
-			if props, ok := propIntf.(*genRuleProperties); ok {
-				outs = props.Out
-				break
-			}
-		}
-		bazelName := m.Name()
+		outs := m.RawOutputFiles(ctx)
 		for _, out := range outs {
 			if out == bazelName {
 				// This is a workaround to circumvent a Bazel warning where a genrule's
@@ -1037,6 +1037,73 @@ func (m *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 			Tags: tags,
 		}, attrs)
 	}
+
+	if m.needsCcLibraryHeadersBp2build() {
+		includeDirs := make([]string, len(m.properties.Export_include_dirs)*2)
+		for i, dir := range m.properties.Export_include_dirs {
+			includeDirs[i*2] = dir
+			includeDirs[i*2+1] = filepath.Clean(filepath.Join(ctx.ModuleDir(), dir))
+		}
+		attrs := &ccHeaderLibraryAttrs{
+			Hdrs:            []string{":" + bazelName},
+			Export_includes: includeDirs,
+		}
+		props := bazel.BazelTargetModuleProperties{
+			Rule_class:        "cc_library_headers",
+			Bzl_load_location: "//build/bazel/rules/cc:cc_library_headers.bzl",
+		}
+		ctx.CreateBazelTargetModule(props, android.CommonAttributes{
+			Name: m.Name() + genruleHeaderLibrarySuffix,
+			Tags: tags,
+		}, attrs)
+
+	}
+}
+
+const genruleHeaderLibrarySuffix = "__header_library"
+
+func (m *Module) needsCcLibraryHeadersBp2build() bool {
+	return len(m.properties.Export_include_dirs) > 0
+}
+
+// GenruleCcHeaderMapper is a bazel.LabelMapper function to map genrules to a cc_library_headers
+// target when they export multiple include directories.
+func GenruleCcHeaderLabelMapper(ctx bazel.OtherModuleContext, label bazel.Label) (string, bool) {
+	mod, exists := ctx.ModuleFromName(label.OriginalModuleName)
+	if !exists {
+		return label.Label, false
+	}
+	if m, ok := mod.(*Module); ok {
+		if m.needsCcLibraryHeadersBp2build() {
+			return label.Label + genruleHeaderLibrarySuffix, true
+		}
+	}
+	return label.Label, false
+}
+
+type ccHeaderLibraryAttrs struct {
+	Hdrs []string
+
+	Export_includes []string
+}
+
+// RawOutputFfiles returns the raw outputs specified in Android.bp
+// This does not contain the fully resolved path relative to the top of the tree
+func (g *Module) RawOutputFiles(ctx android.BazelConversionContext) []string {
+	if ctx.Config().BuildMode != android.Bp2build {
+		ctx.ModuleErrorf("RawOutputFiles is only supported in bp2build mode")
+	}
+	// The Out prop is not in an immediately accessible field
+	// in the Module struct, so use GetProperties and cast it
+	// to the known struct prop.
+	var outs []string
+	for _, propIntf := range g.GetProperties() {
+		if props, ok := propIntf.(*genRuleProperties); ok {
+			outs = props.Out
+			break
+		}
+	}
+	return outs
 }
 
 var Bool = proptools.Bool
@@ -1090,6 +1157,7 @@ func getSandboxingAllowlistSets(ctx android.PathContext) *sandboxingAllowlistSet
 		}
 	}).(*sandboxingAllowlistSets)
 }
+
 func getSandboxedRuleBuilder(ctx android.ModuleContext, r *android.RuleBuilder) *android.RuleBuilder {
 	if !ctx.DeviceConfig().GenruleSandboxing() {
 		return r.SandboxTools()

@@ -1003,6 +1003,38 @@ cc_library_static {
 	})
 }
 
+func TestCcLibraryStaticGeneratedHeadersMultipleExports(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Blueprint: soongCcLibraryStaticPreamble + `
+genrule {
+    name: "generated_hdr",
+    cmd: "nothing to see here",
+    export_include_dirs: ["foo", "bar"],
+    bazel_module: { bp2build_available: false },
+}
+
+genrule {
+    name: "export_generated_hdr",
+    cmd: "nothing to see here",
+    export_include_dirs: ["a", "b"],
+    bazel_module: { bp2build_available: false },
+}
+
+cc_library_static {
+    name: "foo_static",
+    generated_headers: ["generated_hdr", "export_generated_hdr"],
+    export_generated_headers: ["export_generated_hdr"],
+    include_build_directory: false,
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_static", AttrNameToString{
+				"deps":                `[":export_generated_hdr__header_library"]`,
+				"implementation_deps": `[":generated_hdr__header_library"]`,
+			}),
+		},
+	})
+}
+
 // generated_headers has "variant_prepend" tag. In bp2build output,
 // variant info(select) should go before general info.
 func TestCcLibraryStaticArchSrcsExcludeSrcsGeneratedFiles(t *testing.T) {
@@ -1156,13 +1188,13 @@ cc_library_static {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_static", "foo_static", AttrNameToString{
 				"copts": `select({
-        "//build/bazel/product_variables:binder32bit": ["-Wbinder32bit"],
+        "//build/bazel/product_config/config_settings:binder32bit": ["-Wbinder32bit"],
         "//conditions:default": [],
     }) + select({
-        "//build/bazel/product_variables:malloc_not_svelte": ["-Wmalloc_not_svelte"],
+        "//build/bazel/product_config/config_settings:malloc_not_svelte": ["-Wmalloc_not_svelte"],
         "//conditions:default": [],
     }) + select({
-        "//build/bazel/product_variables:malloc_zero_contents": ["-Wmalloc_zero_contents"],
+        "//build/bazel/product_config/config_settings:malloc_zero_contents": ["-Wmalloc_zero_contents"],
         "//conditions:default": [],
     })`,
 				"srcs_c": `["common.c"]`,
@@ -1216,19 +1248,19 @@ cc_library_static {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_static", "foo_static", AttrNameToString{
 				"copts": `select({
-        "//build/bazel/product_variables:malloc_not_svelte": ["-Wmalloc_not_svelte"],
+        "//build/bazel/product_config/config_settings:malloc_not_svelte": ["-Wmalloc_not_svelte"],
         "//conditions:default": [],
     }) + select({
-        "//build/bazel/product_variables:malloc_not_svelte-android": ["-Wandroid_malloc_not_svelte"],
+        "//build/bazel/product_config/config_settings:malloc_not_svelte-android": ["-Wandroid_malloc_not_svelte"],
         "//conditions:default": [],
     }) + select({
-        "//build/bazel/product_variables:malloc_not_svelte-arm": ["-Wlib32_malloc_not_svelte"],
+        "//build/bazel/product_config/config_settings:malloc_not_svelte-arm": ["-Wlib32_malloc_not_svelte"],
         "//conditions:default": [],
     }) + select({
-        "//build/bazel/product_variables:malloc_not_svelte-arm64": ["-Warm64_malloc_not_svelte"],
+        "//build/bazel/product_config/config_settings:malloc_not_svelte-arm64": ["-Warm64_malloc_not_svelte"],
         "//conditions:default": [],
     }) + select({
-        "//build/bazel/product_variables:malloc_not_svelte-x86": ["-Wlib32_malloc_not_svelte"],
+        "//build/bazel/product_config/config_settings:malloc_not_svelte-x86": ["-Wlib32_malloc_not_svelte"],
         "//conditions:default": [],
     })`,
 				"srcs_c": `["common.c"]`,
@@ -1255,7 +1287,7 @@ cc_library_static {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_static", "foo_static", AttrNameToString{
 				"asflags": `select({
-        "//build/bazel/product_variables:platform_sdk_version": ["-DPLATFORM_SDK_VERSION=$(Platform_sdk_version)"],
+        "//build/bazel/product_config/config_settings:platform_sdk_version": ["-DPLATFORM_SDK_VERSION=$(Platform_sdk_version)"],
         "//conditions:default": [],
     })`,
 				"srcs_as": `["common.S"]`,
@@ -1918,7 +1950,7 @@ cc_library_static {
 `,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
-				"features":       `["ubsan_blocklist_foo_blocklist_txt"]`,
+				"features":       `["sanitizer_blocklist_foo_blocklist_txt"]`,
 				"local_includes": `["."]`,
 			}),
 		},
@@ -2214,4 +2246,39 @@ cc_library_static{
         "foo_renderscript",
     ]`,
 			})}})
+}
+
+func TestCcLibraryWithProtoInGeneratedSrcs(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library with a .proto file generated from a genrule",
+		ModuleTypeUnderTest:        "cc_library_static",
+		ModuleTypeUnderTestFactory: cc.LibraryStaticFactory,
+		Blueprint: soongCcLibraryPreamble + `
+cc_library_static {
+	name: "mylib",
+	generated_sources: ["myprotogen"],
+}
+genrule {
+	name: "myprotogen",
+	out: ["myproto.proto"],
+}
+` + simpleModuleDoNotConvertBp2build("cc_library", "libprotobuf-cpp-lite"),
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "mylib", AttrNameToString{
+				"local_includes":                    `["."]`,
+				"deps":                              `[":libprotobuf-cpp-lite"]`,
+				"implementation_whole_archive_deps": `[":mylib_cc_proto_lite"]`,
+			}),
+			MakeBazelTarget("cc_lite_proto_library", "mylib_cc_proto_lite", AttrNameToString{
+				"deps": `[":mylib_proto"]`,
+			}),
+			MakeBazelTarget("proto_library", "mylib_proto", AttrNameToString{
+				"srcs": `[":myprotogen"]`,
+			}),
+			MakeBazelTargetNoRestrictions("genrule", "myprotogen", AttrNameToString{
+				"cmd":  `""`,
+				"outs": `["myproto.proto"]`,
+			}),
+		},
+	})
 }

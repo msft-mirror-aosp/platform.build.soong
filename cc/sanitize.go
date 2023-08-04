@@ -56,10 +56,6 @@ var (
 		// higher number of "optimized out" stack variables.
 		// b/112437883.
 		"-instcombine-lower-dbg-declare=0",
-		// TODO(b/159343917): HWASan and GlobalISel don't play nicely, and
-		// GlobalISel is the default at -O0 on aarch64.
-		"--aarch64-enable-global-isel-at-O=-1",
-		"-fast-isel=false",
 		"-hwasan-use-after-scope=1",
 		"-dom-tree-reachability-max-bbs-to-explore=128",
 	}
@@ -91,6 +87,8 @@ var (
 
 	hostOnlySanitizeFlags   = []string{"-fno-sanitize-recover=all"}
 	deviceOnlySanitizeFlags = []string{"-fsanitize-trap=all", "-ftrap-function=abort"}
+
+	noSanitizeLinkRuntimeFlag = "-fno-sanitize-link-runtime"
 )
 
 type SanitizerType int
@@ -411,6 +409,8 @@ func init() {
 	exportedVars.ExportStringListStaticVariable("HostOnlySanitizeFlags", hostOnlySanitizeFlags)
 	exportedVars.ExportStringList("DeviceOnlySanitizeFlags", deviceOnlySanitizeFlags)
 
+	exportedVars.ExportStringList("MinimalRuntimeFlags", minimalRuntimeFlags)
+
 	// Leave out "-flto" from the slices exported to bazel, as we will use the
 	// dedicated LTO feature for this. For C Flags and Linker Flags, also leave
 	// out the cross DSO flag which will be added separately under the correct conditions.
@@ -425,6 +425,8 @@ func init() {
 	exportedVars.ExportString("CfiExportsMapPath", cfiExportsMapPath)
 	exportedVars.ExportString("CfiExportsMapFilename", cfiExportsMapFilename)
 	exportedVars.ExportString("CfiAssemblySupportFlag", cfiAssemblySupportFlag)
+
+	exportedVars.ExportString("NoSanitizeLinkRuntimeFlag", noSanitizeLinkRuntimeFlag)
 
 	android.RegisterMakeVarsProvider(pctx, cfiMakeVarsProvider)
 	android.RegisterMakeVarsProvider(pctx, hwasanMakeVarsProvider)
@@ -644,10 +646,6 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 
 	// SCS is only implemented on AArch64/riscv64.
 	if (ctx.Arch().ArchType != android.Arm64 && ctx.Arch().ArchType != android.Riscv64) || !ctx.toolchain().Bionic() {
-		s.Scs = nil
-	}
-	// ...but temporarily globally disabled on riscv64 (http://b/277909695).
-	if ctx.Arch().ArchType == android.Riscv64 {
 		s.Scs = nil
 	}
 
@@ -931,7 +929,7 @@ func (s *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 			// Bionic and musl sanitizer runtimes have already been added as dependencies so that
 			// the right variant of the runtime will be used (with the "-android" or "-musl"
 			// suffixes), so don't let clang the runtime library.
-			flags.Local.LdFlags = append(flags.Local.LdFlags, "-fno-sanitize-link-runtime")
+			flags.Local.LdFlags = append(flags.Local.LdFlags, noSanitizeLinkRuntimeFlag)
 		} else {
 			// Host sanitizers only link symbols in the final executable, so
 			// there will always be undefined symbols in intermediate libraries.
