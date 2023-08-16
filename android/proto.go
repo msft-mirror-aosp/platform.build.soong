@@ -230,6 +230,7 @@ func Bp2buildProtoProperties(ctx Bp2buildMutatorContext, m *ModuleBase, srcs baz
 	name := m.Name() + "_proto"
 
 	depsFromFilegroup := protoLibraries
+	var canonicalPathFromRoot bool
 
 	if len(directProtoSrcs.Includes) > 0 {
 		pkgToSrcs := partitionSrcsByPackage(ctx.ModuleDir(), directProtoSrcs)
@@ -250,7 +251,8 @@ func Bp2buildProtoProperties(ctx Bp2buildMutatorContext, m *ModuleBase, srcs baz
 					if axis == bazel.NoConfigAxis {
 						info.Type = props.Proto.Type
 
-						if !proptools.BoolDefault(props.Proto.Canonical_path_from_root, canonicalPathFromRootDefault) {
+						canonicalPathFromRoot = proptools.BoolDefault(props.Proto.Canonical_path_from_root, canonicalPathFromRootDefault)
+						if !canonicalPathFromRoot {
 							// an empty string indicates to strips the package path
 							path := ""
 							attrs.Strip_import_prefix = &path
@@ -271,13 +273,25 @@ func Bp2buildProtoProperties(ctx Bp2buildMutatorContext, m *ModuleBase, srcs baz
 
 			tags := ApexAvailableTagsWithoutTestApexes(ctx.(TopDownMutatorContext), ctx.Module())
 
-			// Since we are creating the proto_library in a subpackage, create an import_prefix relative to the current package
-			if rel, err := filepath.Rel(ctx.ModuleDir(), pkg); err != nil {
-				ctx.ModuleErrorf("Could not get relative path for %v %v", pkg, err)
-			} else if rel != "." {
-				attrs.Import_prefix = &rel
+			moduleDir := ctx.ModuleDir()
+			if !canonicalPathFromRoot {
+				// Since we are creating the proto_library in a subpackage, set the import_prefix relative to the current package
+				if rel, err := filepath.Rel(moduleDir, pkg); err != nil {
+					ctx.ModuleErrorf("Could not get relative path for %v %v", pkg, err)
+				} else if rel != "." {
+					attrs.Import_prefix = &rel
+				}
 			}
 
+			// TODO - b/246997908: Handle potential orphaned proto_library targets
+			// To create proto_library targets in the same package, we split the .proto files
+			// This means that if a proto_library in a subpackage imports another proto_library from the parent package
+			// (or a different subpackage), it will not find it.
+			// The CcProtoGen action itself runs fine because we construct the correct ProtoInfo,
+			// but the FileDescriptorSet of each proto_library might not be compile-able
+			if pkg != ctx.ModuleDir() {
+				tags.Append(bazel.MakeStringListAttribute([]string{"manual"}))
+			}
 			ctx.CreateBazelTargetModule(
 				bazel.BazelTargetModuleProperties{Rule_class: "proto_library"},
 				CommonAttributes{Name: name, Dir: proptools.StringPtr(pkg), Tags: tags},
@@ -285,7 +299,7 @@ func Bp2buildProtoProperties(ctx Bp2buildMutatorContext, m *ModuleBase, srcs baz
 			)
 
 			l := ""
-			if pkg == ctx.ModuleDir() { // same package that the original module lives in
+			if pkg == moduleDir { // same package that the original module lives in
 				l = ":" + name
 			} else {
 				l = "//" + pkg + ":" + name

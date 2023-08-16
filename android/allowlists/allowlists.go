@@ -145,6 +145,7 @@ var (
 		"external/flatbuffers":                   Bp2BuildDefaultTrueRecursively,
 		"external/fmtlib":                        Bp2BuildDefaultTrueRecursively,
 		"external/fsverity-utils":                Bp2BuildDefaultTrueRecursively,
+		"external/gflags":                        Bp2BuildDefaultTrueRecursively,
 		"external/google-benchmark":              Bp2BuildDefaultTrueRecursively,
 		"external/googletest":                    Bp2BuildDefaultTrueRecursively,
 		"external/guava":                         Bp2BuildDefaultTrueRecursively,
@@ -440,6 +441,7 @@ var (
 		"external/bazelbuild-rules_license":/* recursive = */ true,
 		"external/bazelbuild-rules_go":/* recursive = */ true,
 		"external/bazelbuild-rules_python":/* recursive = */ true,
+		"external/bazelbuild-rules_rust":/* recursive = */ true,
 		"external/bazelbuild-kotlin-rules":/* recursive = */ true,
 		"external/bazel-skylib":/* recursive = */ true,
 		"external/protobuf":/* recursive = */ false,
@@ -467,6 +469,7 @@ var (
 		"prebuilts/sdk/tools":/* recursive = */ false,
 		"prebuilts/r8":/* recursive = */ false,
 		"prebuilts/runtime":/* recursive = */ false,
+		"prebuilts/rust":/* recursive = */ true,
 
 		// not recursive due to conflicting workspace paths in tools/atest/bazel/rules
 		"tools/asuite/atest":/* recursive = */ false,
@@ -480,6 +483,32 @@ var (
 	}
 
 	Bp2buildModuleAlwaysConvertList = []string{
+		// ext
+		"tagsoup",
+
+		// framework-res
+		"remote-color-resources-compile-public",
+		"remote-color-resources-compile-colors",
+
+		// framework-minus-apex
+		"android.mime.types.minimized",
+		"debian.mime.types.minimized",
+		"framework-javastream-protos",
+		"libview-inspector-annotation-processor",
+
+		// services
+		"apache-commons-math",
+		"cbor-java",
+		"icu4j_calendar_astronomer",
+		"json",
+		"remote-color-resources-compile-public",
+		"statslog-art-java-gen",
+		"statslog-framework-java-gen",
+
+		"AndroidCommonLint",
+		"ImmutabilityAnnotation",
+		"ImmutabilityAnnotationProcessorHostLibrary",
+
 		"libidmap2_policies",
 		"libSurfaceFlingerProp",
 		"toolbox_input_labels",
@@ -938,7 +967,6 @@ var (
 		"libdebuggerd_handler",                                       // depends on unconverted module libdebuggerd_handler_core
 		"libdebuggerd_handler_core", "libdebuggerd_handler_fallback", // depends on unconverted module libdebuggerd
 		"libdexfiled",                                             // depends on unconverted modules: dexfile_operator_srcs, libartbased, libartpalette
-		"libfastdeploy_host",                                      // depends on unconverted modules: libandroidfw, libusb, AdbWinApi
 		"libgmock_main_ndk",                                       // depends on unconverted modules: libgtest_ndk_c++
 		"libgmock_ndk",                                            // depends on unconverted modules: libgtest_ndk_c++
 		"libnativehelper_lazy_mts_jni", "libnativehelper_mts_jni", // depends on unconverted modules: libnativetesthelper_jni, libgmock_ndk
@@ -1068,6 +1096,7 @@ var (
 		"ion-unit-tests",
 		"jemalloc5_integrationtests",
 		"jemalloc5_unittests",
+		"jemalloc5_stresstests", // run by run_jemalloc_tests.sh and will be deleted after V
 		"ld_config_test_helper",
 		"ld_preload_test_helper",
 		"libBionicCtsGtestMain", // depends on unconverted modules: libgtest_isolated
@@ -1521,6 +1550,10 @@ var (
 		"libart_generated_headers",
 		"libart-runtime-gtest",
 		"libartd-runtime-gtest",
+		"libart-unstripped",
+
+		// depends on libart-unstripped and new module type llvm_prebuilt_build_tool
+		"check_cfi",
 	}
 
 	// Bazel prod-mode allowlist. Modules in this list are built by Bazel

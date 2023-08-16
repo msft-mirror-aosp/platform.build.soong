@@ -190,6 +190,12 @@ func (c Config) MaxPageSizeSupported() string {
 	return String(c.config.productVariables.DeviceMaxPageSizeSupported)
 }
 
+// PageSizeAgnostic returns true when AOSP is page size agnostic,
+// othersise it returns false.
+func (c Config) PageSizeAgnostic() bool {
+	return Bool(c.config.productVariables.DevicePageSizeAgnostic)
+}
+
 // The release version passed to aconfig, derived from RELEASE_VERSION
 func (c Config) ReleaseVersion() string {
 	return c.config.productVariables.ReleaseVersion
@@ -198,6 +204,12 @@ func (c Config) ReleaseVersion() string {
 // The flag values files passed to aconfig, derived from RELEASE_VERSION
 func (c Config) ReleaseAconfigValueSets() []string {
 	return c.config.productVariables.ReleaseAconfigValueSets
+}
+
+// The flag default permission value passed to aconfig
+// derived from RELEASE_ACONFIG_FLAG_DEFAULT_PERMISSION
+func (c Config) ReleaseAconfigFlagDefaultPermission() string {
+	return c.config.productVariables.ReleaseAconfigFlagDefaultPermission
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -433,10 +445,6 @@ func saveToBazelConfigFile(config *ProductVariables, outDir string) error {
 	t := reflect.TypeOf(p.Product_variables)
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
-		if f.Name == "Pdk" {
-			// Pdk is deprecated and has no effect as of aosp/1319667
-			continue
-		}
 		archVariant := proptools.HasTag(f, "android", "arch_variant")
 		if mainProductVariablesStructField, ok := allProductVariablesType.FieldByName(f.Name); ok {
 			productVariablesInfo[f.Name] = productVariableStarlarkRepresentation{

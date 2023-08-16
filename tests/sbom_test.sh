@@ -85,34 +85,18 @@ function test_sbom_aosp_cf_x86_64_phone {
   lz4=$out_dir/host/linux-x86/bin/lz4
 
   declare -A diff_excludes
-  diff_excludes[product]="\
-    -I /product/etc/aconfig_flags.textproto \
-    -I /product/etc/build_flags.json"
   diff_excludes[vendor]="\
     -I /vendor/lib64/libkeystore2_crypto.so \
-    -I /vendor/etc/aconfig_flags.textproto \
-    -I /vendor/etc/build_flags.json"
+    -I /vendor/lib64/libvsock_utils.so"
   diff_excludes[system]="\
-    -I /bin \
-    -I /bugreports \
-    -I /cache \
-    -I /d \
-    -I /etc \
-    -I /init \
-    -I /odm/app \
-    -I /odm/bin \
-    -I /odm_dlkm/etc \
-    -I /odm/etc \
-    -I /odm/firmware \
-    -I /odm/framework \
-    -I /odm/lib \
-    -I /odm/lib64 \
-    -I /odm/overlay \
-    -I /odm/priv-app \
-    -I /odm/usr \
-    -I /sdcard \
-    -I /system/etc/aconfig_flags.textproto \
-    -I /system/etc/build_flags.json \
+    -I /system/bin/assemble_cvd \
+    -I /system/bin/console_forwarder \
+    -I /system/bin/kernel_log_monitor \
+    -I /system/bin/logcat_receiver \
+    -I /system/bin/mkenvimage_slim \
+    -I /system/bin/run_cvd \
+    -I /system/bin/simg2img \
+    -I /system/bin/log_tee \
     -I /system/lib64/android.hardware.confirmationui@1.0.so \
     -I /system/lib64/android.hardware.confirmationui-V1-ndk.so \
     -I /system/lib64/android.hardware.keymaster@4.1.so \
@@ -140,11 +124,7 @@ function test_sbom_aosp_cf_x86_64_phone {
     -I /system/lib64/vndk-sp-29 \
     -I /system/lib/vndk-29 \
     -I /system/lib/vndk-sp-29 \
-    -I /system/usr/icu \
-    -I /vendor_dlkm/etc"
-  diff_excludes[system_ext]="\
-    -I /system_ext/etc/aconfig_flags.textproto \
-    -I /system_ext/etc/build_flags.json"
+    -I /system/usr/icu"
 
   # Example output of dump.erofs is as below, and the data used in the test start
   # at line 11. Column 1 is inode id, column 2 is inode type and column 3 is name.
