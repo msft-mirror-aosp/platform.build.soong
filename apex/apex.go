@@ -3252,7 +3252,38 @@ func makeApexAvailableBaseline() map[string][]string {
 	//
 	// Module separator
 	//
-	m["com.android.cellbroadcast"] = []string{"CellBroadcastApp", "CellBroadcastServiceModule"}
+	m["com.android.cellbroadcast"] = []string{
+		"CellBroadcastApp",
+		"CellBroadcastServiceModule",
+		"checker-qual",
+		"clockwork-guava",
+		"clockwork-guava-prebuilt-jar",
+		"clockwork-common-time",
+		"clockwork-common-time-prebuilt-jar",
+		"clockwork-common-suppliers",
+		"clockwork-common-suppliers-prebuilt-jar",
+		"jsr330",
+		"wearmaterial-animations",
+		"wearmaterial-rotaryinput",
+		"wearmaterial-rotarymotioneventprocessor",
+		"wearmaterial-color",
+		"wearmaterial-preference",
+		"wearmaterial-alertdialog",
+		"wearmaterial-button",
+		"wearmaterial-drawable",
+		"wearmaterial-list",
+		"wearmaterial-slider",
+		"wearmaterial-textappearance",
+		"wearmaterial-time",
+		"wearmaterial-theme",
+		"wearmaterial-util",
+		"wearmaterial-card",
+		"wearmaterial-pageindicator",
+		"wearmaterial-picker",
+		"wearmaterial-rsbcontrol",
+		"wearmaterial-selectioncontrol",
+		"wearmaterial-progressindicator",
+	}
 	//
 	// Module separator
 	//
