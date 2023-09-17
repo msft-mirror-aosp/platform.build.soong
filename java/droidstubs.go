@@ -540,7 +540,7 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersi
 
 	// Force metalava to sort overloaded methods by their order in the source code.
 	// See b/285312164 for more information.
-	cmd.FlagWithArg("--api-overloaded-method-order ", "source")
+	cmd.FlagWithArg("--format-defaults ", "overloaded-method-order=source")
 
 	return cmd
 }
@@ -693,6 +693,13 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			`******************************\n'`
 
 		cmd.FlagWithArg("--error-message:compatibility:released ", msg)
+	}
+
+	if apiCheckEnabled(ctx, d.properties.Check_api.Current, "current") {
+		// Pass the current API file into metalava so it can use it as the basis for determining how to
+		// generate the output signature files (both api and removed).
+		currentApiFile := android.PathForModuleSrc(ctx, String(d.properties.Check_api.Current.Api_file))
+		cmd.FlagWithInput("--use-same-format-as ", currentApiFile)
 	}
 
 	if generateStubs {
