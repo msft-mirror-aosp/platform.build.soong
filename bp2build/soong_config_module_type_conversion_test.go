@@ -15,10 +15,11 @@
 package bp2build
 
 import (
-	"android/soong/android"
-	"android/soong/cc"
 	"fmt"
 	"testing"
+
+	"android/soong/android"
+	"android/soong/cc"
 )
 
 func runSoongConfigModuleTypeTest(t *testing.T, tc Bp2buildTestCase) {
@@ -91,7 +92,7 @@ custom_cc_library_static {
 		ExpectedBazelTargets: []string{`cc_library_static(
     name = "foo",
     copts = select({
-        "//build/bazel/product_variables:acme__feature1": ["-DFEATURE1"],
+        "//build/bazel/product_config/config_settings:acme__feature1": ["-DFEATURE1"],
         "//conditions:default": ["-DDEFAULT1"],
     }),
     local_includes = ["."],
@@ -140,7 +141,7 @@ custom_cc_library_static {
 		ExpectedBazelTargets: []string{`cc_library_static(
     name = "foo",
     copts = select({
-        "//build/bazel/product_variables:acme__feature1": ["-DFEATURE1"],
+        "//build/bazel/product_config/config_settings:acme__feature1": ["-DFEATURE1"],
         "//conditions:default": ["-DDEFAULT1"],
     }),
     local_includes = ["."],
@@ -191,9 +192,9 @@ custom_cc_library_static {
 		ExpectedBazelTargets: []string{`cc_library_static(
     name = "foo",
     copts = select({
-        "//build/bazel/product_variables:acme__board__soc_a": ["-DSOC_A"],
-        "//build/bazel/product_variables:acme__board__soc_b": ["-DSOC_B"],
-        "//build/bazel/product_variables:acme__board__soc_c": [],
+        "//build/bazel/product_config/config_settings:acme__board__soc_a": ["-DSOC_A"],
+        "//build/bazel/product_config/config_settings:acme__board__soc_b": ["-DSOC_B"],
+        "//build/bazel/product_config/config_settings:acme__board__soc_c": [],
         "//conditions:default": ["-DSOC_DEFAULT"],
     }),
     local_includes = ["."],
@@ -240,7 +241,7 @@ custom_cc_library_static {
 		ExpectedBazelTargets: []string{`cc_library_static(
     name = "foo",
     copts = select({
-        "//build/bazel/product_variables:acme__feature1": ["-DFEATURE1"],
+        "//build/bazel/product_config/config_settings:acme__feature1": ["-DFEATURE1"],
         "//conditions:default": ["-DDEFAULT1"],
     }),
     local_includes = ["."],
@@ -310,15 +311,15 @@ custom_cc_library_static {
 		ExpectedBazelTargets: []string{`cc_library_static(
     name = "foo",
     copts = select({
-        "//build/bazel/product_variables:acme__board__soc_a": ["-DSOC_A"],
-        "//build/bazel/product_variables:acme__board__soc_b": ["-DSOC_B"],
-        "//build/bazel/product_variables:acme__board__soc_c": [],
+        "//build/bazel/product_config/config_settings:acme__board__soc_a": ["-DSOC_A"],
+        "//build/bazel/product_config/config_settings:acme__board__soc_b": ["-DSOC_B"],
+        "//build/bazel/product_config/config_settings:acme__board__soc_c": [],
         "//conditions:default": ["-DSOC_DEFAULT"],
     }) + select({
-        "//build/bazel/product_variables:acme__feature1": ["-DFEATURE1"],
+        "//build/bazel/product_config/config_settings:acme__feature1": ["-DFEATURE1"],
         "//conditions:default": ["-DDEFAULT1"],
     }) + select({
-        "//build/bazel/product_variables:acme__feature2": ["-DFEATURE2"],
+        "//build/bazel/product_config/config_settings:acme__feature2": ["-DFEATURE2"],
         "//conditions:default": ["-DDEFAULT2"],
     }),
     local_includes = ["."],
@@ -364,9 +365,9 @@ custom_cc_library_static {
 }`
 
 	otherDeps := `
-cc_library_static { name: "soc_a_dep", bazel_module: { bp2build_available: false } }
-cc_library_static { name: "soc_b_dep", bazel_module: { bp2build_available: false } }
-cc_library_static { name: "soc_default_static_dep", bazel_module: { bp2build_available: false } }
+cc_library_static { name: "soc_a_dep"}
+cc_library_static { name: "soc_b_dep"}
+cc_library_static { name: "soc_default_static_dep"}
 `
 
 	runSoongConfigModuleTypeTest(t, Bp2buildTestCase{
@@ -377,18 +378,19 @@ cc_library_static { name: "soc_default_static_dep", bazel_module: { bp2build_ava
 		Filesystem: map[string]string{
 			"foo/bar/Android.bp": otherDeps,
 		},
+		StubbedBuildDefinitions: []string{"//foo/bar:soc_a_dep", "//foo/bar:soc_b_dep", "//foo/bar:soc_default_static_dep"},
 		ExpectedBazelTargets: []string{`cc_library_static(
     name = "foo",
     copts = select({
-        "//build/bazel/product_variables:acme__board__soc_a": ["-DSOC_A"],
-        "//build/bazel/product_variables:acme__board__soc_b": ["-DSOC_B"],
-        "//build/bazel/product_variables:acme__board__soc_c": [],
+        "//build/bazel/product_config/config_settings:acme__board__soc_a": ["-DSOC_A"],
+        "//build/bazel/product_config/config_settings:acme__board__soc_b": ["-DSOC_B"],
+        "//build/bazel/product_config/config_settings:acme__board__soc_c": [],
         "//conditions:default": ["-DSOC_DEFAULT"],
     }),
     implementation_deps = select({
-        "//build/bazel/product_variables:acme__board__soc_a": ["//foo/bar:soc_a_dep"],
-        "//build/bazel/product_variables:acme__board__soc_b": ["//foo/bar:soc_b_dep"],
-        "//build/bazel/product_variables:acme__board__soc_c": [],
+        "//build/bazel/product_config/config_settings:acme__board__soc_a": ["//foo/bar:soc_a_dep"],
+        "//build/bazel/product_config/config_settings:acme__board__soc_b": ["//foo/bar:soc_b_dep"],
+        "//build/bazel/product_config/config_settings:acme__board__soc_c": [],
         "//conditions:default": ["//foo/bar:soc_default_static_dep"],
     }),
     local_includes = ["."],
@@ -446,7 +448,7 @@ cc_library_static {
 		ExpectedBazelTargets: []string{`cc_library_static(
     name = "lib",
     copts = select({
-        "//build/bazel/product_variables:vendor_foo__feature": [
+        "//build/bazel/product_config/config_settings:vendor_foo__feature": [
             "-cflag_feature_2",
             "-cflag_feature_1",
         ],
@@ -527,11 +529,11 @@ cc_library_static {
 		ExpectedBazelTargets: []string{`cc_library_static(
     name = "lib",
     asflags = select({
-        "//build/bazel/product_variables:acme__feature": ["-asflag_bar"],
+        "//build/bazel/product_config/config_settings:acme__feature": ["-asflag_bar"],
         "//conditions:default": ["-asflag_default_bar"],
     }),
     copts = select({
-        "//build/bazel/product_variables:acme__feature": [
+        "//build/bazel/product_config/config_settings:acme__feature": [
             "-cflag_foo",
             "-cflag_bar",
         ],
@@ -546,11 +548,11 @@ cc_library_static {
 			`cc_library_static(
     name = "lib2",
     asflags = select({
-        "//build/bazel/product_variables:acme__feature": ["-asflag_bar"],
+        "//build/bazel/product_config/config_settings:acme__feature": ["-asflag_bar"],
         "//conditions:default": ["-asflag_default_bar"],
     }),
     copts = select({
-        "//build/bazel/product_variables:acme__feature": [
+        "//build/bazel/product_config/config_settings:acme__feature": [
             "-cflag_bar",
             "-cflag_foo",
         ],
@@ -643,13 +645,13 @@ cc_library_static {
 		ExpectedBazelTargets: []string{`cc_library_static(
     name = "lib",
     copts = select({
-        "//build/bazel/product_variables:vendor_bar__feature": ["-DVENDOR_BAR_FEATURE"],
+        "//build/bazel/product_config/config_settings:vendor_bar__feature": ["-DVENDOR_BAR_FEATURE"],
         "//conditions:default": ["-DVENDOR_BAR_DEFAULT"],
     }) + select({
-        "//build/bazel/product_variables:vendor_foo__feature": ["-DVENDOR_FOO_FEATURE"],
+        "//build/bazel/product_config/config_settings:vendor_foo__feature": ["-DVENDOR_FOO_FEATURE"],
         "//conditions:default": ["-DVENDOR_FOO_DEFAULT"],
     }) + select({
-        "//build/bazel/product_variables:vendor_qux__feature": ["-DVENDOR_QUX_FEATURE"],
+        "//build/bazel/product_config/config_settings:vendor_qux__feature": ["-DVENDOR_QUX_FEATURE"],
         "//conditions:default": ["-DVENDOR_QUX_DEFAULT"],
     }),
     local_includes = ["."],
@@ -697,7 +699,7 @@ library_linking_strategy_custom {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("custom", "foo", AttrNameToString{
 				"string_literal_prop": `select({
-        "//build/bazel/product_variables:android__library_linking_strategy__prefer_static": "29",
+        "//build/bazel/product_config/config_settings:android__library_linking_strategy__prefer_static": "29",
         "//conditions:default": "30",
     })`,
 			}),
@@ -763,9 +765,9 @@ cc_binary {
 }`
 
 	otherDeps := `
-cc_library { name: "lib_a", bazel_module: { bp2build_available: false } }
-cc_library { name: "lib_b", bazel_module: { bp2build_available: false } }
-cc_library { name: "lib_default", bazel_module: { bp2build_available: false } }
+cc_library { name: "lib_a"}
+cc_library { name: "lib_b"}
+cc_library { name: "lib_default"}
 `
 
 	runSoongConfigModuleTypeTest(t, Bp2buildTestCase{
@@ -773,13 +775,14 @@ cc_library { name: "lib_default", bazel_module: { bp2build_available: false } }
 		ModuleTypeUnderTest:        "cc_binary",
 		ModuleTypeUnderTestFactory: cc.BinaryFactory,
 		Blueprint:                  bp,
+		StubbedBuildDefinitions:    []string{"//foo/bar:lib_a", "//foo/bar:lib_b", "//foo/bar:lib_default"},
 		Filesystem: map[string]string{
 			"foo/bar/Android.bp": otherDeps,
 		},
 		ExpectedBazelTargets: []string{`cc_binary(
     name = "library_linking_strategy_sample_binary",
     dynamic_deps = select({
-        "//build/bazel/product_variables:android__library_linking_strategy__prefer_static": [],
+        "//build/bazel/product_config/config_settings:android__library_linking_strategy__prefer_static": [],
         "//conditions:default": [
             "//foo/bar:lib_b",
             "//foo/bar:lib_a",
@@ -852,15 +855,16 @@ cc_binary {
 }`
 
 	otherDeps := `
-cc_library { name: "lib_a", bazel_module: { bp2build_available: false } }
-cc_library { name: "lib_b", bazel_module: { bp2build_available: false } }
-cc_library { name: "lib_c", bazel_module: { bp2build_available: false } }
+cc_library { name: "lib_a"}
+cc_library { name: "lib_b"}
+cc_library { name: "lib_c"}
 `
 
 	runSoongConfigModuleTypeTest(t, Bp2buildTestCase{
 		Description:                "soong config variables - generates selects for library_linking_strategy",
 		ModuleTypeUnderTest:        "cc_binary",
 		ModuleTypeUnderTestFactory: cc.BinaryFactory,
+		StubbedBuildDefinitions:    []string{"//foo/bar:lib_a", "//foo/bar:lib_b", "//foo/bar:lib_c"},
 		Blueprint:                  bp,
 		Filesystem: map[string]string{
 			"foo/bar/Android.bp": otherDeps,
@@ -868,7 +872,7 @@ cc_library { name: "lib_c", bazel_module: { bp2build_available: false } }
 		ExpectedBazelTargets: []string{
 			MakeBazelTargetNoRestrictions("cc_binary", "library_linking_strategy_sample_binary", AttrNameToString{
 				"dynamic_deps": `select({
-        "//build/bazel/product_variables:android__library_linking_strategy__prefer_static": [],
+        "//build/bazel/product_config/config_settings:android__library_linking_strategy__prefer_static": [],
         "//conditions:default": [
             "//foo/bar:lib_b",
             "//foo/bar:lib_c",
@@ -877,7 +881,7 @@ cc_library { name: "lib_c", bazel_module: { bp2build_available: false } }
 			}),
 			MakeBazelTargetNoRestrictions("cc_binary", "library_linking_strategy_sample_binary_with_excludes", AttrNameToString{
 				"dynamic_deps": `select({
-        "//build/bazel/product_variables:android__library_linking_strategy__prefer_static": [],
+        "//build/bazel/product_config/config_settings:android__library_linking_strategy__prefer_static": [],
         "//conditions:default": ["//foo/bar:lib_b"],
     })`,
 			}),
@@ -949,9 +953,9 @@ cc_binary {
 }`
 
 	otherDeps := `
-cc_library { name: "lib_a", bazel_module: { bp2build_available: false } }
-cc_library { name: "lib_b", bazel_module: { bp2build_available: false } }
-cc_library { name: "lib_default", bazel_module: { bp2build_available: false } }
+cc_library { name: "lib_a"}
+cc_library { name: "lib_b"}
+cc_library { name: "lib_default"}
 `
 
 	runSoongConfigModuleTypeTest(t, Bp2buildTestCase{
@@ -962,17 +966,18 @@ cc_library { name: "lib_default", bazel_module: { bp2build_available: false } }
 		Filesystem: map[string]string{
 			"foo/bar/Android.bp": otherDeps,
 		},
+		StubbedBuildDefinitions: []string{"//foo/bar:lib_a", "//foo/bar:lib_b", "//foo/bar:lib_default"},
 		ExpectedBazelTargets: []string{`cc_binary(
     name = "library_linking_strategy_sample_binary",
     deps = select({
-        "//build/bazel/product_variables:android__library_linking_strategy__prefer_static": [
+        "//build/bazel/product_config/config_settings:android__library_linking_strategy__prefer_static": [
             "//foo/bar:lib_b_bp2build_cc_library_static",
             "//foo/bar:lib_a_bp2build_cc_library_static",
         ],
         "//conditions:default": [],
     }),
     dynamic_deps = select({
-        "//build/bazel/product_variables:android__library_linking_strategy__prefer_static": [],
+        "//build/bazel/product_config/config_settings:android__library_linking_strategy__prefer_static": [],
         "//conditions:default": [
             "//foo/bar:lib_b",
             "//foo/bar:lib_a",
@@ -1031,8 +1036,8 @@ cc_binary {
 }`
 
 	otherDeps := `
-cc_library { name: "lib_a", bazel_module: { bp2build_available: false } }
-cc_library { name: "lib_b", bazel_module: { bp2build_available: false } }
+cc_library { name: "lib_a"}
+cc_library { name: "lib_b"}
 `
 
 	runSoongConfigModuleTypeTest(t, Bp2buildTestCase{
@@ -1040,20 +1045,21 @@ cc_library { name: "lib_b", bazel_module: { bp2build_available: false } }
 		ModuleTypeUnderTest:        "cc_binary",
 		ModuleTypeUnderTestFactory: cc.BinaryFactory,
 		Blueprint:                  bp,
+		StubbedBuildDefinitions:    []string{"//foo/bar:lib_a", "//foo/bar:lib_b"},
 		Filesystem: map[string]string{
 			"foo/bar/Android.bp": otherDeps,
 		},
 		ExpectedBazelTargets: []string{`cc_binary(
     name = "library_linking_strategy_sample_binary",
     deps = select({
-        "//build/bazel/product_variables:android__library_linking_strategy__prefer_static": [
+        "//build/bazel/product_config/config_settings:android__library_linking_strategy__prefer_static": [
             "//foo/bar:lib_a_bp2build_cc_library_static",
             "//foo/bar:lib_b_bp2build_cc_library_static",
         ],
         "//conditions:default": [],
     }),
     dynamic_deps = select({
-        "//build/bazel/product_variables:android__library_linking_strategy__prefer_static": [],
+        "//build/bazel/product_config/config_settings:android__library_linking_strategy__prefer_static": [],
         "//conditions:default": [
             "//foo/bar:lib_a",
             "//foo/bar:lib_b",
@@ -1118,9 +1124,9 @@ cc_binary {
 }`
 
 	otherDeps := `
-cc_library { name: "lib_a", bazel_module: { bp2build_available: false } }
-cc_library { name: "lib_b", bazel_module: { bp2build_available: false } }
-cc_library { name: "lib_default", bazel_module: { bp2build_available: false } }
+cc_library { name: "lib_a"}
+cc_library { name: "lib_b"}
+cc_library { name: "lib_default"}
 `
 
 	runSoongConfigModuleTypeTest(t, Bp2buildTestCase{
@@ -1131,16 +1137,17 @@ cc_library { name: "lib_default", bazel_module: { bp2build_available: false } }
 		Filesystem: map[string]string{
 			"foo/bar/Android.bp": otherDeps,
 		},
+		StubbedBuildDefinitions: []string{"//foo/bar:lib_a", "//foo/bar:lib_b", "//foo/bar:lib_default"},
 		ExpectedBazelTargets: []string{`cc_binary(
     name = "alphabet_binary",
     deps = select({
-        "//build/bazel/product_variables:android__alphabet__a": [],
-        "//build/bazel/product_variables:android__alphabet__b": [],
+        "//build/bazel/product_config/config_settings:android__alphabet__a": [],
+        "//build/bazel/product_config/config_settings:android__alphabet__b": [],
         "//conditions:default": ["//foo/bar:lib_default_bp2build_cc_library_static"],
     }),
     dynamic_deps = select({
-        "//build/bazel/product_variables:android__alphabet__a": ["//foo/bar:lib_a"],
-        "//build/bazel/product_variables:android__alphabet__b": ["//foo/bar:lib_b"],
+        "//build/bazel/product_config/config_settings:android__alphabet__a": ["//foo/bar:lib_a"],
+        "//build/bazel/product_config/config_settings:android__alphabet__b": ["//foo/bar:lib_b"],
         "//conditions:default": [],
     }),
     local_includes = ["."],
@@ -1199,7 +1206,7 @@ cc_binary {
     name = "alphabet_binary",
     local_includes = ["."],
     srcs = ["main.cc"],
-    target_compatible_with = ["//build/bazel/product_variables:alphabet_module__special_build"] + select({
+    target_compatible_with = select({
         "//build/bazel/platforms/os_arch:android_x86_64": ["@platforms//:incompatible"],
         "//build/bazel/platforms/os_arch:darwin_arm64": ["@platforms//:incompatible"],
         "//build/bazel/platforms/os_arch:darwin_x86_64": ["@platforms//:incompatible"],
@@ -1208,6 +1215,9 @@ cc_binary {
         "//build/bazel/platforms/os_arch:linux_musl_x86_64": ["@platforms//:incompatible"],
         "//build/bazel/platforms/os_arch:windows_x86_64": ["@platforms//:incompatible"],
         "//conditions:default": [],
+    }) + select({
+        "//build/bazel/product_config/config_settings:alphabet_module__special_build": [],
+        "//conditions:default": ["@platforms//:incompatible"],
     }),
 )`}})
 }
@@ -1240,6 +1250,24 @@ cc_binary {
     srcs: ["main.cc"],
     defaults: ["alphabet_sample_cc_defaults"],
     enabled: false,
+}
+
+alphabet_cc_defaults {
+    name: "alphabet_sample_cc_defaults_conditions_default",
+    soong_config_variables: {
+        special_build: {
+		conditions_default: {
+			enabled: false,
+		},
+	},
+    },
+}
+
+cc_binary {
+    name: "alphabet_binary_conditions_default",
+    srcs: ["main.cc"],
+    defaults: ["alphabet_sample_cc_defaults_conditions_default"],
+    enabled: false,
 }`
 
 	runSoongConfigModuleTypeTest(t, Bp2buildTestCase{
@@ -1252,8 +1280,17 @@ cc_binary {
     name = "alphabet_binary",
     local_includes = ["."],
     srcs = ["main.cc"],
-    target_compatible_with = ["//build/bazel/product_variables:alphabet_module__special_build"],
-)`}})
+    target_compatible_with = select({
+        "//build/bazel/product_config/config_settings:alphabet_module__special_build": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)`,
+			MakeBazelTarget("cc_binary", "alphabet_binary_conditions_default", AttrNameToString{
+				"local_includes":         `["."]`,
+				"srcs":                   `["main.cc"]`,
+				"target_compatible_with": `["@platforms//:incompatible"]`,
+			}),
+		}})
 }
 
 func TestSoongConfigModuleType_ProductVariableIgnoredIfEnabledByDefault(t *testing.T) {
@@ -1389,20 +1426,183 @@ cc_binary {
         "//build/bazel/platforms/os:android": ["-DFOO"],
         "//conditions:default": [],
     }) + select({
-        "//build/bazel/product_variables:my_namespace__my_bool_variable__android": ["-DBAR"],
-        "//build/bazel/product_variables:my_namespace__my_bool_variable__conditions_default__android": ["-DBAZ"],
+        "//build/bazel/product_config/config_settings:my_namespace__my_bool_variable__android": ["-DBAR"],
+        "//build/bazel/product_config/config_settings:my_namespace__my_bool_variable__conditions_default__android": ["-DBAZ"],
         "//conditions:default": [],
     }) + select({
-        "//build/bazel/product_variables:my_namespace__my_string_variable__value1": ["-DVALUE1_NOT_ANDROID"],
+        "//build/bazel/product_config/config_settings:my_namespace__my_string_variable__value1": ["-DVALUE1_NOT_ANDROID"],
         "//conditions:default": [],
     }) + select({
-        "//build/bazel/product_variables:my_namespace__my_string_variable__conditions_default__android": ["-DSTRING_VAR_CONDITIONS_DEFAULT"],
-        "//build/bazel/product_variables:my_namespace__my_string_variable__value1__android": ["-DVALUE1"],
-        "//build/bazel/product_variables:my_namespace__my_string_variable__value2__android": ["-DVALUE2"],
+        "//build/bazel/product_config/config_settings:my_namespace__my_string_variable__conditions_default__android": ["-DSTRING_VAR_CONDITIONS_DEFAULT"],
+        "//build/bazel/product_config/config_settings:my_namespace__my_string_variable__value1__android": ["-DVALUE1"],
+        "//build/bazel/product_config/config_settings:my_namespace__my_string_variable__value2__android": ["-DVALUE2"],
         "//conditions:default": [],
     }),
     local_includes = ["."],
     srcs = ["main.cc"],
     target_compatible_with = ["//build/bazel/platforms/os:android"],
 )`}})
+}
+
+// If we have
+// A. a soong_config_module_type with target.android_<arch>.* in properties
+// B. a module that uses this module type but does not set target.android_<arch>.* via soong config vars
+// Then we should not panic
+func TestPanicsIfSoongConfigModuleTypeHasArchSpecificProperties(t *testing.T) {
+	commonBp := `
+soong_config_bool_variable {
+	name: "my_bool_variable",
+}
+soong_config_module_type {
+	name: "special_cc_defaults",
+	module_type: "cc_defaults",
+	config_namespace: "my_namespace",
+	bool_variables: ["my_bool_variable"],
+	properties: [
+		"cflags",
+		"target.android_arm64.shared_libs",
+	],
+}
+cc_binary {
+	name: "my_binary",
+	defaults: ["my_special_cc_defaults"],
+}
+`
+	testCases := []struct {
+		desc            string
+		additionalBp    string
+		isPanicExpected bool
+	}{
+		{
+			desc: "target.android_arm64 is not set, bp2build should not panic",
+			additionalBp: `
+special_cc_defaults {
+	name: "my_special_cc_defaults",
+	soong_config_variables: {
+		my_bool_variable: {
+			cflags: ["-DFOO"],
+			conditions_default: {
+				cflags: ["-DBAR"],
+			}
+		}
+	},
+}
+			`,
+			isPanicExpected: false,
+		},
+		{
+			desc: "target.android_arm64 is set using the bool soong config var, bp2build should panic",
+			additionalBp: `
+special_cc_defaults {
+	name: "my_special_cc_defaults",
+	soong_config_variables: {
+		my_bool_variable: {
+			cflags: ["-DFOO"],
+			target: {
+				android_arm64: {
+					shared_libs: ["liblog"],
+				},
+			},
+			conditions_default: {
+				cflags: ["-DBAR"],
+			}
+		}
+	},
+}
+			`,
+			isPanicExpected: true,
+		},
+		{
+			desc: "target.android_arm64 is set using conditions_default for the bool soong config var, bp2build should panic",
+			additionalBp: `
+special_cc_defaults {
+	name: "my_special_cc_defaults",
+	soong_config_variables: {
+		my_bool_variable: {
+			cflags: ["-DFOO"],
+			conditions_default: {
+				cflags: ["-DBAR"],
+				target: {
+					android_arm64: {
+						shared_libs: ["liblog"],
+					},
+				},
+			}
+		}
+	},
+}
+			`,
+			isPanicExpected: true,
+		},
+	}
+	for _, tc := range testCases {
+		bp2buildTestCase := Bp2buildTestCase{
+			Description:                tc.desc,
+			ModuleTypeUnderTest:        "cc_binary",
+			ModuleTypeUnderTestFactory: cc.BinaryFactory,
+			Blueprint:                  commonBp + tc.additionalBp,
+			// Check in `foo` dir so that we can check whether it panics or not and not trip over an empty `ExpectedBazelTargets`
+			Dir:                  "foo",
+			ExpectedBazelTargets: []string{},
+		}
+		if tc.isPanicExpected {
+			bp2buildTestCase.ExpectedErr = fmt.Errorf("TODO: support other target types in soong config variable structs: Android_arm64")
+		}
+		runSoongConfigModuleTypeTest(t, bp2buildTestCase)
+	}
+}
+
+func TestNoPanicIfEnabledIsNotUsed(t *testing.T) {
+	bp := `
+soong_config_string_variable {
+	name: "my_string_variable",
+	values: ["val1", "val2"],
+}
+soong_config_module_type {
+	name: "special_cc_defaults",
+	module_type: "cc_defaults",
+	config_namespace: "my_namespace",
+	variables: ["my_string_variable"],
+	properties: [
+		"cflags",
+		"enabled",
+	],
+}
+special_cc_defaults {
+	name: "my_special_cc_defaults",
+	soong_config_variables: {
+		my_string_variable: {
+			val1: {
+				cflags: ["-DFOO"],
+			},
+			val2: {
+				cflags: ["-DBAR"],
+			},
+		},
+	},
+}
+cc_binary {
+	name: "my_binary",
+	enabled: false,
+	defaults: ["my_special_cc_defaults"],
+}
+`
+	tc := Bp2buildTestCase{
+		Description:                "Soong config vars is not used to set `enabled` property",
+		ModuleTypeUnderTest:        "cc_binary",
+		ModuleTypeUnderTestFactory: cc.BinaryFactory,
+		Blueprint:                  bp,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_binary", "my_binary", AttrNameToString{
+				"copts": `select({
+        "//build/bazel/product_config/config_settings:my_namespace__my_string_variable__val1": ["-DFOO"],
+        "//build/bazel/product_config/config_settings:my_namespace__my_string_variable__val2": ["-DBAR"],
+        "//conditions:default": [],
+    })`,
+				"local_includes":         `["."]`,
+				"target_compatible_with": `["@platforms//:incompatible"]`,
+			}),
+		},
+	}
+	runSoongConfigModuleTypeTest(t, tc)
 }

@@ -24,7 +24,6 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
-	"android/soong/bazel"
 	"android/soong/java/config"
 	"android/soong/remoteexec"
 )
@@ -512,21 +511,19 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersi
 	cmd.BuiltTool("metalava").ImplicitTool(ctx.Config().HostJavaToolPath(ctx, "metalava.jar")).
 		Flag(config.JavacVmFlags).
 		Flag("-J--add-opens=java.base/java.util=ALL-UNNAMED").
-		FlagWithArg("-encoding ", "UTF-8").
-		FlagWithArg("-source ", javaVersion.String()).
+		FlagWithArg("--java-source ", javaVersion.String()).
 		FlagWithRspFileInputList("@", android.PathForModuleOut(ctx, "metalava.rsp"), srcs).
 		FlagWithInput("@", srcJarList)
 
-	if len(bootclasspath) > 0 {
-		cmd.FlagWithInputList("-bootclasspath ", bootclasspath.Paths(), ":")
+	// Metalava does not differentiate between bootclasspath and classpath and has not done so for
+	// years, so it is unlikely to change any time soon.
+	combinedPaths := append(([]android.Path)(nil), bootclasspath.Paths()...)
+	combinedPaths = append(combinedPaths, classpath.Paths()...)
+	if len(combinedPaths) > 0 {
+		cmd.FlagWithInputList("--classpath ", combinedPaths, ":")
 	}
 
-	if len(classpath) > 0 {
-		cmd.FlagWithInputList("-classpath ", classpath.Paths(), ":")
-	}
-
-	cmd.Flag("--no-banner").
-		Flag("--color").
+	cmd.Flag("--color").
 		Flag("--quiet").
 		Flag("--format=v2").
 		FlagWithArg("--repeat-errors-max ", "10").
@@ -541,7 +538,11 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersi
 
 	// Force metalava to sort overloaded methods by their order in the source code.
 	// See b/285312164 for more information.
-	cmd.FlagWithArg("--api-overloaded-method-order ", "source")
+	cmd.FlagWithArg("--format-defaults ", "overloaded-method-order=source")
+
+	if ctx.DeviceConfig().HideFlaggedApis() {
+		cmd.FlagWithArg("--hide-annotation ", "android.annotation.FlaggedApi")
+	}
 
 	return cmd
 }
@@ -696,6 +697,13 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		cmd.FlagWithArg("--error-message:compatibility:released ", msg)
 	}
 
+	if apiCheckEnabled(ctx, d.properties.Check_api.Current, "current") {
+		// Pass the current API file into metalava so it can use it as the basis for determining how to
+		// generate the output signature files (both api and removed).
+		currentApiFile := android.PathForModuleSrc(ctx, String(d.properties.Check_api.Current.Api_file))
+		cmd.FlagWithInput("--use-same-format-as ", currentApiFile)
+	}
+
 	if generateStubs {
 		rule.Command().
 			BuiltTool("soong_zip").
@@ -848,34 +856,6 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 		rule.Build("nullabilityWarningsCheck", "nullability warnings check")
 	}
-}
-
-var _ android.ApiProvider = (*Droidstubs)(nil)
-
-type bazelJavaApiContributionAttributes struct {
-	Api         bazel.LabelAttribute
-	Api_surface *string
-}
-
-func (d *Droidstubs) ConvertWithApiBp2build(ctx android.TopDownMutatorContext) {
-	props := bazel.BazelTargetModuleProperties{
-		Rule_class:        "java_api_contribution",
-		Bzl_load_location: "//build/bazel/rules/apis:java_api_contribution.bzl",
-	}
-	apiFile := d.properties.Check_api.Current.Api_file
-	// Do not generate a target if check_api is not set
-	if apiFile == nil {
-		return
-	}
-	attrs := &bazelJavaApiContributionAttributes{
-		Api: *bazel.MakeLabelAttribute(
-			android.BazelLabelForModuleSrcSingle(ctx, proptools.String(apiFile)).Label,
-		),
-		Api_surface: proptools.StringPtr(bazelApiSurfaceName(d.Name())),
-	}
-	ctx.CreateBazelTargetModule(props, android.CommonAttributes{
-		Name: android.ApiContributionTargetName(ctx.ModuleName()),
-	}, attrs)
 }
 
 func (d *Droidstubs) createApiContribution(ctx android.DefaultableHookContext) {

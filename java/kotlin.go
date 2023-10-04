@@ -42,7 +42,7 @@ var kotlinc = pctx.AndroidRemoteStaticRule("kotlinc", android.RemoteRuleSupports
 			` -P plugin:org.jetbrains.kotlin.jvm.abi:outputDir=$headerClassesDir && ` +
 			`${config.SoongZipCmd} -jar -o $out -C $classesDir -D $classesDir -write_if_changed && ` +
 			`${config.SoongZipCmd} -jar -o $headerJar -C $headerClassesDir -D $headerClassesDir -write_if_changed && ` +
-			`rm -rf "$srcJarDir"`,
+			`rm -rf "$srcJarDir" "$classesDir" "$headerClassesDir"`,
 		CommandDeps: []string{
 			"${config.KotlincCmd}",
 			"${config.KotlinCompilerJar}",
@@ -145,7 +145,7 @@ var kaptStubs = pctx.AndroidRemoteStaticRule("kaptStubs", android.RemoteRuleSupp
 			`$kaptProcessorPath ` +
 			`$kaptProcessor ` +
 			`-Xbuild-file=$kotlinBuildFile && ` +
-			`${config.SoongZipCmd} -jar -o $out -C $kaptDir/stubs -D $kaptDir/stubs && ` +
+			`${config.SoongZipCmd} -jar -write_if_changed -o $out -C $kaptDir/stubs -D $kaptDir/stubs && ` +
 			`rm -rf "$srcJarDir"`,
 		CommandDeps: []string{
 			"${config.KotlincCmd}",
@@ -157,6 +157,7 @@ var kaptStubs = pctx.AndroidRemoteStaticRule("kaptStubs", android.RemoteRuleSupp
 		},
 		Rspfile:        "$out.rsp",
 		RspfileContent: `$in`,
+		Restat:         true,
 	},
 	"kotlincFlags", "encodedJavacFlags", "kaptProcessorPath", "kaptProcessor",
 	"classpath", "srcJars", "commonSrcFilesArg", "srcJarDir", "kaptDir", "kotlinJvmTarget",

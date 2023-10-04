@@ -16,6 +16,7 @@ package bp2build
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"android/soong/android"
@@ -26,6 +27,8 @@ import (
 
 func registerGenruleModuleTypes(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("genrule_defaults", func() android.Module { return genrule.DefaultsFactory() })
+	ctx.RegisterModuleType("cc_binary", func() android.Module { return cc.BinaryFactory() })
+	ctx.RegisterModuleType("soong_namespace", func() android.Module { return android.NamespaceFactory() })
 }
 
 func runGenruleTestCase(t *testing.T, tc Bp2buildTestCase) {
@@ -90,7 +93,6 @@ func TestGenruleCliVariableReplacement(t *testing.T) {
     out: ["foo_tool.out"],
     srcs: ["foo_tool.in"],
     cmd: "cp $(in) $(out)",
-    bazel_module: { bp2build_available: false },
 }
 
 %s {
@@ -121,6 +123,7 @@ func TestGenruleCliVariableReplacement(t *testing.T) {
 					ModuleTypeUnderTestFactory: tc.factory,
 					Blueprint:                  fmt.Sprintf(bp, tc.moduleType, tc.moduleType),
 					ExpectedBazelTargets:       expectedBazelTargets,
+					StubbedBuildDefinitions:    []string{"foo.tool", "other.tool"},
 				})
 		})
 	}
@@ -259,6 +262,7 @@ func TestGenruleLocationsAbsoluteLabel(t *testing.T) {
 					Blueprint:                  fmt.Sprintf(bp, tc.moduleType),
 					ExpectedBazelTargets:       expectedBazelTargets,
 					Filesystem:                 otherGenruleBp(tc.moduleType),
+					StubbedBuildDefinitions:    []string{"//other:foo.tool"},
 				})
 		})
 	}
@@ -323,6 +327,7 @@ func TestGenruleSrcsLocationsAbsoluteLabel(t *testing.T) {
 					Blueprint:                  fmt.Sprintf(bp, tc.moduleType),
 					ExpectedBazelTargets:       expectedBazelTargets,
 					Filesystem:                 otherGenruleBp(tc.moduleType),
+					StubbedBuildDefinitions:    []string{"//other:foo.tool", "//other:other.tool"},
 				})
 		})
 	}
@@ -387,6 +392,7 @@ func TestGenruleLocationLabelShouldSubstituteFirstToolLabel(t *testing.T) {
 					Blueprint:                  fmt.Sprintf(bp, tc.moduleType),
 					ExpectedBazelTargets:       expectedBazelTargets,
 					Filesystem:                 otherGenruleBp(tc.moduleType),
+					StubbedBuildDefinitions:    []string{"//other:foo.tool", "//other:other.tool"},
 				})
 		})
 	}
@@ -451,6 +457,7 @@ func TestGenruleLocationsLabelShouldSubstituteFirstToolLabel(t *testing.T) {
 					Blueprint:                  fmt.Sprintf(bp, tc.moduleType),
 					ExpectedBazelTargets:       expectedBazelTargets,
 					Filesystem:                 otherGenruleBp(tc.moduleType),
+					StubbedBuildDefinitions:    []string{"//other:foo.tool", "//other:other.tool"},
 				})
 		})
 	}
@@ -694,4 +701,259 @@ func TestCcGenruleArchAndExcludeSrcs(t *testing.T) {
 				ExpectedBazelTargets:       expectedBazelTargets,
 			})
 	})
+}
+
+func TestGenruleWithExportIncludeDirs(t *testing.T) {
+	testCases := []struct {
+		moduleType string
+		factory    android.ModuleFactory
+		hod        android.HostOrDeviceSupported
+	}{
+		{
+			moduleType: "genrule",
+			factory:    genrule.GenRuleFactory,
+		},
+		{
+			moduleType: "cc_genrule",
+			factory:    cc.GenRuleFactory,
+			hod:        android.DeviceSupported,
+		},
+		{
+			moduleType: "java_genrule",
+			factory:    java.GenRuleFactory,
+			hod:        android.DeviceSupported,
+		},
+		{
+			moduleType: "java_genrule_host",
+			factory:    java.GenRuleFactoryHost,
+			hod:        android.HostSupported,
+		},
+	}
+
+	dir := "baz"
+
+	bp := `%s {
+    name: "foo",
+    out: ["foo.out.h"],
+    srcs: ["foo.in"],
+    cmd: "cp $(in) $(out)",
+    export_include_dirs: ["foo", "bar", "."],
+    bazel_module: { bp2build_available: true },
+}`
+
+	for _, tc := range testCases {
+		moduleAttrs := AttrNameToString{
+			"cmd":  `"cp $(SRCS) $(OUTS)"`,
+			"outs": `["foo.out.h"]`,
+			"srcs": `["foo.in"]`,
+		}
+
+		expectedBazelTargets := []string{
+			makeBazelTargetHostOrDevice("genrule", "foo", moduleAttrs, tc.hod),
+			makeBazelTargetHostOrDevice("cc_library_headers", "foo__header_library", AttrNameToString{
+				"hdrs": `[":foo"]`,
+				"export_includes": `[
+        "foo",
+        "baz/foo",
+        "bar",
+        "baz/bar",
+        ".",
+        "baz",
+    ]`,
+			},
+				tc.hod),
+		}
+
+		t.Run(tc.moduleType, func(t *testing.T) {
+			RunBp2BuildTestCase(t, func(ctx android.RegistrationContext) {},
+				Bp2buildTestCase{
+					ModuleTypeUnderTest:        tc.moduleType,
+					ModuleTypeUnderTestFactory: tc.factory,
+					Filesystem: map[string]string{
+						filepath.Join(dir, "Android.bp"): fmt.Sprintf(bp, tc.moduleType),
+					},
+					Dir:                  dir,
+					ExpectedBazelTargets: expectedBazelTargets,
+				})
+		})
+	}
+}
+
+func TestGenruleWithSoongConfigVariableConfiguredCmd(t *testing.T) {
+	testCases := []struct {
+		moduleType string
+		factory    android.ModuleFactory
+		hod        android.HostOrDeviceSupported
+	}{
+		{
+			moduleType: "genrule",
+			factory:    genrule.GenRuleFactory,
+		},
+		{
+			moduleType: "cc_genrule",
+			factory:    cc.GenRuleFactory,
+			hod:        android.DeviceSupported,
+		},
+		{
+			moduleType: "java_genrule",
+			factory:    java.GenRuleFactory,
+			hod:        android.DeviceSupported,
+		},
+		{
+			moduleType: "java_genrule_host",
+			factory:    java.GenRuleFactoryHost,
+			hod:        android.HostSupported,
+		},
+	}
+
+	bp := `
+soong_config_module_type {
+    name: "my_genrule",
+    module_type: "%s",
+    config_namespace: "my_namespace",
+    bool_variables: ["my_variable"],
+    properties: ["cmd"],
+}
+
+my_genrule {
+    name: "foo",
+    out: ["foo.txt"],
+    cmd: "echo 'no variable' > $(out)",
+    soong_config_variables: {
+        my_variable: {
+            cmd: "echo 'with variable' > $(out)",
+        },
+    },
+    bazel_module: { bp2build_available: true },
+}
+`
+
+	for _, tc := range testCases {
+		moduleAttrs := AttrNameToString{
+			"cmd": `select({
+        "//build/bazel/product_config/config_settings:my_namespace__my_variable": "echo 'with variable' > $(OUTS)",
+        "//conditions:default": "echo 'no variable' > $(OUTS)",
+    })`,
+			"outs": `["foo.txt"]`,
+		}
+
+		expectedBazelTargets := []string{
+			makeBazelTargetHostOrDevice("genrule", "foo", moduleAttrs, tc.hod),
+		}
+
+		t.Run(tc.moduleType, func(t *testing.T) {
+			RunBp2BuildTestCase(t, func(ctx android.RegistrationContext) { android.RegisterSoongConfigModuleBuildComponents(ctx) },
+				Bp2buildTestCase{
+					Blueprint:                  fmt.Sprintf(bp, tc.moduleType),
+					ModuleTypeUnderTest:        tc.moduleType,
+					ModuleTypeUnderTestFactory: tc.factory,
+					ExpectedBazelTargets:       expectedBazelTargets,
+				})
+		})
+	}
+}
+
+func TestGenruleWithProductVariableConfiguredCmd(t *testing.T) {
+	testCases := []struct {
+		moduleType string
+		factory    android.ModuleFactory
+		hod        android.HostOrDeviceSupported
+	}{
+		{
+			moduleType: "genrule",
+			factory:    genrule.GenRuleFactory,
+		},
+		{
+			moduleType: "cc_genrule",
+			factory:    cc.GenRuleFactory,
+			hod:        android.DeviceSupported,
+		},
+		{
+			moduleType: "java_genrule",
+			factory:    java.GenRuleFactory,
+			hod:        android.DeviceSupported,
+		},
+		{
+			moduleType: "java_genrule_host",
+			factory:    java.GenRuleFactoryHost,
+			hod:        android.HostSupported,
+		},
+	}
+
+	bp := `
+
+%s {
+    name: "foo",
+    out: ["foo.txt"],
+    cmd: "echo 'no variable' > $(out)",
+    product_variables: {
+        debuggable: {
+            cmd: "echo 'with variable' > $(out)",
+        },
+    },
+    bazel_module: { bp2build_available: true },
+}
+`
+
+	for _, tc := range testCases {
+		moduleAttrs := AttrNameToString{
+			"cmd": `select({
+        "//build/bazel/product_config/config_settings:debuggable": "echo 'with variable' > $(OUTS)",
+        "//conditions:default": "echo 'no variable' > $(OUTS)",
+    })`,
+			"outs": `["foo.txt"]`,
+		}
+
+		expectedBazelTargets := []string{
+			makeBazelTargetHostOrDevice("genrule", "foo", moduleAttrs, tc.hod),
+		}
+
+		t.Run(tc.moduleType, func(t *testing.T) {
+			RunBp2BuildTestCase(t, func(ctx android.RegistrationContext) { android.RegisterSoongConfigModuleBuildComponents(ctx) },
+				Bp2buildTestCase{
+					Blueprint:                  fmt.Sprintf(bp, tc.moduleType),
+					ModuleTypeUnderTest:        tc.moduleType,
+					ModuleTypeUnderTestFactory: tc.factory,
+					ExpectedBazelTargets:       expectedBazelTargets,
+				})
+		})
+	}
+}
+
+func TestGenruleWithModulesInNamespaces(t *testing.T) {
+	bp := `
+genrule {
+	name: "mygenrule",
+	cmd: "echo $(location //mynamespace:mymodule) > $(out)",
+	srcs: ["//mynamespace:mymodule"],
+	out: ["myout"],
+}
+`
+	fs := map[string]string{
+		"mynamespace/Android.bp":     `soong_namespace {}`,
+		"mynamespace/dir/Android.bp": `cc_binary {name: "mymodule"}`,
+	}
+	expectedBazelTargets := []string{
+		MakeBazelTargetNoRestrictions("genrule", "mygenrule", AttrNameToString{
+			// The fully qualified soong label is <namespace>:<module_name>
+			// - here the prefix is mynamespace
+			// The fully qualifed bazel label is <package>:<module_name>
+			// - here the prefix is mynamespace/dir, since there is a BUILD file at each level of this FS path
+			"cmd":  `"echo $(location //mynamespace/dir:mymodule) > $(OUTS)"`,
+			"outs": `["myout"]`,
+			"srcs": `["//mynamespace/dir:mymodule"]`,
+		}),
+	}
+
+	t.Run("genrule that uses module from a different namespace", func(t *testing.T) {
+		runGenruleTestCase(t, Bp2buildTestCase{
+			Blueprint:                  bp,
+			Filesystem:                 fs,
+			ModuleTypeUnderTest:        "genrule",
+			ModuleTypeUnderTestFactory: genrule.GenRuleFactory,
+			ExpectedBazelTargets:       expectedBazelTargets,
+			StubbedBuildDefinitions:    []string{"//mynamespace/dir:mymodule"},
+		})
+	})
+
 }

@@ -282,6 +282,8 @@ type ZipArgs struct {
 	StoreSymlinks            bool
 	IgnoreMissingFiles       bool
 	Sha256Checksum           bool
+	DoNotWrite               bool
+	Quiet                    bool
 
 	Stderr     io.Writer
 	Filesystem pathtools.FileSystem
@@ -339,7 +341,9 @@ func zipTo(args ZipArgs, w io.Writer) error {
 					Err:  os.ErrNotExist,
 				}
 				if args.IgnoreMissingFiles {
-					fmt.Fprintln(z.stderr, "warning:", err)
+					if !args.Quiet {
+						fmt.Fprintln(z.stderr, "warning:", err)
+					}
 				} else {
 					return err
 				}
@@ -356,7 +360,9 @@ func zipTo(args ZipArgs, w io.Writer) error {
 					Err:  os.ErrNotExist,
 				}
 				if args.IgnoreMissingFiles {
-					fmt.Fprintln(z.stderr, "warning:", err)
+					if !args.Quiet {
+						fmt.Fprintln(z.stderr, "warning:", err)
+					}
 				} else {
 					return err
 				}
@@ -367,7 +373,9 @@ func zipTo(args ZipArgs, w io.Writer) error {
 					Err:  syscall.ENOTDIR,
 				}
 				if args.IgnoreMissingFiles {
-					fmt.Fprintln(z.stderr, "warning:", err)
+					if !args.Quiet {
+						fmt.Fprintln(z.stderr, "warning:", err)
+					}
 				} else {
 					return err
 				}
@@ -400,7 +408,9 @@ func Zip(args ZipArgs) error {
 
 	var zipErr error
 
-	if !args.WriteIfChanged {
+	if args.DoNotWrite {
+		out = io.Discard
+	} else if !args.WriteIfChanged {
 		f, err := os.Create(args.OutputFilePath)
 		if err != nil {
 			return err
@@ -421,7 +431,7 @@ func Zip(args ZipArgs) error {
 		return zipErr
 	}
 
-	if args.WriteIfChanged {
+	if args.WriteIfChanged && !args.DoNotWrite {
 		err := pathtools.WriteFileIfChanged(args.OutputFilePath, buf.Bytes(), 0666)
 		if err != nil {
 			return err

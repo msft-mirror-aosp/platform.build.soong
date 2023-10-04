@@ -15,7 +15,6 @@
 package bp2build
 
 import (
-	"android/soong/starlark_import"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +23,7 @@ import (
 	"android/soong/android"
 	"android/soong/bazel"
 	"android/soong/shared"
+	"android/soong/starlark_import"
 )
 
 func deleteFilesExcept(ctx *CodegenContext, rootOutputPath android.OutputPath, except []BazelFile) {
@@ -67,6 +67,8 @@ func deleteFilesExcept(ctx *CodegenContext, rootOutputPath android.OutputPath, e
 // writing .bzl files that are equivalent to Android.bp files that are capable
 // of being built with Bazel.
 func Codegen(ctx *CodegenContext) *CodegenMetrics {
+	ctx.Context().BeginEvent("Codegen")
+	defer ctx.Context().EndEvent("Codegen")
 	// This directory stores BUILD files that could be eventually checked-in.
 	bp2buildDir := android.PathForOutput(ctx, "bp2build")
 
@@ -79,7 +81,26 @@ func Codegen(ctx *CodegenContext) *CodegenMetrics {
 		fmt.Printf("ERROR: Encountered %d error(s): \nERROR: %s", len(errs), strings.Join(errMsgs, "\n"))
 		os.Exit(1)
 	}
-	bp2buildFiles := CreateBazelFiles(ctx.Config(), nil, res.buildFileToTargets, ctx.mode)
+	var bp2buildFiles []BazelFile
+	productConfig, err := createProductConfigFiles(ctx, res.metrics)
+	ctx.Context().EventHandler.Do("CreateBazelFile", func() {
+		allTargets := make(map[string]BazelTargets)
+		for k, v := range res.buildFileToTargets {
+			allTargets[k] = append(allTargets[k], v...)
+		}
+		for k, v := range productConfig.bp2buildTargets {
+			allTargets[k] = append(allTargets[k], v...)
+		}
+		bp2buildFiles = CreateBazelFiles(nil, allTargets, ctx.mode)
+	})
+	bp2buildFiles = append(bp2buildFiles, productConfig.bp2buildFiles...)
+	injectionFiles, err := createSoongInjectionDirFiles(ctx, res.metrics)
+	if err != nil {
+		fmt.Printf("%s\n", err.Error())
+		os.Exit(1)
+	}
+	injectionFiles = append(injectionFiles, productConfig.injectionFiles...)
+
 	writeFiles(ctx, bp2buildDir, bp2buildFiles)
 	// Delete files under the bp2build root which weren't just written. An
 	// alternative would have been to delete the whole directory and write these
@@ -88,11 +109,6 @@ func Codegen(ctx *CodegenContext) *CodegenMetrics {
 	// performance implications.
 	deleteFilesExcept(ctx, bp2buildDir, bp2buildFiles)
 
-	injectionFiles, err := CreateSoongInjectionDirFiles(ctx, res.metrics)
-	if err != nil {
-		fmt.Printf("%s\n", err.Error())
-		os.Exit(1)
-	}
 	writeFiles(ctx, android.PathForOutput(ctx, bazel.SoongInjectionDirName), injectionFiles)
 	starlarkDeps, err := starlark_import.GetNinjaDeps()
 	if err != nil {
@@ -101,26 +117,6 @@ func Codegen(ctx *CodegenContext) *CodegenMetrics {
 	}
 	ctx.AddNinjaFileDeps(starlarkDeps...)
 	return &res.metrics
-}
-
-// Wrapper function that will be responsible for all files in soong_injection directory
-// This includes
-// 1. config value(s) that are hardcoded in Soong
-// 2. product_config variables
-func CreateSoongInjectionDirFiles(ctx *CodegenContext, metrics CodegenMetrics) ([]BazelFile, error) {
-	var ret []BazelFile
-
-	productConfigFiles, err := CreateProductConfigFiles(ctx)
-	if err != nil {
-		return nil, err
-	}
-	ret = append(ret, productConfigFiles...)
-	injectionFiles, err := soongInjectionFiles(ctx.Config(), metrics)
-	if err != nil {
-		return nil, err
-	}
-	ret = append(ret, injectionFiles...)
-	return ret, nil
 }
 
 // Get the output directory and create it if it doesn't exist.

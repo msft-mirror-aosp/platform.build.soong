@@ -33,8 +33,12 @@ func TestUniqueBazelLabels(t *testing.T) {
 				{Label: "b"},
 				{Label: "a"},
 				{Label: "c"},
+				// namespaces
+				{Label: "//foo:bar", OriginalModuleName: "bar"},       // when referenced from foo namespace
+				{Label: "//foo:bar", OriginalModuleName: "//foo:bar"}, // when reference from root namespace
 			},
 			expectedUniqueLabels: []Label{
+				{Label: "//foo:bar", OriginalModuleName: "bar"},
 				{Label: "a"},
 				{Label: "b"},
 				{Label: "c"},
@@ -125,6 +129,63 @@ func TestSubtractBazelLabelList(t *testing.T) {
 		}
 	}
 }
+
+func TestSubtractBazelLabelListAttribute(t *testing.T) {
+	testCases := []struct {
+		haystack LabelListAttribute
+		needle   LabelListAttribute
+		expected LabelListAttribute
+	}{
+		{
+			haystack: LabelListAttribute{
+				Value: makeLabelList(
+					[]string{"a", "b", "a", "c"},
+					[]string{"x", "x", "y", "z"},
+				),
+				ConfigurableValues: configurableLabelLists{
+					ArchConfigurationAxis: labelListSelectValues{
+						"arm": makeLabelList([]string{"arm_1", "arm_2"}, []string{}),
+						"x86": makeLabelList([]string{"x86_3", "x86_4", "x86_5"}, []string{"x86_5"}),
+					},
+				},
+			},
+			needle: LabelListAttribute{
+				Value: makeLabelList(
+					[]string{"d", "a"},
+					[]string{"x", "y2", "z2"},
+				),
+				ConfigurableValues: configurableLabelLists{
+					ArchConfigurationAxis: labelListSelectValues{
+						"arm": makeLabelList([]string{"arm_1", "arm_3"}, []string{}),
+						"x86": makeLabelList([]string{"x86_3", "x86_4"}, []string{"x86_6"}),
+					},
+				},
+			},
+			expected: LabelListAttribute{
+				Value: makeLabelList(
+					[]string{"b", "c"},
+					[]string{"x", "x", "y", "z"},
+				),
+				ConfigurableValues: configurableLabelLists{
+					ArchConfigurationAxis: labelListSelectValues{
+						"arm": makeLabelList([]string{"arm_2"}, []string{}),
+						"x86": makeLabelList([]string{"x86_5"}, []string{"x86_5"}),
+					},
+				},
+				ForceSpecifyEmptyList: false,
+				EmitEmptyList:         false,
+				Prepend:               false,
+			},
+		},
+	}
+	for _, tc := range testCases {
+		got := SubtractBazelLabelListAttribute(tc.haystack, tc.needle)
+		if !reflect.DeepEqual(tc.expected, got) {
+			t.Fatalf("Expected\n%v, but got\n%v", tc.expected, got)
+		}
+	}
+}
+
 func TestFirstUniqueBazelLabelList(t *testing.T) {
 	testCases := []struct {
 		originalLabelList       LabelList
@@ -137,6 +198,9 @@ func TestFirstUniqueBazelLabelList(t *testing.T) {
 					{Label: "b"},
 					{Label: "a"},
 					{Label: "c"},
+					// namespaces
+					{Label: "//foo:bar", OriginalModuleName: "bar"},       // when referenced from foo namespace
+					{Label: "//foo:bar", OriginalModuleName: "//foo:bar"}, // when referenced from root namespace
 				},
 				Excludes: []Label{
 					{Label: "x"},
@@ -150,6 +214,7 @@ func TestFirstUniqueBazelLabelList(t *testing.T) {
 					{Label: "a"},
 					{Label: "b"},
 					{Label: "c"},
+					{Label: "//foo:bar", OriginalModuleName: "bar"},
 				},
 				Excludes: []Label{
 					{Label: "x"},
@@ -161,6 +226,46 @@ func TestFirstUniqueBazelLabelList(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		actualUniqueLabelList := FirstUniqueBazelLabelList(tc.originalLabelList)
+		if !reflect.DeepEqual(tc.expectedUniqueLabelList, actualUniqueLabelList) {
+			t.Fatalf("Expected %v, got %v", tc.expectedUniqueLabelList, actualUniqueLabelList)
+		}
+	}
+}
+
+func TestFirstUniqueBazelLabelListAttribute(t *testing.T) {
+	testCases := []struct {
+		originalLabelList       LabelListAttribute
+		expectedUniqueLabelList LabelListAttribute
+	}{
+		{
+			originalLabelList: LabelListAttribute{
+				Value: makeLabelList(
+					[]string{"a", "b", "a", "c"},
+					[]string{"x", "x", "y", "z"},
+				),
+				ConfigurableValues: configurableLabelLists{
+					ArchConfigurationAxis: labelListSelectValues{
+						"arm": makeLabelList([]string{"1", "2", "1"}, []string{}),
+						"x86": makeLabelList([]string{"3", "4", "4"}, []string{"5", "5"}),
+					},
+				},
+			},
+			expectedUniqueLabelList: LabelListAttribute{
+				Value: makeLabelList(
+					[]string{"a", "b", "c"},
+					[]string{"x", "y", "z"},
+				),
+				ConfigurableValues: configurableLabelLists{
+					ArchConfigurationAxis: labelListSelectValues{
+						"arm": makeLabelList([]string{"1", "2"}, []string{}),
+						"x86": makeLabelList([]string{"3", "4"}, []string{"5"}),
+					},
+				},
+			},
+		},
+	}
+	for _, tc := range testCases {
+		actualUniqueLabelList := FirstUniqueBazelLabelListAttribute(tc.originalLabelList)
 		if !reflect.DeepEqual(tc.expectedUniqueLabelList, actualUniqueLabelList) {
 			t.Fatalf("Expected %v, got %v", tc.expectedUniqueLabelList, actualUniqueLabelList)
 		}

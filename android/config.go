@@ -18,7 +18,6 @@ package android
 // product variables necessary for soong_build's operation.
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -88,7 +87,6 @@ type CmdArgs struct {
 	SymlinkForestMarker string
 	Bp2buildMarker      string
 	BazelQueryViewDir   string
-	BazelApiBp2buildDir string
 	ModuleGraphFile     string
 	ModuleActionsFile   string
 	DocFile             string
@@ -121,9 +119,6 @@ const (
 	// blueprint modules. Individual BUILD targets will not, however, faitfhully
 	// express build semantics.
 	GenerateQueryView
-
-	// Generate BUILD files for API contributions to API surfaces
-	ApiBp2build
 
 	// Create a JSON representation of the module graph and exit.
 	GenerateModuleGraph
@@ -171,6 +166,19 @@ func (c Config) RunningInsideUnitTest() bool {
 	return c.config.TestProductVariables != nil
 }
 
+// DisableHiddenApiChecks returns true if hiddenapi checks have been disabled.
+// For 'eng' target variant hiddenapi checks are disabled by default for performance optimisation,
+// but can be enabled by setting environment variable ENABLE_HIDDENAPI_FLAGS=true.
+// For other target variants hiddenapi check are enabled by default but can be disabled by
+// setting environment variable UNSAFE_DISABLE_HIDDENAPI_FLAGS=true.
+// If both ENABLE_HIDDENAPI_FLAGS=true and UNSAFE_DISABLE_HIDDENAPI_FLAGS=true, then
+// ENABLE_HIDDENAPI_FLAGS=true will be triggered and hiddenapi checks will be considered enabled.
+func (c Config) DisableHiddenApiChecks() bool {
+	return !c.IsEnvTrue("ENABLE_HIDDENAPI_FLAGS") &&
+		(c.IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") ||
+			Bool(c.productVariables.Eng))
+}
+
 // MaxPageSizeSupported returns the max page size supported by the device. This
 // value will define the ELF segment alignment for binaries (executables and
 // shared libraries).
@@ -178,14 +186,39 @@ func (c Config) MaxPageSizeSupported() string {
 	return String(c.config.productVariables.DeviceMaxPageSizeSupported)
 }
 
+// PageSizeAgnostic returns true when AOSP is page size agnostic,
+// othersise it returns false.
+func (c Config) PageSizeAgnostic() bool {
+	return Bool(c.config.productVariables.DevicePageSizeAgnostic)
+}
+
 // The release version passed to aconfig, derived from RELEASE_VERSION
 func (c Config) ReleaseVersion() string {
 	return c.config.productVariables.ReleaseVersion
 }
 
-// The flag values files passed to aconfig, derived from RELEASE_VERSION
-func (c Config) ReleaseAconfigValueSets() []string {
-	return c.config.productVariables.ReleaseAconfigValueSets
+// The aconfig value set passed to aconfig, derived from RELEASE_VERSION
+func (c Config) ReleaseAconfigValueSets() string {
+	// This logic to handle both Soong module name and bazel target is temporary in order to
+	// provide backward compatibility where aosp and internal both have the release
+	// aconfig value set but can't be updated at the same time to use bazel target
+	value := strings.Split(c.config.productVariables.ReleaseAconfigValueSets, ":")
+	value_len := len(value)
+	if value_len > 2 {
+		// This shouldn't happen as this should be either a module name or a bazel target path.
+		panic(fmt.Errorf("config file: invalid value for release aconfig value sets: %s",
+			c.config.productVariables.ReleaseAconfigValueSets))
+	}
+	if value_len > 0 {
+		return value[value_len-1]
+	}
+	return ""
+}
+
+// The flag default permission value passed to aconfig
+// derived from RELEASE_ACONFIG_FLAG_DEFAULT_PERMISSION
+func (c Config) ReleaseAconfigFlagDefaultPermission() string {
+	return c.config.productVariables.ReleaseAconfigFlagDefaultPermission
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -202,10 +235,10 @@ type VendorConfig soongconfig.SoongConfig
 // product configuration values are read from Kati-generated soong.variables.
 type config struct {
 	// Options configurable with soong.variables
-	productVariables productVariables
+	productVariables ProductVariables
 
 	// Only available on configs created by TestConfig
-	TestProductVariables *productVariables
+	TestProductVariables *ProductVariables
 
 	// A specialized context object for Bazel/Soong mixed builds and migration
 	// purposes.
@@ -321,7 +354,7 @@ func loadConfig(config *config) error {
 
 // loadFromConfigFile loads and decodes configuration options from a JSON file
 // in the current working directory.
-func loadFromConfigFile(configurable *productVariables, filename string) error {
+func loadFromConfigFile(configurable *ProductVariables, filename string) error {
 	// Try to open the file
 	configFileReader, err := os.Open(filename)
 	defer configFileReader.Close()
@@ -373,7 +406,7 @@ func loadFromConfigFile(configurable *productVariables, filename string) error {
 
 // atomically writes the config file in case two copies of soong_build are running simultaneously
 // (for example, docs generation and ninja manifest generation)
-func saveToConfigFile(config *productVariables, filename string) error {
+func saveToConfigFile(config *ProductVariables, filename string) error {
 	data, err := json.MarshalIndent(&config, "", "    ")
 	if err != nil {
 		return fmt.Errorf("cannot marshal config data: %s", err.Error())
@@ -402,65 +435,52 @@ func saveToConfigFile(config *productVariables, filename string) error {
 	return nil
 }
 
-func saveToBazelConfigFile(config *productVariables, outDir string) error {
+type productVariableStarlarkRepresentation struct {
+	soongType   string
+	selectable  bool
+	archVariant bool
+}
+
+func saveToBazelConfigFile(config *ProductVariables, outDir string) error {
 	dir := filepath.Join(outDir, bazel.SoongInjectionDirName, "product_config")
 	err := createDirIfNonexistent(dir, os.ModePerm)
 	if err != nil {
 		return fmt.Errorf("Could not create dir %s: %s", dir, err)
 	}
 
-	nonArchVariantProductVariables := []string{}
-	archVariantProductVariables := []string{}
+	allProductVariablesType := reflect.TypeOf((*ProductVariables)(nil)).Elem()
+	productVariablesInfo := make(map[string]productVariableStarlarkRepresentation)
 	p := variableProperties{}
 	t := reflect.TypeOf(p.Product_variables)
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
-		nonArchVariantProductVariables = append(nonArchVariantProductVariables, strings.ToLower(f.Name))
-		if proptools.HasTag(f, "android", "arch_variant") {
-			archVariantProductVariables = append(archVariantProductVariables, strings.ToLower(f.Name))
+		archVariant := proptools.HasTag(f, "android", "arch_variant")
+		if mainProductVariablesStructField, ok := allProductVariablesType.FieldByName(f.Name); ok {
+			productVariablesInfo[f.Name] = productVariableStarlarkRepresentation{
+				soongType:   stringRepresentationOfSimpleType(mainProductVariablesStructField.Type),
+				selectable:  true,
+				archVariant: archVariant,
+			}
+		} else {
+			panic("Unknown variable " + f.Name)
 		}
 	}
 
-	nonArchVariantProductVariablesJson := starlark_fmt.PrintStringList(nonArchVariantProductVariables, 0)
-	if err != nil {
-		return fmt.Errorf("cannot marshal product variable data: %s", err.Error())
-	}
-
-	archVariantProductVariablesJson := starlark_fmt.PrintStringList(archVariantProductVariables, 0)
-	if err != nil {
-		return fmt.Errorf("cannot marshal arch variant product variable data: %s", err.Error())
-	}
-
-	configJson, err := json.MarshalIndent(&config, "", "    ")
-	if err != nil {
-		return fmt.Errorf("cannot marshal config data: %s", err.Error())
-	}
-	// The backslashes need to be escaped because this text is going to be put
-	// inside a Starlark string literal.
-	configJson = bytes.ReplaceAll(configJson, []byte("\\"), []byte("\\\\"))
-
-	bzl := []string{
-		bazel.GeneratedBazelFileWarning,
-		fmt.Sprintf(`_product_vars = json.decode("""%s""")`, configJson),
-		fmt.Sprintf(`_product_var_constraints = %s`, nonArchVariantProductVariablesJson),
-		fmt.Sprintf(`_arch_variant_product_var_constraints = %s`, archVariantProductVariablesJson),
-		"\n", `
-product_vars = _product_vars
-
-# TODO(b/269577299) Remove these when everything switches over to loading them from product_variable_constants.bzl
-product_var_constraints = _product_var_constraints
-arch_variant_product_var_constraints = _arch_variant_product_var_constraints
-`,
-	}
-	err = pathtools.WriteFileIfChanged(filepath.Join(dir, "product_variables.bzl"),
-		[]byte(strings.Join(bzl, "\n")), 0644)
-	if err != nil {
-		return fmt.Errorf("Could not write .bzl config file %s", err)
-	}
 	err = pathtools.WriteFileIfChanged(filepath.Join(dir, "product_variable_constants.bzl"), []byte(fmt.Sprintf(`
-product_var_constraints = %s
-arch_variant_product_var_constraints = %s
-`, nonArchVariantProductVariablesJson, archVariantProductVariablesJson)), 0644)
+# product_var_constant_info is a map of product variables to information about them. The fields are:
+# - soongType: The type of the product variable as it appears in soong's ProductVariables struct.
+#              examples are string, bool, int, *bool, *string, []string, etc. This may be an overly
+#              conservative estimation of the type, for example a *bool could oftentimes just be a
+#              bool that defaults to false.
+# - selectable: if this product variable can be selected on in Android.bp/build files. This means
+#               it's listed in the "variableProperties" soong struct. Currently all variables in
+#               this list are selectable because we only need the selectable ones at the moment,
+#               but the list may be expanded later.
+# - archVariant: If the variable is tagged as arch variant in the "variableProperties" struct.
+product_var_constant_info = %s
+product_var_constraints = [k for k, v in product_var_constant_info.items() if v.selectable]
+arch_variant_product_var_constraints = [k for k, v in product_var_constant_info.items() if v.selectable and v.archVariant]
+`, starlark_fmt.PrintAny(productVariablesInfo, 0))), 0644)
 	if err != nil {
 		return fmt.Errorf("Could not write .bzl config file %s", err)
 	}
@@ -471,6 +491,23 @@ arch_variant_product_var_constraints = %s
 	}
 
 	return nil
+}
+
+func stringRepresentationOfSimpleType(ty reflect.Type) string {
+	switch ty.Kind() {
+	case reflect.String:
+		return "string"
+	case reflect.Bool:
+		return "bool"
+	case reflect.Int:
+		return "int"
+	case reflect.Slice:
+		return "[]" + stringRepresentationOfSimpleType(ty.Elem())
+	case reflect.Pointer:
+		return "*" + stringRepresentationOfSimpleType(ty.Elem())
+	default:
+		panic("unimplemented type: " + ty.Kind().String())
+	}
 }
 
 // NullConfig returns a mostly empty Config for use by standalone tools like dexpreopt_gen that
@@ -613,7 +650,6 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 	setBuildMode(cmdArgs.SymlinkForestMarker, SymlinkForest)
 	setBuildMode(cmdArgs.Bp2buildMarker, Bp2build)
 	setBuildMode(cmdArgs.BazelQueryViewDir, GenerateQueryView)
-	setBuildMode(cmdArgs.BazelApiBp2buildDir, ApiBp2build)
 	setBuildMode(cmdArgs.ModuleGraphFile, GenerateModuleGraph)
 	setBuildMode(cmdArgs.DocFile, GenerateDocFile)
 	setBazelMode(cmdArgs.BazelMode, "--bazel-mode", BazelProdMode)
@@ -639,6 +675,7 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		"framework-media":                   {},
 		"framework-mediaprovider":           {},
 		"framework-ondevicepersonalization": {},
+		"framework-pdf":                     {},
 		"framework-permission":              {},
 		"framework-permission-s":            {},
 		"framework-scheduling":              {},
@@ -1355,6 +1392,10 @@ func (c *config) BazelModulesForceEnabledByFlag() map[string]struct{} {
 	return c.bazelForceEnabledModules
 }
 
+func (c *config) IsVndkDeprecated() bool {
+	return !Bool(c.productVariables.KeepVndk)
+}
+
 func (c *deviceConfig) Arches() []Arch {
 	var arches []Arch
 	for _, target := range c.config.Targets[Android] {
@@ -1392,10 +1433,6 @@ func (c *deviceConfig) CurrentApiLevelForVendorModules() string {
 
 func (c *deviceConfig) PlatformVndkVersion() string {
 	return String(c.config.productVariables.Platform_vndk_version)
-}
-
-func (c *deviceConfig) ProductVndkVersion() string {
-	return String(c.config.productVariables.ProductVndkVersion)
 }
 
 func (c *deviceConfig) ExtraVndkVersions() []string {
@@ -1630,11 +1667,18 @@ func (c *config) MemtagHeapSyncEnabledForPath(path string) bool {
 	return HasAnyPrefix(path, c.productVariables.MemtagHeapSyncIncludePaths) && !c.MemtagHeapDisabledForPath(path)
 }
 
+func (c *config) HWASanDisabledForPath(path string) bool {
+	if len(c.productVariables.HWASanExcludePaths) == 0 {
+		return false
+	}
+	return HasAnyPrefix(path, c.productVariables.HWASanExcludePaths)
+}
+
 func (c *config) HWASanEnabledForPath(path string) bool {
 	if len(c.productVariables.HWASanIncludePaths) == 0 {
 		return false
 	}
-	return HasAnyPrefix(path, c.productVariables.HWASanIncludePaths)
+	return HasAnyPrefix(path, c.productVariables.HWASanIncludePaths) && !c.HWASanDisabledForPath(path)
 }
 
 func (c *config) VendorConfig(name string) VendorConfig {
@@ -1758,30 +1802,6 @@ func (c *deviceConfig) BoardSepolicyVers() string {
 		return ver
 	}
 	return c.PlatformSepolicyVersion()
-}
-
-func (c *deviceConfig) BoardPlatVendorPolicy() []string {
-	return c.config.productVariables.BoardPlatVendorPolicy
-}
-
-func (c *deviceConfig) BoardReqdMaskPolicy() []string {
-	return c.config.productVariables.BoardReqdMaskPolicy
-}
-
-func (c *deviceConfig) BoardSystemExtPublicPrebuiltDirs() []string {
-	return c.config.productVariables.BoardSystemExtPublicPrebuiltDirs
-}
-
-func (c *deviceConfig) BoardSystemExtPrivatePrebuiltDirs() []string {
-	return c.config.productVariables.BoardSystemExtPrivatePrebuiltDirs
-}
-
-func (c *deviceConfig) BoardProductPublicPrebuiltDirs() []string {
-	return c.config.productVariables.BoardProductPublicPrebuiltDirs
-}
-
-func (c *deviceConfig) BoardProductPrivatePrebuiltDirs() []string {
-	return c.config.productVariables.BoardProductPrivatePrebuiltDirs
 }
 
 func (c *deviceConfig) SystemExtSepolicyPrebuiltApiDir() string {
@@ -1932,6 +1952,10 @@ func (c *deviceConfig) RequiresInsecureExecmemForSwiftshader() bool {
 	return c.config.productVariables.RequiresInsecureExecmemForSwiftshader
 }
 
+func (c *deviceConfig) Release_aidl_use_unfrozen() bool {
+	return Bool(c.config.productVariables.Release_aidl_use_unfrozen)
+}
+
 func (c *config) SelinuxIgnoreNeverallows() bool {
 	return c.productVariables.SelinuxIgnoreNeverallows
 }
@@ -1995,10 +2019,9 @@ func (c *config) LogMixedBuild(ctx BaseModuleContext, useBazel bool) {
 	}
 }
 
-func (c *config) HasBazelBuildTargetInSource(ctx BaseModuleContext) bool {
-	moduleName := ctx.Module().Name()
-	for _, buildTarget := range c.bazelTargetsByDir[ctx.ModuleDir()] {
-		if moduleName == buildTarget {
+func (c *config) HasBazelBuildTargetInSource(dir string, target string) bool {
+	for _, existingTarget := range c.bazelTargetsByDir[dir] {
+		if target == existingTarget {
 			return true
 		}
 	}
@@ -2044,4 +2067,25 @@ func (c *config) SetApiLibraries(libs []string) {
 
 func (c *config) GetApiLibraries() map[string]struct{} {
 	return c.apiLibraries
+}
+
+// Bp2buildMode indicates whether the config is for bp2build mode of Soong
+func (c *config) Bp2buildMode() bool {
+	return c.BuildMode == Bp2build
+}
+
+func (c *deviceConfig) CheckVendorSeappViolations() bool {
+	return Bool(c.config.productVariables.CheckVendorSeappViolations)
+}
+
+func (c *deviceConfig) NextReleaseHideFlaggedApi() bool {
+	return Bool(c.config.productVariables.NextReleaseHideFlaggedApi)
+}
+
+func (c *deviceConfig) ReleaseExposeFlaggedApi() bool {
+	return Bool(c.config.productVariables.Release_expose_flagged_api)
+}
+
+func (c *deviceConfig) HideFlaggedApis() bool {
+	return c.NextReleaseHideFlaggedApi() && !c.ReleaseExposeFlaggedApi()
 }

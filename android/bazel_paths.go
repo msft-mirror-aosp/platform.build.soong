@@ -16,6 +16,7 @@ package android
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -88,6 +89,8 @@ type BazelConversionPathContext interface {
 	EarlyModulePathContext
 	BazelConversionContext
 
+	ModuleName() string
+	ModuleType() string
 	ModuleErrorf(fmt string, args ...interface{})
 	PropertyErrorf(property, fmt string, args ...interface{})
 	GetDirectDep(name string) (blueprint.Module, blueprint.DependencyTag)
@@ -124,6 +127,7 @@ func BazelLabelForModuleDepsWithFn(ctx BazelConversionPathContext, modules []str
 		labels.Includes = []bazel.Label{}
 		return labels
 	}
+	modules = FirstUniqueStrings(modules)
 	for _, module := range modules {
 		bpText := module
 		if m := SrcIsModule(module); m == "" {
@@ -179,7 +183,7 @@ func BazelLabelForModuleDepSingle(ctx BazelConversionPathContext, path string) b
 // paths, relative to the local module, or Bazel-labels (absolute if in a different package or
 // relative if within the same package).
 // Properties must have been annotated with struct tag `android:"path"` so that dependencies modules
-// will have already been handled by the path_deps mutator.
+// will have already been handled by the pathdeps mutator.
 func BazelLabelForModuleSrc(ctx BazelConversionPathContext, paths []string) bazel.LabelList {
 	return BazelLabelForModuleSrcExcludes(ctx, paths, []string(nil))
 }
@@ -189,7 +193,7 @@ func BazelLabelForModuleSrc(ctx BazelConversionPathContext, paths []string) baze
 // references in paths, minus those in excludes, relative to the local module, or Bazel-labels
 // (absolute if in a different package or relative if within the same package).
 // Properties must have been annotated with struct tag `android:"path"` so that dependencies modules
-// will have already been handled by the path_deps mutator.
+// will have already been handled by the pathdeps mutator.
 func BazelLabelForModuleSrcExcludes(ctx BazelConversionPathContext, paths, excludes []string) bazel.LabelList {
 	excludeLabels := expandSrcsForBazel(ctx, excludes, []string(nil))
 	excluded := make([]string, 0, len(excludeLabels.Includes))
@@ -198,8 +202,23 @@ func BazelLabelForModuleSrcExcludes(ctx BazelConversionPathContext, paths, exclu
 	}
 	labels := expandSrcsForBazel(ctx, paths, excluded)
 	labels.Excludes = excludeLabels.Includes
-	labels = transformSubpackagePaths(ctx, labels)
+	labels = TransformSubpackagePaths(ctx.Config(), ctx.ModuleDir(), labels)
 	return labels
+}
+
+func BazelLabelForSrcPatternExcludes(ctx BazelConversionPathContext, dir, pattern string, excludes []string) bazel.LabelList {
+	topRelPaths, err := ctx.GlobWithDeps(filepath.Join(dir, pattern), excludes)
+	if err != nil {
+		ctx.ModuleErrorf("Could not search dir: %s for pattern %s due to %v\n", dir, pattern, err)
+	}
+	// An intermediate list of labels relative to `dir` that assumes that there no subpacakges beneath `dir`
+	dirRelLabels := []bazel.Label{}
+	for _, topRelPath := range topRelPaths {
+		dirRelPath := Rel(ctx, dir, topRelPath)
+		dirRelLabels = append(dirRelLabels, bazel.Label{Label: "./" + dirRelPath})
+	}
+	// Return the package boudary resolved labels
+	return TransformSubpackagePaths(ctx.Config(), dir, bazel.MakeLabelList(dirRelLabels))
 }
 
 // Returns true if a prefix + components[:i] is a package boundary.
@@ -210,10 +229,18 @@ func BazelLabelForModuleSrcExcludes(ctx BazelConversionPathContext, paths, exclu
 //  2. An Android.bp doesn't exist, but a checked-in BUILD/BUILD.bazel file exists, and that file
 //     is allowlisted by the bp2build configuration to be merged into the symlink forest workspace.
 func isPackageBoundary(config Config, prefix string, components []string, componentIndex int) bool {
+	isSymlink := func(c Config, path string) bool {
+		f, err := c.fs.Lstat(path)
+		if err != nil {
+			// The file does not exist
+			return false
+		}
+		return f.Mode()&os.ModeSymlink == os.ModeSymlink
+	}
 	prefix = filepath.Join(prefix, filepath.Join(components[:componentIndex+1]...))
 	if exists, _, _ := config.fs.Exists(filepath.Join(prefix, "Android.bp")); exists {
 		return true
-	} else if config.Bp2buildPackageConfig.ShouldKeepExistingBuildFileForDir(prefix) {
+	} else if config.Bp2buildPackageConfig.ShouldKeepExistingBuildFileForDir(prefix) || isSymlink(config, prefix) {
 		if exists, _, _ := config.fs.Exists(filepath.Join(prefix, "BUILD")); exists {
 			return true
 		} else if exists, _, _ := config.fs.Exists(filepath.Join(prefix, "BUILD.bazel")); exists {
@@ -237,7 +264,7 @@ func isPackageBoundary(config Config, prefix string, components []string, compon
 // if the "async_safe" directory is actually a package and not just a directory.
 //
 // In particular, paths that extend into packages are transformed into absolute labels beginning with //.
-func transformSubpackagePath(ctx BazelConversionPathContext, path bazel.Label) bazel.Label {
+func transformSubpackagePath(cfg Config, dir string, path bazel.Label) bazel.Label {
 	var newPath bazel.Label
 
 	// Don't transform OriginalModuleName
@@ -281,7 +308,7 @@ func transformSubpackagePath(ctx BazelConversionPathContext, path bazel.Label) b
 	for i := len(pathComponents) - 1; i >= 0; i-- {
 		pathComponent := pathComponents[i]
 		var sep string
-		if !foundPackageBoundary && isPackageBoundary(ctx.Config(), ctx.ModuleDir(), pathComponents, i) {
+		if !foundPackageBoundary && isPackageBoundary(cfg, dir, pathComponents, i) {
 			sep = ":"
 			foundPackageBoundary = true
 		} else {
@@ -295,7 +322,7 @@ func transformSubpackagePath(ctx BazelConversionPathContext, path bazel.Label) b
 	}
 	if foundPackageBoundary {
 		// Ensure paths end up looking like //bionic/... instead of //./bionic/...
-		moduleDir := ctx.ModuleDir()
+		moduleDir := dir
 		if strings.HasPrefix(moduleDir, ".") {
 			moduleDir = moduleDir[1:]
 		}
@@ -313,13 +340,13 @@ func transformSubpackagePath(ctx BazelConversionPathContext, path bazel.Label) b
 
 // Transform paths to acknowledge package boundaries
 // See transformSubpackagePath() for more information
-func transformSubpackagePaths(ctx BazelConversionPathContext, paths bazel.LabelList) bazel.LabelList {
+func TransformSubpackagePaths(cfg Config, dir string, paths bazel.LabelList) bazel.LabelList {
 	var newPaths bazel.LabelList
 	for _, include := range paths.Includes {
-		newPaths.Includes = append(newPaths.Includes, transformSubpackagePath(ctx, include))
+		newPaths.Includes = append(newPaths.Includes, transformSubpackagePath(cfg, dir, include))
 	}
 	for _, exclude := range paths.Excludes {
-		newPaths.Excludes = append(newPaths.Excludes, transformSubpackagePath(ctx, exclude))
+		newPaths.Excludes = append(newPaths.Excludes, transformSubpackagePath(cfg, dir, exclude))
 	}
 	return newPaths
 }
@@ -355,7 +382,7 @@ func RootToModuleRelativePaths(ctx BazelConversionPathContext, paths Paths) []ba
 //
 // Properties passed as the paths or excludes argument must have been annotated with struct tag
 // `android:"path"` so that dependencies on other modules will have already been handled by the
-// path_deps mutator.
+// pathdeps mutator.
 func expandSrcsForBazel(ctx BazelConversionPathContext, paths, expandedExcludes []string) bazel.LabelList {
 	if paths == nil {
 		return bazel.LabelList{}
@@ -375,7 +402,13 @@ func expandSrcsForBazel(ctx BazelConversionPathContext, paths, expandedExcludes 
 		if m, tag := SrcIsModuleWithTag(p); m != "" {
 			l := getOtherModuleLabel(ctx, m, tag, BazelModuleLabel)
 			if l != nil && !InList(l.Label, expandedExcludes) {
-				l.OriginalModuleName = fmt.Sprintf(":%s", m)
+				if strings.HasPrefix(m, "//") {
+					// this is a module in a soong namespace
+					// It appears as //<namespace>:<module_name> in srcs, and not ://<namespace>:<module_name>
+					l.OriginalModuleName = m
+				} else {
+					l.OriginalModuleName = fmt.Sprintf(":%s", m)
+				}
 				labels.Includes = append(labels.Includes, *l)
 			}
 		} else {
@@ -418,6 +451,10 @@ func getOtherModuleLabel(ctx BazelConversionPathContext, dep, tag string,
 	otherLabel := labelFromModule(ctx, m)
 
 	// TODO(b/165114590): Convert tag (":name{.tag}") to corresponding Bazel implicit output targets.
+	if (tag != "" && m.Name() == "framework-res") ||
+		(tag == ".generated_srcjars" && ctx.OtherModuleType(m) == "java_aconfig_library") {
+		otherLabel += tag
+	}
 
 	if samePackage(label, otherLabel) {
 		otherLabel = bazelShortLabel(otherLabel)
@@ -430,7 +467,7 @@ func getOtherModuleLabel(ctx BazelConversionPathContext, dep, tag string,
 
 func BazelModuleLabel(ctx BazelConversionPathContext, module blueprint.Module) string {
 	// TODO(b/165114590): Convert tag (":name{.tag}") to corresponding Bazel implicit output targets.
-	if !convertedToBazel(ctx, module) {
+	if !convertedToBazel(ctx, module) || isGoModule(module) {
 		return bp2buildModuleLabel(ctx, module)
 	}
 	b, _ := module.(Bazelable)
@@ -458,10 +495,13 @@ func samePackage(label1, label2 string) bool {
 }
 
 func bp2buildModuleLabel(ctx BazelConversionContext, module blueprint.Module) string {
-	moduleName := moduleNameWithPossibleOverride(ctx, module)
-	moduleDir := moduleDirWithPossibleOverride(ctx, module)
+	moduleName := moduleNameWithPossibleOverride(ctx, module, ctx.OtherModuleName(module))
+	moduleDir := moduleDirWithPossibleOverride(ctx, module, ctx.OtherModuleDir(module))
 	if moduleDir == Bp2BuildTopLevel {
 		moduleDir = ""
+	}
+	if a, ok := module.(Module); ok && IsModulePrebuilt(a) {
+		moduleName = RemoveOptionalPrebuiltPrefix(moduleName)
 	}
 	return fmt.Sprintf("//%s:%s", moduleDir, moduleName)
 }
@@ -561,7 +601,7 @@ func PathsForBazelOut(ctx PathContext, paths []string) Paths {
 // For the first two cases, they are defined using the label attribute. For the third case,
 // it's defined with the string attribute.
 func BazelStringOrLabelFromProp(
-	ctx TopDownMutatorContext,
+	ctx Bp2buildMutatorContext,
 	propToDistinguish *string) (bazel.LabelAttribute, bazel.StringAttribute) {
 
 	var labelAttr bazel.LabelAttribute

@@ -15,7 +15,6 @@
 package build
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +22,7 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -40,9 +40,6 @@ import (
 const (
 	envConfigDir = "vendor/google/tools/soong_config"
 	jsonSuffix   = "json"
-
-	configFetcher         = "vendor/google/tools/soong/expconfigfetcher"
-	envConfigFetchTimeout = 20 * time.Second
 )
 
 var (
@@ -74,7 +71,6 @@ type configImpl struct {
 	checkbuild               bool
 	dist                     bool
 	jsonModuleGraph          bool
-	apiBp2build              bool // Generate BUILD files for Soong modules that contribute APIs
 	bp2build                 bool
 	queryview                bool
 	reportMkMetrics          bool // Collect and report mk2bp migration progress metrics.
@@ -172,87 +168,6 @@ func checkTopDir(ctx Context) {
 		}
 		ctx.Fatalln("Error verifying tree state:", err)
 	}
-}
-
-// fetchEnvConfig optionally fetches a configuration file that can then subsequently be
-// loaded into Soong environment to control certain aspects of build behavior (e.g., enabling RBE).
-// If a configuration file already exists on disk, the fetch is run in the background
-// so as to NOT block the rest of the build execution.
-func fetchEnvConfig(ctx Context, config *configImpl, envConfigName string) error {
-	configName := envConfigName + "." + jsonSuffix
-	expConfigFetcher := &smpb.ExpConfigFetcher{Filename: &configName}
-	defer func() {
-		ctx.Metrics.ExpConfigFetcher(expConfigFetcher)
-	}()
-	if !config.GoogleProdCredsExist() {
-		status := smpb.ExpConfigFetcher_MISSING_GCERT
-		expConfigFetcher.Status = &status
-		return nil
-	}
-
-	s, err := os.Stat(configFetcher)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	if s.Mode()&0111 == 0 {
-		status := smpb.ExpConfigFetcher_ERROR
-		expConfigFetcher.Status = &status
-		return fmt.Errorf("configuration fetcher binary %v is not executable: %v", configFetcher, s.Mode())
-	}
-
-	configExists := false
-	outConfigFilePath := filepath.Join(config.OutDir(), configName)
-	if _, err := os.Stat(outConfigFilePath); err == nil {
-		configExists = true
-	}
-
-	tCtx, cancel := context.WithTimeout(ctx, envConfigFetchTimeout)
-	fetchStart := time.Now()
-	cmd := exec.CommandContext(tCtx, configFetcher, "-output_config_dir", config.OutDir(),
-		"-output_config_name", configName)
-	if err := cmd.Start(); err != nil {
-		status := smpb.ExpConfigFetcher_ERROR
-		expConfigFetcher.Status = &status
-		return err
-	}
-
-	fetchCfg := func() error {
-		if err := cmd.Wait(); err != nil {
-			status := smpb.ExpConfigFetcher_ERROR
-			expConfigFetcher.Status = &status
-			return err
-		}
-		fetchEnd := time.Now()
-		expConfigFetcher.Micros = proto.Uint64(uint64(fetchEnd.Sub(fetchStart).Microseconds()))
-		expConfigFetcher.Filename = proto.String(outConfigFilePath)
-
-		if _, err := os.Stat(outConfigFilePath); err != nil {
-			status := smpb.ExpConfigFetcher_NO_CONFIG
-			expConfigFetcher.Status = &status
-			return err
-		}
-		status := smpb.ExpConfigFetcher_CONFIG
-		expConfigFetcher.Status = &status
-		return nil
-	}
-
-	// If a config file does not exist, wait for the config file to be fetched. Otherwise
-	// fetch the config file in the background and return immediately.
-	if !configExists {
-		defer cancel()
-		return fetchCfg()
-	}
-
-	go func() {
-		defer cancel()
-		if err := fetchCfg(); err != nil {
-			ctx.Verbosef("Failed to fetch config file %v: %v\n", configName, err)
-		}
-	}()
-	return nil
 }
 
 func loadEnvConfig(ctx Context, config *configImpl, bc string) error {
@@ -368,11 +283,13 @@ func NewConfig(ctx Context, args ...string) Config {
 	bc := os.Getenv("ANDROID_BUILD_ENVIRONMENT_CONFIG")
 
 	if bc != "" {
-		if err := fetchEnvConfig(ctx, ret, bc); err != nil {
-			ctx.Verbosef("Failed to fetch config file: %v\n", err)
-		}
 		if err := loadEnvConfig(ctx, ret, bc); err != nil {
 			ctx.Fatalln("Failed to parse env config files: %v", err)
+		}
+		if !ret.canSupportRBE() {
+			// Explicitly set USE_RBE env variable to false when we cannot run
+			// an RBE build to avoid ninja local execution pool issues.
+			ret.environ.Set("USE_RBE", "false")
 		}
 	}
 
@@ -520,6 +437,11 @@ func NewConfig(ctx Context, args ...string) Config {
 	ret.environ.Set("ANDROID_JAVA11_HOME", java11Home)
 	ret.environ.Set("PATH", strings.Join(newPath, string(filepath.ListSeparator)))
 
+	// b/286885495, https://bugzilla.redhat.com/show_bug.cgi?id=2227130: some versions of Fedora include patches
+	// to unzip to enable zipbomb detection that incorrectly handle zip64 and data descriptors and fail on large
+	// zip files produced by soong_zip.  Disable zipbomb detection.
+	ret.environ.Set("UNZIP_DISABLE_ZIPBOMB_DETECTION", "TRUE")
+
 	if ret.MultitreeBuild() {
 		ret.environ.Set("MULTITREE_BUILD", "true")
 	}
@@ -533,6 +455,16 @@ func NewConfig(ctx Context, args ...string) Config {
 	}
 
 	ret.environ.Set("BUILD_DATETIME_FILE", buildDateTimeFile)
+
+	if _, ok := ret.environ.Get("BUILD_USERNAME"); !ok {
+		username := "unknown"
+		if u, err := user.Current(); err == nil {
+			username = u.Username
+		} else {
+			ctx.Println("Failed to get current user:", err)
+		}
+		ret.environ.Set("BUILD_USERNAME", username)
+	}
 
 	if ret.UseRBE() {
 		for k, v := range getRBEVars(ctx, Config{ret}) {
@@ -947,8 +879,6 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			c.jsonModuleGraph = true
 		} else if arg == "bp2build" {
 			c.bp2build = true
-		} else if arg == "api_bp2build" {
-			c.apiBp2build = true
 		} else if arg == "queryview" {
 			c.queryview = true
 		} else if arg == "soong_docs" {
@@ -1048,7 +978,7 @@ func (c *configImpl) SoongBuildInvocationNeeded() bool {
 		return true
 	}
 
-	if !c.JsonModuleGraph() && !c.Bp2Build() && !c.Queryview() && !c.SoongDocs() && !c.ApiBp2build() {
+	if !c.JsonModuleGraph() && !c.Bp2Build() && !c.Queryview() && !c.SoongDocs() {
 		// Command line was empty, the default Ninja target is built
 		return true
 	}
@@ -1146,10 +1076,6 @@ func (c *configImpl) QueryviewMarkerFile() string {
 	return shared.JoinPath(c.SoongOutDir(), "queryview.marker")
 }
 
-func (c *configImpl) ApiBp2buildMarkerFile() string {
-	return shared.JoinPath(c.SoongOutDir(), "api_bp2build.marker")
-}
-
 func (c *configImpl) ModuleGraphFile() string {
 	return shared.JoinPath(c.SoongOutDir(), "module-graph.json")
 }
@@ -1189,10 +1115,6 @@ func (c *configImpl) JsonModuleGraph() bool {
 
 func (c *configImpl) Bp2Build() bool {
 	return c.bp2build
-}
-
-func (c *configImpl) ApiBp2build() bool {
-	return c.apiBp2build
 }
 
 func (c *configImpl) Queryview() bool {
@@ -1374,18 +1296,26 @@ func (c *configImpl) StartGoma() bool {
 	return true
 }
 
-func (c *configImpl) UseRBE() bool {
-	// These alternate modes of running Soong do not use RBE / reclient.
-	if c.Bp2Build() || c.Queryview() || c.ApiBp2build() || c.JsonModuleGraph() {
-		return false
-	}
-
-	authType, _ := c.rbeAuth()
+func (c *configImpl) canSupportRBE() bool {
 	// Do not use RBE with prod credentials in scenarios when stubby doesn't exist, since
 	// its unlikely that we will be able to obtain necessary creds without stubby.
+	authType, _ := c.rbeAuth()
 	if !c.StubbyExists() && strings.Contains(authType, "use_google_prod_creds") {
 		return false
 	}
+	return true
+}
+
+func (c *configImpl) UseRBE() bool {
+	// These alternate modes of running Soong do not use RBE / reclient.
+	if c.Bp2Build() || c.Queryview() || c.JsonModuleGraph() {
+		return false
+	}
+
+	if !c.canSupportRBE() {
+		return false
+	}
+
 	if v, ok := c.Environment().Get("USE_RBE"); ok {
 		v = strings.TrimSpace(v)
 		if v != "" && v != "false" {

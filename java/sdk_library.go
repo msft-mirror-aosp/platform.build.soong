@@ -286,6 +286,17 @@ func (scopes apiScopes) Strings(accessor func(*apiScope) string) []string {
 	return list
 }
 
+// Method that maps the apiScopes properties to the index of each apiScopes elements.
+// apiScopes property to be used as the key can be specified with the input accessor.
+// Only a string property of apiScope can be used as the key of the map.
+func (scopes apiScopes) MapToIndex(accessor func(*apiScope) string) map[string]int {
+	ret := make(map[string]int)
+	for i, scope := range scopes {
+		ret[accessor(scope)] = i
+	}
+	return ret
+}
+
 var (
 	scopeByName    = make(map[string]*apiScope)
 	allScopeNames  []string
@@ -386,6 +397,23 @@ var (
 		apiScopeTest,
 		apiScopeModuleLib,
 		apiScopeSystemServer,
+	}
+	apiLibraryAdditionalProperties = map[string]struct {
+		FullApiSurfaceStubLib     string
+		AdditionalApiContribution string
+	}{
+		"legacy.i18n.module.platform.api": {
+			FullApiSurfaceStubLib:     "legacy.core.platform.api.stubs",
+			AdditionalApiContribution: "i18n.module.public.api.stubs.source.api.contribution",
+		},
+		"stable.i18n.module.platform.api": {
+			FullApiSurfaceStubLib:     "stable.core.platform.api.stubs",
+			AdditionalApiContribution: "i18n.module.public.api.stubs.source.api.contribution",
+		},
+		"conscrypt.module.platform.api": {
+			FullApiSurfaceStubLib:     "stable.core.platform.api.stubs",
+			AdditionalApiContribution: "conscrypt.module.public.api.stubs.source.api.contribution",
+		},
 	}
 )
 
@@ -1513,6 +1541,29 @@ func (module *SdkLibrary) contributesToApiSurface(c android.Config) bool {
 	return exists
 }
 
+// The listed modules are the special java_sdk_libraries where apiScope.kind do not match the
+// api surface that the module contribute to. For example, the public droidstubs and java_library
+// do not contribute to the public api surface, but contributes to the core platform api surface.
+// This method returns the full api surface stub lib that
+// the generated java_api_library should depend on.
+func (module *SdkLibrary) alternativeFullApiSurfaceStubLib() string {
+	if val, ok := apiLibraryAdditionalProperties[module.Name()]; ok {
+		return val.FullApiSurfaceStubLib
+	}
+	return ""
+}
+
+// The listed modules' stubs contents do not match the corresponding txt files,
+// but require additional api contributions to generate the full stubs.
+// This method returns the name of the additional api contribution module
+// for corresponding sdk_library modules.
+func (module *SdkLibrary) apiLibraryAdditionalApiContribution() string {
+	if val, ok := apiLibraryAdditionalProperties[module.Name()]; ok {
+		return val.AdditionalApiContribution
+	}
+	return ""
+}
+
 func childModuleVisibility(childVisibility []string) []string {
 	if childVisibility == nil {
 		// No child visibility set. The child will use the visibility of the sdk_library.
@@ -1593,7 +1644,7 @@ func (module *SdkLibrary) createStubsLibrary(mctx android.DefaultableHookContext
 	}{}
 
 	props.Name = proptools.StringPtr(module.sourceStubLibraryModuleName(apiScope))
-	props.Visibility = childModuleVisibility(module.sdkLibraryProperties.Stubs_library_visibility)
+	props.Visibility = []string{"//visibility:override", "//visibility:private"}
 	// sources are generated from the droiddoc
 	props.Srcs = []string{":" + module.stubsSourceModuleName(apiScope)}
 	sdkVersion := module.sdkVersionForStubsLibrary(mctx, apiScope)
@@ -1778,7 +1829,7 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 	mctx.CreateModule(DroidstubsFactory, &props).(*Droidstubs).CallHookIfAvailable(mctx)
 }
 
-func (module *SdkLibrary) createApiLibrary(mctx android.DefaultableHookContext, apiScope *apiScope) {
+func (module *SdkLibrary) createApiLibrary(mctx android.DefaultableHookContext, apiScope *apiScope, alternativeFullApiSurfaceStub string) {
 	props := struct {
 		Name                  *string
 		Visibility            []string
@@ -1789,7 +1840,7 @@ func (module *SdkLibrary) createApiLibrary(mctx android.DefaultableHookContext, 
 	}{}
 
 	props.Name = proptools.StringPtr(module.apiLibraryModuleName(apiScope))
-	props.Visibility = childModuleVisibility(module.sdkLibraryProperties.Stubs_library_visibility)
+	props.Visibility = []string{"//visibility:override", "//visibility:private"}
 
 	apiContributions := []string{}
 
@@ -1801,13 +1852,22 @@ func (module *SdkLibrary) createApiLibrary(mctx android.DefaultableHookContext, 
 		apiContributions = append(apiContributions, module.stubsSourceModuleName(scope)+".api.contribution")
 		scope = scope.extends
 	}
+	if apiScope == apiScopePublic {
+		additionalApiContribution := module.apiLibraryAdditionalApiContribution()
+		if additionalApiContribution != "" {
+			apiContributions = append(apiContributions, additionalApiContribution)
+		}
+	}
 
 	props.Api_contributions = apiContributions
 	props.Libs = module.properties.Libs
 	props.Libs = append(props.Libs, module.sdkLibraryProperties.Stub_only_libs...)
 	props.Libs = append(props.Libs, "stub-annotations")
 	props.Static_libs = module.sdkLibraryProperties.Stub_only_static_libs
-	props.Full_api_surface_stub = proptools.StringPtr(apiScope.kind.DefaultJavaLibraryName() + ".from-text")
+	props.Full_api_surface_stub = proptools.StringPtr(apiScope.kind.DefaultJavaLibraryName())
+	if alternativeFullApiSurfaceStub != "" {
+		props.Full_api_surface_stub = proptools.StringPtr(alternativeFullApiSurfaceStub)
+	}
 
 	// android_module_lib_stubs_current.from-text only comprises api contributions from art, conscrypt and i18n.
 	// Thus, replace with android_module_lib_stubs_current_full.from-text, which comprises every api domains.
@@ -2062,9 +2122,13 @@ func (module *SdkLibrary) CreateInternalModules(mctx android.DefaultableHookCont
 
 		module.createStubsLibrary(mctx, scope)
 
-		contributesToApiSurface := module.contributesToApiSurface(mctx.Config())
+		alternativeFullApiSurfaceStubLib := ""
+		if scope == apiScopePublic {
+			alternativeFullApiSurfaceStubLib = module.alternativeFullApiSurfaceStubLib()
+		}
+		contributesToApiSurface := module.contributesToApiSurface(mctx.Config()) || alternativeFullApiSurfaceStubLib != ""
 		if contributesToApiSurface {
-			module.createApiLibrary(mctx, scope)
+			module.createApiLibrary(mctx, scope, alternativeFullApiSurfaceStubLib)
 		}
 
 		module.createTopLevelStubsLibrary(mctx, scope, contributesToApiSurface)
@@ -2223,27 +2287,25 @@ func SdkLibraryFactory() android.Module {
 }
 
 type bazelSdkLibraryAttributes struct {
-	Public        bazel.StringAttribute
-	System        bazel.StringAttribute
-	Test          bazel.StringAttribute
-	Module_lib    bazel.StringAttribute
-	System_server bazel.StringAttribute
+	Public        *bazel.Label
+	System        *bazel.Label
+	Test          *bazel.Label
+	Module_lib    *bazel.Label
+	System_server *bazel.Label
 }
 
 // java_sdk_library bp2build converter
-func (module *SdkLibrary) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (module *SdkLibrary) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	if ctx.ModuleType() != "java_sdk_library" {
 		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_TYPE_UNSUPPORTED, "")
 		return
 	}
 
-	nameToAttr := make(map[string]bazel.StringAttribute)
+	nameToAttr := make(map[string]*bazel.Label)
 
 	for _, scope := range module.getGeneratedApiScopes(ctx) {
-		apiSurfaceFile := path.Join(module.getApiDir(), scope.apiFilePrefix+"current.txt")
-		var scopeStringAttribute bazel.StringAttribute
-		scopeStringAttribute.SetValue(apiSurfaceFile)
-		nameToAttr[scope.name] = scopeStringAttribute
+		apiSurfaceFile := android.BazelLabelForModuleSrcSingle(ctx, path.Join(module.getApiDir(), scope.apiFilePrefix+"current.txt"))
+		nameToAttr[scope.name] = &apiSurfaceFile
 	}
 
 	attrs := bazelSdkLibraryAttributes{
@@ -2302,6 +2364,7 @@ type sdkLibraryImportProperties struct {
 type SdkLibraryImport struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
+	android.BazelModuleBase
 	prebuilt android.Prebuilt
 	android.ApexModuleBase
 
@@ -2385,6 +2448,7 @@ func sdkLibraryImportFactory() android.Module {
 
 	android.InitPrebuiltModule(module, &[]string{""})
 	android.InitApexModule(module)
+	android.InitBazelModule(module)
 	InitJavaModule(module, android.HostAndDeviceSupported)
 
 	module.SetDefaultableHook(func(mctx android.DefaultableHookContext) {
@@ -2393,6 +2457,33 @@ func sdkLibraryImportFactory() android.Module {
 		}
 	})
 	return module
+}
+
+// java_sdk_library bp2build converter
+func (i *SdkLibraryImport) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
+	nameToAttr := make(map[string]*bazel.Label)
+
+	for scope, props := range i.scopeProperties {
+		if api := proptools.String(props.Current_api); api != "" {
+			apiSurfaceFile := android.BazelLabelForModuleSrcSingle(ctx, api)
+			nameToAttr[scope.name] = &apiSurfaceFile
+		}
+	}
+
+	attrs := bazelSdkLibraryAttributes{
+		Public:        nameToAttr["public"],
+		System:        nameToAttr["system"],
+		Test:          nameToAttr["test"],
+		Module_lib:    nameToAttr["module-lib"],
+		System_server: nameToAttr["system-server"],
+	}
+	props := bazel.BazelTargetModuleProperties{
+		Rule_class:        "java_sdk_library",
+		Bzl_load_location: "//build/bazel/rules/java:sdk_library.bzl",
+	}
+
+	name := android.RemoveOptionalPrebuiltPrefix(i.Name())
+	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: name}, &attrs)
 }
 
 var _ PermittedPackagesForUpdatableBootJars = (*SdkLibraryImport)(nil)
@@ -2425,6 +2516,10 @@ func (module *SdkLibraryImport) createInternalModules(mctx android.DefaultableHo
 
 		if len(scopeProperties.Stub_srcs) > 0 {
 			module.createPrebuiltStubsSources(mctx, apiScope, scopeProperties)
+		}
+
+		if scopeProperties.Current_api != nil {
+			module.createPrebuiltApiContribution(mctx, apiScope, scopeProperties)
 		}
 	}
 
@@ -2479,6 +2574,25 @@ func (module *SdkLibraryImport) createPrebuiltStubsSources(mctx android.Defaulta
 	props.CopyUserSuppliedPropertiesFromPrebuilt(&module.prebuilt)
 
 	mctx.CreateModule(PrebuiltStubsSourcesFactory, &props)
+}
+
+func (module *SdkLibraryImport) createPrebuiltApiContribution(mctx android.DefaultableHookContext, apiScope *apiScope, scopeProperties *sdkLibraryScopeProperties) {
+	api_file := scopeProperties.Current_api
+	api_surface := &apiScope.name
+
+	props := struct {
+		Name        *string
+		Api_surface *string
+		Api_file    *string
+		Visibility  []string
+	}{}
+
+	props.Name = proptools.StringPtr(module.stubsSourceModuleName(apiScope) + ".api.contribution")
+	props.Api_surface = api_surface
+	props.Api_file = api_file
+	props.Visibility = []string{"//visibility:override", "//visibility:public"}
+
+	mctx.CreateModule(ApiContributionImportFactory, &props)
 }
 
 // Add the dependencies on the child module in the component deps mutator so that it

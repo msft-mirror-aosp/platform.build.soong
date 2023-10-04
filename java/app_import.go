@@ -17,7 +17,9 @@ package java
 // This file contains the module implementations for android_app_import and android_test_import.
 
 import (
+	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/google/blueprint"
 
@@ -50,16 +52,11 @@ var (
 		Description: "Uncompress dex files",
 	})
 
-	checkJniAndDexLibsAreUncompressedRule = pctx.AndroidStaticRule("check-jni-and-dex-libs-are-uncompressed", blueprint.RuleParams{
-		// grep -v ' stor ' will search for lines that don't have ' stor '. stor means the file is stored uncompressed
-		Command: "if (zipinfo $in 'lib/*.so' '*.dex' 2>/dev/null | grep -v ' stor ' >/dev/null) ; then " +
-			"echo $in: Contains compressed JNI libraries and/or dex files >&2;" +
-			"exit 1; " +
-			"else " +
-			"touch $out; " +
-			"fi",
-		Description: "Check for compressed JNI libs or dex files",
-	})
+	checkPresignedApkRule = pctx.AndroidStaticRule("check-presigned-apk", blueprint.RuleParams{
+		Command:     "build/soong/scripts/check_prebuilt_presigned_apk.py --aapt2 ${config.Aapt2Cmd} --zipalign ${config.ZipAlign} $extraArgs $in $out",
+		CommandDeps: []string{"build/soong/scripts/check_prebuilt_presigned_apk.py", "${config.Aapt2Cmd}", "${config.ZipAlign}"},
+		Description: "Check presigned apk",
+	}, "extraArgs")
 )
 
 func RegisterAppImportBuildComponents(ctx android.RegistrationContext) {
@@ -265,6 +262,14 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 		a.hideApexVariantFromMake = true
 	}
 
+	if Bool(a.properties.Preprocessed) {
+		if a.properties.Presigned != nil && !*a.properties.Presigned {
+			ctx.ModuleErrorf("Setting preprocessed: true implies presigned: true, so you cannot set presigned to false")
+		}
+		t := true
+		a.properties.Presigned = &t
+	}
+
 	numCertPropsSet := 0
 	if String(a.properties.Certificate) != "" {
 		numCertPropsSet++
@@ -276,10 +281,8 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 		numCertPropsSet++
 	}
 	if numCertPropsSet != 1 {
-		ctx.ModuleErrorf("One and only one of certficate, presigned, and default_dev_cert properties must be set")
+		ctx.ModuleErrorf("One and only one of certficate, presigned (implied by preprocessed), and default_dev_cert properties must be set")
 	}
-
-	_, _, certificates := collectAppDeps(ctx, a, false, false)
 
 	// TODO: LOCAL_EXTRACT_APK/LOCAL_EXTRACT_DPI_APK
 	// TODO: LOCAL_PACKAGE_SPLITS
@@ -334,17 +337,20 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 	// Sign or align the package if package has not been preprocessed
 
 	if proptools.Bool(a.properties.Preprocessed) {
-		output := srcApk
-		if !proptools.Bool(a.properties.Skip_preprocessed_apk_checks) {
-			writableOutput := android.PathForModuleOut(ctx, "validated-prebuilt", apkFilename)
-			a.validatePreprocessedApk(ctx, srcApk, writableOutput)
-			output = writableOutput
-		}
+		validationStamp := a.validatePresignedApk(ctx, srcApk)
+		output := android.PathForModuleOut(ctx, apkFilename)
+		ctx.Build(pctx, android.BuildParams{
+			Rule:       android.Cp,
+			Input:      srcApk,
+			Output:     output,
+			Validation: validationStamp,
+		})
 		a.outputFile = output
 		a.certificate = PresignedCertificate
 	} else if !Bool(a.properties.Presigned) {
 		// If the certificate property is empty at this point, default_dev_cert must be set to true.
 		// Which makes processMainCert's behavior for the empty cert string WAI.
+		_, _, certificates := collectAppDeps(ctx, a, false, false)
 		a.certificate, certificates = processMainCert(a.ModuleBase, String(a.properties.Certificate), certificates, ctx)
 		signed := android.PathForModuleOut(ctx, "signed", apkFilename)
 		var lineageFile android.Path
@@ -357,8 +363,9 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 		SignAppPackage(ctx, signed, jnisUncompressed, certificates, nil, lineageFile, rotationMinSdkVersion)
 		a.outputFile = signed
 	} else {
+		validationStamp := a.validatePresignedApk(ctx, srcApk)
 		alignedApk := android.PathForModuleOut(ctx, "zip-aligned", apkFilename)
-		TransformZipAlign(ctx, alignedApk, jnisUncompressed)
+		TransformZipAlign(ctx, alignedApk, jnisUncompressed, []android.Path{validationStamp})
 		a.outputFile = alignedApk
 		a.certificate = PresignedCertificate
 	}
@@ -374,28 +381,28 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 	// TODO: androidmk converter jni libs
 }
 
-func (a *AndroidAppImport) validatePreprocessedApk(ctx android.ModuleContext, srcApk android.Path, dstApk android.WritablePath) {
-	alignmentStamp := android.PathForModuleOut(ctx, "validated-prebuilt", "alignment.stamp")
+func (a *AndroidAppImport) validatePresignedApk(ctx android.ModuleContext, srcApk android.Path) android.Path {
+	stamp := android.PathForModuleOut(ctx, "validated-prebuilt", "check.stamp")
+	var extraArgs []string
+	if a.Privileged() {
+		extraArgs = append(extraArgs, "--privileged")
+	}
+	if proptools.Bool(a.properties.Skip_preprocessed_apk_checks) {
+		extraArgs = append(extraArgs, "--skip-preprocessed-apk-checks")
+	}
+	if proptools.Bool(a.properties.Preprocessed) {
+		extraArgs = append(extraArgs, "--preprocessed")
+	}
+
 	ctx.Build(pctx, android.BuildParams{
-		Rule:   checkZipAlignment,
+		Rule:   checkPresignedApkRule,
 		Input:  srcApk,
-		Output: alignmentStamp,
-	})
-	compressionStamp := android.PathForModuleOut(ctx, "validated-prebuilt", "compression.stamp")
-	ctx.Build(pctx, android.BuildParams{
-		Rule:   checkJniAndDexLibsAreUncompressedRule,
-		Input:  srcApk,
-		Output: compressionStamp,
-	})
-	ctx.Build(pctx, android.BuildParams{
-		Rule:   android.Cp,
-		Input:  srcApk,
-		Output: dstApk,
-		Validations: []android.Path{
-			alignmentStamp,
-			compressionStamp,
+		Output: stamp,
+		Args: map[string]string{
+			"extraArgs": strings.Join(extraArgs, " "),
 		},
 	})
+	return stamp
 }
 
 func (a *AndroidAppImport) Prebuilt() *android.Prebuilt {
@@ -408,6 +415,15 @@ func (a *AndroidAppImport) Name() string {
 
 func (a *AndroidAppImport) OutputFile() android.Path {
 	return a.outputFile
+}
+
+func (a *AndroidAppImport) OutputFiles(tag string) (android.Paths, error) {
+	switch tag {
+	case "":
+		return []android.Path{a.outputFile}, nil
+	default:
+		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
+	}
 }
 
 func (a *AndroidAppImport) JacocoReportClassesFile() android.Path {

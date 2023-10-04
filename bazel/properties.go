@@ -194,14 +194,7 @@ func (ll *LabelList) Partition(predicate func(label Label) bool) (LabelList, Lab
 // UniqueSortedBazelLabels takes a []Label and deduplicates the labels, and returns
 // the slice in a sorted order.
 func UniqueSortedBazelLabels(originalLabels []Label) []Label {
-	uniqueLabelsSet := make(map[Label]bool)
-	for _, l := range originalLabels {
-		uniqueLabelsSet[l] = true
-	}
-	var uniqueLabels []Label
-	for l, _ := range uniqueLabelsSet {
-		uniqueLabels = append(uniqueLabels, l)
-	}
+	uniqueLabels := FirstUniqueBazelLabels(originalLabels)
 	sort.SliceStable(uniqueLabels, func(i, j int) bool {
 		return uniqueLabels[i].Label < uniqueLabels[j].Label
 	})
@@ -210,13 +203,13 @@ func UniqueSortedBazelLabels(originalLabels []Label) []Label {
 
 func FirstUniqueBazelLabels(originalLabels []Label) []Label {
 	var labels []Label
-	found := make(map[Label]bool, len(originalLabels))
+	found := make(map[string]bool, len(originalLabels))
 	for _, l := range originalLabels {
-		if _, ok := found[l]; ok {
+		if _, ok := found[l.Label]; ok {
 			continue
 		}
 		labels = append(labels, l)
-		found[l] = true
+		found[l.Label] = true
 	}
 	return labels
 }
@@ -285,6 +278,41 @@ func SubtractBazelLabelList(haystack LabelList, needle LabelList) LabelList {
 	result.Includes = SubtractBazelLabels(haystack.Includes, needle.Includes)
 	// NOTE: Excludes are intentionally not subtracted
 	result.Excludes = haystack.Excludes
+	return result
+}
+
+// FirstUniqueBazelLabelListAttribute takes a LabelListAttribute and makes the LabelList for
+// each axis/configuration by keeping the first instance of a Label and omitting all subsequent
+// repetitions.
+func FirstUniqueBazelLabelListAttribute(attr LabelListAttribute) LabelListAttribute {
+	var result LabelListAttribute
+	result.Value = FirstUniqueBazelLabelList(attr.Value)
+	if attr.HasConfigurableValues() {
+		result.ConfigurableValues = make(configurableLabelLists)
+	}
+	for axis, configToLabels := range attr.ConfigurableValues {
+		for c, l := range configToLabels {
+			result.SetSelectValue(axis, c, FirstUniqueBazelLabelList(l))
+		}
+	}
+
+	return result
+}
+
+// SubtractBazelLabelListAttribute subtract needle from haystack for LabelList in each
+// axis/configuration.
+func SubtractBazelLabelListAttribute(haystack LabelListAttribute, needle LabelListAttribute) LabelListAttribute {
+	var result LabelListAttribute
+	result.Value = SubtractBazelLabelList(haystack.Value, needle.Value)
+	if haystack.HasConfigurableValues() {
+		result.ConfigurableValues = make(configurableLabelLists)
+	}
+	for axis, configToLabels := range haystack.ConfigurableValues {
+		for haystackConfig, haystackLabels := range configToLabels {
+			result.SetSelectValue(axis, haystackConfig, SubtractBazelLabelList(haystackLabels, needle.SelectValue(axis, haystackConfig)))
+		}
+	}
+
 	return result
 }
 
@@ -398,7 +426,7 @@ func (la *LabelAttribute) SetSelectValue(axis ConfigurationAxis, config string, 
 	switch axis.configurationType {
 	case noConfig:
 		la.Value = &value
-	case arch, os, osArch, productVariables, osAndInApex:
+	case arch, os, osArch, productVariables, osAndInApex, sanitizersEnabled:
 		if la.ConfigurableValues == nil {
 			la.ConfigurableValues = make(configurableLabels)
 		}
@@ -414,7 +442,7 @@ func (la *LabelAttribute) SelectValue(axis ConfigurationAxis, config string) *La
 	switch axis.configurationType {
 	case noConfig:
 		return la.Value
-	case arch, os, osArch, productVariables, osAndInApex:
+	case arch, os, osArch, productVariables, osAndInApex, sanitizersEnabled:
 		return la.ConfigurableValues[axis][config]
 	default:
 		panic(fmt.Errorf("Unrecognized ConfigurationAxis %s", axis))
@@ -484,7 +512,7 @@ func (ba *BoolAttribute) SetSelectValue(axis ConfigurationAxis, config string, v
 	switch axis.configurationType {
 	case noConfig:
 		ba.Value = value
-	case arch, os, osArch, productVariables, osAndInApex:
+	case arch, os, osArch, productVariables, osAndInApex, sanitizersEnabled:
 		if ba.ConfigurableValues == nil {
 			ba.ConfigurableValues = make(configurableBools)
 		}
@@ -631,7 +659,7 @@ func (ba BoolAttribute) SelectValue(axis ConfigurationAxis, config string) *bool
 	switch axis.configurationType {
 	case noConfig:
 		return ba.Value
-	case arch, os, osArch, productVariables, osAndInApex:
+	case arch, os, osArch, productVariables, osAndInApex, sanitizersEnabled:
 		if v, ok := ba.ConfigurableValues[axis][config]; ok {
 			return &v
 		} else {
@@ -766,7 +794,7 @@ func (lla *LabelListAttribute) SetSelectValue(axis ConfigurationAxis, config str
 	switch axis.configurationType {
 	case noConfig:
 		lla.Value = list
-	case arch, os, osArch, productVariables, osAndInApex, inApex:
+	case arch, os, osArch, productVariables, osAndInApex, inApex, errorProneDisabled, sanitizersEnabled:
 		if lla.ConfigurableValues == nil {
 			lla.ConfigurableValues = make(configurableLabelLists)
 		}
@@ -782,7 +810,7 @@ func (lla *LabelListAttribute) SelectValue(axis ConfigurationAxis, config string
 	switch axis.configurationType {
 	case noConfig:
 		return lla.Value
-	case arch, os, osArch, productVariables, osAndInApex, inApex:
+	case arch, os, osArch, productVariables, osAndInApex, inApex, errorProneDisabled, sanitizersEnabled:
 		return lla.ConfigurableValues[axis][config]
 	default:
 		panic(fmt.Errorf("Unrecognized ConfigurationAxis %s", axis))
@@ -1140,7 +1168,7 @@ func (sa *StringAttribute) SetSelectValue(axis ConfigurationAxis, config string,
 	switch axis.configurationType {
 	case noConfig:
 		sa.Value = str
-	case arch, os, osArch, productVariables:
+	case arch, os, osArch, productVariables, sanitizersEnabled:
 		if sa.ConfigurableValues == nil {
 			sa.ConfigurableValues = make(configurableStrings)
 		}
@@ -1156,7 +1184,7 @@ func (sa *StringAttribute) SelectValue(axis ConfigurationAxis, config string) *s
 	switch axis.configurationType {
 	case noConfig:
 		return sa.Value
-	case arch, os, osArch, productVariables:
+	case arch, os, osArch, productVariables, sanitizersEnabled:
 		if v, ok := sa.ConfigurableValues[axis][config]; ok {
 			return v
 		} else {
@@ -1346,7 +1374,7 @@ func (sla *StringListAttribute) SetSelectValue(axis ConfigurationAxis, config st
 	switch axis.configurationType {
 	case noConfig:
 		sla.Value = list
-	case arch, os, osArch, productVariables, osAndInApex:
+	case arch, os, osArch, productVariables, osAndInApex, errorProneDisabled, sanitizersEnabled:
 		if sla.ConfigurableValues == nil {
 			sla.ConfigurableValues = make(configurableStringLists)
 		}
@@ -1362,7 +1390,7 @@ func (sla *StringListAttribute) SelectValue(axis ConfigurationAxis, config strin
 	switch axis.configurationType {
 	case noConfig:
 		return sla.Value
-	case arch, os, osArch, productVariables, osAndInApex:
+	case arch, os, osArch, productVariables, osAndInApex, errorProneDisabled, sanitizersEnabled:
 		return sla.ConfigurableValues[axis][config]
 	default:
 		panic(fmt.Errorf("Unrecognized ConfigurationAxis %s", axis))

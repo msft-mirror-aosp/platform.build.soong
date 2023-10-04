@@ -200,7 +200,7 @@ func TestCcObjectProductVariable(t *testing.T) {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_object", "foo", AttrNameToString{
 				"asflags": `select({
-        "//build/bazel/product_variables:platform_sdk_version": ["-DPLATFORM_SDK_VERSION=$(Platform_sdk_version)"],
+        "//build/bazel/product_config/config_settings:platform_sdk_version": ["-DPLATFORM_SDK_VERSION=$(Platform_sdk_version)"],
         "//conditions:default": [],
     })`,
 				"copts":               `["-fno-addrsig"]`,
@@ -317,7 +317,8 @@ func TestCcObjectLinkerScript(t *testing.T) {
 
 func TestCcObjectDepsAndLinkerScriptSelects(t *testing.T) {
 	runCcObjectTestCase(t, Bp2buildTestCase{
-		Description: "cc_object setting deps and linker_script across archs",
+		Description:             "cc_object setting deps and linker_script across archs",
+		StubbedBuildDefinitions: []string{"x86_obj", "x86_64_obj", "arm_obj"},
 		Blueprint: `cc_object {
     name: "foo",
     srcs: ["base.cpp"],
@@ -343,7 +344,6 @@ cc_object {
     system_shared_libs: [],
     srcs: ["x86.cpp"],
     include_build_directory: false,
-    bazel_module: { bp2build_available: false },
 }
 
 cc_object {
@@ -351,7 +351,6 @@ cc_object {
     system_shared_libs: [],
     srcs: ["x86_64.cpp"],
     include_build_directory: false,
-    bazel_module: { bp2build_available: false },
 }
 
 cc_object {
@@ -359,7 +358,6 @@ cc_object {
     system_shared_libs: [],
     srcs: ["arm.cpp"],
     include_build_directory: false,
-    bazel_module: { bp2build_available: false },
 }
 `,
 		ExpectedBazelTargets: []string{

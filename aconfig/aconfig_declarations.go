@@ -15,15 +15,18 @@
 package aconfig
 
 import (
-	"android/soong/android"
 	"fmt"
-	"github.com/google/blueprint"
 	"strings"
+
+	"android/soong/android"
+	"android/soong/bazel"
+	"github.com/google/blueprint"
 )
 
 type DeclarationsModule struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
+	android.BazelModuleBase
 
 	// Properties for "aconfig_declarations"
 	properties struct {
@@ -46,8 +49,7 @@ func DeclarationsFactory() android.Module {
 	android.InitAndroidModule(module)
 	android.InitDefaultableModule(module)
 	module.AddProperties(&module.properties)
-	// TODO: bp2build
-	//android.InitBazelModule(module)
+	android.InitBazelModule(module)
 
 	return module
 }
@@ -72,7 +74,9 @@ func (module *DeclarationsModule) DepsMutator(ctx android.BottomUpMutatorContext
 	// RELEASE_ACONFIG_VALUE_SETS, and add any aconfig_values that
 	// match our package.
 	valuesFromConfig := ctx.Config().ReleaseAconfigValueSets()
-	ctx.AddDependency(ctx.Module(), implicitValuesTag, valuesFromConfig...)
+	if valuesFromConfig != "" {
+		ctx.AddDependency(ctx.Module(), implicitValuesTag, valuesFromConfig)
+	}
 }
 
 func (module *DeclarationsModule) OutputFiles(tag string) (android.Paths, error) {
@@ -96,6 +100,15 @@ func joinAndPrefix(prefix string, values []string) string {
 	return sb.String()
 }
 
+func optionalVariable(prefix string, value string) string {
+	var sb strings.Builder
+	if value != "" {
+		sb.WriteString(prefix)
+		sb.WriteString(value)
+	}
+	return sb.String()
+}
+
 // Provider published by aconfig_value_set
 type declarationsProviderData struct {
 	Package          string
@@ -106,32 +119,40 @@ var declarationsProviderKey = blueprint.NewProvider(declarationsProviderData{})
 
 func (module *DeclarationsModule) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// Get the values that came from the global RELEASE_ACONFIG_VALUE_SETS flag
+	valuesFiles := make([]android.Path, 0)
 	ctx.VisitDirectDeps(func(dep android.Module) {
 		if !ctx.OtherModuleHasProvider(dep, valueSetProviderKey) {
 			// Other modules get injected as dependencies too, for example the license modules
 			return
 		}
 		depData := ctx.OtherModuleProvider(dep, valueSetProviderKey).(valueSetProviderData)
-		valuesFiles, ok := depData.AvailablePackages[module.properties.Package]
+		paths, ok := depData.AvailablePackages[module.properties.Package]
 		if ok {
-			for _, path := range valuesFiles {
+			valuesFiles = append(valuesFiles, paths...)
+			for _, path := range paths {
 				module.properties.Values = append(module.properties.Values, path.String())
 			}
 		}
 	})
 
 	// Intermediate format
-	inputFiles := android.PathsForModuleSrc(ctx, module.properties.Srcs)
+	declarationFiles := android.PathsForModuleSrc(ctx, module.properties.Srcs)
 	intermediatePath := android.PathForModuleOut(ctx, "intermediate.pb")
+	defaultPermission := ctx.Config().ReleaseAconfigFlagDefaultPermission()
+	inputFiles := make([]android.Path, len(declarationFiles))
+	copy(inputFiles, declarationFiles)
+	inputFiles = append(inputFiles, valuesFiles...)
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        aconfigRule,
-		Inputs:      inputFiles,
 		Output:      intermediatePath,
+		Inputs:      inputFiles,
 		Description: "aconfig_declarations",
 		Args: map[string]string{
-			"release_version": ctx.Config().ReleaseVersion(),
-			"package":         module.properties.Package,
-			"values":          joinAndPrefix(" --values ", module.properties.Values),
+			"release_version":    ctx.Config().ReleaseVersion(),
+			"package":            module.properties.Package,
+			"declarations":       android.JoinPathsWithPrefix(declarationFiles, "--declarations "),
+			"values":             joinAndPrefix(" --values ", module.properties.Values),
+			"default-permission": optionalVariable(" --default-permission ", defaultPermission),
 		},
 	})
 
@@ -140,4 +161,27 @@ func (module *DeclarationsModule) GenerateAndroidBuildActions(ctx android.Module
 		IntermediatePath: intermediatePath,
 	})
 
+}
+
+type bazelAconfigDeclarationsAttributes struct {
+	Srcs    bazel.LabelListAttribute
+	Package string
+}
+
+func (module *DeclarationsModule) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
+	if ctx.ModuleType() != "aconfig_declarations" {
+		return
+	}
+	srcs := bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrc(ctx, module.properties.Srcs))
+
+	attrs := bazelAconfigDeclarationsAttributes{
+		Srcs:    srcs,
+		Package: module.properties.Package,
+	}
+	props := bazel.BazelTargetModuleProperties{
+		Rule_class:        "aconfig_declarations",
+		Bzl_load_location: "//build/bazel/rules/aconfig:aconfig_declarations.bzl",
+	}
+
+	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: module.Name()}, &attrs)
 }

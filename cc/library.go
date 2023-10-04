@@ -32,6 +32,20 @@ import (
 	"github.com/google/blueprint/proptools"
 )
 
+var (
+	alwaysLinkLibraries = map[string]bool{
+		// Coverage libraries are _always_ added as a whole_static_dep. By converting as these as
+		// alwayslink = True, we can add these as to deps (e.g. as a regular static dep) in Bazel
+		// without any extra complications in cc_shared_library roots to prevent linking the same
+		// library repeatedly.
+		"libprofile-extras_ndk":               true,
+		"libprofile-extras":                   true,
+		"libprofile-clang-extras_ndk":         true,
+		"libprofile-clang-extras_cfi_support": true,
+		"libprofile-clang-extras":             true,
+	}
+)
+
 // LibraryProperties is a collection of properties shared by cc library rules/cc.
 type LibraryProperties struct {
 	// local file name to pass to the linker as -unexported_symbols_list
@@ -294,7 +308,7 @@ func stripAttrsFromLinkerAttrs(la *linkerAttributes) stripAttributes {
 	}
 }
 
-func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
+func libraryBp2Build(ctx android.Bp2buildMutatorContext, m *Module) {
 	sharedAttrs := bp2BuildParseSharedProps(ctx, m)
 	staticAttrs := bp2BuildParseStaticProps(ctx, m)
 	baseAttributes := bp2BuildParseBaseProps(ctx, m)
@@ -335,6 +349,7 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Runtime_deps:                      linkerAttrs.runtimeDeps,
 		sdkAttributes:                     bp2BuildParseSdkAttributes(m),
 		Native_coverage:                   baseAttributes.Native_coverage,
+		Additional_compiler_inputs:        compilerAttrs.additionalCompilerInputs,
 	}
 
 	includeAttrs := includesAttributes{
@@ -362,6 +377,7 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Runtime_deps:                      linkerAttrs.runtimeDeps,
 		sdkAttributes:                     bp2BuildParseSdkAttributes(m),
 		Native_coverage:                   baseAttributes.Native_coverage,
+		Additional_compiler_inputs:        compilerAttrs.additionalCompilerInputs,
 	}
 
 	staticTargetAttrs := &bazelCcLibraryStaticAttributes{
@@ -435,6 +451,10 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 		Bzl_load_location: "//build/bazel/rules/cc:cc_library_shared.bzl",
 	}
 
+	if _, ok := alwaysLinkLibraries[m.Name()]; ok {
+		staticTargetAttrs.Alwayslink = proptools.BoolPtr(true)
+	}
+
 	var tagsForStaticVariant bazel.StringListAttribute
 	if compilerAttrs.stubsSymbolFile == nil && len(compilerAttrs.stubsVersions.Value) == 0 {
 		tagsForStaticVariant = android.ApexAvailableTagsWithoutTestApexes(ctx, m)
@@ -460,7 +480,7 @@ func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
 	createStubsBazelTargetIfNeeded(ctx, m, compilerAttrs, exportedIncludes, baseAttributes)
 }
 
-func createStubsBazelTargetIfNeeded(ctx android.TopDownMutatorContext, m *Module, compilerAttrs compilerAttributes, exportedIncludes BazelIncludes, baseAttributes baseAttributes) {
+func createStubsBazelTargetIfNeeded(ctx android.Bp2buildMutatorContext, m *Module, compilerAttrs compilerAttributes, exportedIncludes BazelIncludes, baseAttributes baseAttributes) {
 	if compilerAttrs.stubsSymbolFile != nil && len(compilerAttrs.stubsVersions.Value) > 0 {
 		stubSuitesProps := bazel.BazelTargetModuleProperties{
 			Rule_class:        "cc_stub_suite",
@@ -474,6 +494,7 @@ func createStubsBazelTargetIfNeeded(ctx android.TopDownMutatorContext, m *Module
 			Soname:               &soname,
 			Source_library_label: proptools.StringPtr(m.GetBazelLabel(ctx, m)),
 			Deps:                 baseAttributes.deps,
+			Api_surface:          proptools.StringPtr("module-libapi"),
 		}
 		ctx.CreateBazelTargetModule(stubSuitesProps,
 			android.CommonAttributes{Name: m.Name() + "_stub_libs"},
@@ -494,70 +515,6 @@ func createStubsBazelTargetIfNeeded(ctx android.TopDownMutatorContext, m *Module
 		headerAlias := m.Name() + "_headers"
 		ctx.CreateBazelTargetAliasInDir(currentModuleLibApiDir, headerAlias, headerLabelInMainWorkspace)
 	}
-}
-
-func apiContributionBp2Build(ctx android.TopDownMutatorContext, module *Module) {
-	apiSurfaces := make([]string, 0)
-	apiHeaders := make([]string, 0)
-	// module-libapi for apexes (non-null `stubs` property)
-	if module.HasStubsVariants() {
-		apiSurfaces = append(apiSurfaces, android.ModuleLibApi.String())
-		apiIncludes := getModuleLibApiIncludes(ctx, module)
-		if !apiIncludes.isEmpty() {
-			createApiHeaderTarget(ctx, apiIncludes)
-			apiHeaders = append(apiHeaders, apiIncludes.name)
-		}
-	}
-	// vendorapi (non-null `llndk` property)
-	if module.HasLlndkStubs() {
-		apiSurfaces = append(apiSurfaces, android.VendorApi.String())
-		apiIncludes := getVendorApiIncludes(ctx, module)
-		if !apiIncludes.isEmpty() {
-			createApiHeaderTarget(ctx, apiIncludes)
-			apiHeaders = append(apiHeaders, apiIncludes.name)
-		}
-	}
-	// create a target only if this module contributes to an api surface
-	// TODO: Currently this does not distinguish modulelibapi-only headers and vendrorapi-only headers
-	// TODO: Update so that modulelibapi-only headers do not get exported to vendorapi (and vice-versa)
-	if len(apiSurfaces) > 0 {
-		props := bazel.BazelTargetModuleProperties{
-			Rule_class:        "cc_api_contribution",
-			Bzl_load_location: "//build/bazel/rules/apis:cc_api_contribution.bzl",
-		}
-		attrs := &bazelCcApiContributionAttributes{
-			Library_name: module.Name(),
-			Api_surfaces: bazel.MakeStringListAttribute(apiSurfaces),
-			Api:          apiLabelAttribute(ctx, module),
-			Hdrs: bazel.MakeLabelListAttribute(
-				bazel.MakeLabelListFromTargetNames(apiHeaders),
-			),
-		}
-		ctx.CreateBazelTargetModule(
-			props,
-			android.CommonAttributes{
-				Name:     android.ApiContributionTargetName(module.Name()),
-				SkipData: proptools.BoolPtr(true),
-			},
-			attrs,
-		)
-	}
-}
-
-// Native apis are versioned in a single .map.txt for all api surfaces
-// Pick any one of the .map.txt files
-func apiLabelAttribute(ctx android.TopDownMutatorContext, module *Module) bazel.LabelAttribute {
-	var apiFile *string
-	linker := module.linker.(*libraryDecorator)
-	if llndkApi := linker.Properties.Llndk.Symbol_file; llndkApi != nil {
-		apiFile = llndkApi
-	} else if moduleLibApi := linker.Properties.Stubs.Symbol_file; moduleLibApi != nil {
-		apiFile = moduleLibApi
-	} else {
-		ctx.ModuleErrorf("API surface library does not have any API file")
-	}
-	apiLabel := android.BazelLabelForModuleSrcSingle(ctx, proptools.String(apiFile)).Label
-	return *bazel.MakeLabelAttribute(apiLabel)
 }
 
 // wrapper struct to flatten the arch and os specific export_include_dirs
@@ -1963,6 +1920,10 @@ func (library *libraryDecorator) optInAbiDiff(ctx android.ModuleContext, referen
 
 	libName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 	errorMessage := "error: Please update ABI references with: $$ANDROID_BUILD_TOP/development/vndk/tools/header-checker/utils/create_reference_dumps.py -l " + libName + " -ref-dump-dir $$ANDROID_BUILD_TOP/" + refDumpDir
+	// Most opt-in libraries do not have dumps for all default architectures.
+	if ctx.Config().HasDeviceProduct() {
+		errorMessage += " -products " + ctx.Config().DeviceProduct()
+	}
 
 	library.sourceAbiDiff(ctx, referenceDump, baseName, nameExt,
 		isLlndkOrNdk, false /* allowExtensions */, "current", errorMessage)
@@ -2271,7 +2232,7 @@ func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 
 			// do not install vndk libs
 			// vndk libs are packaged into VNDK APEX
-			if ctx.isVndk() && !ctx.IsVndkExt() {
+			if ctx.isVndk() && !ctx.IsVndkExt() && !ctx.Config().IsVndkDeprecated() {
 				return
 			}
 		} else if library.hasStubsVariants() && !ctx.Host() && ctx.directlyInAnyApex() {
@@ -2861,7 +2822,7 @@ func maybeInjectBoringSSLHash(ctx android.ModuleContext, outputFile android.Modu
 	return outputFile
 }
 
-func bp2buildParseAbiCheckerProps(ctx android.TopDownMutatorContext, module *Module) bazelCcHeaderAbiCheckerAttributes {
+func bp2buildParseAbiCheckerProps(ctx android.Bp2buildMutatorContext, module *Module) bazelCcHeaderAbiCheckerAttributes {
 	lib, ok := module.linker.(*libraryDecorator)
 	if !ok {
 		return bazelCcHeaderAbiCheckerAttributes{}
@@ -2884,7 +2845,7 @@ func bp2buildParseAbiCheckerProps(ctx android.TopDownMutatorContext, module *Mod
 	return abiCheckerAttrs
 }
 
-func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Module, isStatic bool) {
+func sharedOrStaticLibraryBp2Build(ctx android.Bp2buildMutatorContext, module *Module, isStatic bool) {
 	baseAttributes := bp2BuildParseBaseProps(ctx, module)
 	compilerAttrs := baseAttributes.compilerAttributes
 	linkerAttrs := baseAttributes.linkerAttributes
@@ -2940,6 +2901,7 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 		sdkAttributes:                     bp2BuildParseSdkAttributes(module),
 		Runtime_deps:                      linkerAttrs.runtimeDeps,
 		Native_coverage:                   baseAttributes.Native_coverage,
+		Additional_compiler_inputs:        compilerAttrs.additionalCompilerInputs,
 	}
 
 	module.convertTidyAttributes(ctx, &commonAttrs.tidyAttributes)
@@ -2947,6 +2909,10 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 	var attrs interface{}
 	if isStatic {
 		commonAttrs.Deps.Add(baseAttributes.protoDependency)
+		var alwayslink *bool
+		if _, ok := alwaysLinkLibraries[module.Name()]; ok && isStatic {
+			alwayslink = proptools.BoolPtr(true)
+		}
 		attrs = &bazelCcLibraryStaticAttributes{
 			staticOrSharedAttributes: commonAttrs,
 			Rtti:                     compilerAttrs.rtti,
@@ -2960,8 +2926,10 @@ func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Mo
 			Conlyflags: compilerAttrs.conlyFlags,
 			Asflags:    asFlags,
 
-			Features: *features,
+			Alwayslink: alwayslink,
+			Features:   *features,
 		}
+
 	} else {
 		commonAttrs.Dynamic_deps.Add(baseAttributes.protoDependency)
 
@@ -3043,7 +3011,8 @@ type bazelCcLibraryStaticAttributes struct {
 	Conlyflags bazel.StringListAttribute
 	Asflags    bazel.StringListAttribute
 
-	Features bazel.StringListAttribute
+	Alwayslink *bool
+	Features   bazel.StringListAttribute
 }
 
 // TODO(b/199902614): Can this be factored to share with the other Attributes?
@@ -3089,6 +3058,7 @@ type bazelCcStubSuiteAttributes struct {
 	Source_library_label *string
 	Soname               *string
 	Deps                 bazel.LabelListAttribute
+	Api_surface          *string
 }
 
 type bazelCcHeaderAbiCheckerAttributes struct {

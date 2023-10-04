@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 func init() {
@@ -237,6 +238,14 @@ func uncheckedFinalApiLevel(num int) ApiLevel {
 	}
 }
 
+func uncheckedFinalIncrementalApiLevel(num int, increment int) ApiLevel {
+	return ApiLevel{
+		value:     strconv.Itoa(num) + "." + strconv.Itoa(increment),
+		number:    num,
+		isPreview: false,
+	}
+}
+
 var NoneApiLevel = ApiLevel{
 	value: "(no version)",
 	// Not 0 because we don't want this to compare equal with the first preview.
@@ -274,10 +283,6 @@ var FirstAndroidRelrVersion = uncheckedFinalApiLevel(28)
 // obsolete and has been removed, but lld can now generate compatible packed
 // relocations itself.
 var FirstPackedRelocationsVersion = uncheckedFinalApiLevel(23)
-
-// The first API level that does not require NDK code to link
-// libandroid_support.
-var FirstNonLibAndroidSupportVersion = uncheckedFinalApiLevel(21)
 
 // LastWithoutModuleLibCoreSystemModules is the last API level where prebuilts/sdk does not contain
 // a core-for-system-modules.jar for the module-lib API scope.
@@ -373,6 +378,22 @@ func ApiLevelForTest(raw string) ApiLevel {
 
 	if raw == "current" {
 		return FutureApiLevel
+	}
+
+	if strings.Contains(raw, ".") {
+		// Check prebuilt incremental API format MM.m for major (API level) and minor (incremental) revisions
+		parts := strings.Split(raw, ".")
+		if len(parts) != 2 {
+			panic(fmt.Errorf("Found unexpected version '%s' for incremental API - expect MM.m format for incremental API with both major (MM) an minor (m) revision.", raw))
+		}
+		sdk, sdk_err := strconv.Atoi(parts[0])
+		qpr, qpr_err := strconv.Atoi(parts[1])
+		if sdk_err != nil || qpr_err != nil {
+			panic(fmt.Errorf("Unable to read version number for incremental api '%s'", raw))
+		}
+
+		apiLevel := uncheckedFinalIncrementalApiLevel(sdk, qpr)
+		return apiLevel
 	}
 
 	asInt, err := strconv.Atoi(raw)

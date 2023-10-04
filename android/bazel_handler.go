@@ -16,10 +16,13 @@ package android
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -30,10 +33,10 @@ import (
 	"android/soong/shared"
 	"android/soong/starlark_import"
 
+	"android/soong/bazel"
+
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/metrics"
-
-	"android/soong/bazel"
 )
 
 var (
@@ -184,6 +187,8 @@ type BazelContext interface {
 
 	// Returns the depsets defined in Bazel's aquery response.
 	AqueryDepsets() []bazel.AqueryDepset
+
+	QueueBazelSandwichCqueryRequests(config Config) error
 }
 
 type bazelRunner interface {
@@ -260,6 +265,10 @@ func (m MockBazelContext) QueueBazelRequest(label string, requestType cqueryRequ
 		m.BazelRequests = make(map[string]bool)
 	}
 	m.BazelRequests[key] = true
+}
+
+func (m MockBazelContext) QueueBazelSandwichCqueryRequests(config Config) error {
+	panic("unimplemented")
 }
 
 func (m MockBazelContext) GetOutputFiles(label string, _ configKey) ([]string, error) {
@@ -419,6 +428,10 @@ func (bazelCtx *mixedBuildBazelContext) GetPrebuiltFileInfo(label string, cfgKey
 }
 
 func (n noopBazelContext) QueueBazelRequest(_ string, _ cqueryRequest, _ configKey) {
+	panic("unimplemented")
+}
+
+func (n noopBazelContext) QueueBazelSandwichCqueryRequests(config Config) error {
 	panic("unimplemented")
 }
 
@@ -652,7 +665,8 @@ func (context *mixedBuildBazelContext) createBazelCommand(config Config, runName
 		command.expression,
 		"--profile=" + shared.BazelMetricsFilename(context.paths, runName),
 
-		"--host_platform=@soong_injection//product_config_platforms:mixed_builds_product-" + context.targetBuildVariant + "_" + runtime.GOOS + "_x86_64",
+		"--host_platform=@soong_injection//product_config_platforms:mixed_builds_product_" + runtime.GOOS + "_x86_64",
+		"--//build/bazel/product_config:target_build_variant=" + context.targetBuildVariant,
 		// Don't specify --platforms, because on some products/branches (like kernel-build-tools)
 		// the main platform for mixed_builds_product-variant doesn't exist because an arch isn't
 		// specified in product config. The derivative platforms that config_node transitions into
@@ -707,9 +721,9 @@ func (context *mixedBuildBazelContext) mainBzlFileContents() []byte {
 #####################################################
 def _config_node_transition_impl(settings, attr):
     if attr.os == "android" and attr.arch == "target":
-        target = "mixed_builds_product-{VARIANT}"
+        target = "mixed_builds_product"
     else:
-        target = "mixed_builds_product-{VARIANT}_%s_%s" % (attr.os, attr.arch)
+        target = "mixed_builds_product_%s_%s" % (attr.os, attr.arch)
     apex_name = ""
     if attr.within_apex:
         # //build/bazel/rules/apex:apex_name has to be set to a non_empty value,
@@ -781,11 +795,7 @@ phony_root = rule(
 )
 `
 
-	productReplacer := strings.NewReplacer(
-		"{PRODUCT}", context.targetProduct,
-		"{VARIANT}", context.targetBuildVariant)
-
-	return []byte(productReplacer.Replace(contents))
+	return []byte(contents)
 }
 
 func (context *mixedBuildBazelContext) mainBuildFileContents() []byte {
@@ -959,9 +969,9 @@ def get_arch(target):
   platform_name = platforms[0].name
   if platform_name == "host":
     return "HOST"
-  if not platform_name.startswith("mixed_builds_product-{TARGET_BUILD_VARIANT}"):
-    fail("expected platform name of the form 'mixed_builds_product-{TARGET_BUILD_VARIANT}_android_<arch>' or 'mixed_builds_product-{TARGET_BUILD_VARIANT}_linux_<arch>', but was " + str(platforms))
-  platform_name = platform_name.removeprefix("mixed_builds_product-{TARGET_BUILD_VARIANT}").removeprefix("_")
+  if not platform_name.startswith("mixed_builds_product"):
+    fail("expected platform name of the form 'mixed_builds_product_android_<arch>' or 'mixed_builds_product_linux_<arch>', but was " + str(platforms))
+  platform_name = platform_name.removeprefix("mixed_builds_product").removeprefix("_")
   config_key = ""
   if not platform_name:
     config_key = "target|android"
@@ -970,7 +980,7 @@ def get_arch(target):
   elif platform_name.startswith("linux_"):
     config_key = platform_name.removeprefix("linux_") + "|linux"
   else:
-    fail("expected platform name of the form 'mixed_builds_product-{TARGET_BUILD_VARIANT}_android_<arch>' or 'mixed_builds_product-{TARGET_BUILD_VARIANT}_linux_<arch>', but was " + str(platforms))
+    fail("expected platform name of the form 'mixed_builds_product_android_<arch>' or 'mixed_builds_product_linux_<arch>', but was " + str(platforms))
 
   within_apex = buildoptions.get("//build/bazel/rules/apex:within_apex")
   apex_sdk_version = buildoptions.get("//build/bazel/rules/apex:min_sdk_version")
@@ -999,8 +1009,6 @@ def format(target):
   return id_string + ">>NONE"
 `
 	replacer := strings.NewReplacer(
-		"{TARGET_PRODUCT}", context.targetProduct,
-		"{TARGET_BUILD_VARIANT}", context.targetBuildVariant,
 		"{LABEL_REGISTRATION_MAP_SECTION}", labelRegistrationMapSection,
 		"{FUNCTION_DEF_SECTION}", functionDefSection,
 		"{MAIN_SWITCH_SECTION}", mainSwitchSection)
@@ -1039,6 +1047,71 @@ var (
 	buildCmd         = bazelCommand{"build", "@soong_injection//mixed_builds:phonyroot"}
 	allBazelCommands = []bazelCommand{aqueryCmd, cqueryCmd, buildCmd}
 )
+
+// This can't be part of bp2build_product_config.go because it would create a circular go package dependency
+func getLabelsForBazelSandwichPartitions(variables *ProductVariables) []string {
+	targetProduct := "unknown"
+	if variables.DeviceProduct != nil {
+		targetProduct = *variables.DeviceProduct
+	}
+	currentProductFolder := fmt.Sprintf("build/bazel/products/%s", targetProduct)
+	if len(variables.PartitionVarsForBazelMigrationOnlyDoNotUse.ProductDirectory) > 0 {
+		currentProductFolder = fmt.Sprintf("%s%s", variables.PartitionVarsForBazelMigrationOnlyDoNotUse.ProductDirectory, targetProduct)
+	}
+	var ret []string
+	if variables.PartitionVarsForBazelMigrationOnlyDoNotUse.PartitionQualifiedVariables["system"].BuildingImage {
+		ret = append(ret, "@//"+currentProductFolder+":system_image")
+		ret = append(ret, "@//"+currentProductFolder+":run_system_image_test")
+	}
+	return ret
+}
+
+func GetBazelSandwichCqueryRequests(config Config) ([]cqueryKey, error) {
+	partitionLabels := getLabelsForBazelSandwichPartitions(&config.productVariables)
+	result := make([]cqueryKey, 0, len(partitionLabels))
+	labelRegex := regexp.MustCompile("^@?//([a-zA-Z0-9/_-]+):[a-zA-Z0-9_-]+$")
+	// Note that bazel "targets" are different from soong "targets", the bazel targets are
+	// synonymous with soong modules, and soong targets are a configuration a module is built in.
+	for _, target := range partitionLabels {
+		match := labelRegex.FindStringSubmatch(target)
+		if match == nil {
+			return nil, fmt.Errorf("invalid label, must match `^@?//([a-zA-Z0-9/_-]+):[a-zA-Z0-9_-]+$`: %s", target)
+		}
+
+		// change this to config.BuildOSTarget if we add host targets
+		soongTarget := config.AndroidCommonTarget
+		if soongTarget.Os.Class != Device {
+			// kernel-build-tools seems to set the AndroidCommonTarget to a linux host
+			// target for some reason, disable device builds in that case.
+			continue
+		}
+
+		result = append(result, cqueryKey{
+			label:       target,
+			requestType: cquery.GetOutputFiles,
+			configKey: configKey{
+				arch:   soongTarget.Arch.String(),
+				osType: soongTarget.Os,
+			},
+		})
+	}
+	return result, nil
+}
+
+// QueueBazelSandwichCqueryRequests queues cquery requests for all the bazel labels in
+// bazel_sandwich_targets. These will later be given phony targets so that they can be built on the
+// command line.
+func (context *mixedBuildBazelContext) QueueBazelSandwichCqueryRequests(config Config) error {
+	requests, err := GetBazelSandwichCqueryRequests(config)
+	if err != nil {
+		return err
+	}
+	for _, request := range requests {
+		context.QueueBazelRequest(request.label, request.requestType, request.configKey)
+	}
+
+	return nil
+}
 
 // Issues commands to Bazel to receive results for all cquery requests
 // queued in the BazelContext.
@@ -1222,7 +1295,11 @@ func (c *bazelSingleton) GenerateBuildActions(ctx SingletonContext) {
 		ctx.AddNinjaFileDeps(file)
 	}
 
+	depsetHashToDepset := map[string]bazel.AqueryDepset{}
+
 	for _, depset := range ctx.Config().BazelContext.AqueryDepsets() {
+		depsetHashToDepset[depset.ContentHash] = depset
+
 		var outputs []Path
 		var orderOnlies []Path
 		for _, depsetDepHash := range depset.TransitiveDepSetHashes {
@@ -1249,6 +1326,11 @@ func (c *bazelSingleton) GenerateBuildActions(ctx SingletonContext) {
 
 	executionRoot := path.Join(ctx.Config().BazelContext.OutputBase(), "execroot", "__main__")
 	bazelOutDir := path.Join(executionRoot, "bazel-out")
+	rel, err := filepath.Rel(ctx.Config().OutDir(), executionRoot)
+	if err != nil {
+		ctx.Errorf("%s", err.Error())
+	}
+	dotdotsToOutRoot := strings.Repeat("../", strings.Count(rel, "/")+1)
 	for index, buildStatement := range ctx.Config().BazelContext.BuildStatementsToRegister() {
 		// nil build statements are a valid case where we do not create an action because it is
 		// unnecessary or handled by other processing
@@ -1257,7 +1339,31 @@ func (c *bazelSingleton) GenerateBuildActions(ctx SingletonContext) {
 		}
 		if len(buildStatement.Command) > 0 {
 			rule := NewRuleBuilder(pctx, ctx)
-			createCommand(rule.Command(), buildStatement, executionRoot, bazelOutDir, ctx)
+			intermediateDir, intermediateDirHash := intermediatePathForSboxMixedBuildAction(ctx, buildStatement)
+			if buildStatement.ShouldRunInSbox {
+				// Create a rule to build the output inside a sandbox
+				// This will create two changes of working directory
+				// 1. From ANDROID_BUILD_TOP to sbox top
+				// 2. From sbox top to a a synthetic mixed build execution root relative to it
+				// Finally, the outputs will be copied to intermediateDir
+				rule.Sbox(intermediateDir,
+					PathForOutput(ctx, "mixed_build_sbox_intermediates", intermediateDirHash+".textproto")).
+					SandboxInputs().
+					// Since we will cd to mixed build execution root, set sbox's out subdir to empty
+					// Without this, we will try to copy from $SBOX_SANDBOX_DIR/out/out/bazel/output/execroot/__main__/...
+					SetSboxOutDirDirAsEmpty()
+
+				// Create another set of rules to copy files from the intermediate dir to mixed build execution root
+				for _, outputPath := range buildStatement.OutputPaths {
+					ctx.Build(pctx, BuildParams{
+						Rule:   CpIfChanged,
+						Input:  intermediateDir.Join(ctx, executionRoot, outputPath),
+						Output: PathForBazelOut(ctx, outputPath),
+					})
+				}
+			}
+			createCommand(rule.Command(), buildStatement, executionRoot, bazelOutDir, ctx, depsetHashToDepset, dotdotsToOutRoot)
+
 			desc := fmt.Sprintf("%s: %s", buildStatement.Mnemonic, buildStatement.OutputPaths)
 			rule.Build(fmt.Sprintf("bazel %d", index), desc)
 			continue
@@ -1270,9 +1376,19 @@ func (c *bazelSingleton) GenerateBuildActions(ctx SingletonContext) {
 		// because this would cause circular dependency. So, until we move aquery processing
 		// to the 'android' package, we need to handle special cases here.
 		switch buildStatement.Mnemonic {
+		case "RepoMappingManifest":
+			// It appears RepoMappingManifest files currently have
+			// non-deterministic content. Just emit empty files for
+			// now because they're unused.
+			out := PathForBazelOut(ctx, buildStatement.OutputPaths[0])
+			WriteFileRuleVerbatim(ctx, out, "")
 		case "FileWrite", "SourceSymlinkManifest":
 			out := PathForBazelOut(ctx, buildStatement.OutputPaths[0])
-			WriteFileRuleVerbatim(ctx, out, buildStatement.FileContents)
+			if buildStatement.IsExecutable {
+				WriteExecutableFileRuleVerbatim(ctx, out, buildStatement.FileContents)
+			} else {
+				WriteFileRuleVerbatim(ctx, out, buildStatement.FileContents)
+			}
 		case "SymlinkTree":
 			// build-runfiles arguments are the manifest file and the target directory
 			// where it creates the symlink tree according to this manifest (and then
@@ -1296,12 +1412,45 @@ func (c *bazelSingleton) GenerateBuildActions(ctx SingletonContext) {
 			panic(fmt.Sprintf("unhandled build statement: %v", buildStatement))
 		}
 	}
+
+	// Create phony targets for all the bazel sandwich output files
+	requests, err := GetBazelSandwichCqueryRequests(ctx.Config())
+	if err != nil {
+		ctx.Errorf(err.Error())
+	}
+	for _, request := range requests {
+		files, err := ctx.Config().BazelContext.GetOutputFiles(request.label, request.configKey)
+		if err != nil {
+			ctx.Errorf(err.Error())
+		}
+		filesAsPaths := make([]Path, 0, len(files))
+		for _, file := range files {
+			filesAsPaths = append(filesAsPaths, PathForBazelOut(ctx, file))
+		}
+		ctx.Phony("bazel_sandwich", filesAsPaths...)
+	}
+	ctx.Phony("checkbuild", PathForPhony(ctx, "bazel_sandwich"))
+}
+
+// Returns a out dir path for a sandboxed mixed build action
+func intermediatePathForSboxMixedBuildAction(ctx PathContext, statement *bazel.BuildStatement) (OutputPath, string) {
+	// An artifact can be generated by a single buildstatement.
+	// Use the hash of the first artifact to create a unique path
+	uniqueDir := sha1.New()
+	uniqueDir.Write([]byte(statement.OutputPaths[0]))
+	uniqueDirHashString := hex.EncodeToString(uniqueDir.Sum(nil))
+	return PathForOutput(ctx, "mixed_build_sbox_intermediates", uniqueDirHashString), uniqueDirHashString
 }
 
 // Register bazel-owned build statements (obtained from the aquery invocation).
-func createCommand(cmd *RuleBuilderCommand, buildStatement *bazel.BuildStatement, executionRoot string, bazelOutDir string, ctx BuilderContext) {
+func createCommand(cmd *RuleBuilderCommand, buildStatement *bazel.BuildStatement, executionRoot string, bazelOutDir string, ctx BuilderContext, depsetHashToDepset map[string]bazel.AqueryDepset, dotdotsToOutRoot string) {
 	// executionRoot is the action cwd.
-	cmd.Text(fmt.Sprintf("cd '%s' &&", executionRoot))
+	if buildStatement.ShouldRunInSbox {
+		// mkdir -p ensures that the directory exists when run via sbox
+		cmd.Text(fmt.Sprintf("mkdir -p '%s' && cd '%s' &&", executionRoot, executionRoot))
+	} else {
+		cmd.Text(fmt.Sprintf("cd '%s' &&", executionRoot))
+	}
 
 	// Remove old outputs, as some actions might not rerun if the outputs are detected.
 	if len(buildStatement.OutputPaths) > 0 {
@@ -1317,25 +1466,47 @@ func createCommand(cmd *RuleBuilderCommand, buildStatement *bazel.BuildStatement
 		cmd.Flag(pair.Key + "=" + pair.Value)
 	}
 
+	command := buildStatement.Command
+	command = strings.ReplaceAll(command, "{DOTDOTS_TO_OUTPUT_ROOT}", dotdotsToOutRoot)
+
 	// The actual Bazel action.
-	if len(buildStatement.Command) > 16*1024 {
+	if len(command) > 16*1024 {
 		commandFile := PathForBazelOut(ctx, buildStatement.OutputPaths[0]+".sh")
-		WriteFileRule(ctx, commandFile, buildStatement.Command)
+		WriteFileRule(ctx, commandFile, command)
 
 		cmd.Text("bash").Text(buildStatement.OutputPaths[0] + ".sh").Implicit(commandFile)
 	} else {
-		cmd.Text(buildStatement.Command)
+		cmd.Text(command)
 	}
 
 	for _, outputPath := range buildStatement.OutputPaths {
-		cmd.ImplicitOutput(PathForBazelOut(ctx, outputPath))
+		if buildStatement.ShouldRunInSbox {
+			// The full path has three components that get joined together
+			// 1. intermediate output dir that `sbox` will place the artifacts at
+			// 2. mixed build execution root
+			// 3. artifact path returned by aquery
+			intermediateDir, _ := intermediatePathForSboxMixedBuildAction(ctx, buildStatement)
+			cmd.ImplicitOutput(intermediateDir.Join(ctx, executionRoot, outputPath))
+		} else {
+			cmd.ImplicitOutput(PathForBazelOut(ctx, outputPath))
+		}
 	}
 	for _, inputPath := range buildStatement.InputPaths {
 		cmd.Implicit(PathForBazelOut(ctx, inputPath))
 	}
 	for _, inputDepsetHash := range buildStatement.InputDepsetHashes {
-		otherDepsetName := bazelDepsetName(inputDepsetHash)
-		cmd.Implicit(PathForPhony(ctx, otherDepsetName))
+		if buildStatement.ShouldRunInSbox {
+			// Bazel depsets are phony targets that are used to group files.
+			// We need to copy the grouped files into the sandbox
+			ds, _ := depsetHashToDepset[inputDepsetHash]
+			cmd.Implicits(PathsForBazelOut(ctx, ds.DirectArtifacts))
+		} else {
+			otherDepsetName := bazelDepsetName(inputDepsetHash)
+			cmd.Implicit(PathForPhony(ctx, otherDepsetName))
+		}
+	}
+	for _, implicitPath := range buildStatement.ImplicitDeps {
+		cmd.Implicit(PathForArbitraryOutput(ctx, implicitPath))
 	}
 
 	if depfile := buildStatement.Depfile; depfile != nil {

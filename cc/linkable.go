@@ -87,8 +87,26 @@ type Snapshottable interface {
 	// SnapshotStaticLibs returns the list of static library dependencies for this module.
 	SnapshotStaticLibs() []string
 
+	// SnapshotDylibs returns the list of dylib library dependencies for this module.
+	SnapshotDylibs() []string
+
+	// SnapshotRlibs returns the list of rlib library dependencies for this module.
+	SnapshotRlibs() []string
+
 	// IsSnapshotPrebuilt returns true if this module is a snapshot prebuilt.
 	IsSnapshotPrebuilt() bool
+
+	// IsSnapshotSanitizer returns true if this snapshot module implements SnapshotSanitizer.
+	IsSnapshotSanitizer() bool
+
+	// IsSnapshotSanitizerAvailable returns true if this snapshot module has a sanitizer source available (cfi, hwasan).
+	IsSnapshotSanitizerAvailable(t SanitizerType) bool
+
+	// SetSnapshotSanitizerVariation sets the sanitizer variation type for this snapshot module.
+	SetSnapshotSanitizerVariation(t SanitizerType, enabled bool)
+
+	// IsSnapshotUnsanitizedVariant returns true if this is the unsanitized snapshot module variant.
+	IsSnapshotUnsanitizedVariant() bool
 }
 
 // LinkableInterface is an interface for a type of module that is linkable in a C++ library.
@@ -238,6 +256,9 @@ type LinkableInterface interface {
 
 	// Dylib returns true if this is an dylib module.
 	Dylib() bool
+
+	// RlibStd returns true if this is an rlib which links against an rlib libstd.
+	RlibStd() bool
 
 	// Static returns true if this is a static library module.
 	Static() bool

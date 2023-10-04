@@ -73,6 +73,15 @@ type BaseCompilerProperties struct {
 	// If no source file is defined, a single generated source module can be defined to be used as the main source.
 	Srcs []string `android:"path,arch_variant"`
 
+	// Entry point that is passed to rustc to begin the compilation. E.g. main.rs or lib.rs.
+	// When this property is set,
+	//    * sandboxing is enabled for this module, and
+	//    * the srcs attribute is interpreted as a list of all source files potentially
+	//          used in compilation, including the entrypoint, and
+	//    * compile_data can be used to add additional files used in compilation that
+	//          not directly used as source files.
+	Crate_root *string `android:"path,arch_variant"`
+
 	// name of the lint set that should be used to validate this module.
 	//
 	// Possible values are "default" (for using a sensible set of lints
@@ -91,10 +100,8 @@ type BaseCompilerProperties struct {
 	// list of rust rlib crate dependencies
 	Rlibs []string `android:"arch_variant"`
 
-	// list of rust dylib crate dependencies
-	Dylibs []string `android:"arch_variant"`
-
-	// list of rust automatic crate dependencies
+	// list of rust automatic crate dependencies.
+	// Rustlibs linkage is rlib for host targets and dylib for device targets.
 	Rustlibs []string `android:"arch_variant"`
 
 	// list of rust proc_macro crate dependencies
@@ -320,6 +327,18 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags) Flag
 		flags.LinkFlags = append(flags.LinkFlags, cc.RpathFlags(ctx)...)
 	}
 
+	if !ctx.toolchain().Bionic() && ctx.Os() != android.LinuxMusl && !ctx.Windows() {
+		// Add -lc, -lrt, -ldl, -lpthread, -lm, -lrt and -lgcc_s to host builds to match the default behavior of device
+		// builds. This is irrelevant for the Windows target as these are Posix specific.
+		flags.LinkFlags = append(flags.LinkFlags,
+			"-lc",
+			"-lrt",
+			"-ldl",
+			"-lpthread",
+			"-lm",
+			"-lgcc_s",
+		)
+	}
 	return flags
 }
 
@@ -359,7 +378,6 @@ func (compiler *baseCompiler) strippedOutputFilePath() android.OptionalPath {
 
 func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 	deps.Rlibs = append(deps.Rlibs, compiler.Properties.Rlibs...)
-	deps.Dylibs = append(deps.Dylibs, compiler.Properties.Dylibs...)
 	deps.Rustlibs = append(deps.Rustlibs, compiler.Properties.Rustlibs...)
 	deps.ProcMacros = append(deps.ProcMacros, compiler.Properties.Proc_macros...)
 	deps.StaticLibs = append(deps.StaticLibs, compiler.Properties.Static_libs...)
@@ -505,6 +523,8 @@ func srcPathFromModuleSrcs(ctx ModuleContext, srcs []string) (android.Path, andr
 		ctx.PropertyErrorf("srcs", "only a single generated source module can be defined without a main source file.")
 	}
 
+	// TODO: b/297264540 - once all modules are sandboxed, we need to select the proper
+	// entry point file from Srcs rather than taking the first one
 	paths := android.PathsForModuleSrc(ctx, srcs)
 	return paths[srcIndex], paths[1:]
 }

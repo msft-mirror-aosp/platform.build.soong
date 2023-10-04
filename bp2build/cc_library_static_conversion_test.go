@@ -96,41 +96,37 @@ func TestCcLibraryStaticSimple(t *testing.T) {
 			"implicit_include_1.h": "",
 			"implicit_include_2.h": "",
 		},
+		StubbedBuildDefinitions: []string{"header_lib_1", "header_lib_2",
+			"static_lib_1", "static_lib_2", "whole_static_lib_1", "whole_static_lib_2"},
 		Blueprint: soongCcLibraryStaticPreamble + `
 cc_library_headers {
     name: "header_lib_1",
     export_include_dirs: ["header_lib_1"],
-    bazel_module: { bp2build_available: false },
 }
 
 cc_library_headers {
     name: "header_lib_2",
     export_include_dirs: ["header_lib_2"],
-    bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
     name: "static_lib_1",
     srcs: ["static_lib_1.cc"],
-    bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
     name: "static_lib_2",
     srcs: ["static_lib_2.cc"],
-    bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
     name: "whole_static_lib_1",
     srcs: ["whole_static_lib_1.cc"],
-    bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
     name: "whole_static_lib_2",
     srcs: ["whole_static_lib_2.cc"],
-    bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
@@ -207,6 +203,10 @@ cc_library_static {
     ]`,
 				"sdk_version":     `"current"`,
 				"min_sdk_version": `"29"`,
+				"deps": `select({
+        "//build/bazel/rules/apex:unbundled_app": ["//build/bazel/rules/cc:ndk_sysroot"],
+        "//conditions:default": [],
+    })`,
 			}),
 		},
 	})
@@ -392,16 +392,15 @@ cc_library_static {
 
 func TestCcLibraryStaticArchSpecificStaticLib(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_static arch-specific static_libs",
-		Filesystem:  map[string]string{},
+		Description:             "cc_library_static arch-specific static_libs",
+		Filesystem:              map[string]string{},
+		StubbedBuildDefinitions: []string{"static_dep", "static_dep2"},
 		Blueprint: soongCcLibraryStaticPreamble + `
 cc_library_static {
     name: "static_dep",
-    bazel_module: { bp2build_available: false },
 }
 cc_library_static {
     name: "static_dep2",
-    bazel_module: { bp2build_available: false },
 }
 cc_library_static {
     name: "foo_static",
@@ -425,16 +424,15 @@ cc_library_static {
 
 func TestCcLibraryStaticOsSpecificStaticLib(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_static os-specific static_libs",
-		Filesystem:  map[string]string{},
+		Description:             "cc_library_static os-specific static_libs",
+		Filesystem:              map[string]string{},
+		StubbedBuildDefinitions: []string{"static_dep", "static_dep2"},
 		Blueprint: soongCcLibraryStaticPreamble + `
 cc_library_static {
     name: "static_dep",
-    bazel_module: { bp2build_available: false },
 }
 cc_library_static {
     name: "static_dep2",
-    bazel_module: { bp2build_available: false },
 }
 cc_library_static {
     name: "foo_static",
@@ -460,22 +458,20 @@ func TestCcLibraryStaticBaseArchOsSpecificStaticLib(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
 		Description: "cc_library_static base, arch and os-specific static_libs",
 		Filesystem:  map[string]string{},
+		StubbedBuildDefinitions: []string{"static_dep", "static_dep2", "static_dep3",
+			"static_dep4"},
 		Blueprint: soongCcLibraryStaticPreamble + `
 cc_library_static {
     name: "static_dep",
-    bazel_module: { bp2build_available: false },
 }
 cc_library_static {
     name: "static_dep2",
-    bazel_module: { bp2build_available: false },
 }
 cc_library_static {
     name: "static_dep3",
-    bazel_module: { bp2build_available: false },
 }
 cc_library_static {
     name: "static_dep4",
-    bazel_module: { bp2build_available: false },
 }
 cc_library_static {
     name: "foo_static",
@@ -756,12 +752,12 @@ cc_library_static {
 
 func TestCcLibraryStaticMultipleDepSameName(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_static multiple dep same name panic",
-		Filesystem:  map[string]string{},
+		Description:             "cc_library_static multiple dep same name panic",
+		Filesystem:              map[string]string{},
+		StubbedBuildDefinitions: []string{"static_dep"},
 		Blueprint: soongCcLibraryStaticPreamble + `
 cc_library_static {
     name: "static_dep",
-    bazel_module: { bp2build_available: false },
 }
 cc_library_static {
     name: "foo_static",
@@ -961,17 +957,16 @@ cc_library_static {
 
 func TestCcLibraryStaticGeneratedHeadersAllPartitions(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		StubbedBuildDefinitions: []string{"generated_hdr", "export_generated_hdr"},
 		Blueprint: soongCcLibraryStaticPreamble + `
 genrule {
     name: "generated_hdr",
     cmd: "nothing to see here",
-    bazel_module: { bp2build_available: false },
 }
 
 genrule {
     name: "export_generated_hdr",
     cmd: "nothing to see here",
-    bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
@@ -1003,27 +998,62 @@ cc_library_static {
 	})
 }
 
+func TestCcLibraryStaticGeneratedHeadersMultipleExports(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		StubbedBuildDefinitions: []string{"generated_hdr", "export_generated_hdr"},
+		Blueprint: soongCcLibraryStaticPreamble + `
+genrule {
+    name: "generated_hdr",
+    cmd: "nothing to see here",
+    export_include_dirs: ["foo", "bar"],
+}
+
+genrule {
+    name: "export_generated_hdr",
+    cmd: "nothing to see here",
+    export_include_dirs: ["a", "b"],
+}
+
+cc_library_static {
+    name: "foo_static",
+    generated_headers: ["generated_hdr", "export_generated_hdr"],
+    export_generated_headers: ["export_generated_hdr"],
+    include_build_directory: false,
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_static", AttrNameToString{
+				"deps":                `[":export_generated_hdr__header_library"]`,
+				"implementation_deps": `[":generated_hdr__header_library"]`,
+			}),
+		},
+	})
+}
+
 // generated_headers has "variant_prepend" tag. In bp2build output,
 // variant info(select) should go before general info.
 func TestCcLibraryStaticArchSrcsExcludeSrcsGeneratedFiles(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
 		Description: "cc_library_static arch srcs/exclude_srcs with generated files",
+		StubbedBuildDefinitions: []string{"//dep:generated_src_other_pkg", "//dep:generated_hdr_other_pkg",
+			"//dep:generated_src_other_pkg_x86", "//dep:generated_hdr_other_pkg_x86", "//dep:generated_hdr_other_pkg_android",
+			"generated_src", "generated_src_not_x86", "generated_src_android", "generated_hdr",
+		},
 		Filesystem: map[string]string{
 			"common.cpp":             "",
 			"for-x86.cpp":            "",
 			"not-for-x86.cpp":        "",
 			"not-for-everything.cpp": "",
-			"dep/Android.bp": simpleModuleDoNotConvertBp2build("genrule", "generated_src_other_pkg") +
-				simpleModuleDoNotConvertBp2build("genrule", "generated_hdr_other_pkg") +
-				simpleModuleDoNotConvertBp2build("genrule", "generated_src_other_pkg_x86") +
-				simpleModuleDoNotConvertBp2build("genrule", "generated_hdr_other_pkg_x86") +
-				simpleModuleDoNotConvertBp2build("genrule", "generated_hdr_other_pkg_android"),
+			"dep/Android.bp": simpleModule("genrule", "generated_src_other_pkg") +
+				simpleModule("genrule", "generated_hdr_other_pkg") +
+				simpleModule("genrule", "generated_src_other_pkg_x86") +
+				simpleModule("genrule", "generated_hdr_other_pkg_x86") +
+				simpleModule("genrule", "generated_hdr_other_pkg_android"),
 		},
 		Blueprint: soongCcLibraryStaticPreamble +
-			simpleModuleDoNotConvertBp2build("genrule", "generated_src") +
-			simpleModuleDoNotConvertBp2build("genrule", "generated_src_not_x86") +
-			simpleModuleDoNotConvertBp2build("genrule", "generated_src_android") +
-			simpleModuleDoNotConvertBp2build("genrule", "generated_hdr") + `
+			simpleModule("genrule", "generated_src") +
+			simpleModule("genrule", "generated_src_not_x86") +
+			simpleModule("genrule", "generated_src_android") +
+			simpleModule("genrule", "generated_hdr") + `
 cc_library_static {
     name: "foo_static",
     srcs: ["common.cpp", "not-for-*.cpp"],
@@ -1156,13 +1186,13 @@ cc_library_static {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_static", "foo_static", AttrNameToString{
 				"copts": `select({
-        "//build/bazel/product_variables:binder32bit": ["-Wbinder32bit"],
+        "//build/bazel/product_config/config_settings:binder32bit": ["-Wbinder32bit"],
         "//conditions:default": [],
     }) + select({
-        "//build/bazel/product_variables:malloc_not_svelte": ["-Wmalloc_not_svelte"],
+        "//build/bazel/product_config/config_settings:malloc_not_svelte": ["-Wmalloc_not_svelte"],
         "//conditions:default": [],
     }) + select({
-        "//build/bazel/product_variables:malloc_zero_contents": ["-Wmalloc_zero_contents"],
+        "//build/bazel/product_config/config_settings:malloc_zero_contents": ["-Wmalloc_zero_contents"],
         "//conditions:default": [],
     })`,
 				"srcs_c": `["common.c"]`,
@@ -1216,19 +1246,19 @@ cc_library_static {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_static", "foo_static", AttrNameToString{
 				"copts": `select({
-        "//build/bazel/product_variables:malloc_not_svelte": ["-Wmalloc_not_svelte"],
+        "//build/bazel/product_config/config_settings:malloc_not_svelte": ["-Wmalloc_not_svelte"],
         "//conditions:default": [],
     }) + select({
-        "//build/bazel/product_variables:malloc_not_svelte-android": ["-Wandroid_malloc_not_svelte"],
+        "//build/bazel/product_config/config_settings:malloc_not_svelte-android": ["-Wandroid_malloc_not_svelte"],
         "//conditions:default": [],
     }) + select({
-        "//build/bazel/product_variables:malloc_not_svelte-arm": ["-Wlib32_malloc_not_svelte"],
+        "//build/bazel/product_config/config_settings:malloc_not_svelte-arm": ["-Wlib32_malloc_not_svelte"],
         "//conditions:default": [],
     }) + select({
-        "//build/bazel/product_variables:malloc_not_svelte-arm64": ["-Warm64_malloc_not_svelte"],
+        "//build/bazel/product_config/config_settings:malloc_not_svelte-arm64": ["-Warm64_malloc_not_svelte"],
         "//conditions:default": [],
     }) + select({
-        "//build/bazel/product_variables:malloc_not_svelte-x86": ["-Wlib32_malloc_not_svelte"],
+        "//build/bazel/product_config/config_settings:malloc_not_svelte-x86": ["-Wlib32_malloc_not_svelte"],
         "//conditions:default": [],
     })`,
 				"srcs_c": `["common.c"]`,
@@ -1255,7 +1285,7 @@ cc_library_static {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_static", "foo_static", AttrNameToString{
 				"asflags": `select({
-        "//build/bazel/product_variables:platform_sdk_version": ["-DPLATFORM_SDK_VERSION=$(Platform_sdk_version)"],
+        "//build/bazel/product_config/config_settings:platform_sdk_version": ["-DPLATFORM_SDK_VERSION=$(Platform_sdk_version)"],
         "//conditions:default": [],
     })`,
 				"srcs_as": `["common.S"]`,
@@ -1308,11 +1338,11 @@ cc_library_static {
 
 func TestStaticLibrary_SystemSharedLibsBionicEmpty(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_static system_shared_lib empty for bionic variant",
+		Description:             "cc_library_static system_shared_lib empty for bionic variant",
+		StubbedBuildDefinitions: []string{"libc_musl"},
 		Blueprint: soongCcLibraryStaticPreamble + `
 cc_library {
 		name: "libc_musl",
-		bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
@@ -1342,11 +1372,11 @@ func TestStaticLibrary_SystemSharedLibsLinuxBionicEmpty(t *testing.T) {
 	// only for linux_bionic, but `android` had `["libc", "libdl", "libm"].
 	// b/195791252 tracks the fix.
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_static system_shared_lib empty for linux_bionic variant",
+		Description:             "cc_library_static system_shared_lib empty for linux_bionic variant",
+		StubbedBuildDefinitions: []string{"libc_musl"},
 		Blueprint: soongCcLibraryStaticPreamble + `
 cc_library {
 		name: "libc_musl",
-		bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
@@ -1372,11 +1402,11 @@ cc_library_static {
 
 func TestStaticLibrary_SystemSharedLibsMuslEmpty(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_static system_shared_lib empty for musl variant",
+		Description:             "cc_library_static system_shared_lib empty for musl variant",
+		StubbedBuildDefinitions: []string{"libc_musl"},
 		Blueprint: soongCcLibraryStaticPreamble + `
 cc_library {
 		name: "libc_musl",
-		bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
@@ -1399,11 +1429,11 @@ cc_library_static {
 
 func TestStaticLibrary_SystemSharedLibsLinuxMuslEmpty(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_static system_shared_lib empty for linux_musl variant",
+		Description:             "cc_library_static system_shared_lib empty for linux_musl variant",
+		StubbedBuildDefinitions: []string{"libc_musl"},
 		Blueprint: soongCcLibraryStaticPreamble + `
 cc_library {
 		name: "libc_musl",
-		bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
@@ -1426,12 +1456,12 @@ cc_library_static {
 
 func TestStaticLibrary_SystemSharedLibsBionic(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_static system_shared_libs set for bionic variant",
+		Description:             "cc_library_static system_shared_libs set for bionic variant",
+		StubbedBuildDefinitions: []string{"libc", "libc_musl"},
 		Blueprint: soongCcLibraryStaticPreamble +
-			simpleModuleDoNotConvertBp2build("cc_library", "libc") + `
+			simpleModule("cc_library", "libc") + `
 cc_library {
 	name: "libc_musl",
-	bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
@@ -1459,13 +1489,13 @@ cc_library_static {
 
 func TestStaticLibrary_SystemSharedLibsLinuxRootAndLinuxBionic(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_static system_shared_libs set for root and linux_bionic variant",
+		Description:             "cc_library_static system_shared_libs set for root and linux_bionic variant",
+		StubbedBuildDefinitions: []string{"libc", "libm", "libc_musl"},
 		Blueprint: soongCcLibraryStaticPreamble +
-			simpleModuleDoNotConvertBp2build("cc_library", "libc") +
-			simpleModuleDoNotConvertBp2build("cc_library", "libm") + `
+			simpleModule("cc_library", "libc") +
+			simpleModule("cc_library", "libm") + `
 cc_library {
 	name: "libc_musl",
-	bazel_module: { bp2build_available: false },
 }
 
 cc_library_static {
@@ -1493,9 +1523,10 @@ cc_library_static {
 
 func TestCcLibrarystatic_SystemSharedLibUsedAsDep(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
-		Description: "cc_library_static system_shared_lib empty for linux_bionic variant",
+		Description:             "cc_library_static system_shared_lib empty for linux_bionic variant",
+		StubbedBuildDefinitions: []string{"libc", "libm"},
 		Blueprint: soongCcLibraryStaticPreamble +
-			simpleModuleDoNotConvertBp2build("cc_library", "libc") + `
+			simpleModule("cc_library", "libc") + `
 
 cc_library {
     name: "libm",
@@ -1503,7 +1534,6 @@ cc_library {
         symbol_file: "libm.map.txt",
         versions: ["current"],
     },
-    bazel_module: { bp2build_available: false },
     apex_available: ["com.android.runtime"],
 }
 
@@ -1581,6 +1611,7 @@ cc_library_static {
 
 func TestCcLibraryStaticProto(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		StubbedBuildDefinitions: []string{"libprotobuf-cpp-full", "libprotobuf-cpp-lite"},
 		Blueprint: soongCcProtoPreamble + `cc_library_static {
 	name: "foo",
 	srcs: ["foo.proto"],
@@ -1607,6 +1638,7 @@ func TestCcLibraryStaticUseVersionLib(t *testing.T) {
 		Filesystem: map[string]string{
 			soongCcVersionLibBpPath: soongCcVersionLibBp,
 		},
+		StubbedBuildDefinitions: []string{"//build/soong/cc/libbuildversion:libbuildversion", "libprotobuf-cpp-full", "libprotobuf-cpp-lite"},
 		Blueprint: soongCcProtoPreamble + `cc_library_static {
 	name: "foo",
 	use_version_lib: true,
@@ -1626,6 +1658,8 @@ func TestCcLibraryStaticUseVersionLibHasDep(t *testing.T) {
 		Filesystem: map[string]string{
 			soongCcVersionLibBpPath: soongCcVersionLibBp,
 		},
+		StubbedBuildDefinitions: []string{"//build/soong/cc/libbuildversion:libbuildversion", "libprotobuf-cpp-full", "libprotobuf-cpp-lite"},
+
 		Blueprint: soongCcProtoPreamble + `cc_library_static {
 	name: "foo",
 	use_version_lib: true,
@@ -1642,6 +1676,7 @@ func TestCcLibraryStaticUseVersionLibHasDep(t *testing.T) {
 
 func TestCcLibraryStaticStdInFlags(t *testing.T) {
 	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		StubbedBuildDefinitions: []string{"libprotobuf-cpp-full", "libprotobuf-cpp-lite"},
 		Blueprint: soongCcProtoPreamble + `cc_library_static {
 	name: "foo",
 	cflags: ["-std=candcpp"],
@@ -1735,14 +1770,14 @@ func TestCCLibraryStaticRuntimeDeps(t *testing.T) {
 
 cc_library_static {
   name: "foo",
-  runtime_libs: ["foo"],
+  runtime_libs: ["bar"],
 }`,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_shared", "bar", AttrNameToString{
 				"local_includes": `["."]`,
 			}),
 			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
-				"runtime_deps":   `[":foo"]`,
+				"runtime_deps":   `[":bar"]`,
 				"local_includes": `["."]`,
 			}),
 		},
@@ -1918,7 +1953,14 @@ cc_library_static {
 `,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
-				"features":       `["ubsan_blocklist_foo_blocklist_txt"]`,
+				"copts": `select({
+        "//build/bazel/rules/cc:sanitizers_enabled": ["-fsanitize-ignorelist=$(location foo_blocklist.txt)"],
+        "//conditions:default": [],
+    })`,
+				"additional_compiler_inputs": `select({
+        "//build/bazel/rules/cc:sanitizers_enabled": [":foo_blocklist.txt"],
+        "//conditions:default": [],
+    })`,
 				"local_includes": `["."]`,
 			}),
 		},
@@ -2214,4 +2256,40 @@ cc_library_static{
         "foo_renderscript",
     ]`,
 			})}})
+}
+
+func TestCcLibraryWithProtoInGeneratedSrcs(t *testing.T) {
+	runCcLibraryStaticTestCase(t, Bp2buildTestCase{
+		Description:                "cc_library with a .proto file generated from a genrule",
+		ModuleTypeUnderTest:        "cc_library_static",
+		ModuleTypeUnderTestFactory: cc.LibraryStaticFactory,
+		StubbedBuildDefinitions:    []string{"libprotobuf-cpp-lite"},
+		Blueprint: soongCcLibraryPreamble + `
+cc_library_static {
+	name: "mylib",
+	generated_sources: ["myprotogen"],
+}
+genrule {
+	name: "myprotogen",
+	out: ["myproto.proto"],
+}
+` + simpleModule("cc_library", "libprotobuf-cpp-lite"),
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "mylib", AttrNameToString{
+				"local_includes":                    `["."]`,
+				"deps":                              `[":libprotobuf-cpp-lite"]`,
+				"implementation_whole_archive_deps": `[":mylib_cc_proto_lite"]`,
+			}),
+			MakeBazelTarget("cc_lite_proto_library", "mylib_cc_proto_lite", AttrNameToString{
+				"deps": `[":mylib_proto"]`,
+			}),
+			MakeBazelTarget("proto_library", "mylib_proto", AttrNameToString{
+				"srcs": `[":myprotogen"]`,
+			}),
+			MakeBazelTargetNoRestrictions("genrule", "myprotogen", AttrNameToString{
+				"cmd":  `""`,
+				"outs": `["myproto.proto"]`,
+			}),
+		},
+	})
 }

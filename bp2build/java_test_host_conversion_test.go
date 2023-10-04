@@ -32,8 +32,9 @@ func runJavaTestHostTestCase(t *testing.T, tc Bp2buildTestCase) {
 
 func TestJavaTestHostGeneral(t *testing.T) {
 	runJavaTestHostTestCase(t, Bp2buildTestCase{
-		Description: "java_test_host general",
-		Filesystem:  map[string]string{},
+		Description:             "java_test_host general",
+		Filesystem:              map[string]string{},
+		StubbedBuildDefinitions: []string{"lib_a", "lib_b"},
 		Blueprint: `
 java_test_host {
     name: "java_test_host-1",
@@ -47,12 +48,10 @@ java_test_host {
 
 java_library {
     name: "lib_a",
-    bazel_module: { bp2build_available: false },
 }
 
 java_library {
     name: "static_libs_a",
-    bazel_module: { bp2build_available: false },
 }
 `,
 		ExpectedBazelTargets: []string{
@@ -71,6 +70,11 @@ java_library {
 			}),
 			MakeBazelTarget("java_test", "java_test_host-1", AttrNameToString{
 				"runtime_deps": `[":java_test_host-1_lib"]`,
+				"deps": `[
+        ":lib_a-neverlink",
+        ":static_libs_a",
+    ]`,
+				"srcs": `["a.java"]`,
 				"target_compatible_with": `select({
         "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],
         "//conditions:default": [],
@@ -93,14 +97,13 @@ java_test_host {
 
 java_library {
     name: "lib_a",
-    bazel_module: { bp2build_available: false },
 }
 
 java_library {
     name: "static_libs_a",
-    bazel_module: { bp2build_available: false },
 }
 `,
+		StubbedBuildDefinitions: []string{"lib_a", "static_libs_a"},
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("java_test", "java_test_host-1", AttrNameToString{
 				"runtime_deps": `[
@@ -128,6 +131,10 @@ java_test_host {
 `,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("java_test", "java_test_host-1", AttrNameToString{
+				"srcs": `[
+        "a.java",
+        "b.kt",
+    ]`,
 				"runtime_deps": `[":java_test_host-1_lib"]`,
 				"target_compatible_with": `select({
         "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],

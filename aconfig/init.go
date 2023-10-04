@@ -16,6 +16,7 @@ package aconfig
 
 import (
 	"android/soong/android"
+
 	"github.com/google/blueprint"
 )
 
@@ -27,23 +28,25 @@ var (
 		blueprint.RuleParams{
 			Command: `${aconfig} create-cache` +
 				` --package ${package}` +
-				` --declarations ${in}` +
+				` ${declarations}` +
 				` ${values}` +
+				` ${default-permission}` +
 				` --cache ${out}.tmp` +
-				` && ( if cmp -s ${out}.tmp ; then rm ${out}.tmp ; else mv ${out}.tmp ${out} ; fi )`,
+				` && ( if cmp -s ${out}.tmp ${out} ; then rm ${out}.tmp ; else mv ${out}.tmp ${out} ; fi )`,
 			//				` --build-id ${release_version}` +
 			CommandDeps: []string{
 				"${aconfig}",
 			},
 			Restat: true,
-		}, "release_version", "package", "values")
+		}, "release_version", "package", "declarations", "values", "default-permission")
 
 	// For java_aconfig_library: Generate java file
-	srcJarRule = pctx.AndroidStaticRule("aconfig_srcjar",
+	javaRule = pctx.AndroidStaticRule("java_aconfig_library",
 		blueprint.RuleParams{
 			Command: `rm -rf ${out}.tmp` +
 				` && mkdir -p ${out}.tmp` +
 				` && ${aconfig} create-java-lib` +
+				`    --mode ${mode}` +
 				`    --cache ${in}` +
 				`    --out ${out}.tmp` +
 				` && $soong_zip -write_if_changed -jar -o ${out} -C ${out}.tmp -D ${out}.tmp` +
@@ -53,7 +56,36 @@ var (
 				"$soong_zip",
 			},
 			Restat: true,
-		})
+		}, "mode")
+
+	// For java_aconfig_library: Generate java file
+	cppRule = pctx.AndroidStaticRule("cc_aconfig_library",
+		blueprint.RuleParams{
+			Command: `rm -rf ${gendir}` +
+				` && mkdir -p ${gendir}` +
+				` && ${aconfig} create-cpp-lib` +
+				`    --mode ${mode}` +
+				`    --cache ${in}` +
+				`    --out ${gendir}`,
+			CommandDeps: []string{
+				"$aconfig",
+				"$soong_zip",
+			},
+		}, "gendir", "mode")
+
+	rustRule = pctx.AndroidStaticRule("rust_aconfig_library",
+		blueprint.RuleParams{
+			Command: `rm -rf ${gendir}` +
+				` && mkdir -p ${gendir}` +
+				` && ${aconfig} create-rust-lib` +
+				`    --mode ${mode}` +
+				`    --cache ${in}` +
+				`    --out ${gendir}`,
+			CommandDeps: []string{
+				"$aconfig",
+				"$soong_zip",
+			},
+		}, "gendir", "mode")
 
 	// For all_aconfig_declarations
 	allDeclarationsRule = pctx.AndroidStaticRule("all_aconfig_declarations_dump",
@@ -66,15 +98,17 @@ var (
 )
 
 func init() {
-	registerBuildComponents(android.InitRegistrationContext)
+	RegisterBuildComponents(android.InitRegistrationContext)
 	pctx.HostBinToolVariable("aconfig", "aconfig")
 	pctx.HostBinToolVariable("soong_zip", "soong_zip")
 }
 
-func registerBuildComponents(ctx android.RegistrationContext) {
+func RegisterBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("aconfig_declarations", DeclarationsFactory)
 	ctx.RegisterModuleType("aconfig_values", ValuesFactory)
 	ctx.RegisterModuleType("aconfig_value_set", ValueSetFactory)
+	ctx.RegisterModuleType("cc_aconfig_library", CcAconfigLibraryFactory)
 	ctx.RegisterModuleType("java_aconfig_library", JavaDeclarationsLibraryFactory)
+	ctx.RegisterModuleType("rust_aconfig_library", RustAconfigLibraryFactory)
 	ctx.RegisterParallelSingletonType("all_aconfig_declarations", AllAconfigDeclarationsFactory)
 }

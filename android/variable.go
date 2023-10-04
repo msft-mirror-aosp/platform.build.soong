@@ -138,6 +138,7 @@ type variableProperties struct {
 
 			Srcs         []string
 			Exclude_srcs []string
+			Cmd          *string
 		}
 
 		// eng is true for -eng builds, and can be used to turn on additional heavyweight debugging
@@ -155,10 +156,6 @@ type variableProperties struct {
 				Enabled *bool
 			}
 		}
-
-		Pdk struct {
-			Enabled *bool `android:"arch_variant"`
-		} `android:"arch_variant"`
 
 		Uml struct {
 			Cppflags []string
@@ -180,12 +177,19 @@ type variableProperties struct {
 			Srcs         []string `android:"arch_variant"`
 			Exclude_srcs []string `android:"arch_variant"`
 		} `android:"arch_variant"`
+
+		// release_aidl_use_unfrozen is "true" when a device can
+		// use the unfrozen versions of AIDL interfaces.
+		Release_aidl_use_unfrozen struct {
+			Cflags []string
+			Cmd    *string
+		}
 	} `android:"arch_variant"`
 }
 
 var defaultProductVariables interface{} = variableProperties{}
 
-type productVariables struct {
+type ProductVariables struct {
 	// Suffix to add to generated Makefiles
 	Make_suffix *string `json:",omitempty"`
 
@@ -220,6 +224,7 @@ type productVariables struct {
 	DeviceCurrentApiLevelForVendorModules *string  `json:",omitempty"`
 	DeviceSystemSdkVersions               []string `json:",omitempty"`
 	DeviceMaxPageSizeSupported            *string  `json:",omitempty"`
+	DevicePageSizeAgnostic                *bool    `json:",omitempty"`
 
 	RecoverySnapshotVersion *string `json:",omitempty"`
 
@@ -310,6 +315,7 @@ type productVariables struct {
 	MemtagHeapSyncIncludePaths  []string `json:",omitempty"`
 
 	HWASanIncludePaths []string `json:",omitempty"`
+	HWASanExcludePaths []string `json:",omitempty"`
 
 	VendorPath    *string `json:",omitempty"`
 	OdmPath       *string `json:",omitempty"`
@@ -367,17 +373,11 @@ type productVariables struct {
 
 	MultitreeUpdateMeta bool `json:",omitempty"`
 
-	BoardVendorSepolicyDirs           []string `json:",omitempty"`
-	BoardOdmSepolicyDirs              []string `json:",omitempty"`
-	BoardReqdMaskPolicy               []string `json:",omitempty"`
-	BoardPlatVendorPolicy             []string `json:",omitempty"`
-	BoardSystemExtPublicPrebuiltDirs  []string `json:",omitempty"`
-	BoardSystemExtPrivatePrebuiltDirs []string `json:",omitempty"`
-	BoardProductPublicPrebuiltDirs    []string `json:",omitempty"`
-	BoardProductPrivatePrebuiltDirs   []string `json:",omitempty"`
-	SystemExtPublicSepolicyDirs       []string `json:",omitempty"`
-	SystemExtPrivateSepolicyDirs      []string `json:",omitempty"`
-	BoardSepolicyM4Defs               []string `json:",omitempty"`
+	BoardVendorSepolicyDirs      []string `json:",omitempty"`
+	BoardOdmSepolicyDirs         []string `json:",omitempty"`
+	SystemExtPublicSepolicyDirs  []string `json:",omitempty"`
+	SystemExtPrivateSepolicyDirs []string `json:",omitempty"`
+	BoardSepolicyM4Defs          []string `json:",omitempty"`
 
 	BoardSepolicyVers       *string `json:",omitempty"`
 	PlatformSepolicyVersion *string `json:",omitempty"`
@@ -401,9 +401,10 @@ type productVariables struct {
 
 	WithDexpreopt bool `json:",omitempty"`
 
-	ManifestPackageNameOverrides []string `json:",omitempty"`
-	CertificateOverrides         []string `json:",omitempty"`
-	PackageNameOverrides         []string `json:",omitempty"`
+	ManifestPackageNameOverrides   []string `json:",omitempty"`
+	CertificateOverrides           []string `json:",omitempty"`
+	PackageNameOverrides           []string `json:",omitempty"`
+	ConfiguredJarLocationOverrides []string `json:",omitempty"`
 
 	ApexGlobalMinSdkVersionOverride *string `json:",omitempty"`
 
@@ -416,8 +417,6 @@ type productVariables struct {
 
 	ProductPublicSepolicyDirs  []string `json:",omitempty"`
 	ProductPrivateSepolicyDirs []string `json:",omitempty"`
-
-	ProductVndkVersion *string `json:",omitempty"`
 
 	TargetFSConfigGen []string `json:",omitempty"`
 
@@ -437,16 +436,17 @@ type productVariables struct {
 
 	ShippingApiLevel *string `json:",omitempty"`
 
-	BuildBrokenPluginValidation        []string `json:",omitempty"`
-	BuildBrokenClangAsFlags            bool     `json:",omitempty"`
-	BuildBrokenClangCFlags             bool     `json:",omitempty"`
-	BuildBrokenClangProperty           bool     `json:",omitempty"`
-	GenruleSandboxing                  *bool    `json:",omitempty"`
-	BuildBrokenEnforceSyspropOwner     bool     `json:",omitempty"`
-	BuildBrokenTrebleSyspropNeverallow bool     `json:",omitempty"`
-	BuildBrokenUsesSoongPython2Modules bool     `json:",omitempty"`
-	BuildBrokenVendorPropertyNamespace bool     `json:",omitempty"`
-	BuildBrokenInputDirModules         []string `json:",omitempty"`
+	BuildBrokenPluginValidation         []string `json:",omitempty"`
+	BuildBrokenClangAsFlags             bool     `json:",omitempty"`
+	BuildBrokenClangCFlags              bool     `json:",omitempty"`
+	BuildBrokenClangProperty            bool     `json:",omitempty"`
+	GenruleSandboxing                   *bool    `json:",omitempty"`
+	BuildBrokenEnforceSyspropOwner      bool     `json:",omitempty"`
+	BuildBrokenTrebleSyspropNeverallow  bool     `json:",omitempty"`
+	BuildBrokenUsesSoongPython2Modules  bool     `json:",omitempty"`
+	BuildBrokenVendorPropertyNamespace  bool     `json:",omitempty"`
+	BuildBrokenIncorrectPartitionImages bool     `json:",omitempty"`
+	BuildBrokenInputDirModules          []string `json:",omitempty"`
 
 	BuildWarningBadOptionalUsesLibsAllowlist []string `json:",omitempty"`
 
@@ -455,6 +455,8 @@ type productVariables struct {
 	RequiresInsecureExecmemForSwiftshader bool `json:",omitempty"`
 
 	SelinuxIgnoreNeverallows bool `json:",omitempty"`
+
+	Release_aidl_use_unfrozen *bool `json:",omitempty"`
 
 	SepolicyFreezeTestExtraDirs         []string `json:",omitempty"`
 	SepolicyFreezeTestExtraPrebuiltDirs []string `json:",omitempty"`
@@ -472,8 +474,76 @@ type productVariables struct {
 	ProductBrand        string   `json:",omitempty"`
 	BuildVersionTags    []string `json:",omitempty"`
 
-	ReleaseVersion          string   `json:",omitempty"`
-	ReleaseAconfigValueSets []string `json:",omitempty"`
+	ReleaseVersion          string `json:",omitempty"`
+	ReleaseAconfigValueSets string `json:",omitempty"`
+
+	ReleaseAconfigFlagDefaultPermission string `json:",omitempty"`
+
+	KeepVndk *bool `json:",omitempty"`
+
+	CheckVendorSeappViolations *bool `json:",omitempty"`
+
+	// PartitionVarsForBazelMigrationOnlyDoNotUse are extra variables that are used to define the
+	// partition images. They should not be read from soong modules.
+	PartitionVarsForBazelMigrationOnlyDoNotUse PartitionVariables `json:",omitempty"`
+
+	NextReleaseHideFlaggedApi *bool `json:",omitempty"`
+
+	Release_expose_flagged_api *bool `json:",omitempty"`
+}
+
+type PartitionVariables struct {
+	ProductDirectory            string `json:",omitempty"`
+	PartitionQualifiedVariables map[string]struct {
+		BuildingImage               bool   `json:",omitempty"`
+		BoardErofsCompressor        string `json:",omitempty"`
+		BoardErofsCompressHints     string `json:",omitempty"`
+		BoardErofsPclusterSize      string `json:",omitempty"`
+		BoardExtfsInodeCount        string `json:",omitempty"`
+		BoardExtfsRsvPct            string `json:",omitempty"`
+		BoardF2fsSloadCompressFlags string `json:",omitempty"`
+		BoardFileSystemCompress     string `json:",omitempty"`
+		BoardFileSystemType         string `json:",omitempty"`
+		BoardJournalSize            string `json:",omitempty"`
+		BoardPartitionReservedSize  string `json:",omitempty"`
+		BoardPartitionSize          string `json:",omitempty"`
+		BoardSquashfsBlockSize      string `json:",omitempty"`
+		BoardSquashfsCompressor     string `json:",omitempty"`
+		BoardSquashfsCompressorOpt  string `json:",omitempty"`
+		BoardSquashfsDisable4kAlign string `json:",omitempty"`
+		ProductBaseFsPath           string `json:",omitempty"`
+		ProductHeadroom             string `json:",omitempty"`
+		ProductVerityPartition      string `json:",omitempty"`
+
+		BoardAvbAddHashtreeFooterArgs string `json:",omitempty"`
+		BoardAvbKeyPath               string `json:",omitempty"`
+		BoardAvbAlgorithm             string `json:",omitempty"`
+		BoardAvbRollbackIndex         string `json:",omitempty"`
+		BoardAvbRollbackIndexLocation string `json:",omitempty"`
+	}
+	TargetUserimagesUseExt2 bool `json:",omitempty"`
+	TargetUserimagesUseExt3 bool `json:",omitempty"`
+	TargetUserimagesUseExt4 bool `json:",omitempty"`
+
+	TargetUserimagesSparseExtDisabled      bool `json:",omitempty"`
+	TargetUserimagesSparseErofsDisabled    bool `json:",omitempty"`
+	TargetUserimagesSparseSquashfsDisabled bool `json:",omitempty"`
+	TargetUserimagesSparseF2fsDisabled     bool `json:",omitempty"`
+
+	BoardErofsCompressor                 string `json:",omitempty"`
+	BoardErofsCompressorHints            string `json:",omitempty"`
+	BoardErofsPclusterSize               string `json:",omitempty"`
+	BoardErofsShareDupBlocks             string `json:",omitempty"`
+	BoardErofsUseLegacyCompression       string `json:",omitempty"`
+	BoardExt4ShareDupBlocks              string `json:",omitempty"`
+	BoardFlashLogicalBlockSize           string `json:",omitempty"`
+	BoardFlashEraseBlockSize             string `json:",omitempty"`
+	BoardUsesRecoveryAsBoot              bool   `json:",omitempty"`
+	BoardBuildGkiBootImageWithoutRamdisk bool   `json:",omitempty"`
+	ProductUseDynamicPartitionSize       bool   `json:",omitempty"`
+	CopyImagesForTargetFilesZip          bool   `json:",omitempty"`
+
+	BoardAvbEnable bool `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
@@ -488,8 +558,8 @@ func stringPtr(v string) *string {
 	return &v
 }
 
-func (v *productVariables) SetDefaultConfig() {
-	*v = productVariables{
+func (v *ProductVariables) SetDefaultConfig() {
+	*v = ProductVariables{
 		BuildNumberFile: stringPtr("build_number.txt"),
 
 		Platform_version_name:                  stringPtr("S"),
@@ -514,6 +584,7 @@ func (v *productVariables) SetDefaultConfig() {
 		DeviceSecondaryCpuVariant:  stringPtr("generic"),
 		DeviceSecondaryAbi:         []string{"armeabi-v7a", "armeabi"},
 		DeviceMaxPageSizeSupported: stringPtr("4096"),
+		DevicePageSizeAgnostic:     boolPtr(false),
 
 		AAPTConfig:          []string{"normal", "large", "xlarge", "hdpi", "xhdpi", "xxhdpi"},
 		AAPTPreferredConfig: stringPtr("xhdpi"),
@@ -658,18 +729,24 @@ type ProductConfigProperties map[string]map[ProductConfigOrSoongConfigProperty]i
 
 // ProductVariableProperties returns a ProductConfigProperties containing only the properties which
 // have been set for the given module.
-func ProductVariableProperties(ctx ArchVariantContext, module Module) ProductConfigProperties {
+func ProductVariableProperties(ctx ArchVariantContext, module Module) (ProductConfigProperties, []error) {
+	var errs []error
 	moduleBase := module.base()
 
 	productConfigProperties := ProductConfigProperties{}
 
 	if moduleBase.variableProperties != nil {
 		productVariablesProperty := proptools.FieldNameForProperty("product_variables")
-		for /* axis */ _, configToProps := range moduleBase.GetArchVariantProperties(ctx, moduleBase.variableProperties) {
-			for config, props := range configToProps {
-				variableValues := reflect.ValueOf(props).Elem().FieldByName(productVariablesProperty)
-				productConfigProperties.AddProductConfigProperties(variableValues, config)
+		if moduleBase.ArchSpecific() {
+			for /* axis */ _, configToProps := range moduleBase.GetArchVariantProperties(ctx, moduleBase.variableProperties) {
+				for config, props := range configToProps {
+					variableValues := reflect.ValueOf(props).Elem().FieldByName(productVariablesProperty)
+					productConfigProperties.AddProductConfigProperties(variableValues, config)
+				}
 			}
+		} else {
+			variableValues := reflect.ValueOf(moduleBase.variableProperties).Elem().FieldByName(productVariablesProperty)
+			productConfigProperties.AddProductConfigProperties(variableValues, "")
 		}
 	}
 
@@ -677,12 +754,15 @@ func ProductVariableProperties(ctx ArchVariantContext, module Module) ProductCon
 		for namespace, namespacedVariableProps := range m.namespacedVariableProps() {
 			for _, namespacedVariableProp := range namespacedVariableProps {
 				variableValues := reflect.ValueOf(namespacedVariableProp).Elem().FieldByName(soongconfig.SoongConfigProperty)
-				productConfigProperties.AddSoongConfigProperties(namespace, variableValues)
+				err := productConfigProperties.AddSoongConfigProperties(namespace, variableValues)
+				if err != nil {
+					errs = append(errs, err)
+				}
 			}
 		}
 	}
 
-	return productConfigProperties
+	return productConfigProperties, errs
 }
 
 func (p *ProductConfigProperties) AddProductConfigProperty(
@@ -725,7 +805,9 @@ func (p *ProductConfigProperties) AddEitherProperty(
 			dst = append(dst, src...)
 			(*p)[propertyName][key] = dst
 		default:
-			panic(fmt.Errorf("TODO: handle merging value %#v", existing))
+			if existing != propertyValue {
+				panic(fmt.Errorf("TODO: handle merging value %#v", existing))
+			}
 		}
 	} else {
 		(*p)[propertyName][key] = propertyValue
@@ -802,7 +884,7 @@ func (productConfigProperties *ProductConfigProperties) AddProductConfigProperti
 
 }
 
-func (productConfigProperties *ProductConfigProperties) AddSoongConfigProperties(namespace string, soongConfigVariablesStruct reflect.Value) {
+func (productConfigProperties *ProductConfigProperties) AddSoongConfigProperties(namespace string, soongConfigVariablesStruct reflect.Value) error {
 	//
 	// Example of soong_config_variables:
 	//
@@ -899,7 +981,7 @@ func (productConfigProperties *ProductConfigProperties) AddSoongConfigProperties
 					if propertyName == "Target" {
 						productConfigProperties.AddSoongConfigPropertiesFromTargetStruct(namespace, variableName, proptools.PropertyNameForField(propertyOrValueName), field.Field(k))
 					} else if propertyName == "Arch" || propertyName == "Multilib" {
-						panic("Arch/Multilib are not currently supported in soong config variable structs")
+						return fmt.Errorf("Arch/Multilib are not currently supported in soong config variable structs")
 					} else {
 						productConfigProperties.AddSoongConfigProperty(propertyName, namespace, variableName, proptools.PropertyNameForField(propertyOrValueName), "", field.Field(k).Interface())
 					}
@@ -910,13 +992,14 @@ func (productConfigProperties *ProductConfigProperties) AddSoongConfigProperties
 				if propertyOrValueName == "Target" {
 					productConfigProperties.AddSoongConfigPropertiesFromTargetStruct(namespace, variableName, "", propertyOrStruct)
 				} else if propertyOrValueName == "Arch" || propertyOrValueName == "Multilib" {
-					panic("Arch/Multilib are not currently supported in soong config variable structs")
+					return fmt.Errorf("Arch/Multilib are not currently supported in soong config variable structs")
 				} else {
 					productConfigProperties.AddSoongConfigProperty(propertyOrValueName, namespace, variableName, "", "", propertyOrStruct.Interface())
 				}
 			}
 		}
 	}
+	return nil
 }
 
 func (productConfigProperties *ProductConfigProperties) AddSoongConfigPropertiesFromTargetStruct(namespace, soongConfigVariableName string, soongConfigVariableValue string, targetStruct reflect.Value) {
@@ -938,7 +1021,7 @@ func (productConfigProperties *ProductConfigProperties) AddSoongConfigProperties
 						productConfigProperties.AddSoongConfigProperty(propertyName, namespace, soongConfigVariableName, soongConfigVariableValue, os.Name, property.Interface())
 					}
 				}
-			} else {
+			} else if !archOrOsSpecificStruct.IsZero() {
 				// One problem with supporting additional fields is that if multiple branches of
 				// "target" overlap, we don't want them to be in the same select statement (aka
 				// configuration axis). "android" and "host" are disjoint, so it's ok that we only

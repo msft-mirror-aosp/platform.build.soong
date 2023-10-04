@@ -640,7 +640,10 @@ func TestBp2buildHostAndDevice(t *testing.T) {
 }`,
 			ExpectedBazelTargets: []string{
 				MakeBazelTargetNoRestrictions("custom", "foo", AttrNameToString{
-					"target_compatible_with": `["//build/bazel/product_variables:unbundled_build"]`,
+					"target_compatible_with": `select({
+        "//build/bazel/product_config/config_settings:unbundled_build": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    })`,
 				}),
 			},
 		},
@@ -770,9 +773,12 @@ func TestLoadStatements(t *testing.T) {
 		{
 			bazelTargets: BazelTargets{
 				BazelTarget{
-					name:            "foo",
-					ruleClass:       "cc_library",
-					bzlLoadLocation: "//build/bazel/rules:cc.bzl",
+					name:      "foo",
+					ruleClass: "cc_library",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:cc.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "cc_library"}},
+					}},
 				},
 			},
 			expectedLoadStatements: `load("//build/bazel/rules:cc.bzl", "cc_library")`,
@@ -780,14 +786,20 @@ func TestLoadStatements(t *testing.T) {
 		{
 			bazelTargets: BazelTargets{
 				BazelTarget{
-					name:            "foo",
-					ruleClass:       "cc_library",
-					bzlLoadLocation: "//build/bazel/rules:cc.bzl",
+					name:      "foo",
+					ruleClass: "cc_library",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:cc.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "cc_library"}},
+					}},
 				},
 				BazelTarget{
-					name:            "bar",
-					ruleClass:       "cc_library",
-					bzlLoadLocation: "//build/bazel/rules:cc.bzl",
+					name:      "bar",
+					ruleClass: "cc_library",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:cc.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "cc_library"}},
+					}},
 				},
 			},
 			expectedLoadStatements: `load("//build/bazel/rules:cc.bzl", "cc_library")`,
@@ -795,14 +807,20 @@ func TestLoadStatements(t *testing.T) {
 		{
 			bazelTargets: BazelTargets{
 				BazelTarget{
-					name:            "foo",
-					ruleClass:       "cc_library",
-					bzlLoadLocation: "//build/bazel/rules:cc.bzl",
+					name:      "foo",
+					ruleClass: "cc_library",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:cc.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "cc_library"}},
+					}},
 				},
 				BazelTarget{
-					name:            "bar",
-					ruleClass:       "cc_binary",
-					bzlLoadLocation: "//build/bazel/rules:cc.bzl",
+					name:      "bar",
+					ruleClass: "cc_binary",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:cc.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "cc_binary"}},
+					}},
 				},
 			},
 			expectedLoadStatements: `load("//build/bazel/rules:cc.bzl", "cc_binary", "cc_library")`,
@@ -810,19 +828,28 @@ func TestLoadStatements(t *testing.T) {
 		{
 			bazelTargets: BazelTargets{
 				BazelTarget{
-					name:            "foo",
-					ruleClass:       "cc_library",
-					bzlLoadLocation: "//build/bazel/rules:cc.bzl",
+					name:      "foo",
+					ruleClass: "cc_library",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:cc.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "cc_library"}},
+					}},
 				},
 				BazelTarget{
-					name:            "bar",
-					ruleClass:       "cc_binary",
-					bzlLoadLocation: "//build/bazel/rules:cc.bzl",
+					name:      "bar",
+					ruleClass: "cc_binary",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:cc.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "cc_binary"}},
+					}},
 				},
 				BazelTarget{
-					name:            "baz",
-					ruleClass:       "java_binary",
-					bzlLoadLocation: "//build/bazel/rules:java.bzl",
+					name:      "baz",
+					ruleClass: "java_binary",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:java.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "java_binary"}},
+					}},
 				},
 			},
 			expectedLoadStatements: `load("//build/bazel/rules:cc.bzl", "cc_binary", "cc_library")
@@ -831,19 +858,25 @@ load("//build/bazel/rules:java.bzl", "java_binary")`,
 		{
 			bazelTargets: BazelTargets{
 				BazelTarget{
-					name:            "foo",
-					ruleClass:       "cc_binary",
-					bzlLoadLocation: "//build/bazel/rules:cc.bzl",
+					name:      "foo",
+					ruleClass: "cc_binary",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:cc.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "cc_binary"}},
+					}},
 				},
 				BazelTarget{
-					name:            "bar",
-					ruleClass:       "java_binary",
-					bzlLoadLocation: "//build/bazel/rules:java.bzl",
+					name:      "bar",
+					ruleClass: "java_binary",
+					loads: []BazelLoad{{
+						file:    "//build/bazel/rules:java.bzl",
+						symbols: []BazelLoadSymbol{{symbol: "java_binary"}},
+					}},
 				},
 				BazelTarget{
 					name:      "baz",
 					ruleClass: "genrule",
-					// Note: no bzlLoadLocation for native rules
+					// Note: no loads for native rules
 				},
 			},
 			expectedLoadStatements: `load("//build/bazel/rules:cc.bzl", "cc_binary")
@@ -1740,7 +1773,8 @@ func TestCommonBp2BuildModuleAttrs(t *testing.T) {
 			Description:                "Required into data test",
 			ModuleTypeUnderTest:        "filegroup",
 			ModuleTypeUnderTestFactory: android.FileGroupFactory,
-			Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "reqd") + `
+			StubbedBuildDefinitions:    []string{"reqd"},
+			Blueprint: simpleModule("filegroup", "reqd") + `
 filegroup {
     name: "fg_foo",
     required: ["reqd"],
@@ -1756,7 +1790,8 @@ filegroup {
 			Description:                "Required into data test, cyclic self reference is filtered out",
 			ModuleTypeUnderTest:        "filegroup",
 			ModuleTypeUnderTestFactory: android.FileGroupFactory,
-			Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "reqd") + `
+			StubbedBuildDefinitions:    []string{"reqd"},
+			Blueprint: simpleModule("filegroup", "reqd") + `
 filegroup {
     name: "fg_foo",
     required: ["reqd", "fg_foo"],
@@ -1772,8 +1807,9 @@ filegroup {
 			Description:                "Required via arch into data test",
 			ModuleTypeUnderTest:        "python_library",
 			ModuleTypeUnderTestFactory: python.PythonLibraryFactory,
-			Blueprint: simpleModuleDoNotConvertBp2build("python_library", "reqdx86") +
-				simpleModuleDoNotConvertBp2build("python_library", "reqdarm") + `
+			StubbedBuildDefinitions:    []string{"reqdx86", "reqdarm"},
+			Blueprint: simpleModule("python_library", "reqdx86") +
+				simpleModule("python_library", "reqdarm") + `
 python_library {
     name: "fg_foo",
     arch: {
@@ -1806,7 +1842,8 @@ python_library {
 				"data.bin": "",
 				"src.py":   "",
 			},
-			Blueprint: simpleModuleDoNotConvertBp2build("python_library", "reqd") + `
+			StubbedBuildDefinitions: []string{"reqd"},
+			Blueprint: simpleModule("python_library", "reqd") + `
 python_library {
     name: "fg_foo",
     data: ["data.bin"],
@@ -1828,7 +1865,8 @@ python_library {
 			Description:                "All props-to-attrs at once together test",
 			ModuleTypeUnderTest:        "filegroup",
 			ModuleTypeUnderTestFactory: android.FileGroupFactory,
-			Blueprint: simpleModuleDoNotConvertBp2build("filegroup", "reqd") + `
+			StubbedBuildDefinitions:    []string{"reqd"},
+			Blueprint: simpleModule("filegroup", "reqd") + `
 filegroup {
     name: "fg_foo",
     required: ["reqd"],
@@ -1876,30 +1914,6 @@ filegroup {
 		})
 }
 
-func TestGenerateApiBazelTargets(t *testing.T) {
-	bp := `
-	custom {
-		name: "foo",
-		api: "foo.txt",
-	}
-	`
-	expectedBazelTarget := MakeBazelTarget(
-		"custom_api_contribution",
-		"foo",
-		AttrNameToString{
-			"api": `"foo.txt"`,
-		},
-	)
-	registerCustomModule := func(ctx android.RegistrationContext) {
-		ctx.RegisterModuleType("custom", customModuleFactoryHostAndDevice)
-	}
-	RunApiBp2BuildTestCase(t, registerCustomModule, Bp2buildTestCase{
-		Blueprint:            bp,
-		ExpectedBazelTargets: []string{expectedBazelTarget},
-		Description:          "Generating API contribution Bazel targets for custom module",
-	})
-}
-
 func TestGenerateConfigSetting(t *testing.T) {
 	bp := `
 	custom {
@@ -1945,4 +1959,145 @@ func TestPrettyPrintSelectMapEqualValues(t *testing.T) {
 	lla.SetSelectValue(bazel.OsAndInApexAxis, bazel.ConditionsDefaultConfigKey, bazel.MakeLabelList([]bazel.Label{libFooImplLabel}))
 	actual, _ := prettyPrintAttribute(lla, 0)
 	android.AssertStringEquals(t, "Print the common value if all keys in an axis have the same value", `[":libfoo.impl"]`, actual)
+}
+
+func TestAlreadyPresentBuildTarget(t *testing.T) {
+	bp := `
+	custom {
+		name: "foo",
+	}
+	custom {
+		name: "bar",
+	}
+	`
+	alreadyPresentBuildFile :=
+		MakeBazelTarget(
+			"custom",
+			"foo",
+			AttrNameToString{},
+		)
+	expectedBazelTargets := []string{
+		MakeBazelTarget(
+			"custom",
+			"bar",
+			AttrNameToString{},
+		),
+	}
+	registerCustomModule := func(ctx android.RegistrationContext) {
+		ctx.RegisterModuleType("custom", customModuleFactoryHostAndDevice)
+	}
+	RunBp2BuildTestCase(t, registerCustomModule, Bp2buildTestCase{
+		AlreadyExistingBuildContents: alreadyPresentBuildFile,
+		Blueprint:                    bp,
+		ExpectedBazelTargets:         expectedBazelTargets,
+		Description:                  "Not duplicating work for an already-present BUILD target.",
+	})
+}
+
+func TestAlreadyPresentOneToManyBuildTarget(t *testing.T) {
+	bp := `
+	custom {
+		name: "foo",
+    one_to_many_prop: true,
+	}
+	custom {
+		name: "bar",
+	}
+	`
+	alreadyPresentBuildFile :=
+		MakeBazelTarget(
+			"custom",
+			// one_to_many_prop ensures that foo generates "foo_proto_library_deps".
+			"foo_proto_library_deps",
+			AttrNameToString{},
+		)
+	expectedBazelTargets := []string{
+		MakeBazelTarget(
+			"custom",
+			"bar",
+			AttrNameToString{},
+		),
+	}
+	registerCustomModule := func(ctx android.RegistrationContext) {
+		ctx.RegisterModuleType("custom", customModuleFactoryHostAndDevice)
+	}
+	RunBp2BuildTestCase(t, registerCustomModule, Bp2buildTestCase{
+		AlreadyExistingBuildContents: alreadyPresentBuildFile,
+		Blueprint:                    bp,
+		ExpectedBazelTargets:         expectedBazelTargets,
+		Description:                  "Not duplicating work for an already-present BUILD target (different generated name)",
+	})
+}
+
+// Verifies that if a module is defined in pkg1/Android.bp, that a target present
+// in pkg2/BUILD.bazel does not result in the module being labeled "already defined
+// in a BUILD file".
+func TestBuildTargetPresentOtherDirectory(t *testing.T) {
+	bp := `
+	custom {
+		name: "foo",
+	}
+	`
+	expectedBazelTargets := []string{
+		MakeBazelTarget(
+			"custom",
+			"foo",
+			AttrNameToString{},
+		),
+	}
+	registerCustomModule := func(ctx android.RegistrationContext) {
+		ctx.RegisterModuleType("custom", customModuleFactoryHostAndDevice)
+	}
+	RunBp2BuildTestCase(t, registerCustomModule, Bp2buildTestCase{
+		KeepBuildFileForDirs: []string{"other_pkg"},
+		Filesystem: map[string]string{
+			"other_pkg/BUILD.bazel": MakeBazelTarget("custom", "foo", AttrNameToString{}),
+		},
+		Blueprint:            bp,
+		ExpectedBazelTargets: expectedBazelTargets,
+		Description:          "Not treating a BUILD target as the bazel definition for a module in another package",
+	})
+}
+
+// If CommonAttributes.Dir is set, the bazel target should be created in that dir
+func TestCreateBazelTargetInDifferentDir(t *testing.T) {
+	t.Parallel()
+	bp := `
+	custom {
+		name: "foo",
+		dir: "subdir",
+	}
+	`
+	registerCustomModule := func(ctx android.RegistrationContext) {
+		ctx.RegisterModuleType("custom", customModuleFactoryHostAndDevice)
+	}
+	// Check that foo is not created in root dir
+	RunBp2BuildTestCase(t, registerCustomModule, Bp2buildTestCase{
+		Description: "foo is not created in root dir because it sets dir explicitly",
+		Blueprint:   bp,
+		Filesystem: map[string]string{
+			"subdir/Android.bp": "",
+		},
+		ExpectedBazelTargets: []string{},
+	})
+	// Check that foo is created in `subdir`
+	RunBp2BuildTestCase(t, registerCustomModule, Bp2buildTestCase{
+		Description: "foo is created in `subdir` because it sets dir explicitly",
+		Blueprint:   bp,
+		Filesystem: map[string]string{
+			"subdir/Android.bp": "",
+		},
+		Dir: "subdir",
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("custom", "foo", AttrNameToString{}),
+		},
+	})
+	// Check that we cannot create target in different dir if it is does not an Android.bp
+	RunBp2BuildTestCase(t, registerCustomModule, Bp2buildTestCase{
+		Description: "foo cannot be created in `subdir` because it does not contain an Android.bp file",
+		Blueprint:   bp,
+		Dir:         "subdir",
+		ExpectedErr: fmt.Errorf("Cannot use ca.Dir to create a BazelTarget in dir: subdir since it does not contain an Android.bp file"),
+	})
+
 }

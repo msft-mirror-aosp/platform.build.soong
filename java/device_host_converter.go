@@ -143,6 +143,8 @@ func (d *DeviceHostConverter) GenerateAndroidBuildActions(ctx android.ModuleCont
 		ResourceJars:                   d.resourceJars,
 		SrcJarArgs:                     d.srcJarArgs,
 		SrcJarDeps:                     d.srcJarDeps,
+		// TODO: Not sure if aconfig flags that have been moved between device and host variants
+		// make sense.
 	})
 
 }
@@ -196,7 +198,7 @@ type bazelDeviceHostConverterAttributes struct {
 	Exports bazel.LabelListAttribute
 }
 
-func (d *DeviceHostConverter) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (d *DeviceHostConverter) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	ctx.CreateBazelTargetModule(
 		bazel.BazelTargetModuleProperties{
 			Rule_class:        "java_host_for_device",

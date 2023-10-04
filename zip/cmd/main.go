@@ -173,6 +173,8 @@ func main() {
 	cpuProfile := flags.String("cpuprofile", "", "write cpu profile to file")
 	traceFile := flags.String("trace", "", "write trace to file")
 	sha256Checksum := flags.Bool("sha256", false, "add a zip header to each file containing its SHA256 digest")
+	doNotWrite := flags.Bool("n", false, "Nothing is written to disk -- all other work happens")
+	quiet := flags.Bool("quiet", false, "do not print warnings to console")
 
 	flags.Var(&rootPrefix{}, "P", "path prefix within the zip at which to place files")
 	flags.Var(&listFiles{}, "l", "file containing list of files to zip")
@@ -236,6 +238,8 @@ func main() {
 		StoreSymlinks:            *symlinks,
 		IgnoreMissingFiles:       *ignoreMissingFiles,
 		Sha256Checksum:           *sha256Checksum,
+		DoNotWrite:               *doNotWrite,
+		Quiet:                    *quiet,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err.Error())
