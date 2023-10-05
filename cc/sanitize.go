@@ -553,7 +553,9 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		}
 
 		if found, globalSanitizers = removeFromList("hwaddress", globalSanitizers); found && s.Hwaddress == nil {
-			s.Hwaddress = proptools.BoolPtr(true)
+			if !ctx.Config().HWASanDisabledForPath(ctx.ModuleDir()) {
+				s.Hwaddress = proptools.BoolPtr(true)
+			}
 		}
 
 		if found, globalSanitizers = removeFromList("writeonly", globalSanitizers); found && s.Writeonly == nil {
@@ -675,12 +677,6 @@ func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 		s.Undefined = nil
 		s.All_undefined = nil
 		s.Integer_overflow = nil
-	}
-
-	// TODO(b/254713216): CFI doesn't work for riscv64 yet because LTO doesn't work.
-	if ctx.Arch().ArchType == android.Riscv64 {
-		s.Cfi = nil
-		s.Diag.Cfi = nil
 	}
 
 	// Disable CFI for musl
@@ -1117,12 +1113,15 @@ func (sanitize *sanitize) isSanitizerExplicitlyDisabled(t SanitizerType) bool {
 // indirectly (via a mutator) sets the bool ptr to true, and you can't
 // distinguish between the cases. It isn't needed though - both cases can be
 // treated identically.
-func (sanitize *sanitize) isSanitizerEnabled(t SanitizerType) bool {
-	if sanitize == nil {
+func (s *sanitize) isSanitizerEnabled(t SanitizerType) bool {
+	if s == nil {
+		return false
+	}
+	if proptools.Bool(s.Properties.SanitizeMutated.Never) {
 		return false
 	}
 
-	sanitizerVal := sanitize.getSanitizerBoolPtr(t)
+	sanitizerVal := s.getSanitizerBoolPtr(t)
 	return sanitizerVal != nil && *sanitizerVal == true
 }
 

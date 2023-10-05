@@ -15,7 +15,6 @@
 package bp2build
 
 import (
-	"fmt"
 	"testing"
 
 	"android/soong/android"
@@ -70,6 +69,7 @@ java_library {
 
 func TestJavaLibraryConvertsStaticLibsToDepsAndExports(t *testing.T) {
 	runJavaLibraryTestCase(t, Bp2buildTestCase{
+		StubbedBuildDefinitions: []string{"java-lib-2", "java-lib-3"},
 		Blueprint: `java_library {
     name: "java-lib-1",
     srcs: ["a.java"],
@@ -83,14 +83,12 @@ java_library {
     name: "java-lib-2",
     srcs: ["b.java"],
     sdk_version: "current",
-    bazel_module: { bp2build_available: false },
 }
 
 java_library {
     name: "java-lib-3",
     srcs: ["c.java"],
     sdk_version: "current",
-    bazel_module: { bp2build_available: false },
 }`,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("java_library", "java-lib-1", AttrNameToString{
@@ -109,6 +107,7 @@ java_library {
 
 func TestJavaLibraryConvertsStaticLibsToExportsIfNoSrcs(t *testing.T) {
 	runJavaLibraryTestCase(t, Bp2buildTestCase{
+		StubbedBuildDefinitions: []string{"java-lib-2"},
 		Blueprint: `java_library {
     name: "java-lib-1",
     static_libs: ["java-lib-2"],
@@ -119,7 +118,6 @@ func TestJavaLibraryConvertsStaticLibsToExportsIfNoSrcs(t *testing.T) {
 java_library {
     name: "java-lib-2",
     srcs: ["a.java"],
-    bazel_module: { bp2build_available: false },
 }`,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("java_library", "java-lib-1", AttrNameToString{
@@ -143,28 +141,9 @@ java_library {
 	})
 }
 
-func TestJavaLibraryFailsToConvertLibsWithNoSrcs(t *testing.T) {
-	runJavaLibraryTestCase(t, Bp2buildTestCase{
-		ExpectedErr: fmt.Errorf("Module has direct dependencies but no sources. Bazel will not allow this."),
-		Blueprint: `java_library {
-    name: "java-lib-1",
-    libs: ["java-lib-2"],
-    sdk_version: "current",
-    bazel_module: { bp2build_available: true },
-}
-
-java_library {
-    name: "java-lib-2",
-    srcs: ["a.java"],
-    sdk_version: "current",
-    bazel_module: { bp2build_available: false },
-}`,
-		ExpectedBazelTargets: []string{},
-	})
-}
-
 func TestJavaLibraryPlugins(t *testing.T) {
 	runJavaLibraryTestCaseWithRegistrationCtxFunc(t, Bp2buildTestCase{
+		StubbedBuildDefinitions: []string{"java-plugin-1"},
 		Blueprint: `java_library {
     name: "java-lib-1",
     plugins: ["java-plugin-1"],
@@ -175,7 +154,6 @@ func TestJavaLibraryPlugins(t *testing.T) {
 java_plugin {
     name: "java-plugin-1",
     srcs: ["a.java"],
-    bazel_module: { bp2build_available: false },
 }`,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("java_library", "java-lib-1", AttrNameToString{
@@ -216,6 +194,7 @@ func TestJavaLibraryJavaVersion(t *testing.T) {
 
 func TestJavaLibraryErrorproneEnabledManually(t *testing.T) {
 	runJavaLibraryTestCaseWithRegistrationCtxFunc(t, Bp2buildTestCase{
+		StubbedBuildDefinitions: []string{"plugin2"},
 		Blueprint: `java_library {
     name: "java-lib-1",
     srcs: ["a.java"],
@@ -230,7 +209,6 @@ func TestJavaLibraryErrorproneEnabledManually(t *testing.T) {
 java_plugin {
     name: "plugin2",
     srcs: ["a.java"],
-    bazel_module: { bp2build_available: false },
 }`,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("java_library", "java-lib-1", AttrNameToString{
@@ -589,12 +567,20 @@ filegroup {
 		"b.aidl",
 	],
 }
+filegroup {
+	name: "aidls_files",
+	srcs: [
+		"a.aidl",
+		"b.aidl",
+	],
+}
 java_library {
 	name: "example_lib",
 	srcs: [
 		"a.java",
 		"b.java",
 		":aidl_files",
+		":aidls_files",
 		":random_other_files",
 	],
 	sdk_version: "current",
@@ -608,8 +594,18 @@ java_library {
     ]`,
 				"tags": `["apex_available=//apex_available:anyapex"]`,
 			}),
+			MakeBazelTargetNoRestrictions("aidl_library", "aidls_files", AttrNameToString{
+				"srcs": `[
+        "a.aidl",
+        "b.aidl",
+    ]`,
+				"tags": `["apex_available=//apex_available:anyapex"]`,
+			}),
 			MakeBazelTarget("java_aidl_library", "example_lib_java_aidl_library", AttrNameToString{
-				"deps": `[":aidl_files"]`,
+				"deps": `[
+        ":aidl_files",
+        ":aidls_files",
+    ]`,
 			}),
 			MakeBazelTarget("java_library", "example_lib", AttrNameToString{
 				"deps":    `[":example_lib_java_aidl_library"]`,
@@ -639,6 +635,7 @@ func TestJavaLibraryAidlNonAdjacentAidlFilegroup(t *testing.T) {
 		Description:                "java_library with non adjacent aidl filegroup",
 		ModuleTypeUnderTest:        "java_library",
 		ModuleTypeUnderTestFactory: java.LibraryFactory,
+		StubbedBuildDefinitions:    []string{"A_aidl"},
 		Filesystem: map[string]string{
 			"path/to/A/Android.bp": `
 filegroup {
@@ -676,7 +673,7 @@ func TestConvertArmNeonVariant(t *testing.T) {
 		Description:                "Android Library - simple arch feature",
 		ModuleTypeUnderTest:        "android_library",
 		ModuleTypeUnderTestFactory: java.AndroidLibraryFactory,
-		Blueprint: simpleModuleDoNotConvertBp2build("android_library", "static_lib_dep") + `
+		Blueprint: simpleModule("android_library", "static_lib_dep") + `
 android_library {
   name: "TestLib",
   manifest: "manifest/AndroidManifest.xml",
@@ -714,7 +711,7 @@ func TestConvertMultipleArchFeatures(t *testing.T) {
 		Description:                "Android Library - multiple arch features",
 		ModuleTypeUnderTest:        "android_library",
 		ModuleTypeUnderTestFactory: java.AndroidLibraryFactory,
-		Blueprint: simpleModuleDoNotConvertBp2build("android_library", "static_lib_dep") + `
+		Blueprint: simpleModule("android_library", "static_lib_dep") + `
 android_library {
   name: "TestLib",
   manifest: "manifest/AndroidManifest.xml",
@@ -760,7 +757,7 @@ func TestConvertExcludeSrcsArchFeature(t *testing.T) {
 		Description:                "Android Library - exclude_srcs with arch feature",
 		ModuleTypeUnderTest:        "android_library",
 		ModuleTypeUnderTestFactory: java.AndroidLibraryFactory,
-		Blueprint: simpleModuleDoNotConvertBp2build("android_library", "static_lib_dep") + `
+		Blueprint: simpleModule("android_library", "static_lib_dep") + `
 android_library {
   name: "TestLib",
   manifest: "manifest/AndroidManifest.xml",
@@ -870,7 +867,8 @@ func TestJavaLibraryKotlinCommonSrcs(t *testing.T) {
 
 func TestJavaLibraryArchVariantDeps(t *testing.T) {
 	runJavaLibraryTestCase(t, Bp2buildTestCase{
-		Description: "java_library with arch variant libs",
+		Description:             "java_library with arch variant libs",
+		StubbedBuildDefinitions: []string{"java-lib-2", "java-lib-3", "java-lib-4"},
 		Blueprint: `java_library {
     name: "java-lib-1",
     srcs: ["a.java"],
@@ -887,17 +885,14 @@ func TestJavaLibraryArchVariantDeps(t *testing.T) {
 
   java_library{
     name: "java-lib-2",
-    bazel_module: { bp2build_available: false },
 }
 
   java_library{
     name: "java-lib-3",
-    bazel_module: { bp2build_available: false },
 }
 
   java_library{
     name: "java-lib-4",
-    bazel_module: { bp2build_available: false },
 }
 `,
 		ExpectedBazelTargets: []string{

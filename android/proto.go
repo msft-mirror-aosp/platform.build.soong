@@ -289,7 +289,7 @@ func Bp2buildProtoProperties(ctx Bp2buildMutatorContext, m *ModuleBase, srcs baz
 				attrs.Strip_import_prefix = proptools.StringPtr("")
 			}
 
-			tags := ApexAvailableTagsWithoutTestApexes(ctx.(TopDownMutatorContext), ctx.Module())
+			tags := ApexAvailableTagsWithoutTestApexes(ctx, ctx.Module())
 
 			moduleDir := ctx.ModuleDir()
 			if !canonicalPathFromRoot {
@@ -408,6 +408,11 @@ func createProtoLibraryTargetsForIncludeDirs(ctx Bp2buildMutatorContext, include
 			// As a workarounds, delete `target_compatible_with`
 			alwaysEnabled := bazel.BoolAttribute{}
 			alwaysEnabled.Value = proptools.BoolPtr(true)
+			// Add android and linux explicitly so that fillcommonbp2buildmoduleattrs can override these configs
+			// When we extend b support for other os'es (darwin/windows), we should add those configs here as well
+			alwaysEnabled.SetSelectValue(bazel.OsConfigurationAxis, bazel.OsAndroid, proptools.BoolPtr(true))
+			alwaysEnabled.SetSelectValue(bazel.OsConfigurationAxis, bazel.OsLinux, proptools.BoolPtr(true))
+
 			ctx.CreateBazelTargetModuleWithRestrictions(
 				bazel.BazelTargetModuleProperties{Rule_class: "proto_library"},
 				CommonAttributes{

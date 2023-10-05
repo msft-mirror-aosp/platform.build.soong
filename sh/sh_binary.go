@@ -190,6 +190,15 @@ func (s *ShBinary) OutputFile() android.OutputPath {
 	return s.outputFilePath
 }
 
+func (s *ShBinary) OutputFiles(tag string) (android.Paths, error) {
+	switch tag {
+	case "":
+		return android.Paths{s.outputFilePath}, nil
+	default:
+		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
+	}
+}
+
 func (s *ShBinary) SubDir() string {
 	return proptools.String(s.properties.Sub_dir)
 }
@@ -574,7 +583,7 @@ type bazelShTestAttributes struct {
 	Auto_gen_config      *bool
 }
 
-func (m *ShBinary) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (m *ShBinary) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	srcs := bazel.MakeLabelListAttribute(
 		android.BazelLabelForModuleSrc(ctx, []string{*m.properties.Src}))
 
@@ -602,7 +611,7 @@ func (m *ShBinary) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
 	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: m.Name()}, attrs)
 }
 
-func (m *ShTest) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (m *ShTest) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	srcs := bazel.MakeLabelListAttribute(
 		android.BazelLabelForModuleSrc(ctx, []string{*m.properties.Src}))
 
