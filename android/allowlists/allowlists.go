@@ -340,7 +340,12 @@ var (
 		"packages/modules/adb/pairing_connection":            Bp2BuildDefaultTrueRecursively,
 		"packages/modules/adb/proto":                         Bp2BuildDefaultTrueRecursively,
 		"packages/modules/adb/tls":                           Bp2BuildDefaultTrueRecursively,
+		"packages/modules/Connectivity/bpf_progs":            Bp2BuildDefaultTrueRecursively,
+		"packages/modules/Connectivity/service-t":            Bp2BuildDefaultTrueRecursively,
+		"packages/modules/Connectivity/service/native":       Bp2BuildDefaultTrueRecursively,
 		"packages/modules/Connectivity/staticlibs/native":    Bp2BuildDefaultTrueRecursively,
+		"packages/modules/Connectivity/staticlibs/netd":      Bp2BuildDefaultTrueRecursively,
+		"packages/modules/Connectivity/tests/unit/jni":       Bp2BuildDefaultTrueRecursively,
 		"packages/modules/Gki/libkver":                       Bp2BuildDefaultTrue,
 		"packages/modules/NetworkStack/common/captiveportal": Bp2BuildDefaultTrue,
 		"packages/modules/NeuralNetworks/apex":               Bp2BuildDefaultTrue,
@@ -577,6 +582,7 @@ var (
 		"tagsoup",
 
 		// framework-minus-apex
+		"AndroidFrameworkLintChecker",
 		"ImmutabilityAnnotationProcessor",
 		"debian.mime.types.minimized",
 		"framework-javastream-protos",
@@ -633,7 +639,6 @@ var (
 		"libneuralnetworks",
 		"libneuralnetworks_static",
 		"libgraphicsenv",
-		"libhardware",
 		"libhardware_headers",
 		"libnativeloader-headers",
 		"libnativewindow_headers",
@@ -672,6 +677,7 @@ var (
 
 		// prebuilts
 		"prebuilt_stats-log-api-gen",
+		"prebuilt_aapt2",
 
 		// fastboot
 		"fastboot",
@@ -853,6 +859,7 @@ var (
 		"kotlinx_coroutines",
 		"kotlinx_coroutines-device",
 		"kotlinx_coroutines-host",
+		"kotlinx_coroutines_android",
 
 		// for building com.android.neuralnetworks
 		"libimapper_stablec",
@@ -993,6 +1000,10 @@ var (
 		"tradefed-result-interfaces",
 		"tradefed-device-build-interfaces",
 		"tradefed-invocation-interfaces",
+		"tradefed-lib-core",
+
+		"libandroid_net_connectivity_com_android_net_module_util_jni",
+		"libservice-connectivity",
 	}
 
 	Bp2buildModuleTypeAlwaysConvertList = []string{
@@ -1019,6 +1030,7 @@ var (
 		"ndk_headers",
 		"ndk_library",
 		"sysprop_library",
+		"versioned_ndk_headers",
 		"xsd_config",
 		// go/keep-sorted end
 	}
@@ -1044,6 +1056,8 @@ var (
 		"libminijail_sys",
 		"libfsverity_rs",
 		"libtombstoned_client_rust",
+
+		"libhardware", //Depends on unconverted libapexsupport
 
 		// TODO(b/263326760): Failed already.
 		"minijail_compiler_unittest",

@@ -544,7 +544,18 @@ func (b *BazelModuleBase) shouldConvertWithBp2build(ctx shouldConvertModuleConte
 	}
 
 	moduleName := moduleNameWithPossibleOverride(ctx, module, p.moduleName)
+	// use "prebuilt_" + original module name as the java_import(_host) module name,
+	// to avoid the failure that a normal module and a prebuilt module with
+	// the same name are both allowlisted. This cannot be applied to all the *_import
+	// module types. For example, android_library_import has to use original module
+	// name here otherwise the *-nodeps targets cannot be handled correctly.
+	// TODO(b/304385140): remove this special casing
+	if p.moduleType == "java_import" || p.moduleType == "java_import_host" {
+		moduleName = module.Name()
+	}
+
 	allowlist := ctx.Config().Bp2buildPackageConfig
+
 	moduleNameAllowed := allowlist.moduleAlwaysConvert[moduleName]
 	moduleTypeAllowed := allowlist.moduleTypeAlwaysConvert[p.moduleType]
 	allowlistConvert := moduleNameAllowed || moduleTypeAllowed
@@ -693,15 +704,27 @@ func bp2buildDepsMutator(ctx BottomUpMutatorContext) {
 
 	if len(ctx.Module().GetMissingBp2buildDeps()) > 0 {
 		exampleDep := ctx.Module().GetMissingBp2buildDeps()[0]
-		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_UNCONVERTED_DEP, exampleDep)
+		ctx.MarkBp2buildUnconvertible(
+			bp2build_metrics_proto.UnconvertedReasonType_UNCONVERTED_DEP, exampleDep)
 	}
 
+	// Transitively mark modules unconvertible with the following set of conditions.
 	ctx.VisitDirectDeps(func(dep Module) {
-		if dep.base().GetUnconvertedReason() != nil &&
-			dep.base().GetUnconvertedReason().ReasonType != int(bp2build_metrics_proto.UnconvertedReasonType_DEFINED_IN_BUILD_FILE) &&
-			ctx.OtherModuleDependencyTag(dep) == Bp2buildDepTag {
-			ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_UNCONVERTED_DEP, dep.Name())
+		if dep.base().GetUnconvertedReason() == nil {
+			return
 		}
+
+		if dep.base().GetUnconvertedReason().ReasonType ==
+			int(bp2build_metrics_proto.UnconvertedReasonType_DEFINED_IN_BUILD_FILE) {
+			return
+		}
+
+		if ctx.OtherModuleDependencyTag(dep) != Bp2buildDepTag {
+			return
+		}
+
+		ctx.MarkBp2buildUnconvertible(
+			bp2build_metrics_proto.UnconvertedReasonType_UNCONVERTED_DEP, dep.Name())
 	})
 }
 

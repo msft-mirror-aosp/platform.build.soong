@@ -61,7 +61,7 @@ var (
 			// because we don't want to spam the build output with "nothing
 			// changed" messages, so redirect output message to $out, and if
 			// changes were detected print the output and fail.
-			Command:     "$stgdiff $args --stg $in -o $out || (cat $out && false)",
+			Command:     "$stgdiff $args --stg $in -o $out || (cat $out && echo 'Run $$ANDROID_BUILD_TOP/development/tools/ndk/update_ndk_abi.sh to update the ABI dumps.' && false)",
 			CommandDeps: []string{"$stgdiff"},
 		}, "args")
 
@@ -594,9 +594,10 @@ func ndkLibraryBp2build(ctx android.Bp2buildMutatorContext, c *Module) {
 	symbolFileLabel := android.BazelLabelForModuleSrcSingle(ctx, proptools.String(ndk.properties.Symbol_file))
 	attrs := &bazelCcStubSuiteAttributes{
 		// TODO - b/300504837 Add ndk headers
-		Symbol_file: proptools.StringPtr(symbolFileLabel.Label),
-		Soname:      proptools.StringPtr(sourceLibraryName + ".so"),
-		Api_surface: proptools.StringPtr(android.PublicApi.String()),
+		Symbol_file:     proptools.StringPtr(symbolFileLabel.Label),
+		Soname:          proptools.StringPtr(sourceLibraryName + ".so"),
+		Api_surface:     proptools.StringPtr(android.PublicApi.String()),
+		Included_in_ndk: proptools.BoolPtr(true),
 	}
 	if sourceLibrary, exists := ctx.ModuleFromName(sourceLibraryName); exists {
 		// the source library might not exist in minimal/unbuildable branches like kernel-build-tools.

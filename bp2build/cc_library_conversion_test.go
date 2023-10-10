@@ -559,8 +559,8 @@ func TestCcLibraryWholeStaticLibsAlwaysLink(t *testing.T) {
 		ModuleTypeUnderTest:        "cc_library",
 		ModuleTypeUnderTestFactory: cc.LibraryFactory,
 		Dir:                        "foo/bar",
-		StubbedBuildDefinitions: []string{"//foo/bar:prebuilt_whole_static_lib_for_shared", "//foo/bar:prebuilt_whole_static_lib_for_static",
-			"//foo/bar:prebuilt_whole_static_lib_for_both"},
+		StubbedBuildDefinitions: []string{"//foo/bar:whole_static_lib_for_shared", "//foo/bar:whole_static_lib_for_static",
+			"//foo/bar:whole_static_lib_for_both"},
 		Filesystem: map[string]string{
 			"foo/bar/Android.bp": `
 cc_library {
@@ -3355,6 +3355,7 @@ func TestCcLibraryWithTargetApex(t *testing.T) {
 		Description:                "cc_library with target.apex",
 		ModuleTypeUnderTest:        "cc_library",
 		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		StubbedBuildDefinitions:    []string{"bar", "baz", "buh"},
 		Blueprint: `
 cc_library {
     name: "foo",
@@ -3366,27 +3367,29 @@ cc_library {
             exclude_static_libs: ["buh"],
         }
     }
-}`,
+}` + simpleModule("cc_library_static", "baz") +
+			simpleModule("cc_library_static", "buh") +
+			simpleModule("cc_library_static", "bar"),
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_static", "foo_bp2build_cc_library_static", AttrNameToString{
-				"implementation_deps": `[":baz__BP2BUILD__MISSING__DEP"] + select({
+				"implementation_deps": `[":baz"] + select({
         "//build/bazel/rules/apex:in_apex": [],
-        "//conditions:default": [":buh__BP2BUILD__MISSING__DEP"],
+        "//conditions:default": [":buh"],
     })`,
-				"implementation_dynamic_deps": `[":baz__BP2BUILD__MISSING__DEP"] + select({
+				"implementation_dynamic_deps": `[":baz"] + select({
         "//build/bazel/rules/apex:in_apex": [],
-        "//conditions:default": [":bar__BP2BUILD__MISSING__DEP"],
+        "//conditions:default": [":bar"],
     })`,
 				"local_includes": `["."]`,
 			}),
 			MakeBazelTarget("cc_library_shared", "foo", AttrNameToString{
-				"implementation_deps": `[":baz__BP2BUILD__MISSING__DEP"] + select({
+				"implementation_deps": `[":baz"] + select({
         "//build/bazel/rules/apex:in_apex": [],
-        "//conditions:default": [":buh__BP2BUILD__MISSING__DEP"],
+        "//conditions:default": [":buh"],
     })`,
-				"implementation_dynamic_deps": `[":baz__BP2BUILD__MISSING__DEP"] + select({
+				"implementation_dynamic_deps": `[":baz"] + select({
         "//build/bazel/rules/apex:in_apex": [],
-        "//conditions:default": [":bar__BP2BUILD__MISSING__DEP"],
+        "//conditions:default": [":bar"],
     })`,
 				"local_includes": `["."]`,
 			}),
@@ -3412,20 +3415,23 @@ cc_library_static {
             exclude_static_libs: ["abc"],
         }
     }
-}`,
+}` + simpleModule("cc_library_static", "bar") +
+			simpleModule("cc_library_static", "baz") +
+			simpleModule("cc_library_static", "abc"),
+		StubbedBuildDefinitions: []string{"bar", "baz", "abc"},
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_library_static", "foo", AttrNameToString{
 				"implementation_dynamic_deps": `select({
         "//build/bazel/rules/apex:in_apex": [],
-        "//conditions:default": [":bar__BP2BUILD__MISSING__DEP"],
+        "//conditions:default": [":bar"],
     })`,
 				"dynamic_deps": `select({
         "//build/bazel/rules/apex:in_apex": [],
-        "//conditions:default": [":baz__BP2BUILD__MISSING__DEP"],
+        "//conditions:default": [":baz"],
     })`,
 				"deps": `select({
         "//build/bazel/rules/apex:in_apex": [],
-        "//conditions:default": [":abc__BP2BUILD__MISSING__DEP"],
+        "//conditions:default": [":abc"],
     })`,
 				"local_includes": `["."]`,
 			}),
@@ -5172,6 +5178,7 @@ ndk_library {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_stub_suite", "libfoo.ndk_stub_libs", AttrNameToString{
 				"api_surface":          `"publicapi"`,
+				"included_in_ndk":      `True`,
 				"soname":               `"libfoo.so"`,
 				"source_library_label": `"//:libfoo"`,
 				"symbol_file":          `"libfoo.map.txt"`,
@@ -5209,6 +5216,149 @@ ndk_headers {
         "foo.h",
         "foo_other.h",
     ]`,
+			}),
+		},
+	}
+	runCcLibraryTestCase(t, tc)
+}
+
+func TestVersionedNdkHeadersConversion(t *testing.T) {
+	tc := Bp2buildTestCase{
+		Description:                "versioned_ndk_headers conversion",
+		ModuleTypeUnderTest:        "versioned_ndk_headers",
+		ModuleTypeUnderTestFactory: cc.VersionedNdkHeadersFactory,
+		Blueprint: `
+versioned_ndk_headers {
+	name: "libfoo_headers",
+	from: "from",
+	to: "to",
+}
+`,
+		Filesystem: map[string]string{
+			"from/foo.h":       "",
+			"from/foo_other.h": "",
+		},
+		ExpectedBazelTargets: []string{
+			MakeBazelTargetNoRestrictions("ndk_headers", "libfoo_headers", AttrNameToString{
+				"strip_import_prefix": `"from"`,
+				"import_prefix":       `"to"`,
+				"hdrs": `[
+        "from/foo.h",
+        "from/foo_other.h",
+    ]`,
+				"run_versioner": "True",
+			}),
+		},
+	}
+	runCcLibraryTestCase(t, tc)
+}
+
+// Regression test for b/303307456.
+// TODO: b/202299295 - Remove this test when cc rules have proper support
+// for the `required` property
+func TestCcModules_requiredProperty(t *testing.T) {
+	runCcLibrarySharedTestCase(t, Bp2buildTestCase{
+		Description: "cc modules do not use the required property",
+		Filesystem: map[string]string{
+			"foo.c": "",
+			"bar.c": "",
+		},
+		Blueprint: soongCcLibraryPreamble + `
+cc_library {
+    name: "foo_both",
+    srcs: ["foo.c"],
+    include_build_directory: false,
+    required: ["bar"],
+}
+cc_library_shared {
+    name: "foo_shared",
+    srcs: ["foo.c"],
+    include_build_directory: false,
+    required: ["bar"],
+}
+cc_library_static {
+    name: "foo_static",
+    srcs: ["foo.c"],
+    include_build_directory: false,
+    required: ["bar"],
+}
+cc_library_static {
+    name: "bar",
+    srcs: ["bar.c"],
+    include_build_directory: false,
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "foo_both_bp2build_cc_library_static", AttrNameToString{
+				"srcs_c": `["foo.c"]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo_both", AttrNameToString{
+				"srcs_c": `["foo.c"]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "foo_shared", AttrNameToString{
+				"srcs_c": `["foo.c"]`,
+			}),
+			MakeBazelTarget("cc_library_static", "foo_static", AttrNameToString{
+				"srcs_c": `["foo.c"]`,
+			}),
+			MakeBazelTarget("cc_library_static", "bar", AttrNameToString{
+				"srcs_c": `["bar.c"]`,
+			}),
+		},
+	})
+}
+
+func TestPropertiesIfStubLibraryIsInNdk(t *testing.T) {
+	tc := Bp2buildTestCase{
+		Description:                "If an equivalent ndk_library exists, set included_in_ndk=true for module-libapi stubs",
+		ModuleTypeUnderTest:        "cc_library",
+		ModuleTypeUnderTestFactory: cc.LibraryFactory,
+		Blueprint: `
+// libfoo is an ndk library and contributes to module-libapi
+cc_library {
+	name: "libfoo",
+	stubs: {symbol_file: "libfoo.map.txt"},
+}
+ndk_library {
+	name: "libfoo",
+	first_version: "29",
+	symbol_file: "libfoo.map.txt",
+}
+// libbar is not an ndk library, but contributes to module-libapi
+cc_library {
+	name: "libbar",
+	stubs: {symbol_file: "libbar.map.txt"},
+}
+`,
+		StubbedBuildDefinitions: []string{"libfoo.ndk"},
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("cc_library_static", "libfoo_bp2build_cc_library_static", AttrNameToString{
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "libfoo", AttrNameToString{
+				"local_includes":    `["."]`,
+				"stubs_symbol_file": `"libfoo.map.txt"`,
+			}),
+			MakeBazelTarget("cc_stub_suite", "libfoo_stub_libs", AttrNameToString{
+				"api_surface":          `"module-libapi"`,
+				"soname":               `"libfoo.so"`,
+				"source_library_label": `"//:libfoo"`,
+				"symbol_file":          `"libfoo.map.txt"`,
+				"versions":             `["current"]`,
+				"included_in_ndk":      `True`,
+			}),
+			MakeBazelTarget("cc_library_static", "libbar_bp2build_cc_library_static", AttrNameToString{
+				"local_includes": `["."]`,
+			}),
+			MakeBazelTarget("cc_library_shared", "libbar", AttrNameToString{
+				"local_includes":    `["."]`,
+				"stubs_symbol_file": `"libbar.map.txt"`,
+			}),
+			MakeBazelTarget("cc_stub_suite", "libbar_stub_libs", AttrNameToString{
+				"api_surface":          `"module-libapi"`,
+				"soname":               `"libbar.so"`,
+				"source_library_label": `"//:libbar"`,
+				"symbol_file":          `"libbar.map.txt"`,
+				"versions":             `["current"]`,
 			}),
 		},
 	}

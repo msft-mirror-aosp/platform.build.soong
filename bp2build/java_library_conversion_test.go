@@ -635,7 +635,7 @@ func TestJavaLibraryAidlNonAdjacentAidlFilegroup(t *testing.T) {
 		Description:                "java_library with non adjacent aidl filegroup",
 		ModuleTypeUnderTest:        "java_library",
 		ModuleTypeUnderTestFactory: java.LibraryFactory,
-		StubbedBuildDefinitions:    []string{"A_aidl"},
+		StubbedBuildDefinitions:    []string{"//path/to/A:A_aidl"},
 		Filesystem: map[string]string{
 			"path/to/A/Android.bp": `
 filegroup {
@@ -1039,5 +1039,30 @@ filegroup {
 		},
 	}, func(ctx android.RegistrationContext) {
 		ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
+	})
+}
+
+func TestJavaLibrarySameNameAsPrebuilt(t *testing.T) {
+	runJavaLibraryTestCaseWithRegistrationCtxFunc(t, Bp2buildTestCase{
+		Description: "java_library and prebuilt module have the same name",
+		Filesystem: map[string]string{
+			"foo/bar/Android.bp": simpleModule("java_import", "test_lib"),
+		},
+		Blueprint: `java_library {
+    name: "test_lib",
+    srcs: ["a.java"],
+    sdk_version: "current",
+    bazel_module: { bp2build_available: true },
+}
+`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("java_library", "test_lib", AttrNameToString{
+				"srcs":        `["a.java"]`,
+				"sdk_version": `"current"`,
+			}),
+			MakeNeverlinkDuplicateTarget("java_library", "test_lib"),
+		},
+	}, func(ctx android.RegistrationContext) {
+		ctx.RegisterModuleType("java_import", java.ImportFactory)
 	})
 }
