@@ -20,6 +20,8 @@ import (
 	"strings"
 
 	"android/soong/android"
+
+	"github.com/google/blueprint/proptools"
 )
 
 func (library *Library) AndroidMkEntriesHostDex() android.AndroidMkEntries {
@@ -78,6 +80,9 @@ func (library *Library) AndroidMkEntries() []android.AndroidMkEntries {
 		entriesList = append(entriesList, android.AndroidMkEntries{Disabled: true})
 	} else if !library.ApexModuleBase.AvailableFor(android.AvailableToPlatform) {
 		// Platform variant.  If not available for the platform, we don't need Make module.
+		entriesList = append(entriesList, android.AndroidMkEntries{Disabled: true})
+	} else if proptools.Bool(library.properties.Headers_only) {
+		// If generating headers only then don't expose to Make.
 		entriesList = append(entriesList, android.AndroidMkEntries{Disabled: true})
 	} else {
 		entriesList = append(entriesList, android.AndroidMkEntries{

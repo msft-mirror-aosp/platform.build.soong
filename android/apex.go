@@ -482,7 +482,9 @@ func CheckAvailableForApex(what string, apex_available []string) bool {
 	}
 	return InList(what, apex_available) ||
 		(what != AvailableToPlatform && InList(AvailableToAnyApex, apex_available)) ||
-		(strings.HasPrefix(what, "com.android.gki.") && InList(AvailableToGkiApex, apex_available))
+		(strings.HasPrefix(what, "com.android.gki.") && InList(AvailableToGkiApex, apex_available)) ||
+		(what == "com.google.mainline.primary.libs") || // TODO b/248601389
+		(what == "com.google.mainline.go.primary.libs") // TODO b/248601389
 }
 
 // Implements ApexModule
@@ -932,6 +934,19 @@ func CheckMinSdkVersion(ctx ModuleContext, minSdkVersion ApiLevel, walk WalkPayl
 		}
 		return true
 	})
+}
+
+// Construct ApiLevel object from min_sdk_version string value
+func MinSdkVersionFromValue(ctx EarlyModuleContext, value string) ApiLevel {
+	if value == "" {
+		return NoneApiLevel
+	}
+	apiLevel, err := ApiLevelFromUser(ctx, value)
+	if err != nil {
+		ctx.PropertyErrorf("min_sdk_version", "%s", err.Error())
+		return NoneApiLevel
+	}
+	return apiLevel
 }
 
 // Implemented by apexBundle.

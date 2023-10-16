@@ -26,14 +26,20 @@ var (
 		// Help catch common 32/64-bit errors.
 		"-Werror=implicit-function-declaration",
 		"-fno-emulated-tls",
-		"-march=rv64gc_zba_zbb_zbs",
+		"-march=rv64gcv_zba_zbb_zbs",
+		// Equivalent to "-munaligned-access", but our clang doesn't have that yet.
+		"-Xclang -target-feature -Xclang +unaligned-scalar-mem",
+		"-Xclang -target-feature -Xclang +unaligned-vector-mem",
 	}
 
 	riscv64ArchVariantCflags = map[string][]string{}
 
 	riscv64Ldflags = []string{
 		"-Wl,--hash-style=gnu",
-		"-march=rv64gc_zba_zbb_zbs",
+		"-march=rv64gcv_zba_zbb_zbs",
+		// Equivalent to "-munaligned-access", but our clang doesn't have that yet.
+		"-Xclang -target-feature -Xclang +unaligned-scalar-mem",
+		"-Xclang -target-feature -Xclang +unaligned-vector-mem",
 	}
 
 	riscv64Lldflags = append(riscv64Ldflags,

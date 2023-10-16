@@ -21,7 +21,9 @@ import (
 )
 
 var (
-	Arm64RustFlags            = []string{}
+	Arm64RustFlags = []string{
+		"-C force-frame-pointers=y",
+	}
 	Arm64ArchFeatureRustFlags = map[string][]string{}
 	Arm64LinkFlags            = []string{}
 
@@ -52,6 +54,7 @@ func init() {
 			strings.Join(rustFlags, " "))
 	}
 
+	ExportedVars.ExportStringListStaticVariable("DEVICE_ARM64_RUSTC_FLAGS", Arm64RustFlags)
 }
 
 type toolchainArm64 struct {

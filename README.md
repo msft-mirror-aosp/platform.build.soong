@@ -26,8 +26,6 @@ review request is enough. For more substantial changes, file a bug in our
 [bug tracker](https://issuetracker.google.com/issues/new?component=381517) or
 or write us at android-building@googlegroups.com .
 
-For Googlers, see our [internal documentation](http://go/soong).
-
 ## Android.bp file format
 
 By design, Android.bp files are very simple.  There are no conditionals or
@@ -650,8 +648,8 @@ invocations are run in the debugger, e.g., running
 SOONG_DELVE=2345 SOONG_DELVE_STEPS='build,modulegraph' m
 ```
 results in only `build` (main build step) and `modulegraph` being run in the debugger.
-The allowed step names are `api_bp2build`, `bp2build_files`, `bp2build_workspace`,
-`build`, `modulegraph`, `queryview`, `soong_docs`.
+The allowed step names are `bp2build_files`, `bp2build_workspace`, `build`,
+`modulegraph`, `queryview`, `soong_docs`.
 
 Note setting or unsetting `SOONG_DELVE` causes a recompilation of `soong_build`. This
 is because in order to debug the binary, it needs to be built with debug

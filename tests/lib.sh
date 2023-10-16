@@ -8,10 +8,15 @@ HARDWIRED_MOCK_TOP=
 
 REAL_TOP="$(readlink -f "$(dirname "$0")"/../../..)"
 
+function make_mock_top {
+  mock=$(mktemp -t -d st.XXXXX)
+  echo "$mock"
+}
+
 if [[ -n "$HARDWIRED_MOCK_TOP" ]]; then
   MOCK_TOP="$HARDWIRED_MOCK_TOP"
 else
-  MOCK_TOP=$(mktemp -t -d st.XXXXX)
+  MOCK_TOP=$(make_mock_top)
   trap cleanup_mock_top EXIT
 fi
 
@@ -154,8 +159,12 @@ function create_mock_bazel {
   symlink_directory external/bazelbuild-rules_go
   symlink_directory external/bazelbuild-rules_license
   symlink_directory external/bazelbuild-kotlin-rules
+  symlink_directory external/bazelbuild-rules_cc
   symlink_directory external/bazelbuild-rules_python
   symlink_directory external/bazelbuild-rules_java
+  symlink_directory external/bazelbuild-rules_rust
+  symlink_directory external/bazelbuild-rules_testing
+  symlink_directory external/rust/crates/tinyjson
 
   symlink_file WORKSPACE
   symlink_file BUILD
@@ -193,4 +202,12 @@ function scan_and_run_tests {
     $f
     info "Completed test case \e[96;1m$f\e[0m"
   done
+}
+
+function move_mock_top {
+  MOCK_TOP2=$(make_mock_top)
+  rm -rf $MOCK_TOP2
+  mv $MOCK_TOP $MOCK_TOP2
+  MOCK_TOP=$MOCK_TOP2
+  trap cleanup_mock_top EXIT
 }

@@ -134,7 +134,7 @@ type CommonProperties struct {
 	// supported at compile time. It should only be needed to compile tests in
 	// packages that exist in libcore and which are inconvenient to move
 	// elsewhere.
-	Patch_module *string `android:"arch_variant"`
+	Patch_module *string
 
 	Jacoco struct {
 		// List of classes to include for instrumentation with jacoco to collect coverage
@@ -192,6 +192,9 @@ type CommonProperties struct {
 
 	// Additional srcJars tacked in by GeneratedJavaLibraryModule
 	Generated_srcjars []android.Path `android:"mutated"`
+
+	// If true, then only the headers are built and not the implementation jar.
+	Headers_only *bool
 }
 
 // Properties that are specific to device modules. Host module factories should not add these when
@@ -429,6 +432,9 @@ type Module struct {
 	srcJarArgs []string
 	srcJarDeps android.Paths
 
+	// the source files of this module and all its static dependencies
+	transitiveSrcFiles *android.DepSet[android.Path]
+
 	// jar file containing implementation classes and resources including static library
 	// dependencies
 	implementationAndResourcesJar android.Path
@@ -574,6 +580,17 @@ func (j *Module) checkPlatformAPI(ctx android.ModuleContext) {
 	}
 }
 
+func (j *Module) checkHeadersOnly(ctx android.ModuleContext) {
+	if _, ok := ctx.Module().(android.SdkContext); ok {
+		headersOnly := proptools.Bool(j.properties.Headers_only)
+		installable := proptools.Bool(j.properties.Installable)
+
+		if headersOnly && installable {
+			ctx.PropertyErrorf("headers_only", "This module has conflicting settings. headers_only is true which, which means this module doesn't generate an implementation jar. However installable is set to true.")
+		}
+	}
+}
+
 func (j *Module) addHostProperties() {
 	j.AddProperties(
 		&j.properties,
@@ -620,6 +637,13 @@ func (j *Module) OutputFiles(tag string) (android.Paths, error) {
 	case ".proguard_map":
 		if j.dexer.proguardDictionary.Valid() {
 			return android.Paths{j.dexer.proguardDictionary.Path()}, nil
+		}
+		return nil, fmt.Errorf("%q was requested, but no output file was found.", tag)
+	case ".generated_srcjars":
+		return j.properties.Generated_srcjars, nil
+	case ".lint":
+		if j.linter.outputs.xml != nil {
+			return android.Paths{j.linter.outputs.xml}, nil
 		}
 		return nil, fmt.Errorf("%q was requested, but no output file was found.", tag)
 	default:
@@ -693,6 +717,10 @@ func (j *Module) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel 
 		return android.ApiLevelFrom(ctx, *j.deviceProperties.Min_sdk_version)
 	}
 	return j.SdkVersion(ctx).ApiLevel
+}
+
+func (j *Module) GetDeviceProperties() *DeviceProperties {
+	return &j.deviceProperties
 }
 
 func (j *Module) MaxSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
@@ -996,7 +1024,12 @@ func (j *Module) collectJavacFlags(
 
 	if flags.javaVersion.usesJavaModules() {
 		javacFlags = append(javacFlags, j.properties.Openjdk9.Javacflags...)
+	} else if len(j.properties.Openjdk9.Javacflags) > 0 {
+		// java version defaults higher than openjdk 9, these conditionals should no longer be necessary
+		ctx.PropertyErrorf("openjdk9.javacflags", "JDK version defaults to higher than 9")
+	}
 
+	if flags.javaVersion.usesJavaModules() {
 		if j.properties.Patch_module != nil {
 			// Manually specify build directory in case it is not under the repo root.
 			// (javac doesn't seem to expand into symbolic links when searching for patch-module targets, so
@@ -1061,8 +1094,8 @@ func (j *Module) AddJSONData(d *map[string]interface{}) {
 
 }
 
-func (module *Module) addGeneratedSrcJars(path android.Path) {
-	module.properties.Generated_srcjars = append(module.properties.Generated_srcjars, path)
+func (j *Module) addGeneratedSrcJars(path android.Path) {
+	j.properties.Generated_srcjars = append(j.properties.Generated_srcjars, path)
 }
 
 func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspathJars, extraCombinedJars android.Paths) {
@@ -1073,6 +1106,9 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	if flags.javaVersion.usesJavaModules() {
 		j.properties.Srcs = append(j.properties.Srcs, j.properties.Openjdk9.Srcs...)
+	} else if len(j.properties.Openjdk9.Javacflags) > 0 {
+		// java version defaults higher than openjdk 9, these conditionals should no longer be necessary
+		ctx.PropertyErrorf("openjdk9.srcs", "JDK version defaults to higher than 9")
 	}
 
 	srcFiles := android.PathsForModuleSrcExcludes(ctx, j.properties.Srcs, j.properties.Exclude_srcs)
@@ -1150,6 +1186,36 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	// any dependencies so that it can override any non-final R classes from dependencies with the
 	// final R classes from the app.
 	flags.classpath = append(android.CopyOf(extraClasspathJars), flags.classpath...)
+
+	// If compiling headers then compile them and skip the rest
+	if proptools.Bool(j.properties.Headers_only) {
+		if srcFiles.HasExt(".kt") {
+			ctx.ModuleErrorf("Compiling headers_only with .kt not supported")
+		}
+		if ctx.Config().IsEnvFalse("TURBINE_ENABLED") || disableTurbine {
+			ctx.ModuleErrorf("headers_only is enabled but Turbine is disabled.")
+		}
+
+		_, j.headerJarFile =
+			j.compileJavaHeader(ctx, uniqueJavaFiles, srcJars, deps, flags, jarName,
+				extraCombinedJars)
+		if ctx.Failed() {
+			return
+		}
+
+		ctx.SetProvider(JavaInfoProvider, JavaInfo{
+			HeaderJars:                     android.PathsIfNonNil(j.headerJarFile),
+			TransitiveLibsHeaderJars:       j.transitiveLibsHeaderJars,
+			TransitiveStaticLibsHeaderJars: j.transitiveStaticLibsHeaderJars,
+			AidlIncludeDirs:                j.exportAidlIncludeDirs,
+			ExportedPlugins:                j.exportedPluginJars,
+			ExportedPluginClasses:          j.exportedPluginClasses,
+			ExportedPluginDisableTurbine:   j.exportedDisableTurbine,
+		})
+
+		j.outputFile = j.headerJarFile
+		return
+	}
 
 	if srcFiles.HasExt(".kt") {
 		// When using kotlin sources turbine is used to generate annotation processor sources,
@@ -1297,10 +1363,17 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 					jars = append(jars, classes)
 				}
 			}
+			// Assume approximately 5 sources per srcjar.
+			// For framework-minus-apex in AOSP at the time this was written, there are 266 srcjars, with a mean
+			// of 5.8 sources per srcjar, but a median of 1, a standard deviation of 10, and a max of 48 source files.
 			if len(srcJars) > 0 {
-				classes := j.compileJavaClasses(ctx, jarName, len(shardSrcs),
-					nil, srcJars, flags, extraJarDeps)
-				jars = append(jars, classes)
+				startIdx := len(shardSrcs)
+				shardSrcJarsList := android.ShardPaths(srcJars, shardSize/5)
+				for idx, shardSrcJars := range shardSrcJarsList {
+					classes := j.compileJavaClasses(ctx, jarName, startIdx+idx,
+						nil, shardSrcJars, flags, extraJarDeps)
+					jars = append(jars, classes)
+				}
 			}
 		} else {
 			classes := j.compileJavaClasses(ctx, jarName, -1, uniqueJavaFiles, srcJars, flags, extraJarDeps)
@@ -1562,7 +1635,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 					false, nil, nil)
 				if *j.dexProperties.Uncompress_dex {
 					combinedAlignedJar := android.PathForModuleOut(ctx, "dex-withres-aligned", jarName).OutputPath
-					TransformZipAlign(ctx, combinedAlignedJar, combinedJar)
+					TransformZipAlign(ctx, combinedAlignedJar, combinedJar, nil)
 					dexOutputFile = combinedAlignedJar
 				} else {
 					dexOutputFile = combinedJar
@@ -1641,6 +1714,8 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		j.linter.lint(ctx)
 	}
 
+	j.collectTransitiveSrcFiles(ctx, srcFiles)
+
 	ctx.CheckbuildFile(outputFile)
 
 	j.collectTransitiveAconfigFiles(ctx)
@@ -1655,6 +1730,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		AidlIncludeDirs:                j.exportAidlIncludeDirs,
 		SrcJarArgs:                     j.srcJarArgs,
 		SrcJarDeps:                     j.srcJarDeps,
+		TransitiveSrcFiles:             j.transitiveSrcFiles,
 		ExportedPlugins:                j.exportedPluginJars,
 		ExportedPluginClasses:          j.exportedPluginClasses,
 		ExportedPluginDisableTurbine:   j.exportedDisableTurbine,
@@ -1668,6 +1744,49 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 func (j *Module) useCompose() bool {
 	return android.InList("androidx.compose.runtime_runtime", j.properties.Static_libs)
+}
+
+func (j *Module) collectProguardSpecInfo(ctx android.ModuleContext) ProguardSpecInfo {
+	transitiveUnconditionalExportedFlags := []*android.DepSet[android.Path]{}
+	transitiveProguardFlags := []*android.DepSet[android.Path]{}
+
+	ctx.VisitDirectDeps(func(m android.Module) {
+		depProguardInfo := ctx.OtherModuleProvider(m, ProguardSpecInfoProvider).(ProguardSpecInfo)
+		depTag := ctx.OtherModuleDependencyTag(m)
+
+		if depProguardInfo.UnconditionallyExportedProguardFlags != nil {
+			transitiveUnconditionalExportedFlags = append(transitiveUnconditionalExportedFlags, depProguardInfo.UnconditionallyExportedProguardFlags)
+			transitiveProguardFlags = append(transitiveProguardFlags, depProguardInfo.UnconditionallyExportedProguardFlags)
+		}
+
+		if depTag == staticLibTag && depProguardInfo.ProguardFlagsFiles != nil {
+			transitiveProguardFlags = append(transitiveProguardFlags, depProguardInfo.ProguardFlagsFiles)
+		}
+	})
+
+	directUnconditionalExportedFlags := android.Paths{}
+	proguardFlagsForThisModule := android.PathsForModuleSrc(ctx, j.dexProperties.Optimize.Proguard_flags_files)
+	exportUnconditionally := proptools.Bool(j.dexProperties.Optimize.Export_proguard_flags_files)
+	if exportUnconditionally {
+		// if we explicitly export, then our unconditional exports are the same as our transitive flags
+		transitiveUnconditionalExportedFlags = transitiveProguardFlags
+		directUnconditionalExportedFlags = proguardFlagsForThisModule
+	}
+
+	return ProguardSpecInfo{
+		Export_proguard_flags_files: exportUnconditionally,
+		ProguardFlagsFiles: android.NewDepSet[android.Path](
+			android.POSTORDER,
+			proguardFlagsForThisModule,
+			transitiveProguardFlags,
+		),
+		UnconditionallyExportedProguardFlags: android.NewDepSet[android.Path](
+			android.POSTORDER,
+			directUnconditionalExportedFlags,
+			transitiveUnconditionalExportedFlags,
+		),
+	}
+
 }
 
 // Returns a copy of the supplied flags, but with all the errorprone-related
@@ -1934,6 +2053,21 @@ func (j *Module) Stem() string {
 
 func (j *Module) JacocoReportClassesFile() android.Path {
 	return j.jacocoReportClassesFile
+}
+
+func (j *Module) collectTransitiveSrcFiles(ctx android.ModuleContext, mine android.Paths) {
+	var fromDeps []*android.DepSet[android.Path]
+	ctx.VisitDirectDeps(func(module android.Module) {
+		tag := ctx.OtherModuleDependencyTag(module)
+		if tag == staticLibTag {
+			depInfo := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
+			if depInfo.TransitiveSrcFiles != nil {
+				fromDeps = append(fromDeps, depInfo.TransitiveSrcFiles)
+			}
+		}
+	})
+
+	j.transitiveSrcFiles = android.NewDepSet(android.POSTORDER, mine, fromDeps)
 }
 
 func (j *Module) IsInstallable() bool {
@@ -2270,7 +2404,7 @@ type ModuleWithStem interface {
 
 var _ ModuleWithStem = (*Module)(nil)
 
-func (j *Module) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (j *Module) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	switch ctx.ModuleType() {
 	case "java_library", "java_library_host", "java_library_static", "tradefed_java_library_host":
 		if lib, ok := ctx.Module().(*Library); ok {

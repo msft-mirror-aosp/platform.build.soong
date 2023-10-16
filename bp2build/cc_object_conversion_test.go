@@ -232,11 +232,11 @@ func TestCcObjectCflagsOneArch(t *testing.T) {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_object", "foo", AttrNameToString{
 				"copts": `["-fno-addrsig"] + select({
-        "//build/bazel/platforms/arch:x86": ["-fPIC"],
+        "//build/bazel_common_rules/platforms/arch:x86": ["-fPIC"],
         "//conditions:default": [],
     })`,
 				"srcs": `["a.cpp"] + select({
-        "//build/bazel/platforms/arch:arm": ["arch/arm/file.cpp"],
+        "//build/bazel_common_rules/platforms/arch:arm": ["arch/arm/file.cpp"],
         "//conditions:default": [],
     })`,
 				"system_dynamic_deps": `[]`,
@@ -276,17 +276,17 @@ func TestCcObjectCflagsFourArch(t *testing.T) {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_object", "foo", AttrNameToString{
 				"copts": `["-fno-addrsig"] + select({
-        "//build/bazel/platforms/arch:arm": ["-Wall"],
-        "//build/bazel/platforms/arch:arm64": ["-Wall"],
-        "//build/bazel/platforms/arch:x86": ["-fPIC"],
-        "//build/bazel/platforms/arch:x86_64": ["-fPIC"],
+        "//build/bazel_common_rules/platforms/arch:arm": ["-Wall"],
+        "//build/bazel_common_rules/platforms/arch:arm64": ["-Wall"],
+        "//build/bazel_common_rules/platforms/arch:x86": ["-fPIC"],
+        "//build/bazel_common_rules/platforms/arch:x86_64": ["-fPIC"],
         "//conditions:default": [],
     })`,
 				"srcs": `["base.cpp"] + select({
-        "//build/bazel/platforms/arch:arm": ["arm.cpp"],
-        "//build/bazel/platforms/arch:arm64": ["arm64.cpp"],
-        "//build/bazel/platforms/arch:x86": ["x86.cpp"],
-        "//build/bazel/platforms/arch:x86_64": ["x86_64.cpp"],
+        "//build/bazel_common_rules/platforms/arch:arm": ["arm.cpp"],
+        "//build/bazel_common_rules/platforms/arch:arm64": ["arm64.cpp"],
+        "//build/bazel_common_rules/platforms/arch:x86": ["x86.cpp"],
+        "//build/bazel_common_rules/platforms/arch:x86_64": ["x86_64.cpp"],
         "//conditions:default": [],
     })`,
 				"system_dynamic_deps": `[]`,
@@ -317,7 +317,8 @@ func TestCcObjectLinkerScript(t *testing.T) {
 
 func TestCcObjectDepsAndLinkerScriptSelects(t *testing.T) {
 	runCcObjectTestCase(t, Bp2buildTestCase{
-		Description: "cc_object setting deps and linker_script across archs",
+		Description:             "cc_object setting deps and linker_script across archs",
+		StubbedBuildDefinitions: []string{"x86_obj", "x86_64_obj", "arm_obj"},
 		Blueprint: `cc_object {
     name: "foo",
     srcs: ["base.cpp"],
@@ -343,7 +344,6 @@ cc_object {
     system_shared_libs: [],
     srcs: ["x86.cpp"],
     include_build_directory: false,
-    bazel_module: { bp2build_available: false },
 }
 
 cc_object {
@@ -351,7 +351,6 @@ cc_object {
     system_shared_libs: [],
     srcs: ["x86_64.cpp"],
     include_build_directory: false,
-    bazel_module: { bp2build_available: false },
 }
 
 cc_object {
@@ -359,22 +358,21 @@ cc_object {
     system_shared_libs: [],
     srcs: ["arm.cpp"],
     include_build_directory: false,
-    bazel_module: { bp2build_available: false },
 }
 `,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("cc_object", "foo", AttrNameToString{
 				"copts": `["-fno-addrsig"]`,
 				"objs": `select({
-        "//build/bazel/platforms/arch:arm": [":arm_obj"],
-        "//build/bazel/platforms/arch:x86": [":x86_obj"],
-        "//build/bazel/platforms/arch:x86_64": [":x86_64_obj"],
+        "//build/bazel_common_rules/platforms/arch:arm": [":arm_obj"],
+        "//build/bazel_common_rules/platforms/arch:x86": [":x86_obj"],
+        "//build/bazel_common_rules/platforms/arch:x86_64": [":x86_64_obj"],
         "//conditions:default": [],
     })`,
 				"linker_script": `select({
-        "//build/bazel/platforms/arch:arm": "arm.lds",
-        "//build/bazel/platforms/arch:x86": "x86.lds",
-        "//build/bazel/platforms/arch:x86_64": "x86_64.lds",
+        "//build/bazel_common_rules/platforms/arch:arm": "arm.lds",
+        "//build/bazel_common_rules/platforms/arch:x86": "x86.lds",
+        "//build/bazel_common_rules/platforms/arch:x86_64": "x86_64.lds",
         "//conditions:default": None,
     })`,
 				"srcs": `["base.cpp"]`,
@@ -407,18 +405,18 @@ func TestCcObjectSelectOnLinuxAndBionicArchs(t *testing.T) {
 			MakeBazelTarget("cc_object", "foo", AttrNameToString{
 				"copts": `["-fno-addrsig"]`,
 				"srcs": `["base.cpp"] + select({
-        "//build/bazel/platforms/os_arch:android_arm64": [
+        "//build/bazel_common_rules/platforms/os_arch:android_arm64": [
             "linux_arm64.cpp",
             "bionic_arm64.cpp",
         ],
-        "//build/bazel/platforms/os_arch:android_x86": ["linux_x86.cpp"],
-        "//build/bazel/platforms/os_arch:linux_bionic_arm64": [
+        "//build/bazel_common_rules/platforms/os_arch:android_x86": ["linux_x86.cpp"],
+        "//build/bazel_common_rules/platforms/os_arch:linux_bionic_arm64": [
             "linux_arm64.cpp",
             "bionic_arm64.cpp",
         ],
-        "//build/bazel/platforms/os_arch:linux_glibc_x86": ["linux_x86.cpp"],
-        "//build/bazel/platforms/os_arch:linux_musl_arm64": ["linux_arm64.cpp"],
-        "//build/bazel/platforms/os_arch:linux_musl_x86": ["linux_x86.cpp"],
+        "//build/bazel_common_rules/platforms/os_arch:linux_glibc_x86": ["linux_x86.cpp"],
+        "//build/bazel_common_rules/platforms/os_arch:linux_musl_arm64": ["linux_arm64.cpp"],
+        "//build/bazel_common_rules/platforms/os_arch:linux_musl_x86": ["linux_x86.cpp"],
         "//conditions:default": [],
     })`,
 			}),

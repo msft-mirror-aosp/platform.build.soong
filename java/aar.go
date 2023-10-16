@@ -23,13 +23,13 @@ import (
 	"android/soong/android"
 	"android/soong/bazel"
 	"android/soong/dexpreopt"
+	"android/soong/ui/metrics/bp2build_metrics_proto"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 )
 
 type AndroidLibraryDependency interface {
-	LibraryDependency
 	ExportPackage() android.Path
 	ResourcesNodeDepSet() *android.DepSet[*resourcesNode]
 	RRODirsDepSet() *android.DepSet[rroDir]
@@ -301,23 +301,29 @@ var extractAssetsRule = pctx.AndroidStaticRule("extractAssets",
 		CommandDeps: []string{"${config.Zip2ZipCmd}"},
 	})
 
-func (a *aapt) buildActions(ctx android.ModuleContext, sdkContext android.SdkContext,
-	classLoaderContexts dexpreopt.ClassLoaderContextMap, excludedLibs []string,
-	enforceDefaultTargetSdkVersion bool, extraLinkFlags ...string) {
+type aaptBuildActionOptions struct {
+	sdkContext                     android.SdkContext
+	classLoaderContexts            dexpreopt.ClassLoaderContextMap
+	excludedLibs                   []string
+	enforceDefaultTargetSdkVersion bool
+	extraLinkFlags                 []string
+}
 
-	staticResourcesNodesDepSet, staticRRODirsDepSet, staticManifestsDepSet, sharedDeps, libFlags :=
-		aaptLibs(ctx, sdkContext, classLoaderContexts)
+func (a *aapt) buildActions(ctx android.ModuleContext, opts aaptBuildActionOptions) {
+
+	staticResourcesNodesDepSet, sharedResourcesNodesDepSet, staticRRODirsDepSet, staticManifestsDepSet, sharedExportPackages, libFlags :=
+		aaptLibs(ctx, opts.sdkContext, opts.classLoaderContexts)
 
 	// Exclude any libraries from the supplied list.
-	classLoaderContexts = classLoaderContexts.ExcludeLibs(excludedLibs)
+	opts.classLoaderContexts = opts.classLoaderContexts.ExcludeLibs(opts.excludedLibs)
 
 	// App manifest file
 	manifestFile := proptools.StringDefault(a.aaptProperties.Manifest, "AndroidManifest.xml")
 	manifestSrcPath := android.PathForModuleSrc(ctx, manifestFile)
 
 	manifestPath := ManifestFixer(ctx, manifestSrcPath, ManifestFixerParams{
-		SdkContext:                     sdkContext,
-		ClassLoaderContexts:            classLoaderContexts,
+		SdkContext:                     opts.sdkContext,
+		ClassLoaderContexts:            opts.classLoaderContexts,
 		IsLibrary:                      a.isLibrary,
 		DefaultManifestVersion:         a.defaultManifestVersion,
 		UseEmbeddedNativeLibs:          a.useEmbeddedNativeLibs,
@@ -325,10 +331,11 @@ func (a *aapt) buildActions(ctx android.ModuleContext, sdkContext android.SdkCon
 		UseEmbeddedDex:                 a.useEmbeddedDex,
 		HasNoCode:                      a.hasNoCode,
 		LoggingParent:                  a.LoggingParent,
-		EnforceDefaultTargetSdkVersion: enforceDefaultTargetSdkVersion,
+		EnforceDefaultTargetSdkVersion: opts.enforceDefaultTargetSdkVersion,
 	})
 
 	staticDeps := transitiveAarDeps(staticResourcesNodesDepSet.ToList())
+	sharedDeps := transitiveAarDeps(sharedResourcesNodesDepSet.ToList())
 
 	// Add additional manifest files to transitive manifests.
 	additionalManifests := android.PathsForModuleSrc(ctx, a.aaptProperties.Additional_manifests)
@@ -341,7 +348,10 @@ func (a *aapt) buildActions(ctx android.ModuleContext, sdkContext android.SdkCon
 	transitiveManifestPaths = append(transitiveManifestPaths, staticManifestsDepSet.ToList()...)
 
 	if len(transitiveManifestPaths) > 1 && !Bool(a.aaptProperties.Dont_merge_manifests) {
-		a.mergedManifestFile = manifestMerger(ctx, transitiveManifestPaths[0], transitiveManifestPaths[1:], a.isLibrary)
+		manifestMergerParams := ManifestMergerParams{
+			staticLibManifests: transitiveManifestPaths[1:],
+			isLibrary:          a.isLibrary}
+		a.mergedManifestFile = manifestMerger(ctx, transitiveManifestPaths[0], manifestMergerParams)
 		if !a.isLibrary {
 			// Only use the merged manifest for applications.  For libraries, the transitive closure of manifests
 			// will be propagated to the final application and merged there.  The merged manifest for libraries is
@@ -352,12 +362,12 @@ func (a *aapt) buildActions(ctx android.ModuleContext, sdkContext android.SdkCon
 		a.mergedManifestFile = manifestPath
 	}
 
-	compileFlags, linkFlags, linkDeps, resDirs, overlayDirs, rroDirs, resZips := a.aapt2Flags(ctx, sdkContext, manifestPath)
+	compileFlags, linkFlags, linkDeps, resDirs, overlayDirs, rroDirs, resZips := a.aapt2Flags(ctx, opts.sdkContext, manifestPath)
 
 	linkFlags = append(linkFlags, libFlags...)
-	linkDeps = append(linkDeps, sharedDeps...)
+	linkDeps = append(linkDeps, sharedExportPackages...)
 	linkDeps = append(linkDeps, staticDeps.resPackages()...)
-	linkFlags = append(linkFlags, extraLinkFlags...)
+	linkFlags = append(linkFlags, opts.extraLinkFlags...)
 	if a.isLibrary {
 		linkFlags = append(linkFlags, "--static-lib")
 	}
@@ -411,6 +421,11 @@ func (a *aapt) buildActions(ctx android.ModuleContext, sdkContext android.SdkCon
 			linkFlags = append(linkFlags, "-I "+staticDep.resPackage.String())
 			if staticDep.usedResourceProcessor {
 				transitiveRJars = append(transitiveRJars, staticDep.rJar)
+			}
+		}
+		for _, sharedDep := range sharedDeps {
+			if sharedDep.usedResourceProcessor {
+				transitiveRJars = append(transitiveRJars, sharedDep.rJar)
 			}
 		}
 	} else {
@@ -621,7 +636,7 @@ func (t transitiveAarDeps) assets() android.Paths {
 
 // aaptLibs collects libraries from dependencies and sdk_version and converts them into paths
 func aaptLibs(ctx android.ModuleContext, sdkContext android.SdkContext, classLoaderContexts dexpreopt.ClassLoaderContextMap) (
-	staticResourcesNodes *android.DepSet[*resourcesNode], staticRRODirs *android.DepSet[rroDir],
+	staticResourcesNodes, sharedResourcesNodes *android.DepSet[*resourcesNode], staticRRODirs *android.DepSet[rroDir],
 	staticManifests *android.DepSet[android.Path], sharedLibs android.Paths, flags []string) {
 
 	if classLoaderContexts == nil {
@@ -635,7 +650,8 @@ func aaptLibs(ctx android.ModuleContext, sdkContext android.SdkContext, classLoa
 		sharedLibs = append(sharedLibs, sdkDep.jars...)
 	}
 
-	var resourcesNodeDepSets []*android.DepSet[*resourcesNode]
+	var staticResourcesNodeDepSets []*android.DepSet[*resourcesNode]
+	var sharedResourcesNodeDepSets []*android.DepSet[*resourcesNode]
 	rroDirsDepSetBuilder := android.NewDepSetBuilder[rroDir](android.TOPOLOGICAL)
 	manifestsDepSetBuilder := android.NewDepSetBuilder[android.Path](android.TOPOLOGICAL)
 
@@ -653,6 +669,7 @@ func aaptLibs(ctx android.ModuleContext, sdkContext android.SdkContext, classLoa
 			// Nothing, instrumentationForTag is treated as libTag for javac but not for aapt2.
 		case sdkLibTag, libTag:
 			if exportPackage != nil {
+				sharedResourcesNodeDepSets = append(sharedResourcesNodeDepSets, aarDep.ResourcesNodeDepSet())
 				sharedLibs = append(sharedLibs, exportPackage)
 			}
 		case frameworkResTag:
@@ -661,7 +678,7 @@ func aaptLibs(ctx android.ModuleContext, sdkContext android.SdkContext, classLoa
 			}
 		case staticLibTag:
 			if exportPackage != nil {
-				resourcesNodeDepSets = append(resourcesNodeDepSets, aarDep.ResourcesNodeDepSet())
+				staticResourcesNodeDepSets = append(staticResourcesNodeDepSets, aarDep.ResourcesNodeDepSet())
 				rroDirsDepSetBuilder.Transitive(aarDep.RRODirsDepSet())
 				manifestsDepSetBuilder.Transitive(aarDep.ManifestsDepSet())
 			}
@@ -677,7 +694,9 @@ func aaptLibs(ctx android.ModuleContext, sdkContext android.SdkContext, classLoa
 	// dependencies) the highest priority dependency is listed first, but for resources the highest priority
 	// dependency has to be listed last.
 	staticResourcesNodes = android.NewDepSet(android.TOPOLOGICAL, nil,
-		android.ReverseSliceInPlace(resourcesNodeDepSets))
+		android.ReverseSliceInPlace(staticResourcesNodeDepSets))
+	sharedResourcesNodes = android.NewDepSet(android.TOPOLOGICAL, nil,
+		android.ReverseSliceInPlace(sharedResourcesNodeDepSets))
 
 	staticRRODirs = rroDirsDepSetBuilder.Build()
 	staticManifests = manifestsDepSetBuilder.Build()
@@ -690,7 +709,7 @@ func aaptLibs(ctx android.ModuleContext, sdkContext android.SdkContext, classLoa
 		flags = append(flags, "-I "+sharedLib.String())
 	}
 
-	return staticResourcesNodes, staticRRODirs, staticManifests, sharedLibs, flags
+	return staticResourcesNodes, sharedResourcesNodes, staticRRODirs, staticManifests, sharedLibs, flags
 }
 
 type AndroidLibrary struct {
@@ -729,7 +748,13 @@ func (a *AndroidLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 func (a *AndroidLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.aapt.isLibrary = true
 	a.classLoaderContexts = a.usesLibrary.classLoaderContextForUsesLibDeps(ctx)
-	a.aapt.buildActions(ctx, android.SdkContext(a), a.classLoaderContexts, nil, false)
+	a.aapt.buildActions(ctx,
+		aaptBuildActionOptions{
+			sdkContext:                     android.SdkContext(a),
+			classLoaderContexts:            a.classLoaderContexts,
+			enforceDefaultTargetSdkVersion: false,
+		},
+	)
 
 	a.hideApexVariantFromMake = !ctx.Provider(android.ApexInfoProvider).(android.ApexInfo).IsForPlatform()
 
@@ -777,17 +802,9 @@ func (a *AndroidLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 		ctx.CheckbuildFile(a.aarFile)
 	}
 
-	a.exportedProguardFlagFiles = append(a.exportedProguardFlagFiles,
-		android.PathsForModuleSrc(ctx, a.dexProperties.Optimize.Proguard_flags_files)...)
-
-	ctx.VisitDirectDeps(func(m android.Module) {
-		if ctx.OtherModuleDependencyTag(m) == staticLibTag {
-			if lib, ok := m.(LibraryDependency); ok {
-				a.exportedProguardFlagFiles = append(a.exportedProguardFlagFiles, lib.ExportedProguardFlagFiles()...)
-			}
-		}
-	})
-	a.exportedProguardFlagFiles = android.FirstUniquePaths(a.exportedProguardFlagFiles)
+	proguardSpecInfo := a.collectProguardSpecInfo(ctx)
+	ctx.SetProvider(ProguardSpecInfoProvider, proguardSpecInfo)
+	a.exportedProguardFlagFiles = proguardSpecInfo.ProguardFlagsFiles.ToList()
 
 	prebuiltJniPackages := android.Paths{}
 	ctx.VisitDirectDeps(func(module android.Module) {
@@ -938,10 +955,6 @@ var _ AndroidLibraryDependency = (*AARImport)(nil)
 func (a *AARImport) ExportPackage() android.Path {
 	return a.exportPackage
 }
-func (a *AARImport) ExportedProguardFlagFiles() android.Paths {
-	return android.Paths{a.proguardFlags}
-}
-
 func (a *AARImport) ResourcesNodeDepSet() *android.DepSet[*resourcesNode] {
 	return a.resourcesNodesDepSet
 }
@@ -1005,7 +1018,7 @@ var extractJNI = pctx.AndroidStaticRule("extractJNI",
 			`jni_files=$$(find $outDir/jni -type f) && ` +
 			// print error message if there are no JNI libs for this arch
 			`[ -n "$$jni_files" ] || (echo "ERROR: no JNI libs found for arch ${archString}" && exit 1) && ` +
-			`${config.SoongZipCmd} -o $out -P 'lib/${archString}' ` +
+			`${config.SoongZipCmd} -o $out -L 0 -P 'lib/${archString}' ` +
 			`-C $outDir/jni/${archString} $$(echo $$jni_files | xargs -n1 printf " -f %s")`,
 		CommandDeps: []string{"${config.SoongZipCmd}"},
 	},
@@ -1045,10 +1058,17 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	extractedAARDir := android.PathForModuleOut(ctx, "aar")
 	a.classpathFile = extractedAARDir.Join(ctx, "classes-combined.jar")
-	a.proguardFlags = extractedAARDir.Join(ctx, "proguard.txt")
 	a.manifest = extractedAARDir.Join(ctx, "AndroidManifest.xml")
 	aarRTxt := extractedAARDir.Join(ctx, "R.txt")
 	a.assetsPackage = android.PathForModuleOut(ctx, "assets.zip")
+	a.proguardFlags = extractedAARDir.Join(ctx, "proguard.txt")
+	ctx.SetProvider(ProguardSpecInfoProvider, ProguardSpecInfo{
+		ProguardFlagsFiles: android.NewDepSet[android.Path](
+			android.POSTORDER,
+			android.Paths{a.proguardFlags},
+			nil,
+		),
+	})
 
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        unzipAAR,
@@ -1085,10 +1105,12 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	linkFlags = append(linkFlags, "--manifest "+a.manifest.String())
 	linkDeps = append(linkDeps, a.manifest)
 
-	staticResourcesNodesDepSet, staticRRODirsDepSet, staticManifestsDepSet, sharedLibs, libFlags :=
+	staticResourcesNodesDepSet, sharedResourcesNodesDepSet, staticRRODirsDepSet, staticManifestsDepSet, sharedLibs, libFlags :=
 		aaptLibs(ctx, android.SdkContext(a), nil)
 
+	_ = sharedResourcesNodesDepSet
 	_ = staticRRODirsDepSet
+
 	staticDeps := transitiveAarDeps(staticResourcesNodesDepSet.ToList())
 
 	linkDeps = append(linkDeps, sharedLibs...)
@@ -1228,6 +1250,9 @@ func AARImportFactory() android.Module {
 type bazelAapt struct {
 	Manifest       bazel.Label
 	Resource_files bazel.LabelListAttribute
+	Resource_zips  bazel.LabelListAttribute
+	Assets_dir     bazel.StringAttribute
+	Assets         bazel.LabelListAttribute
 }
 
 type bazelAndroidLibrary struct {
@@ -1242,7 +1267,7 @@ type bazelAndroidLibraryImport struct {
 	Sdk_version bazel.StringAttribute
 }
 
-func (a *aapt) convertAaptAttrsWithBp2Build(ctx android.TopDownMutatorContext) *bazelAapt {
+func (a *aapt) convertAaptAttrsWithBp2Build(ctx android.Bp2buildMutatorContext) (*bazelAapt, bool) {
 	manifest := proptools.StringDefault(a.aaptProperties.Manifest, "AndroidManifest.xml")
 
 	resourceFiles := bazel.LabelList{
@@ -1252,13 +1277,48 @@ func (a *aapt) convertAaptAttrsWithBp2Build(ctx android.TopDownMutatorContext) *
 		files := android.RootToModuleRelativePaths(ctx, androidResourceGlob(ctx, dir))
 		resourceFiles.Includes = append(resourceFiles.Includes, files...)
 	}
+
+	assetsDir := bazel.StringAttribute{}
+	var assets bazel.LabelList
+	for i, dir := range android.PathsWithOptionalDefaultForModuleSrc(ctx, a.aaptProperties.Asset_dirs, "assets") {
+		if i > 0 {
+			ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_PROPERTY_UNSUPPORTED, "multiple asset_dirs")
+			return &bazelAapt{}, false
+		}
+		// Assets_dirs are relative to the module dir when specified, but if the default in used in
+		// PathsWithOptionalDefaultForModuleSrc, then dir is relative to the top.
+		assetsRelDir, error := filepath.Rel(ctx.ModuleDir(), dir.Rel())
+		if error != nil {
+			assetsRelDir = dir.Rel()
+		}
+		assetsDir.Value = proptools.StringPtr(assetsRelDir)
+		assets = bazel.MakeLabelList(android.RootToModuleRelativePaths(ctx, androidResourceGlob(ctx, dir)))
+
+	}
+	var resourceZips bazel.LabelList
+	if len(a.aaptProperties.Resource_zips) > 0 {
+		if ctx.ModuleName() == "framework-res" {
+			resourceZips = android.BazelLabelForModuleSrc(ctx, a.aaptProperties.Resource_zips)
+		} else {
+			//TODO: b/301593550 - Implement support for this
+			ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_PROPERTY_UNSUPPORTED, "resource_zips")
+			return &bazelAapt{}, false
+		}
+	}
 	return &bazelAapt{
 		android.BazelLabelForModuleSrcSingle(ctx, manifest),
 		bazel.MakeLabelListAttribute(resourceFiles),
-	}
+		bazel.MakeLabelListAttribute(resourceZips),
+		assetsDir,
+		bazel.MakeLabelListAttribute(assets),
+	}, true
 }
 
-func (a *AARImport) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (a *AARImport) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
+	if len(a.properties.Aars) == 0 {
+		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_PROPERTY_UNSUPPORTED, "aars can't be empty")
+		return
+	}
 	aars := android.BazelLabelForModuleSrcExcludes(ctx, a.properties.Aars, []string{})
 	exportableStaticLibs := []string{}
 	// TODO(b/240716882): investigate and handle static_libs deps that are not imports. They are not supported for export by Bazel.
@@ -1311,7 +1371,7 @@ func AndroidLibraryBazelTargetModuleProperties() bazel.BazelTargetModuleProperti
 	}
 }
 
-func (a *AndroidLibrary) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (a *AndroidLibrary) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	commonAttrs, bp2buildInfo, supported := a.convertLibraryAttrsBp2Build(ctx)
 	if !supported {
 		return
@@ -1323,11 +1383,23 @@ func (a *AndroidLibrary) ConvertWithBp2build(ctx android.TopDownMutatorContext) 
 	if !commonAttrs.Srcs.IsEmpty() {
 		deps.Append(depLabels.StaticDeps) // we should only append these if there are sources to use them
 	} else if !depLabels.Deps.IsEmpty() {
-		ctx.ModuleErrorf("Module has direct dependencies but no sources. Bazel will not allow this.")
+		// android_library does not accept deps when there are no srcs because
+		// there is no compilation happening, but it accepts exports.
+		// The non-empty deps here are unnecessary as deps on the android_library
+		// since they aren't being propagated to any dependencies.
+		// So we can drop deps here.
+		deps = bazel.LabelListAttribute{}
 	}
 	name := a.Name()
 	props := AndroidLibraryBazelTargetModuleProperties()
 
+	aaptAttrs, supported := a.convertAaptAttrsWithBp2Build(ctx)
+	if !supported {
+		return
+	}
+	if hasJavaResources := aaptAttrs.ConvertJavaResources(ctx, commonAttrs); hasJavaResources {
+		return
+	}
 	ctx.CreateBazelTargetModule(
 		props,
 		android.CommonAttributes{Name: name},
@@ -1337,7 +1409,7 @@ func (a *AndroidLibrary) ConvertWithBp2build(ctx android.TopDownMutatorContext) 
 				Deps:                 deps,
 				Exports:              depLabels.StaticDeps,
 			},
-			a.convertAaptAttrsWithBp2Build(ctx),
+			aaptAttrs,
 		},
 	)
 

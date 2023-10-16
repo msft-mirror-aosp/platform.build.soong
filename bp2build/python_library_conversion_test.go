@@ -13,18 +13,19 @@ import (
 type PythonLibBp2Build func(ctx android.TopDownMutatorContext)
 
 type pythonLibBp2BuildTestCase struct {
-	description          string
-	filesystem           map[string]string
-	blueprint            string
-	expectedBazelTargets []testBazelTarget
-	dir                  string
-	expectedError        error
+	description             string
+	filesystem              map[string]string
+	blueprint               string
+	expectedBazelTargets    []testBazelTarget
+	dir                     string
+	expectedError           error
+	stubbedBuildDefinitions []string
 }
 
 func convertPythonLibTestCaseToBp2build_Host(tc pythonLibBp2BuildTestCase) Bp2buildTestCase {
 	for i := range tc.expectedBazelTargets {
 		tc.expectedBazelTargets[i].attrs["target_compatible_with"] = `select({
-        "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],
+        "//build/bazel_common_rules/platforms/os:android": ["@platforms//:incompatible"],
         "//conditions:default": [],
     })`
 	}
@@ -44,12 +45,13 @@ func convertPythonLibTestCaseToBp2build(tc pythonLibBp2BuildTestCase) Bp2buildTe
 		filesystemCopy[k] = v
 	}
 	return Bp2buildTestCase{
-		Description:          tc.description,
-		Filesystem:           filesystemCopy,
-		Blueprint:            tc.blueprint,
-		ExpectedBazelTargets: bp2BuildTargets,
-		Dir:                  tc.dir,
-		ExpectedErr:          tc.expectedError,
+		Description:             tc.description,
+		Filesystem:              filesystemCopy,
+		Blueprint:               tc.blueprint,
+		ExpectedBazelTargets:    bp2BuildTargets,
+		Dir:                     tc.dir,
+		ExpectedErr:             tc.expectedError,
+		StubbedBuildDefinitions: tc.stubbedBuildDefinitions,
 	}
 }
 
@@ -104,6 +106,7 @@ func TestSimplePythonLib(t *testing.T) {
 				"b/e.py":         "",
 				"files/data.txt": "",
 			},
+			stubbedBuildDefinitions: []string{"bar"},
 			blueprint: `%s {
     name: "foo",
     srcs: ["**/*.py"],
@@ -115,7 +118,6 @@ func TestSimplePythonLib(t *testing.T) {
     python_library {
       name: "bar",
       srcs: ["b/e.py"],
-      bazel_module: { bp2build_available: false },
     }`,
 			expectedBazelTargets: []testBazelTarget{
 				{
@@ -294,8 +296,8 @@ func TestPythonArchVariance(t *testing.T) {
 				name: "foo",
 				attrs: AttrNameToString{
 					"srcs": `select({
-        "//build/bazel/platforms/arch:arm": ["arm.py"],
-        "//build/bazel/platforms/arch:x86": ["x86.py"],
+        "//build/bazel_common_rules/platforms/arch:arm": ["arm.py"],
+        "//build/bazel_common_rules/platforms/arch:x86": ["x86.py"],
         "//conditions:default": [],
     })`,
 					"srcs_version": `"PY3"`,
@@ -345,6 +347,46 @@ func TestPythonLibraryWithProtobufs(t *testing.T) {
 					"deps":         `[":foo_py_proto"]`,
 				},
 			},
+		},
+	})
+}
+
+func TestPythonLibraryWithProtobufsAndPkgPath(t *testing.T) {
+	t.Parallel()
+	runBp2BuildTestCaseWithPythonLibraries(t, Bp2buildTestCase{
+		Description: "test python_library protobuf with pkg_path",
+		Filesystem: map[string]string{
+			"dir/foo.proto": "",
+			"dir/bar.proto": "", // bar contains "import dir/foo.proto"
+			"dir/Android.bp": `
+python_library {
+  name: "foo",
+  pkg_path: "dir",
+  srcs: [
+    "foo.proto",
+    "bar.proto",
+  ],
+  bazel_module: {bp2build_available: true},
+}`,
+		},
+		Dir: "dir",
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("proto_library", "foo_proto", AttrNameToString{
+				"import_prefix":       `"dir"`,
+				"strip_import_prefix": `""`,
+				"srcs": `[
+        "foo.proto",
+        "bar.proto",
+    ]`,
+			}),
+			MakeBazelTarget("py_proto_library", "foo_py_proto", AttrNameToString{
+				"deps": `[":foo_proto"]`,
+			}),
+			MakeBazelTarget("py_library", "foo", AttrNameToString{
+				"srcs_version": `"PY3"`,
+				"imports":      `[".."]`,
+				"deps":         `[":foo_py_proto"]`,
+			}),
 		},
 	})
 }

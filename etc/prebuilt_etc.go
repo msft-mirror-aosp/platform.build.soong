@@ -40,6 +40,7 @@ import (
 	"android/soong/bazel"
 	"android/soong/bazel/cquery"
 	"android/soong/snapshot"
+	"android/soong/ui/metrics/bp2build_metrics_proto"
 )
 
 var pctx = android.NewPackageContext("android/soong/etc")
@@ -507,6 +508,7 @@ func PrebuiltRootHostFactory() android.Module {
 	// This module is host-only
 	android.InitAndroidArchModule(module, android.HostSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
+	android.InitBazelModule(module)
 	return module
 }
 
@@ -711,7 +713,7 @@ type bazelPrebuiltFileAttributes struct {
 // Bp2buildHelper returns a bazelPrebuiltFileAttributes used for the conversion
 // of prebuilt_*  modules. bazelPrebuiltFileAttributes has the common attributes
 // used by both prebuilt_etc_xml and other prebuilt_* moodules
-func (module *PrebuiltEtc) Bp2buildHelper(ctx android.TopDownMutatorContext) *bazelPrebuiltFileAttributes {
+func (module *PrebuiltEtc) Bp2buildHelper(ctx android.Bp2buildMutatorContext) (*bazelPrebuiltFileAttributes, bool) {
 	var src bazel.LabelAttribute
 	for axis, configToProps := range module.GetArchVariantProperties(ctx, &prebuiltEtcProperties{}) {
 		for config, p := range configToProps {
@@ -720,12 +722,20 @@ func (module *PrebuiltEtc) Bp2buildHelper(ctx android.TopDownMutatorContext) *ba
 				continue
 			}
 			if props.Src != nil {
-				label := android.BazelLabelForModuleSrcSingle(ctx, *props.Src)
+				srcStr := proptools.String(props.Src)
+				if srcStr == ctx.ModuleName() {
+					ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_PROPERTY_UNSUPPORTED, "src == name")
+					return &bazelPrebuiltFileAttributes{}, false
+				}
+				label := android.BazelLabelForModuleSrcSingle(ctx, srcStr)
 				src.SetSelectValue(axis, config, label)
 			}
 		}
-
-		for propName, productConfigProps := range android.ProductVariableProperties(ctx, ctx.Module()) {
+		productVarProperties, errs := android.ProductVariableProperties(ctx, ctx.Module())
+		for _, err := range errs {
+			ctx.ModuleErrorf("ProductVariableProperties error: %s", err)
+		}
+		for propName, productConfigProps := range productVarProperties {
 			for configProp, propVal := range productConfigProps {
 				if propName == "Src" {
 					props, ok := propVal.(*string)
@@ -750,7 +760,7 @@ func (module *PrebuiltEtc) Bp2buildHelper(ctx android.TopDownMutatorContext) *ba
 		filename = *moduleProps.Filename
 	} else if moduleProps.Filename_from_src != nil && *moduleProps.Filename_from_src {
 		if moduleProps.Src != nil {
-			filename = *moduleProps.Src
+			filename = android.BazelLabelForModuleSrcSingle(ctx, *moduleProps.Src).Label
 		}
 		filenameFromSrc = true
 	} else {
@@ -758,8 +768,8 @@ func (module *PrebuiltEtc) Bp2buildHelper(ctx android.TopDownMutatorContext) *ba
 	}
 
 	var dir = module.installDirBase
-	if subDir := module.subdirProperties.Sub_dir; subDir != nil {
-		dir = dir + "/" + *subDir
+	if module.SubDir() != "" {
+		dir = dir + "/" + module.SubDir()
 	}
 
 	var installable bazel.BoolAttribute
@@ -779,21 +789,24 @@ func (module *PrebuiltEtc) Bp2buildHelper(ctx android.TopDownMutatorContext) *ba
 		attrs.Filename_from_src = bazel.BoolAttribute{Value: moduleProps.Filename_from_src}
 	}
 
-	return attrs
-
+	return attrs, true
 }
 
 // ConvertWithBp2build performs bp2build conversion of PrebuiltEtc
 // prebuilt_* modules (except prebuilt_etc_xml) are PrebuiltEtc,
 // which we treat as *PrebuiltFile*
-func (module *PrebuiltEtc) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
+func (module *PrebuiltEtc) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	var dir = module.installDirBase
-	// prebuilt_file supports only `etc` or `usr/share`
-	if !(dir == "etc" || dir == "usr/share") {
+	// prebuilt_file only supports "etc" or "usr/share" or "." as module installDirBase
+	if !(dir == "etc" || dir == "usr/share" || dir == ".") {
+		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_TYPE_UNSUPPORTED, "")
 		return
 	}
 
-	attrs := module.Bp2buildHelper(ctx)
+	attrs, convertible := module.Bp2buildHelper(ctx)
+	if !convertible {
+		return
+	}
 
 	props := bazel.BazelTargetModuleProperties{
 		Rule_class:        "prebuilt_file",

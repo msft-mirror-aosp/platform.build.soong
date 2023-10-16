@@ -30,6 +30,7 @@ func TestPythonBinaryHostSimple(t *testing.T) {
 			"b/e.py":         "",
 			"files/data.txt": "",
 		},
+		StubbedBuildDefinitions: []string{"bar"},
 		Blueprint: `python_binary_host {
     name: "foo",
     main: "a.py",
@@ -42,7 +43,6 @@ func TestPythonBinaryHostSimple(t *testing.T) {
     python_library_host {
       name: "bar",
       srcs: ["b/e.py"],
-      bazel_module: { bp2build_available: false },
     }`,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("py_binary", "foo", AttrNameToString{
@@ -56,7 +56,7 @@ func TestPythonBinaryHostSimple(t *testing.T) {
         "b/d.py",
     ]`,
 				"target_compatible_with": `select({
-        "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],
+        "//build/bazel_common_rules/platforms/os:android": ["@platforms//:incompatible"],
         "//conditions:default": [],
     })`,
 			}),
@@ -90,7 +90,7 @@ func TestPythonBinaryHostPy2(t *testing.T) {
 				"imports":        `["."]`,
 				"srcs":           `["a.py"]`,
 				"target_compatible_with": `select({
-        "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],
+        "//build/bazel_common_rules/platforms/os:android": ["@platforms//:incompatible"],
         "//conditions:default": [],
     })`,
 			}),
@@ -124,7 +124,7 @@ func TestPythonBinaryHostPy3(t *testing.T) {
 				"imports": `["."]`,
 				"srcs":    `["a.py"]`,
 				"target_compatible_with": `select({
-        "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],
+        "//build/bazel_common_rules/platforms/os:android": ["@platforms//:incompatible"],
         "//conditions:default": [],
     })`,
 			}),
@@ -156,12 +156,12 @@ func TestPythonBinaryHostArchVariance(t *testing.T) {
 			MakeBazelTarget("py_binary", "foo-arm", AttrNameToString{
 				"imports": `["."]`,
 				"srcs": `select({
-        "//build/bazel/platforms/arch:arm": ["arm.py"],
-        "//build/bazel/platforms/arch:x86": ["x86.py"],
+        "//build/bazel_common_rules/platforms/arch:arm": ["arm.py"],
+        "//build/bazel_common_rules/platforms/arch:x86": ["x86.py"],
         "//conditions:default": [],
     })`,
 				"target_compatible_with": `select({
-        "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],
+        "//build/bazel_common_rules/platforms/os:android": ["@platforms//:incompatible"],
         "//conditions:default": [],
     })`,
 			}),
@@ -183,7 +183,7 @@ func TestPythonBinaryMainIsNotSpecified(t *testing.T) {
 			MakeBazelTarget("py_binary", "foo", AttrNameToString{
 				"imports": `["."]`,
 				"target_compatible_with": `select({
-        "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],
+        "//build/bazel_common_rules/platforms/os:android": ["@platforms//:incompatible"],
         "//conditions:default": [],
     })`,
 			}),
@@ -196,6 +196,7 @@ func TestPythonBinaryMainIsLabel(t *testing.T) {
 		Description:                "python_binary_host main label in same package",
 		ModuleTypeUnderTest:        "python_binary_host",
 		ModuleTypeUnderTestFactory: python.PythonBinaryHostFactory,
+		StubbedBuildDefinitions:    []string{"a"},
 		Blueprint: `python_binary_host {
     name: "foo",
     main: ":a",
@@ -204,7 +205,6 @@ func TestPythonBinaryMainIsLabel(t *testing.T) {
 
 genrule {
 		name: "a",
-		bazel_module: { bp2build_available: false },
 }
 `,
 		ExpectedBazelTargets: []string{
@@ -212,7 +212,7 @@ genrule {
 				"main":    `":a"`,
 				"imports": `["."]`,
 				"target_compatible_with": `select({
-        "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],
+        "//build/bazel_common_rules/platforms/os:android": ["@platforms//:incompatible"],
         "//conditions:default": [],
     })`,
 			}),
@@ -241,7 +241,7 @@ func TestPythonBinaryMainIsSubpackageFile(t *testing.T) {
 				"main":    `"//a:b.py"`,
 				"imports": `["."]`,
 				"target_compatible_with": `select({
-        "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],
+        "//build/bazel_common_rules/platforms/os:android": ["@platforms//:incompatible"],
         "//conditions:default": [],
     })`,
 			}),
@@ -269,7 +269,7 @@ func TestPythonBinaryMainIsSubDirFile(t *testing.T) {
 				"main":    `"a/b.py"`,
 				"imports": `["."]`,
 				"target_compatible_with": `select({
-        "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],
+        "//build/bazel_common_rules/platforms/os:android": ["@platforms//:incompatible"],
         "//conditions:default": [],
     })`,
 			}),
@@ -282,6 +282,7 @@ func TestPythonBinaryDuplicatesInRequired(t *testing.T) {
 		Description:                "python_binary_host duplicates in required attribute of the module and its defaults",
 		ModuleTypeUnderTest:        "python_binary_host",
 		ModuleTypeUnderTestFactory: python.PythonBinaryHostFactory,
+		StubbedBuildDefinitions:    []string{"r1", "r2"},
 		Blueprint: `python_binary_host {
     name: "foo",
     main: "a.py",
@@ -298,8 +299,8 @@ python_defaults {
         "r1",
         "r2",
     ],
-}` + simpleModuleDoNotConvertBp2build("genrule", "r1") +
-			simpleModuleDoNotConvertBp2build("genrule", "r2"),
+}` + simpleModule("genrule", "r1") +
+			simpleModule("genrule", "r2"),
 
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("py_binary", "foo", AttrNameToString{
@@ -310,7 +311,7 @@ python_defaults {
         ":r2",
     ]`,
 				"target_compatible_with": `select({
-        "//build/bazel/platforms/os:android": ["@platforms//:incompatible"],
+        "//build/bazel_common_rules/platforms/os:android": ["@platforms//:incompatible"],
         "//conditions:default": [],
     })`,
 			}),

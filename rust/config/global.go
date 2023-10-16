@@ -21,10 +21,11 @@ import (
 	_ "android/soong/cc/config"
 )
 
-var pctx = android.NewPackageContext("android/soong/rust/config")
-
 var (
-	RustDefaultVersion = "1.71.0"
+	pctx         = android.NewPackageContext("android/soong/rust/config")
+	ExportedVars = android.NewExportedVariables(pctx)
+
+	RustDefaultVersion = "1.72.0"
 	RustDefaultBase    = "prebuilts/rust/"
 	DefaultEdition     = "2021"
 	Stdlibs            = []string{
@@ -43,7 +44,6 @@ var (
 	GlobalRustFlags = []string{
 		"-Z stack-protector=strong",
 		"-Z remap-cwd-prefix=.",
-		"-C codegen-units=1",
 		"-C debuginfo=2",
 		"-C opt-level=3",
 		"-C relocation-model=pic",
@@ -51,13 +51,24 @@ var (
 		"-C force-unwind-tables=yes",
 		// Use v0 mangling to distinguish from C++ symbols
 		"-C symbol-mangling-version=v0",
-		"--color always",
-		"-Zdylib-lto",
+		// This flag requires to have no space so that when it's exported to bazel
+		// it can be removed. See aosp/2768339
+		"--color=always",
+		"-Z dylib-lto",
+		"-Z link-native-libraries=no",
+	}
+
+	LinuxHostGlobalLinkFlags = []string{
+		"-lc",
+		"-lrt",
+		"-ldl",
+		"-lpthread",
+		"-lm",
+		"-lgcc_s",
 	}
 
 	deviceGlobalRustFlags = []string{
 		"-C panic=abort",
-		"-Z link-native-libraries=no",
 		// Generate additional debug info for AutoFDO
 		"-Z debug-info-for-profiling",
 	}
@@ -80,13 +91,7 @@ var (
 
 func init() {
 	pctx.SourcePathVariable("RustDefaultBase", RustDefaultBase)
-	pctx.VariableConfigMethod("HostPrebuiltTag", func(config android.Config) string {
-		if config.UseHostMusl() {
-			return "linux-musl-x86"
-		} else {
-			return config.PrebuiltOS()
-		}
-	})
+	pctx.VariableConfigMethod("HostPrebuiltTag", HostPrebuiltTag)
 
 	pctx.VariableFunc("RustBase", func(ctx android.PackageVarContext) string {
 		if override := ctx.Config().Getenv("RUST_PREBUILTS_BASE"); override != "" {
@@ -105,6 +110,25 @@ func init() {
 
 	pctx.StaticVariable("DeviceGlobalLinkFlags", strings.Join(deviceGlobalLinkFlags, " "))
 
+	ExportedVars.ExportStringStaticVariable("RUST_DEFAULT_VERSION", RustDefaultVersion)
+	ExportedVars.ExportStringListStaticVariable("GLOBAL_RUSTC_FLAGS", GlobalRustFlags)
+	ExportedVars.ExportStringListStaticVariable("LINUX_HOST_GLOBAL_LINK_FLAGS", LinuxHostGlobalLinkFlags)
+
+	ExportedVars.ExportStringListStaticVariable("DEVICE_GLOBAL_RUSTC_FLAGS", deviceGlobalRustFlags)
+	ExportedVars.ExportStringListStaticVariable("DEVICE_GLOBAL_LINK_FLAGS",
+		android.RemoveListFromList(deviceGlobalLinkFlags, []string{
+			// The cc_config flags are retrieved from cc_toolchain by rust rules.
+			"${cc_config.DeviceGlobalLldflags}",
+			"-B${cc_config.ClangBin}",
+		}))
+}
+
+func HostPrebuiltTag(config android.Config) string {
+	if config.UseHostMusl() {
+		return "linux-musl-x86"
+	} else {
+		return config.PrebuiltOS()
+	}
 }
 
 func getRustVersionPctx(ctx android.PackageVarContext) string {
@@ -116,4 +140,9 @@ func GetRustVersion(ctx android.PathContext) string {
 		return override
 	}
 	return RustDefaultVersion
+}
+
+// BazelRustToolchainVars returns a string with
+func BazelRustToolchainVars(config android.Config) string {
+	return android.BazelToolchainVars(config, ExportedVars)
 }

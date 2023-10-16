@@ -24,7 +24,6 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
-	"android/soong/bazel"
 	"android/soong/java/config"
 	"android/soong/remoteexec"
 )
@@ -172,6 +171,10 @@ type ApiStubsProvider interface {
 	ApiStubsSrcProvider
 }
 
+type currentApiTimestampProvider interface {
+	CurrentApiTimestamp() android.Path
+}
+
 // droidstubs passes sources files through Metalava to generate stub .java files that only contain the API to be
 // documented, filtering out hidden classes and methods.  The resulting .java files are intended to be passed to
 // a droiddoc module to generate documentation.
@@ -239,10 +242,15 @@ func (d *Droidstubs) StubsSrcJar() android.Path {
 	return d.stubsSrcJar
 }
 
+func (d *Droidstubs) CurrentApiTimestamp() android.Path {
+	return d.checkCurrentApiTimestamp
+}
+
 var metalavaMergeAnnotationsDirTag = dependencyTag{name: "metalava-merge-annotations-dir"}
 var metalavaMergeInclusionAnnotationsDirTag = dependencyTag{name: "metalava-merge-inclusion-annotations-dir"}
 var metalavaAPILevelsAnnotationsDirTag = dependencyTag{name: "metalava-api-levels-annotations-dir"}
 var metalavaAPILevelsModuleTag = dependencyTag{name: "metalava-api-levels-module-tag"}
+var metalavaCurrentApiTimestampTag = dependencyTag{name: "metalava-current-api-timestamp-tag"}
 
 func (d *Droidstubs) DepsMutator(ctx android.BottomUpMutatorContext) {
 	d.Javadoc.addDeps(ctx)
@@ -539,7 +547,13 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersi
 
 	// Force metalava to sort overloaded methods by their order in the source code.
 	// See b/285312164 for more information.
-	cmd.FlagWithArg("--api-overloaded-method-order ", "source")
+	// And add concrete overrides of abstract methods, see b/299366704 for more
+	// information.
+	cmd.FlagWithArg("--format-defaults ", "overloaded-method-order=source,add-additional-overrides=yes")
+
+	if ctx.DeviceConfig().HideFlaggedApis() {
+		cmd.FlagWithArg("--hide-annotation ", "android.annotation.FlaggedApi")
+	}
 
 	return cmd
 }
@@ -853,34 +867,6 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 		rule.Build("nullabilityWarningsCheck", "nullability warnings check")
 	}
-}
-
-var _ android.ApiProvider = (*Droidstubs)(nil)
-
-type bazelJavaApiContributionAttributes struct {
-	Api         bazel.LabelAttribute
-	Api_surface *string
-}
-
-func (d *Droidstubs) ConvertWithApiBp2build(ctx android.TopDownMutatorContext) {
-	props := bazel.BazelTargetModuleProperties{
-		Rule_class:        "java_api_contribution",
-		Bzl_load_location: "//build/bazel/rules/apis:java_api_contribution.bzl",
-	}
-	apiFile := d.properties.Check_api.Current.Api_file
-	// Do not generate a target if check_api is not set
-	if apiFile == nil {
-		return
-	}
-	attrs := &bazelJavaApiContributionAttributes{
-		Api: *bazel.MakeLabelAttribute(
-			android.BazelLabelForModuleSrcSingle(ctx, proptools.String(apiFile)).Label,
-		),
-		Api_surface: proptools.StringPtr(bazelApiSurfaceName(d.Name())),
-	}
-	ctx.CreateBazelTargetModule(props, android.CommonAttributes{
-		Name: android.ApiContributionTargetName(ctx.ModuleName()),
-	}, attrs)
 }
 
 func (d *Droidstubs) createApiContribution(ctx android.DefaultableHookContext) {

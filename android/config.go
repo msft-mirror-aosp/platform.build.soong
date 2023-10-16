@@ -87,7 +87,6 @@ type CmdArgs struct {
 	SymlinkForestMarker string
 	Bp2buildMarker      string
 	BazelQueryViewDir   string
-	BazelApiBp2buildDir string
 	ModuleGraphFile     string
 	ModuleActionsFile   string
 	DocFile             string
@@ -120,9 +119,6 @@ const (
 	// blueprint modules. Individual BUILD targets will not, however, faitfhully
 	// express build semantics.
 	GenerateQueryView
-
-	// Generate BUILD files for API contributions to API surfaces
-	ApiBp2build
 
 	// Create a JSON representation of the module graph and exit.
 	GenerateModuleGraph
@@ -171,7 +167,8 @@ func (c Config) RunningInsideUnitTest() bool {
 }
 
 // DisableHiddenApiChecks returns true if hiddenapi checks have been disabled.
-// For 'eng' target variant hiddenapi checks are disabled by default for performance optimisation,
+// For 'eng' target variant hiddenapi checks are disabled by default for performance optimisation
+// Hiddenapi checks are also disabled when RELEASE_DEFAULT_MODULE_BUILD_FROM_SOURCE is set to false
 // but can be enabled by setting environment variable ENABLE_HIDDENAPI_FLAGS=true.
 // For other target variants hiddenapi check are enabled by default but can be disabled by
 // setting environment variable UNSAFE_DISABLE_HIDDENAPI_FLAGS=true.
@@ -180,7 +177,8 @@ func (c Config) RunningInsideUnitTest() bool {
 func (c Config) DisableHiddenApiChecks() bool {
 	return !c.IsEnvTrue("ENABLE_HIDDENAPI_FLAGS") &&
 		(c.IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") ||
-			Bool(c.productVariables.Eng))
+			Bool(c.productVariables.Eng) ||
+			!c.ReleaseDefaultModuleBuildFromSource())
 }
 
 // MaxPageSizeSupported returns the max page size supported by the device. This
@@ -201,15 +199,37 @@ func (c Config) ReleaseVersion() string {
 	return c.config.productVariables.ReleaseVersion
 }
 
-// The flag values files passed to aconfig, derived from RELEASE_VERSION
+// The aconfig value set passed to aconfig, derived from RELEASE_VERSION
 func (c Config) ReleaseAconfigValueSets() []string {
-	return c.config.productVariables.ReleaseAconfigValueSets
+	// This logic to handle both Soong module name and bazel target is temporary in order to
+	// provide backward compatibility where aosp and internal both have the release
+	// aconfig value set but can't be updated at the same time to use bazel target
+	var valueSets []string
+	for _, valueSet := range c.config.productVariables.ReleaseAconfigValueSets {
+		value := strings.Split(valueSet, ":")
+		valueLen := len(value)
+		if valueLen > 2 {
+			// This shouldn't happen as this should be either a module name or a bazel target path.
+			panic(fmt.Errorf("config file: invalid value for release aconfig value sets: %s", valueSet))
+		}
+		if valueLen > 0 {
+			valueSets = append(valueSets, value[valueLen-1])
+		}
+	}
+	return valueSets
 }
 
 // The flag default permission value passed to aconfig
 // derived from RELEASE_ACONFIG_FLAG_DEFAULT_PERMISSION
 func (c Config) ReleaseAconfigFlagDefaultPermission() string {
 	return c.config.productVariables.ReleaseAconfigFlagDefaultPermission
+}
+
+// The flag indicating behavior for the tree wrt building modules or using prebuilts
+// derived from RELEASE_DEFAULT_MODULE_BUILD_FROM_SOURCE
+func (c Config) ReleaseDefaultModuleBuildFromSource() bool {
+	return c.config.productVariables.ReleaseDefaultModuleBuildFromSource == nil ||
+		Bool(c.config.productVariables.ReleaseDefaultModuleBuildFromSource)
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -641,7 +661,6 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 	setBuildMode(cmdArgs.SymlinkForestMarker, SymlinkForest)
 	setBuildMode(cmdArgs.Bp2buildMarker, Bp2build)
 	setBuildMode(cmdArgs.BazelQueryViewDir, GenerateQueryView)
-	setBuildMode(cmdArgs.BazelApiBp2buildDir, ApiBp2build)
 	setBuildMode(cmdArgs.ModuleGraphFile, GenerateModuleGraph)
 	setBuildMode(cmdArgs.DocFile, GenerateDocFile)
 	setBazelMode(cmdArgs.BazelMode, "--bazel-mode", BazelProdMode)
@@ -991,12 +1010,18 @@ func (c *config) FinalApiLevels() []ApiLevel {
 
 func (c *config) PreviewApiLevels() []ApiLevel {
 	var levels []ApiLevel
-	for i, codename := range c.PlatformVersionActiveCodenames() {
+	i := 0
+	for _, codename := range c.PlatformVersionActiveCodenames() {
+		if codename == "REL" {
+			continue
+		}
+
 		levels = append(levels, ApiLevel{
 			value:     codename,
 			number:    i,
 			isPreview: true,
 		})
+		i++
 	}
 	return levels
 }
@@ -1426,16 +1451,12 @@ func (c *deviceConfig) PlatformVndkVersion() string {
 	return String(c.config.productVariables.Platform_vndk_version)
 }
 
-func (c *deviceConfig) ProductVndkVersion() string {
-	return String(c.config.productVariables.ProductVndkVersion)
-}
-
 func (c *deviceConfig) ExtraVndkVersions() []string {
 	return c.config.productVariables.ExtraVndkVersions
 }
 
 func (c *deviceConfig) VndkUseCoreVariant() bool {
-	return Bool(c.config.productVariables.VndkUseCoreVariant)
+	return Bool(c.config.productVariables.VndkUseCoreVariant) && Bool(c.config.productVariables.KeepVndk)
 }
 
 func (c *deviceConfig) SystemSdkVersions() []string {
@@ -1662,11 +1683,18 @@ func (c *config) MemtagHeapSyncEnabledForPath(path string) bool {
 	return HasAnyPrefix(path, c.productVariables.MemtagHeapSyncIncludePaths) && !c.MemtagHeapDisabledForPath(path)
 }
 
+func (c *config) HWASanDisabledForPath(path string) bool {
+	if len(c.productVariables.HWASanExcludePaths) == 0 {
+		return false
+	}
+	return HasAnyPrefix(path, c.productVariables.HWASanExcludePaths)
+}
+
 func (c *config) HWASanEnabledForPath(path string) bool {
 	if len(c.productVariables.HWASanIncludePaths) == 0 {
 		return false
 	}
-	return HasAnyPrefix(path, c.productVariables.HWASanIncludePaths)
+	return HasAnyPrefix(path, c.productVariables.HWASanIncludePaths) && !c.HWASanDisabledForPath(path)
 }
 
 func (c *config) VendorConfig(name string) VendorConfig {
@@ -1790,30 +1818,6 @@ func (c *deviceConfig) BoardSepolicyVers() string {
 		return ver
 	}
 	return c.PlatformSepolicyVersion()
-}
-
-func (c *deviceConfig) BoardPlatVendorPolicy() []string {
-	return c.config.productVariables.BoardPlatVendorPolicy
-}
-
-func (c *deviceConfig) BoardReqdMaskPolicy() []string {
-	return c.config.productVariables.BoardReqdMaskPolicy
-}
-
-func (c *deviceConfig) BoardSystemExtPublicPrebuiltDirs() []string {
-	return c.config.productVariables.BoardSystemExtPublicPrebuiltDirs
-}
-
-func (c *deviceConfig) BoardSystemExtPrivatePrebuiltDirs() []string {
-	return c.config.productVariables.BoardSystemExtPrivatePrebuiltDirs
-}
-
-func (c *deviceConfig) BoardProductPublicPrebuiltDirs() []string {
-	return c.config.productVariables.BoardProductPublicPrebuiltDirs
-}
-
-func (c *deviceConfig) BoardProductPrivatePrebuiltDirs() []string {
-	return c.config.productVariables.BoardProductPrivatePrebuiltDirs
 }
 
 func (c *deviceConfig) SystemExtSepolicyPrebuiltApiDir() string {
@@ -2031,10 +2035,9 @@ func (c *config) LogMixedBuild(ctx BaseModuleContext, useBazel bool) {
 	}
 }
 
-func (c *config) HasBazelBuildTargetInSource(ctx BaseModuleContext) bool {
-	moduleName := ctx.Module().Name()
-	for _, buildTarget := range c.bazelTargetsByDir[ctx.ModuleDir()] {
-		if moduleName == buildTarget {
+func (c *config) HasBazelBuildTargetInSource(dir string, target string) bool {
+	for _, existingTarget := range c.bazelTargetsByDir[dir] {
+		if target == existingTarget {
 			return true
 		}
 	}
@@ -2080,4 +2083,25 @@ func (c *config) SetApiLibraries(libs []string) {
 
 func (c *config) GetApiLibraries() map[string]struct{} {
 	return c.apiLibraries
+}
+
+// Bp2buildMode indicates whether the config is for bp2build mode of Soong
+func (c *config) Bp2buildMode() bool {
+	return c.BuildMode == Bp2build
+}
+
+func (c *deviceConfig) CheckVendorSeappViolations() bool {
+	return Bool(c.config.productVariables.CheckVendorSeappViolations)
+}
+
+func (c *deviceConfig) NextReleaseHideFlaggedApi() bool {
+	return Bool(c.config.productVariables.NextReleaseHideFlaggedApi)
+}
+
+func (c *deviceConfig) ReleaseExposeFlaggedApi() bool {
+	return Bool(c.config.productVariables.Release_expose_flagged_api)
+}
+
+func (c *deviceConfig) HideFlaggedApis() bool {
+	return c.NextReleaseHideFlaggedApi() && !c.ReleaseExposeFlaggedApi()
 }
