@@ -192,6 +192,45 @@ func TestJavaLibraryJavaVersion(t *testing.T) {
 	})
 }
 
+func TestJavaLibraryOpenjdk9(t *testing.T) {
+	runJavaLibraryTestCase(t, Bp2buildTestCase{
+		Blueprint: `java_library {
+			name: "java-lib-1",
+		srcs: ["a.java"],
+		exclude_srcs: ["b.java"],
+		javacflags: ["flag"],
+		target: {
+			android: {
+				srcs: ["android.java"],
+			},
+		},
+		openjdk9: {
+			srcs: ["b.java", "foo.java"],
+			javacflags: ["extraflag"],
+		},
+		sdk_version: "current",
+}`,
+		ExpectedBazelTargets: []string{
+			MakeBazelTarget("java_library", "java-lib-1", AttrNameToString{
+				"srcs": `[
+        "a.java",
+        "foo.java",
+    ] + select({
+        "//build/bazel_common_rules/platforms/os:android": ["android.java"],
+        "//conditions:default": [],
+    })`,
+				"sdk_version": `"current"`,
+				"javacopts": `[
+        "flag",
+        "extraflag",
+    ]`,
+			}),
+			MakeNeverlinkDuplicateTarget("java_library", "java-lib-1"),
+		},
+	})
+
+}
+
 func TestJavaLibraryErrorproneEnabledManually(t *testing.T) {
 	runJavaLibraryTestCaseWithRegistrationCtxFunc(t, Bp2buildTestCase{
 		StubbedBuildDefinitions: []string{"plugin2"},
@@ -424,6 +463,7 @@ func TestJavaLibraryResourcesWithMultipleDirs(t *testing.T) {
 		},
 		Blueprint: `java_library {
 	name: "java-lib-1",
+	srcs: ["foo.java"],
 	java_resource_dirs: ["res", "res1"],
 	sdk_version: "current",
 }`,
@@ -433,9 +473,10 @@ func TestJavaLibraryResourcesWithMultipleDirs(t *testing.T) {
 				"resources":             `["res1/b.res"]`,
 			}),
 			MakeBazelTarget("java_library", "java-lib-1", AttrNameToString{
-				"additional_resources":  `["java-lib-1_resource_dir_res1"]`,
+				"deps":                  `["java-lib-1_resource_dir_res1"]`,
 				"resources":             `["res/a.res"]`,
 				"resource_strip_prefix": `"res"`,
+				"srcs":                  `["foo.java"]`,
 				"sdk_version":           `"current"`,
 			}),
 			MakeNeverlinkDuplicateTarget("java_library", "java-lib-1"),
@@ -453,6 +494,7 @@ func TestJavaLibraryJavaResourcesAndResourceDirs(t *testing.T) {
 		java_resources: ["res1", "res2"],
 		java_resource_dirs: ["resdir"],
 		sdk_version: "current",
+		srcs: ["foo.java"],
 }`,
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("java_resources", "java-lib-1_resource_dir_resdir", AttrNameToString{
@@ -460,12 +502,13 @@ func TestJavaLibraryJavaResourcesAndResourceDirs(t *testing.T) {
 				"resources":             `["resdir/a.res"]`,
 			}),
 			MakeBazelTarget("java_library", "java-lib-1", AttrNameToString{
-				"additional_resources":  `["java-lib-1_resource_dir_resdir"]`,
+				"deps":                  `["java-lib-1_resource_dir_resdir"]`,
 				"resource_strip_prefix": `"."`,
 				"resources": `[
         "res1",
         "res2",
     ]`,
+				"srcs":        `["foo.java"]`,
 				"sdk_version": `"current"`,
 			}),
 			MakeNeverlinkDuplicateTarget("java_library", "java-lib-1"),
@@ -780,7 +823,7 @@ android_library {
 				AttrNameToString{
 					"srcs": `["lib.java"] + select({
         "//build/bazel/platforms/arch/variants:arm-neon": [],
-        "//build/bazel/platforms/arch:arm": ["arm_non_neon.java"],
+        "//build/bazel_common_rules/platforms/arch:arm": ["arm_non_neon.java"],
         "//conditions:default": [],
     })`,
 					"manifest":       `"manifest/AndroidManifest.xml"`,
@@ -899,11 +942,11 @@ func TestJavaLibraryArchVariantDeps(t *testing.T) {
 			MakeBazelTarget("java_library", "java-lib-1", AttrNameToString{
 				"srcs": `["a.java"]`,
 				"exports": `select({
-        "//build/bazel/platforms/os:android": [":java-lib-4"],
+        "//build/bazel_common_rules/platforms/os:android": [":java-lib-4"],
         "//conditions:default": [],
     })`,
 				"deps": `[":java-lib-2-neverlink"] + select({
-        "//build/bazel/platforms/os:android": [
+        "//build/bazel_common_rules/platforms/os:android": [
             ":java-lib-3-neverlink",
             ":java-lib-4",
         ],
@@ -934,7 +977,7 @@ func TestJavaLibraryArchVariantSrcsWithExcludes(t *testing.T) {
 		ExpectedBazelTargets: []string{
 			MakeBazelTarget("java_library", "java-lib-1", AttrNameToString{
 				"srcs": `["b.java"] + select({
-        "//build/bazel/platforms/os:android": [],
+        "//build/bazel_common_rules/platforms/os:android": [],
         "//conditions:default": ["a.java"],
     })`,
 				"sdk_version": `"current"`,
@@ -1025,7 +1068,7 @@ filegroup {
 				"srcs":                  `["a.java"]`,
 				"resources":             `["a.res"]`,
 				"resource_strip_prefix": `"."`,
-				"additional_resources": `[
+				"deps": `[
         "java-lib-1_filegroup_resources_filegroup1",
         "java-lib-1_filegroup_resources_filegroup2",
     ]`,

@@ -200,21 +200,23 @@ func (c Config) ReleaseVersion() string {
 }
 
 // The aconfig value set passed to aconfig, derived from RELEASE_VERSION
-func (c Config) ReleaseAconfigValueSets() string {
+func (c Config) ReleaseAconfigValueSets() []string {
 	// This logic to handle both Soong module name and bazel target is temporary in order to
 	// provide backward compatibility where aosp and internal both have the release
 	// aconfig value set but can't be updated at the same time to use bazel target
-	value := strings.Split(c.config.productVariables.ReleaseAconfigValueSets, ":")
-	value_len := len(value)
-	if value_len > 2 {
-		// This shouldn't happen as this should be either a module name or a bazel target path.
-		panic(fmt.Errorf("config file: invalid value for release aconfig value sets: %s",
-			c.config.productVariables.ReleaseAconfigValueSets))
+	var valueSets []string
+	for _, valueSet := range c.config.productVariables.ReleaseAconfigValueSets {
+		value := strings.Split(valueSet, ":")
+		valueLen := len(value)
+		if valueLen > 2 {
+			// This shouldn't happen as this should be either a module name or a bazel target path.
+			panic(fmt.Errorf("config file: invalid value for release aconfig value sets: %s", valueSet))
+		}
+		if valueLen > 0 {
+			valueSets = append(valueSets, value[valueLen-1])
+		}
 	}
-	if value_len > 0 {
-		return value[value_len-1]
-	}
-	return ""
+	return valueSets
 }
 
 // The flag default permission value passed to aconfig
@@ -787,7 +789,7 @@ func (c *config) HostToolDir() string {
 }
 
 func (c *config) HostToolPath(ctx PathContext, tool string) Path {
-	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "bin", false, tool)
+	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "bin", tool)
 	return path
 }
 
@@ -796,12 +798,12 @@ func (c *config) HostJNIToolPath(ctx PathContext, lib string) Path {
 	if runtime.GOOS == "darwin" {
 		ext = ".dylib"
 	}
-	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "lib64", false, lib+ext)
+	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "lib64", lib+ext)
 	return path
 }
 
 func (c *config) HostJavaToolPath(ctx PathContext, tool string) Path {
-	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "framework", false, tool)
+	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "framework", tool)
 	return path
 }
 
@@ -810,7 +812,7 @@ func (c *config) HostCcSharedLibPath(ctx PathContext, lib string) Path {
 	if ctx.Config().BuildArch.Multilib == "lib64" {
 		libDir = "lib64"
 	}
-	return pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, libDir, false, lib+".so")
+	return pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, libDir, lib+".so")
 }
 
 // PrebuiltOS returns the name of the host OS used in prebuilts directories.

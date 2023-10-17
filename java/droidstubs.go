@@ -122,7 +122,7 @@ type DroidstubsProperties struct {
 	Generate_stubs *bool
 
 	// if set to true, provides a hint to the build system that this rule uses a lot of memory,
-	// whicih can be used for scheduling purposes
+	// which can be used for scheduling purposes
 	High_mem *bool
 
 	// if set to true, Metalava will allow framework SDK to contain API levels annotations.
@@ -169,6 +169,10 @@ type ApiStubsProvider interface {
 	RemovedApiFilePath() android.Path
 
 	ApiStubsSrcProvider
+}
+
+type currentApiTimestampProvider interface {
+	CurrentApiTimestamp() android.Path
 }
 
 // droidstubs passes sources files through Metalava to generate stub .java files that only contain the API to be
@@ -238,10 +242,15 @@ func (d *Droidstubs) StubsSrcJar() android.Path {
 	return d.stubsSrcJar
 }
 
+func (d *Droidstubs) CurrentApiTimestamp() android.Path {
+	return d.checkCurrentApiTimestamp
+}
+
 var metalavaMergeAnnotationsDirTag = dependencyTag{name: "metalava-merge-annotations-dir"}
 var metalavaMergeInclusionAnnotationsDirTag = dependencyTag{name: "metalava-merge-inclusion-annotations-dir"}
 var metalavaAPILevelsAnnotationsDirTag = dependencyTag{name: "metalava-api-levels-annotations-dir"}
 var metalavaAPILevelsModuleTag = dependencyTag{name: "metalava-api-levels-module-tag"}
+var metalavaCurrentApiTimestampTag = dependencyTag{name: "metalava-current-api-timestamp-tag"}
 
 func (d *Droidstubs) DepsMutator(ctx android.BottomUpMutatorContext) {
 	d.Javadoc.addDeps(ctx)
