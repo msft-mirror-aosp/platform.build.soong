@@ -1014,8 +1014,16 @@ func (j *Module) collectJavacFlags(
 	ctx android.ModuleContext, flags javaBuilderFlags, srcFiles android.Paths) javaBuilderFlags {
 	// javac flags.
 	javacFlags := j.properties.Javacflags
+	var needsDebugInfo bool
 
-	if ctx.Config().MinimizeJavaDebugInfo() && !ctx.Host() {
+	needsDebugInfo = false
+	for _, flag := range javacFlags {
+		if strings.HasPrefix(flag, "-g") {
+			needsDebugInfo = true
+		}
+	}
+
+	if ctx.Config().MinimizeJavaDebugInfo() && !ctx.Host() && !needsDebugInfo {
 		// For non-host binaries, override the -g flag passed globally to remove
 		// local variable debug info to reduce disk and memory usage.
 		javacFlags = append(javacFlags, "-g:source,lines")
@@ -1938,19 +1946,22 @@ func (j *providesTransitiveHeaderJars) collectTransitiveHeaderJars(ctx android.M
 		}
 
 		dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
-		if dep.TransitiveLibsHeaderJars != nil {
-			transitiveLibs = append(transitiveLibs, dep.TransitiveLibsHeaderJars)
-		}
-		if dep.TransitiveStaticLibsHeaderJars != nil {
-			transitiveStaticLibs = append(transitiveStaticLibs, dep.TransitiveStaticLibsHeaderJars)
-		}
-
 		tag := ctx.OtherModuleDependencyTag(module)
 		_, isUsesLibDep := tag.(usesLibraryDependencyTag)
 		if tag == libTag || tag == r8LibraryJarTag || isUsesLibDep {
 			directLibs = append(directLibs, dep.HeaderJars...)
 		} else if tag == staticLibTag {
 			directStaticLibs = append(directStaticLibs, dep.HeaderJars...)
+		} else {
+			// Don't propagate transitive libs for other kinds of dependencies.
+			return
+		}
+
+		if dep.TransitiveLibsHeaderJars != nil {
+			transitiveLibs = append(transitiveLibs, dep.TransitiveLibsHeaderJars)
+		}
+		if dep.TransitiveStaticLibsHeaderJars != nil {
+			transitiveStaticLibs = append(transitiveStaticLibs, dep.TransitiveStaticLibsHeaderJars)
 		}
 	})
 	j.transitiveLibsHeaderJars = android.NewDepSet(android.POSTORDER, directLibs, transitiveLibs)
