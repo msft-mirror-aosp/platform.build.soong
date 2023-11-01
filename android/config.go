@@ -167,7 +167,8 @@ func (c Config) RunningInsideUnitTest() bool {
 }
 
 // DisableHiddenApiChecks returns true if hiddenapi checks have been disabled.
-// For 'eng' target variant hiddenapi checks are disabled by default for performance optimisation,
+// For 'eng' target variant hiddenapi checks are disabled by default for performance optimisation
+// Hiddenapi checks are also disabled when RELEASE_DEFAULT_MODULE_BUILD_FROM_SOURCE is set to false
 // but can be enabled by setting environment variable ENABLE_HIDDENAPI_FLAGS=true.
 // For other target variants hiddenapi check are enabled by default but can be disabled by
 // setting environment variable UNSAFE_DISABLE_HIDDENAPI_FLAGS=true.
@@ -176,7 +177,8 @@ func (c Config) RunningInsideUnitTest() bool {
 func (c Config) DisableHiddenApiChecks() bool {
 	return !c.IsEnvTrue("ENABLE_HIDDENAPI_FLAGS") &&
 		(c.IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") ||
-			Bool(c.productVariables.Eng))
+			Bool(c.productVariables.Eng) ||
+			!c.ReleaseDefaultModuleBuildFromSource())
 }
 
 // MaxPageSizeSupported returns the max page size supported by the device. This
@@ -198,27 +200,36 @@ func (c Config) ReleaseVersion() string {
 }
 
 // The aconfig value set passed to aconfig, derived from RELEASE_VERSION
-func (c Config) ReleaseAconfigValueSets() string {
+func (c Config) ReleaseAconfigValueSets() []string {
 	// This logic to handle both Soong module name and bazel target is temporary in order to
 	// provide backward compatibility where aosp and internal both have the release
 	// aconfig value set but can't be updated at the same time to use bazel target
-	value := strings.Split(c.config.productVariables.ReleaseAconfigValueSets, ":")
-	value_len := len(value)
-	if value_len > 2 {
-		// This shouldn't happen as this should be either a module name or a bazel target path.
-		panic(fmt.Errorf("config file: invalid value for release aconfig value sets: %s",
-			c.config.productVariables.ReleaseAconfigValueSets))
+	var valueSets []string
+	for _, valueSet := range c.config.productVariables.ReleaseAconfigValueSets {
+		value := strings.Split(valueSet, ":")
+		valueLen := len(value)
+		if valueLen > 2 {
+			// This shouldn't happen as this should be either a module name or a bazel target path.
+			panic(fmt.Errorf("config file: invalid value for release aconfig value sets: %s", valueSet))
+		}
+		if valueLen > 0 {
+			valueSets = append(valueSets, value[valueLen-1])
+		}
 	}
-	if value_len > 0 {
-		return value[value_len-1]
-	}
-	return ""
+	return valueSets
 }
 
 // The flag default permission value passed to aconfig
 // derived from RELEASE_ACONFIG_FLAG_DEFAULT_PERMISSION
 func (c Config) ReleaseAconfigFlagDefaultPermission() string {
 	return c.config.productVariables.ReleaseAconfigFlagDefaultPermission
+}
+
+// The flag indicating behavior for the tree wrt building modules or using prebuilts
+// derived from RELEASE_DEFAULT_MODULE_BUILD_FROM_SOURCE
+func (c Config) ReleaseDefaultModuleBuildFromSource() bool {
+	return c.config.productVariables.ReleaseDefaultModuleBuildFromSource == nil ||
+		Bool(c.config.productVariables.ReleaseDefaultModuleBuildFromSource)
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -296,9 +307,6 @@ type config struct {
 	// If testAllowNonExistentPaths is true then PathForSource and PathForModuleSrc won't error
 	// in tests when a path doesn't exist.
 	TestAllowNonExistentPaths bool
-
-	// If true, register the "bp2build_deps" mutator in the mutator pipeline.
-	Bp2buildDepsMutator bool
 
 	// The list of files that when changed, must invalidate soong_build to
 	// regenerate build.ninja.
@@ -555,7 +563,7 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		config: config,
 	}
 
-	config.productVariables.Build_from_text_stub = boolPtr(config.buildFromTextStub)
+	config.productVariables.Build_from_text_stub = boolPtr(config.BuildFromTextStub())
 
 	// Soundness check of the build and source directories. This won't catch strange
 	// configurations with symlinks, but at least checks the obvious case.
@@ -675,6 +683,7 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		"framework-connectivity":            {},
 		"framework-connectivity-t":          {},
 		"framework-graphics":                {},
+		"framework-location":                {},
 		"framework-media":                   {},
 		"framework-mediaprovider":           {},
 		"framework-ondevicepersonalization": {},
@@ -781,7 +790,7 @@ func (c *config) HostToolDir() string {
 }
 
 func (c *config) HostToolPath(ctx PathContext, tool string) Path {
-	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "bin", false, tool)
+	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "bin", tool)
 	return path
 }
 
@@ -790,12 +799,12 @@ func (c *config) HostJNIToolPath(ctx PathContext, lib string) Path {
 	if runtime.GOOS == "darwin" {
 		ext = ".dylib"
 	}
-	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "lib64", false, lib+ext)
+	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "lib64", lib+ext)
 	return path
 }
 
 func (c *config) HostJavaToolPath(ctx PathContext, tool string) Path {
-	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "framework", false, tool)
+	path := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "framework", tool)
 	return path
 }
 
@@ -804,7 +813,7 @@ func (c *config) HostCcSharedLibPath(ctx PathContext, lib string) Path {
 	if ctx.Config().BuildArch.Multilib == "lib64" {
 		libDir = "lib64"
 	}
-	return pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, libDir, false, lib+".so")
+	return pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, libDir, lib+".so")
 }
 
 // PrebuiltOS returns the name of the host OS used in prebuilts directories.
@@ -890,6 +899,10 @@ func (c *config) EnvDeps() map[string]string {
 
 func (c *config) KatiEnabled() bool {
 	return c.katiEnabled
+}
+
+func (c *config) ProductVariables() ProductVariables {
+	return c.productVariables
 }
 
 func (c *config) BuildId() string {
@@ -1002,12 +1015,18 @@ func (c *config) FinalApiLevels() []ApiLevel {
 
 func (c *config) PreviewApiLevels() []ApiLevel {
 	var levels []ApiLevel
-	for i, codename := range c.PlatformVersionActiveCodenames() {
+	i := 0
+	for _, codename := range c.PlatformVersionActiveCodenames() {
+		if codename == "REL" {
+			continue
+		}
+
 		levels = append(levels, ApiLevel{
 			value:     codename,
 			number:    i,
 			isPreview: true,
 		})
+		i++
 	}
 	return levels
 }
@@ -1442,7 +1461,7 @@ func (c *deviceConfig) ExtraVndkVersions() []string {
 }
 
 func (c *deviceConfig) VndkUseCoreVariant() bool {
-	return Bool(c.config.productVariables.VndkUseCoreVariant)
+	return Bool(c.config.productVariables.VndkUseCoreVariant) && Bool(c.config.productVariables.KeepVndk)
 }
 
 func (c *deviceConfig) SystemSdkVersions() []string {
@@ -2045,8 +2064,15 @@ func (c *config) ApiSurfacesDir(s ApiSurface, version string) string {
 		version)
 }
 
+func (c *config) JavaCoverageEnabled() bool {
+	return c.IsEnvTrue("EMMA_INSTRUMENT") || c.IsEnvTrue("EMMA_INSTRUMENT_STATIC") || c.IsEnvTrue("EMMA_INSTRUMENT_FRAMEWORK")
+}
+
 func (c *config) BuildFromTextStub() bool {
-	return c.buildFromTextStub
+	// TODO: b/302320354 - Remove the coverage build specific logic once the
+	// robust solution for handling native properties in from-text stub build
+	// is implemented.
+	return c.buildFromTextStub && !c.JavaCoverageEnabled()
 }
 
 func (c *config) SetBuildFromTextStub(b bool) {

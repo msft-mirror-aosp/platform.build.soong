@@ -286,7 +286,7 @@ type ccAidlLibraryAttributes struct {
 	Implementation_dynamic_deps bazel.LabelListAttribute
 	Tags                        bazel.StringListAttribute
 
-	sdkAttributes
+	SdkAttributes
 	includesAttributes
 }
 
@@ -347,7 +347,7 @@ func libraryBp2Build(ctx android.Bp2buildMutatorContext, m *Module) {
 		Whole_archive_deps:                *linkerAttrs.wholeArchiveDeps.Clone().Append(staticAttrs.Whole_archive_deps),
 		System_dynamic_deps:               *linkerAttrs.systemDynamicDeps.Clone().Append(staticAttrs.System_dynamic_deps),
 		Runtime_deps:                      linkerAttrs.runtimeDeps,
-		sdkAttributes:                     bp2BuildParseSdkAttributes(m),
+		SdkAttributes:                     Bp2BuildParseSdkAttributes(m),
 		Native_coverage:                   baseAttributes.Native_coverage,
 		Additional_compiler_inputs:        compilerAttrs.additionalCompilerInputs,
 	}
@@ -375,7 +375,7 @@ func libraryBp2Build(ctx android.Bp2buildMutatorContext, m *Module) {
 		Implementation_whole_archive_deps: linkerAttrs.implementationWholeArchiveDeps,
 		System_dynamic_deps:               *linkerAttrs.systemDynamicDeps.Clone().Append(sharedAttrs.System_dynamic_deps),
 		Runtime_deps:                      linkerAttrs.runtimeDeps,
-		sdkAttributes:                     bp2BuildParseSdkAttributes(m),
+		SdkAttributes:                     Bp2BuildParseSdkAttributes(m),
 		Native_coverage:                   baseAttributes.Native_coverage,
 		Additional_compiler_inputs:        compilerAttrs.additionalCompilerInputs,
 	}
@@ -500,6 +500,10 @@ func createStubsBazelTargetIfNeeded(ctx android.Bp2buildMutatorContext, m *Modul
 			Deps:                 baseAttributes.deps,
 			Api_surface:          proptools.StringPtr("module-libapi"),
 		}
+		if _, isNdk := ctx.ModuleFromName(m.Name() + ".ndk"); isNdk {
+			stubSuitesAttrs.Included_in_ndk = proptools.BoolPtr(true)
+		}
+
 		ctx.CreateBazelTargetModule(stubSuitesProps, android.CommonAttributes{
 			Name: m.Name() + "_stub_libs",
 			// TODO: b/303307456 - Remove this when data is properly supported in cc rules.
@@ -1900,17 +1904,19 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 		}
 		exportedHeaderFlags := strings.Join(SourceAbiFlags, " ")
 		headerAbiChecker := library.getHeaderAbiCheckerProperties(ctx)
-		library.sAbiOutputFile = transformDumpToLinkedDump(ctx, objs.sAbiDumpFiles, soFile, fileName, exportedHeaderFlags,
-			android.OptionalPathForModuleSrc(ctx, library.symbolFileForAbiCheck(ctx)),
-			headerAbiChecker.Exclude_symbol_versions,
-			headerAbiChecker.Exclude_symbol_tags)
-
-		addLsdumpPath(classifySourceAbiDump(ctx) + ":" + library.sAbiOutputFile.String())
-
 		// The logic must be consistent with classifySourceAbiDump.
 		isVndk := ctx.useVndk() && ctx.isVndk()
 		isNdk := ctx.isNdk(ctx.Config())
 		isLlndk := ctx.isImplementationForLLNDKPublic()
+		currVersion := currRefAbiDumpVersion(ctx, isVndk)
+		library.sAbiOutputFile = transformDumpToLinkedDump(ctx, objs.sAbiDumpFiles, soFile, fileName, exportedHeaderFlags,
+			android.OptionalPathForModuleSrc(ctx, library.symbolFileForAbiCheck(ctx)),
+			headerAbiChecker.Exclude_symbol_versions,
+			headerAbiChecker.Exclude_symbol_tags,
+			currVersion)
+
+		addLsdumpPath(classifySourceAbiDump(ctx) + ":" + library.sAbiOutputFile.String())
+
 		dumpDir := getRefAbiDumpDir(isNdk, isVndk)
 		binderBitness := ctx.DeviceConfig().BinderBitness()
 		// If NDK or PLATFORM library, check against previous version ABI.
@@ -1926,7 +1932,6 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 			}
 		}
 		// Check against the current version.
-		currVersion := currRefAbiDumpVersion(ctx, isVndk)
 		currDumpDir := filepath.Join(dumpDir, currVersion, binderBitness)
 		currDumpFile := getRefAbiDumpFile(ctx, currDumpDir, fileName)
 		if currDumpFile.Valid() {
@@ -2191,7 +2196,7 @@ func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 
 			// do not install vndk libs
 			// vndk libs are packaged into VNDK APEX
-			if ctx.isVndk() && !ctx.IsVndkExt() && !ctx.Config().IsVndkDeprecated() {
+			if ctx.isVndk() && !ctx.IsVndkExt() && !ctx.Config().IsVndkDeprecated() && !ctx.inProduct() {
 				return
 			}
 		} else if library.hasStubsVariants() && !ctx.Host() && ctx.directlyInAnyApex() {
@@ -2857,7 +2862,7 @@ func sharedOrStaticLibraryBp2Build(ctx android.Bp2buildMutatorContext, module *M
 		Whole_archive_deps:                linkerAttrs.wholeArchiveDeps,
 		Implementation_whole_archive_deps: linkerAttrs.implementationWholeArchiveDeps,
 		System_dynamic_deps:               linkerAttrs.systemDynamicDeps,
-		sdkAttributes:                     bp2BuildParseSdkAttributes(module),
+		SdkAttributes:                     Bp2BuildParseSdkAttributes(module),
 		Runtime_deps:                      linkerAttrs.runtimeDeps,
 		Native_coverage:                   baseAttributes.Native_coverage,
 		Additional_compiler_inputs:        compilerAttrs.additionalCompilerInputs,
@@ -3023,6 +3028,13 @@ type bazelCcStubSuiteAttributes struct {
 	Soname               *string
 	Deps                 bazel.LabelListAttribute
 	Api_surface          *string
+
+	// Unless the library is in the NDK, module-libapi stubs should *not* include the public symbols
+	// Soong uses a global variable to determine if the library is in the NDK
+	// Since Bazel does not have global analysis, create an explicit property
+	// This property is only relevant if `api_surface = module-libapi`
+	// https://cs.android.com/android/_/android/platform/build/soong/+/main:cc/library.go;l=1214-1219;drc=7123cc5370a38983ee6325b5f5f6df19f4e4f10b;bpv=1;bpt=0
+	Included_in_ndk *bool
 }
 
 type bazelCcHeaderAbiCheckerAttributes struct {

@@ -697,6 +697,11 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	j.stem = proptools.StringDefault(j.overridableDeviceProperties.Stem, ctx.ModuleName())
 
+	proguardSpecInfo := j.collectProguardSpecInfo(ctx)
+	ctx.SetProvider(ProguardSpecInfoProvider, proguardSpecInfo)
+	j.exportedProguardFlagFiles = proguardSpecInfo.ProguardFlagsFiles.ToList()
+	j.extraProguardFlagFiles = append(j.extraProguardFlagFiles, j.exportedProguardFlagFiles...)
+
 	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
 	if !apexInfo.IsForPlatform() {
 		j.hideApexVariantFromMake = true
@@ -741,10 +746,6 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 		j.installFile = ctx.InstallFile(installDir, j.Stem()+".jar", j.outputFile, extraInstallDeps...)
 	}
-
-	proguardSpecInfo := j.collectProguardSpecInfo(ctx)
-	ctx.SetProvider(ProguardSpecInfoProvider, proguardSpecInfo)
-	j.exportedProguardFlagFiles = proguardSpecInfo.ProguardFlagsFiles.ToList()
 }
 
 func (j *Library) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -1085,6 +1086,10 @@ func (j *TestHelperLibrary) InstallInTestcases() bool {
 
 func (j *JavaTestImport) InstallInTestcases() bool {
 	return true
+}
+
+func (j *TestHost) IsNativeCoverageNeeded(ctx android.BaseModuleContext) bool {
+	return ctx.DeviceConfig().NativeCoverageEnabled()
 }
 
 func (j *TestHost) addDataDeviceBinsDeps(ctx android.BottomUpMutatorContext) {
@@ -1608,6 +1613,7 @@ func BinaryHostFactory() android.Module {
 type JavaApiContribution struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
+	embeddableInModuleAndImport
 
 	properties struct {
 		// name of the API surface
@@ -1623,6 +1629,7 @@ func ApiContributionFactory() android.Module {
 	android.InitAndroidModule(module)
 	android.InitDefaultableModule(module)
 	module.AddProperties(&module.properties)
+	module.initModuleAndImport(module)
 	return module
 }
 
@@ -1651,6 +1658,7 @@ type ApiLibrary struct {
 
 	hiddenAPI
 	dexer
+	embeddableInModuleAndImport
 
 	properties JavaApiLibraryProperties
 
@@ -1660,6 +1668,8 @@ type ApiLibrary struct {
 	extractedSrcJar           android.WritablePath
 	// .dex of stubs, used for hiddenapi processing
 	dexJarFile OptionalDexJarPath
+
+	validationPaths android.Paths
 }
 
 type JavaApiLibraryProperties struct {
@@ -1689,12 +1699,25 @@ type JavaApiLibraryProperties struct {
 
 	// Version of previously released API file for compatibility check.
 	Previous_api *string `android:"path"`
+
+	// java_system_modules module providing the jar to be added to the
+	// bootclasspath when compiling the stubs.
+	// The jar will also be passed to metalava as a classpath to
+	// generate compilable stubs.
+	System_modules *string
+
+	// If true, the module runs validation on the API signature files provided
+	// by the modules passed via api_contributions by checking if the files are
+	// in sync with the source Java files. However, the environment variable
+	// DISABLE_STUB_VALIDATION has precedence over this property.
+	Enable_validation *bool
 }
 
 func ApiLibraryFactory() android.Module {
 	module := &ApiLibrary{}
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	module.AddProperties(&module.properties)
+	module.initModuleAndImport(module)
 	android.InitDefaultableModule(module)
 	return module
 }
@@ -1708,7 +1731,8 @@ func (al *ApiLibrary) StubsJar() android.Path {
 }
 
 func metalavaStubCmd(ctx android.ModuleContext, rule *android.RuleBuilder,
-	srcs android.Paths, homeDir android.WritablePath) *android.RuleBuilderCommand {
+	srcs android.Paths, homeDir android.WritablePath,
+	classpath android.Paths) *android.RuleBuilderCommand {
 	rule.Command().Text("rm -rf").Flag(homeDir.String())
 	rule.Command().Text("mkdir -p").Flag(homeDir.String())
 
@@ -1747,12 +1771,17 @@ func metalavaStubCmd(ctx android.ModuleContext, rule *android.RuleBuilder,
 		FlagWithArg("--hide ", "InvalidNullabilityOverride").
 		FlagWithArg("--hide ", "ChangedDefault")
 
-	// The main purpose of the `--api-class-resolution api` option is to force metalava to ignore
-	// classes on the classpath when an API file contains missing classes. However, as this command
-	// does not specify `--classpath` this is not needed for that. However, this is also used as a
-	// signal to the special metalava code for generating stubs from text files that it needs to add
-	// some additional items into the API (e.g. default constructors).
-	cmd.FlagWithArg("--api-class-resolution ", "api")
+	if len(classpath) == 0 {
+		// The main purpose of the `--api-class-resolution api` option is to force metalava to ignore
+		// classes on the classpath when an API file contains missing classes. However, as this command
+		// does not specify `--classpath` this is not needed for that. However, this is also used as a
+		// signal to the special metalava code for generating stubs from text files that it needs to add
+		// some additional items into the API (e.g. default constructors).
+		cmd.FlagWithArg("--api-class-resolution ", "api")
+	} else {
+		cmd.FlagWithArg("--api-class-resolution ", "api:classpath")
+		cmd.FlagWithInputList("--classpath ", classpath, ":")
+	}
 
 	return cmd
 }
@@ -1768,6 +1797,12 @@ func (al *ApiLibrary) OutputDirAndDeps() (android.Path, android.Paths) {
 func (al *ApiLibrary) stubsFlags(ctx android.ModuleContext, cmd *android.RuleBuilderCommand, stubsDir android.OptionalPath) {
 	if stubsDir.Valid() {
 		cmd.FlagWithArg("--stubs ", stubsDir.String())
+	}
+}
+
+func (al *ApiLibrary) addValidation(ctx android.ModuleContext, cmd *android.RuleBuilderCommand, validationPaths android.Paths) {
+	for _, validationPath := range validationPaths {
+		cmd.Validation(validationPath)
 	}
 }
 
@@ -1807,13 +1842,36 @@ func (al *ApiLibrary) extractApiSrcs(ctx android.ModuleContext, rule *android.Ru
 
 func (al *ApiLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 	apiContributions := al.properties.Api_contributions
+	addValidations := !ctx.Config().IsEnvTrue("DISABLE_STUB_VALIDATION") &&
+		proptools.BoolDefault(al.properties.Enable_validation, true)
 	for _, apiContributionName := range apiContributions {
 		ctx.AddDependency(ctx.Module(), javaApiContributionTag, apiContributionName)
+
+		// Add the java_api_contribution module generating droidstubs module
+		// as dependency when validation adding conditions are met and
+		// the java_api_contribution module name has ".api.contribution" suffix.
+		// All droidstubs-generated modules possess the suffix in the name,
+		// but there is no such guarantee for tests.
+		if addValidations {
+			if strings.HasSuffix(apiContributionName, ".api.contribution") {
+				ctx.AddDependency(ctx.Module(), metalavaCurrentApiTimestampTag, strings.TrimSuffix(apiContributionName, ".api.contribution"))
+			} else {
+				ctx.ModuleErrorf("Validation is enabled for module %s but a "+
+					"current timestamp provider is not found for the api "+
+					"contribution %s",
+					ctx.ModuleName(),
+					apiContributionName,
+				)
+			}
+		}
 	}
 	ctx.AddVariationDependencies(nil, libTag, al.properties.Libs...)
 	ctx.AddVariationDependencies(nil, staticLibTag, al.properties.Static_libs...)
 	if al.properties.Full_api_surface_stub != nil {
 		ctx.AddVariationDependencies(nil, depApiSrcsTag, String(al.properties.Full_api_surface_stub))
+	}
+	if al.properties.System_modules != nil {
+		ctx.AddVariationDependencies(nil, systemModulesTag, String(al.properties.System_modules))
 	}
 }
 
@@ -1843,8 +1901,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		android.PathForModuleOut(ctx, "metalava.sbox.textproto")).
 		SandboxInputs()
 
-	var stubsDir android.OptionalPath
-	stubsDir = android.OptionalPathForPath(android.PathForModuleOut(ctx, "metalava", "stubsDir"))
+	stubsDir := android.OptionalPathForPath(android.PathForModuleOut(ctx, "metalava", "stubsDir"))
 	rule.Command().Text("rm -rf").Text(stubsDir.String())
 	rule.Command().Text("mkdir -p").Text(stubsDir.String())
 
@@ -1854,6 +1911,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	var classPaths android.Paths
 	var staticLibs android.Paths
 	var depApiSrcsStubsJar android.Path
+	var systemModulesPaths android.Paths
 	ctx.VisitDirectDeps(func(dep android.Module) {
 		tag := ctx.OtherModuleDependencyTag(dep)
 		switch tag {
@@ -1872,6 +1930,13 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		case depApiSrcsTag:
 			provider := ctx.OtherModuleProvider(dep, JavaInfoProvider).(JavaInfo)
 			depApiSrcsStubsJar = provider.HeaderJars[0]
+		case systemModulesTag:
+			module := dep.(SystemModulesProvider)
+			systemModulesPaths = append(systemModulesPaths, module.HeaderJars()...)
+		case metalavaCurrentApiTimestampTag:
+			if currentApiTimestampProvider, ok := dep.(currentApiTimestampProvider); ok {
+				al.validationPaths = append(al.validationPaths, currentApiTimestampProvider.CurrentApiTimestamp())
+			}
 		}
 	})
 
@@ -1885,7 +1950,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		ctx.ModuleErrorf("Error: %s has an empty api file.", ctx.ModuleName())
 	}
 
-	cmd := metalavaStubCmd(ctx, rule, srcFiles, homeDir)
+	cmd := metalavaStubCmd(ctx, rule, srcFiles, homeDir, systemModulesPaths)
 
 	al.stubsFlags(ctx, cmd, stubsDir)
 
@@ -1894,6 +1959,8 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		previousApi := android.PathForModuleSrc(ctx, String(al.properties.Previous_api))
 		cmd.FlagWithInput("--migrate-nullness ", previousApi)
 	}
+
+	al.addValidation(ctx, cmd, al.validationPaths)
 
 	al.stubsSrcJar = android.PathForModuleOut(ctx, "metalava", ctx.ModuleName()+"-"+"stubs.srcjar")
 	al.stubsJarWithoutStaticLibs = android.PathForModuleOut(ctx, "metalava", "stubs.jar")
@@ -1917,6 +1984,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		flags.javaVersion = getStubsJavaVersion()
 		flags.javacFlags = strings.Join(al.properties.Javacflags, " ")
 		flags.classpath = classpath(classPaths)
+		flags.bootClasspath = classpath(systemModulesPaths)
 
 		annoSrcJar := android.PathForModuleOut(ctx, ctx.ModuleName(), "anno.srcjar")
 
@@ -2751,7 +2819,7 @@ func addCLCFromDep(ctx android.ModuleContext, depModule android.Module,
 type javaResourcesAttributes struct {
 	Resources             bazel.LabelListAttribute
 	Resource_strip_prefix *string
-	Additional_resources  bazel.LabelListAttribute
+	Additional_resources  bazel.LabelListAttribute `blueprint:"mutated"`
 }
 
 func (m *Library) getResourceFilegroupStripPrefix(ctx android.Bp2buildMutatorContext, resourceFilegroup string) (*string, bool) {
@@ -2853,6 +2921,7 @@ type javaCommonAttributes struct {
 	Sdk_version             bazel.StringAttribute
 	Java_version            bazel.StringAttribute
 	Errorprone_force_enable bazel.BoolAttribute
+	Javac_shard_size        *int64
 }
 
 type javaDependencyLabels struct {
@@ -2911,8 +2980,8 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.Bp2buildMutatorContext
 
 	archVariantProps := m.GetArchVariantProperties(ctx, &CommonProperties{})
 	for axis, configToProps := range archVariantProps {
-		for config, _props := range configToProps {
-			if archProps, ok := _props.(*CommonProperties); ok {
+		for config, p := range configToProps {
+			if archProps, ok := p.(*CommonProperties); ok {
 				archSrcs := android.BazelLabelForModuleSrcExcludes(ctx, archProps.Srcs, archProps.Exclude_srcs)
 				srcs.SetSelectValue(axis, config, archSrcs)
 				if archProps.Jarjar_rules != nil {
@@ -2922,6 +2991,11 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.Bp2buildMutatorContext
 			}
 		}
 	}
+	srcs.Append(
+		bazel.MakeLabelListAttribute(
+			android.BazelLabelForModuleSrcExcludes(ctx,
+				m.properties.Openjdk9.Srcs,
+				m.properties.Exclude_srcs)))
 	srcs.ResolveExcludes()
 
 	javaSrcPartition := "java"
@@ -3005,8 +3079,9 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.Bp2buildMutatorContext
 	plugins := bazel.MakeLabelListAttribute(
 		android.BazelLabelForModuleDeps(ctx, m.properties.Plugins),
 	)
-	if m.properties.Javacflags != nil {
-		javacopts = bazel.MakeStringListAttribute(m.properties.Javacflags)
+	if m.properties.Javacflags != nil || m.properties.Openjdk9.Javacflags != nil {
+		javacopts = bazel.MakeStringListAttribute(
+			append(append([]string{}, m.properties.Javacflags...), m.properties.Openjdk9.Javacflags...))
 	}
 
 	epEnabled := m.properties.Errorprone.Enabled
@@ -3022,14 +3097,17 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.Bp2buildMutatorContext
 		javacopts.Append(bazel.MakeStringListAttribute([]string{"-XepDisableAllChecks"}))
 	}
 
+	resourcesAttrs := m.convertJavaResourcesAttributes(ctx)
+
 	commonAttrs := &javaCommonAttributes{
 		Srcs:                    javaSrcs,
-		javaResourcesAttributes: m.convertJavaResourcesAttributes(ctx),
+		javaResourcesAttributes: resourcesAttrs,
 		Plugins:                 plugins,
 		Javacopts:               javacopts,
 		Java_version:            bazel.StringAttribute{Value: m.properties.Java_version},
 		Sdk_version:             bazel.StringAttribute{Value: m.deviceProperties.Sdk_version},
 		Errorprone_force_enable: errorproneForceEnable,
+		Javac_shard_size:        m.properties.Javac_shard_size,
 	}
 
 	for axis, configToProps := range archVariantProps {
@@ -3047,6 +3125,7 @@ func (m *Library) convertLibraryAttrsBp2Build(ctx android.Bp2buildMutatorContext
 	}
 
 	depLabels := &javaDependencyLabels{}
+	deps.Append(resourcesAttrs.Additional_resources)
 	depLabels.Deps = deps
 
 	for axis, configToProps := range archVariantProps {
@@ -3438,6 +3517,7 @@ func ApiContributionImportFactory() android.Module {
 	android.InitDefaultableModule(module)
 	android.InitPrebuiltModule(module, &[]string{""})
 	module.AddProperties(&module.properties)
+	module.AddProperties(&module.sdkLibraryComponentProperties)
 	return module
 }
 

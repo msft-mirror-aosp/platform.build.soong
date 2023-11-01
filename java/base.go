@@ -194,7 +194,7 @@ type CommonProperties struct {
 	Generated_srcjars []android.Path `android:"mutated"`
 
 	// If true, then only the headers are built and not the implementation jar.
-	Headers_only bool
+	Headers_only *bool
 }
 
 // Properties that are specific to device modules. Host module factories should not add these when
@@ -582,7 +582,7 @@ func (j *Module) checkPlatformAPI(ctx android.ModuleContext) {
 
 func (j *Module) checkHeadersOnly(ctx android.ModuleContext) {
 	if _, ok := ctx.Module().(android.SdkContext); ok {
-		headersOnly := proptools.Bool(&j.properties.Headers_only)
+		headersOnly := proptools.Bool(j.properties.Headers_only)
 		installable := proptools.Bool(j.properties.Installable)
 
 		if headersOnly && installable {
@@ -1014,8 +1014,16 @@ func (j *Module) collectJavacFlags(
 	ctx android.ModuleContext, flags javaBuilderFlags, srcFiles android.Paths) javaBuilderFlags {
 	// javac flags.
 	javacFlags := j.properties.Javacflags
+	var needsDebugInfo bool
 
-	if ctx.Config().MinimizeJavaDebugInfo() && !ctx.Host() {
+	needsDebugInfo = false
+	for _, flag := range javacFlags {
+		if strings.HasPrefix(flag, "-g") {
+			needsDebugInfo = true
+		}
+	}
+
+	if ctx.Config().MinimizeJavaDebugInfo() && !ctx.Host() && !needsDebugInfo {
 		// For non-host binaries, override the -g flag passed globally to remove
 		// local variable debug info to reduce disk and memory usage.
 		javacFlags = append(javacFlags, "-g:source,lines")
@@ -1024,7 +1032,12 @@ func (j *Module) collectJavacFlags(
 
 	if flags.javaVersion.usesJavaModules() {
 		javacFlags = append(javacFlags, j.properties.Openjdk9.Javacflags...)
+	} else if len(j.properties.Openjdk9.Javacflags) > 0 {
+		// java version defaults higher than openjdk 9, these conditionals should no longer be necessary
+		ctx.PropertyErrorf("openjdk9.javacflags", "JDK version defaults to higher than 9")
+	}
 
+	if flags.javaVersion.usesJavaModules() {
 		if j.properties.Patch_module != nil {
 			// Manually specify build directory in case it is not under the repo root.
 			// (javac doesn't seem to expand into symbolic links when searching for patch-module targets, so
@@ -1101,6 +1114,9 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	if flags.javaVersion.usesJavaModules() {
 		j.properties.Srcs = append(j.properties.Srcs, j.properties.Openjdk9.Srcs...)
+	} else if len(j.properties.Openjdk9.Javacflags) > 0 {
+		// java version defaults higher than openjdk 9, these conditionals should no longer be necessary
+		ctx.PropertyErrorf("openjdk9.srcs", "JDK version defaults to higher than 9")
 	}
 
 	srcFiles := android.PathsForModuleSrcExcludes(ctx, j.properties.Srcs, j.properties.Exclude_srcs)
@@ -1180,7 +1196,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	flags.classpath = append(android.CopyOf(extraClasspathJars), flags.classpath...)
 
 	// If compiling headers then compile them and skip the rest
-	if j.properties.Headers_only {
+	if proptools.Bool(j.properties.Headers_only) {
 		if srcFiles.HasExt(".kt") {
 			ctx.ModuleErrorf("Compiling headers_only with .kt not supported")
 		}
@@ -1930,19 +1946,22 @@ func (j *providesTransitiveHeaderJars) collectTransitiveHeaderJars(ctx android.M
 		}
 
 		dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
-		if dep.TransitiveLibsHeaderJars != nil {
-			transitiveLibs = append(transitiveLibs, dep.TransitiveLibsHeaderJars)
-		}
-		if dep.TransitiveStaticLibsHeaderJars != nil {
-			transitiveStaticLibs = append(transitiveStaticLibs, dep.TransitiveStaticLibsHeaderJars)
-		}
-
 		tag := ctx.OtherModuleDependencyTag(module)
 		_, isUsesLibDep := tag.(usesLibraryDependencyTag)
 		if tag == libTag || tag == r8LibraryJarTag || isUsesLibDep {
 			directLibs = append(directLibs, dep.HeaderJars...)
 		} else if tag == staticLibTag {
 			directStaticLibs = append(directStaticLibs, dep.HeaderJars...)
+		} else {
+			// Don't propagate transitive libs for other kinds of dependencies.
+			return
+		}
+
+		if dep.TransitiveLibsHeaderJars != nil {
+			transitiveLibs = append(transitiveLibs, dep.TransitiveLibsHeaderJars)
+		}
+		if dep.TransitiveStaticLibsHeaderJars != nil {
+			transitiveStaticLibs = append(transitiveStaticLibs, dep.TransitiveStaticLibsHeaderJars)
 		}
 	})
 	j.transitiveLibsHeaderJars = android.NewDepSet(android.POSTORDER, directLibs, transitiveLibs)

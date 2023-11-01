@@ -65,6 +65,7 @@ func RegisterPrebuiltEtcBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("prebuilt_firmware", PrebuiltFirmwareFactory)
 	ctx.RegisterModuleType("prebuilt_dsp", PrebuiltDSPFactory)
 	ctx.RegisterModuleType("prebuilt_rfsa", PrebuiltRFSAFactory)
+	ctx.RegisterModuleType("prebuilt_renderscript_bitcode", PrebuiltRenderScriptBitcodeFactory)
 
 	ctx.RegisterModuleType("prebuilt_defaults", defaultsFactory)
 
@@ -149,12 +150,15 @@ type PrebuiltEtc struct {
 	sourceFilePath android.Path
 	outputFilePath android.OutputPath
 	// The base install location, e.g. "etc" for prebuilt_etc, "usr/share" for prebuilt_usr_share.
-	installDirBase string
+	installDirBase   string
+	installDirBase64 string
 	// The base install location when soc_specific property is set to true, e.g. "firmware" for
 	// prebuilt_firmware.
 	socInstallDirBase      string
 	installDirPath         android.InstallPath
 	additionalDependencies *android.Paths
+
+	makeClass string
 }
 
 type Defaults struct {
@@ -345,6 +349,9 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// If soc install dir was specified and SOC specific is set, set the installDirPath to the
 	// specified socInstallDirBase.
 	installBaseDir := p.installDirBase
+	if p.Target().Arch.ArchType.Multilib == "lib64" && p.installDirBase64 != "" {
+		installBaseDir = p.installDirBase64
+	}
 	if p.SocSpecific() && p.socInstallDirBase != "" {
 		installBaseDir = p.socInstallDirBase
 	}
@@ -404,8 +411,14 @@ func (p *PrebuiltEtc) AndroidMkEntries() []android.AndroidMkEntries {
 	if p.InRecovery() && !p.onlyInRecovery() {
 		nameSuffix = ".recovery"
 	}
+
+	class := p.makeClass
+	if class == "" {
+		class = "ETC"
+	}
+
 	return []android.AndroidMkEntries{android.AndroidMkEntries{
-		Class:      "ETC",
+		Class:      class,
 		SubName:    nameSuffix,
 		OutputFile: android.OptionalPathForPath(p.outputFilePath),
 		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
@@ -508,6 +521,7 @@ func PrebuiltRootHostFactory() android.Module {
 	// This module is host-only
 	android.InitAndroidArchModule(module, android.HostSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
+	android.InitBazelModule(module)
 	return module
 }
 
@@ -567,6 +581,18 @@ func PrebuiltDSPFactory() android.Module {
 	InitPrebuiltEtcModule(module, "etc/dsp")
 	// This module is device-only
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_renderscript_bitcode installs a *.bc file into /system/lib or /system/lib64.
+func PrebuiltRenderScriptBitcodeFactory() android.Module {
+	module := &PrebuiltEtc{}
+	module.makeClass = "RENDERSCRIPT_BITCODE"
+	module.installDirBase64 = "lib64"
+	InitPrebuiltEtcModule(module, "lib")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibBoth)
 	android.InitDefaultableModule(module)
 	return module
 }
@@ -759,7 +785,7 @@ func (module *PrebuiltEtc) Bp2buildHelper(ctx android.Bp2buildMutatorContext) (*
 		filename = *moduleProps.Filename
 	} else if moduleProps.Filename_from_src != nil && *moduleProps.Filename_from_src {
 		if moduleProps.Src != nil {
-			filename = *moduleProps.Src
+			filename = android.BazelLabelForModuleSrcSingle(ctx, *moduleProps.Src).Label
 		}
 		filenameFromSrc = true
 	} else {
@@ -767,8 +793,8 @@ func (module *PrebuiltEtc) Bp2buildHelper(ctx android.Bp2buildMutatorContext) (*
 	}
 
 	var dir = module.installDirBase
-	if subDir := module.subdirProperties.Sub_dir; subDir != nil {
-		dir = dir + "/" + *subDir
+	if module.SubDir() != "" {
+		dir = dir + "/" + module.SubDir()
 	}
 
 	var installable bazel.BoolAttribute
@@ -796,8 +822,9 @@ func (module *PrebuiltEtc) Bp2buildHelper(ctx android.Bp2buildMutatorContext) (*
 // which we treat as *PrebuiltFile*
 func (module *PrebuiltEtc) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
 	var dir = module.installDirBase
-	// prebuilt_file supports only `etc` or `usr/share`
-	if !(dir == "etc" || dir == "usr/share") {
+	// prebuilt_file only supports "etc" or "usr/share" or "." as module installDirBase
+	if !(dir == "etc" || dir == "usr/share" || dir == ".") {
+		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_TYPE_UNSUPPORTED, "dir")
 		return
 	}
 

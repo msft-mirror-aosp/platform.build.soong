@@ -308,6 +308,13 @@ func (a *AndroidApp) OverridablePropertiesDepsMutator(ctx android.BottomUpMutato
 }
 
 func (a *AndroidTestHelperApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	applicationId := a.appTestHelperAppProperties.Manifest_values.ApplicationId
+	if applicationId != nil {
+		if a.overridableAppProperties.Package_name != nil {
+			ctx.PropertyErrorf("manifest_values.applicationId", "property is not supported when property package_name is set.")
+		}
+		a.aapt.manifestValues.applicationId = *applicationId
+	}
 	a.generateAndroidBuildActions(ctx)
 }
 
@@ -481,8 +488,15 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 	if a.Updatable() {
 		a.aapt.defaultManifestVersion = android.DefaultUpdatableModuleVersion
 	}
-	a.aapt.buildActions(ctx, android.SdkContext(a), a.classLoaderContexts,
-		a.usesLibraryProperties.Exclude_uses_libs, a.enforceDefaultTargetSdkVersion(), aaptLinkFlags...)
+	a.aapt.buildActions(ctx,
+		aaptBuildActionOptions{
+			android.SdkContext(a),
+			a.classLoaderContexts,
+			a.usesLibraryProperties.Exclude_uses_libs,
+			a.enforceDefaultTargetSdkVersion(),
+			aaptLinkFlags,
+		},
+	)
 
 	// apps manifests are handled by aapt, don't let Module see them
 	a.properties.Manifest = nil
@@ -1066,6 +1080,11 @@ func (a *AndroidApp) EnableCoverageIfNeeded() {}
 
 var _ cc.Coverage = (*AndroidApp)(nil)
 
+func (a *AndroidApp) IDEInfo(dpInfo *android.IdeInfo) {
+	a.Library.IDEInfo(dpInfo)
+	a.aapt.IDEInfo(dpInfo)
+}
+
 // android_app compiles sources and Android resources into an Android application package `.apk` file.
 func AndroidAppFactory() android.Module {
 	module := &AndroidApp{}
@@ -1095,6 +1114,12 @@ func AndroidAppFactory() android.Module {
 	return module
 }
 
+// A dictionary of values to be overridden in the manifest.
+type Manifest_values struct {
+	// Overrides the value of package_name in the manifest
+	ApplicationId *string
+}
+
 type appTestProperties struct {
 	// The name of the android_app module that the tests will run against.
 	Instrumentation_for *string
@@ -1104,6 +1129,8 @@ type appTestProperties struct {
 
 	// If specified, the mainline module package name in the test config is overwritten by it.
 	Mainline_package_name *string
+
+	Manifest_values Manifest_values
 }
 
 type AndroidTest struct {
@@ -1147,6 +1174,13 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		if overridden {
 			a.additionalAaptFlags = append(a.additionalAaptFlags, "--rename-instrumentation-target-package "+manifestPackageName)
 		}
+	}
+	applicationId := a.appTestProperties.Manifest_values.ApplicationId
+	if applicationId != nil {
+		if a.overridableAppProperties.Package_name != nil {
+			ctx.PropertyErrorf("manifest_values.applicationId", "property is not supported when property package_name is set.")
+		}
+		a.aapt.manifestValues.applicationId = *applicationId
 	}
 	a.generateAndroidBuildActions(ctx)
 
@@ -1252,6 +1286,8 @@ type appTestHelperAppProperties struct {
 
 	// Install the test into a folder named for the module in all test suites.
 	Per_testcase_directory *bool
+
+	Manifest_values Manifest_values
 }
 
 type AndroidTestHelperApp struct {

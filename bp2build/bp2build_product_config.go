@@ -3,7 +3,6 @@ package bp2build
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -29,6 +28,8 @@ type bazelLabel struct {
 	target string
 }
 
+const releaseAconfigValueSetsName = "release_aconfig_value_sets"
+
 func (l *bazelLabel) Less(other *bazelLabel) bool {
 	if l.repo < other.repo {
 		return true
@@ -51,7 +52,8 @@ func (l *bazelLabel) String() string {
 
 func createProductConfigFiles(
 	ctx *CodegenContext,
-	metrics CodegenMetrics) (createProductConfigFilesResult, error) {
+	moduleNameToPartition map[string]string,
+	convertedModulePathMap map[string]string) (createProductConfigFilesResult, error) {
 	cfg := &ctx.config
 	targetProduct := "unknown"
 	if cfg.HasDeviceProduct() {
@@ -66,16 +68,11 @@ func createProductConfigFiles(
 
 	var res createProductConfigFilesResult
 
-	productVariablesFileName := cfg.ProductVariablesFileName
-	if !strings.HasPrefix(productVariablesFileName, "/") {
-		productVariablesFileName = filepath.Join(ctx.topDir, productVariablesFileName)
-	}
-	productVariablesBytes, err := os.ReadFile(productVariablesFileName)
-	if err != nil {
-		return res, err
-	}
-	productVariables := android.ProductVariables{}
-	err = json.Unmarshal(productVariablesBytes, &productVariables)
+	productVariables := ctx.Config().ProductVariables()
+	// TODO(b/306243251): For some reason, using the real value of native_coverage makes some select
+	// statements ambiguous
+	productVariables.Native_coverage = nil
+	productVariablesBytes, err := json.Marshal(productVariables)
 	if err != nil {
 		return res, err
 	}
@@ -140,12 +137,12 @@ func createProductConfigFiles(
 			},
 		},
 	})
-	createTargets(productLabelsToVariables, res.bp2buildTargets)
+	createTargets(ctx, productLabelsToVariables, moduleNameToPartition, convertedModulePathMap, res.bp2buildTargets)
 
 	platformMappingContent, err := platformMappingContent(
 		productLabelsToVariables,
 		ctx.Config().Bp2buildSoongConfigDefinitions,
-		metrics.convertedModulePathMap)
+		convertedModulePathMap)
 	if err != nil {
 		return res, err
 	}
@@ -343,10 +340,11 @@ func platformMappingSingleProduct(
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:product_brand=%s\n", productVariables.ProductBrand))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:product_manufacturer=%s\n", productVariables.ProductManufacturer))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:release_aconfig_flag_default_permission=%s\n", productVariables.ReleaseAconfigFlagDefaultPermission))
-		// Empty string can't be used as label_flag on the bazel side
+		releaseAconfigValueSets := "//build/bazel/product_config:empty_aconfig_value_sets"
 		if len(productVariables.ReleaseAconfigValueSets) > 0 {
-			result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:release_aconfig_value_sets=%s\n", productVariables.ReleaseAconfigValueSets))
+			releaseAconfigValueSets = "@//" + label.pkg + ":" + releaseAconfigValueSetsName + "_" + label.target
 		}
+		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:release_aconfig_value_sets=%s\n", releaseAconfigValueSets))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:release_version=%s\n", productVariables.ReleaseVersion))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:platform_sdk_version=%d\n", platform_sdk_version))
 		result.WriteString(fmt.Sprintf("    --//build/bazel/product_config:safestack=%t\n", proptools.Bool(productVariables.Safestack)))
@@ -478,11 +476,17 @@ func starlarkMapToProductVariables(in map[string]starlark.Value) (android.Produc
 	return result, nil
 }
 
-func createTargets(productLabelsToVariables map[bazelLabel]*android.ProductVariables, res map[string]BazelTargets) {
+func createTargets(
+	ctx *CodegenContext,
+	productLabelsToVariables map[bazelLabel]*android.ProductVariables,
+	moduleNameToPartition map[string]string,
+	convertedModulePathMap map[string]string,
+	res map[string]BazelTargets) {
 	createGeneratedAndroidCertificateDirectories(productLabelsToVariables, res)
 	createAvbKeyFilegroups(productLabelsToVariables, res)
+	createReleaseAconfigValueSetsFilegroup(productLabelsToVariables, res)
 	for label, variables := range productLabelsToVariables {
-		createSystemPartition(label, &variables.PartitionVarsForBazelMigrationOnlyDoNotUse, res)
+		createSystemPartition(ctx, label, &variables.PartitionVarsForBazelMigrationOnlyDoNotUse, moduleNameToPartition, convertedModulePathMap, res)
 	}
 }
 
@@ -515,6 +519,40 @@ func createGeneratedAndroidCertificateDirectories(productLabelsToVariables map[b
 	}
 }
 
+func createReleaseAconfigValueSetsFilegroup(productLabelsToVariables map[bazelLabel]*android.ProductVariables, targets map[string]BazelTargets) {
+	for label, productVariables := range productLabelsToVariables {
+		if len(productVariables.ReleaseAconfigValueSets) > 0 {
+			key := label.target
+			dir := label.pkg
+			var value_sets strings.Builder
+			for _, value_set := range productVariables.ReleaseAconfigValueSets {
+				value_sets.WriteString("        \"" + value_set + "\",\n")
+			}
+
+			name := releaseAconfigValueSetsName + "_" + key
+			content := "aconfig_value_sets(\n" +
+				"    name = \"" + name + "\",\n" +
+				"    value_sets = [\n" +
+				value_sets.String() +
+				"    ],\n" +
+				"    visibility = [\"//visibility:public\"],\n" +
+				")"
+			targets[dir] = append(targets[dir], BazelTarget{
+				name:        name,
+				packageName: dir,
+				content:     content,
+				ruleClass:   "aconfig_value_sets",
+				loads: []BazelLoad{{
+					file: "//build/bazel/rules/aconfig:aconfig_value_sets.bzl",
+					symbols: []BazelLoadSymbol{{
+						symbol: "aconfig_value_sets",
+					}},
+				}},
+			})
+		}
+	}
+}
+
 func createAvbKeyFilegroups(productLabelsToVariables map[bazelLabel]*android.ProductVariables, targets map[string]BazelTargets) {
 	var allAvbKeys []string
 	for _, productVariables := range productLabelsToVariables {
@@ -543,7 +581,13 @@ func createAvbKeyFilegroups(productLabelsToVariables map[bazelLabel]*android.Pro
 	}
 }
 
-func createSystemPartition(platformLabel bazelLabel, variables *android.PartitionVariables, targets map[string]BazelTargets) {
+func createSystemPartition(
+	ctx *CodegenContext,
+	platformLabel bazelLabel,
+	variables *android.PartitionVariables,
+	moduleNameToPartition map[string]string,
+	convertedModulePathMap map[string]string,
+	targets map[string]BazelTargets) {
 	if !variables.PartitionQualifiedVariables["system"].BuildingImage {
 		return
 	}
@@ -571,6 +615,26 @@ func createSystemPartition(platformLabel bazelLabel, variables *android.Partitio
 			extraProperties.WriteString(fmt.Sprintf("    avb_rollback_index = %s,\n", qualifiedVariables.BoardAvbRollbackIndex))
 			extraProperties.WriteString(fmt.Sprintf("    avb_rollback_index_location = %s,\n", qualifiedVariables.BoardAvbRollbackIndexLocation))
 		}
+	}
+
+	var deps []string
+	for _, mod := range variables.ProductPackages {
+		if path, ok := convertedModulePathMap[mod]; ok && ctx.Config().BazelContext.IsModuleNameAllowed(mod, false) {
+			if partition, ok := moduleNameToPartition[mod]; ok && partition == "system" {
+				if path == "//." {
+					path = "//"
+				}
+				deps = append(deps, fmt.Sprintf("        \"%s:%s\",\n", path, mod))
+			}
+		}
+	}
+	if len(deps) > 0 {
+		sort.Strings(deps)
+		extraProperties.WriteString("    deps = [\n")
+		for _, dep := range deps {
+			extraProperties.WriteString(dep)
+		}
+		extraProperties.WriteString("    ],\n")
 	}
 
 	targets[platformLabel.pkg] = append(targets[platformLabel.pkg], BazelTarget{

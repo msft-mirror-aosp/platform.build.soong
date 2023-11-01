@@ -23,9 +23,9 @@ import (
 
 var (
 	pctx         = android.NewPackageContext("android/soong/rust/config")
-	exportedVars = android.NewExportedVariables(pctx)
+	ExportedVars = android.NewExportedVariables(pctx)
 
-	RustDefaultVersion = "1.72.0"
+	RustDefaultVersion = "1.72.1"
 	RustDefaultBase    = "prebuilts/rust/"
 	DefaultEdition     = "2021"
 	Stdlibs            = []string{
@@ -44,7 +44,6 @@ var (
 	GlobalRustFlags = []string{
 		"-Z stack-protector=strong",
 		"-Z remap-cwd-prefix=.",
-		"-C codegen-units=1",
 		"-C debuginfo=2",
 		"-C opt-level=3",
 		"-C relocation-model=pic",
@@ -55,7 +54,7 @@ var (
 		// This flag requires to have no space so that when it's exported to bazel
 		// it can be removed. See aosp/2768339
 		"--color=always",
-		"-Zdylib-lto",
+		"-Z dylib-lto",
 		"-Z link-native-libraries=no",
 	}
 
@@ -66,6 +65,7 @@ var (
 		"-lpthread",
 		"-lm",
 		"-lgcc_s",
+		"-Wl,--compress-debug-sections=zstd",
 	}
 
 	deviceGlobalRustFlags = []string{
@@ -87,6 +87,7 @@ var (
 		"-Wl,--use-android-relr-tags",
 		"-Wl,--no-undefined",
 		"-B${cc_config.ClangBin}",
+		"-Wl,--compress-debug-sections=zstd",
 	}
 )
 
@@ -111,9 +112,17 @@ func init() {
 
 	pctx.StaticVariable("DeviceGlobalLinkFlags", strings.Join(deviceGlobalLinkFlags, " "))
 
-	exportedVars.ExportStringStaticVariable("RUST_DEFAULT_VERSION", RustDefaultVersion)
-	exportedVars.ExportStringListStaticVariable("GLOBAL_RUSTC_FLAGS", GlobalRustFlags)
-	exportedVars.ExportStringListStaticVariable("LINUX_HOST_GLOBAL_LINK_FLAGS", LinuxHostGlobalLinkFlags)
+	ExportedVars.ExportStringStaticVariable("RUST_DEFAULT_VERSION", RustDefaultVersion)
+	ExportedVars.ExportStringListStaticVariable("GLOBAL_RUSTC_FLAGS", GlobalRustFlags)
+	ExportedVars.ExportStringListStaticVariable("LINUX_HOST_GLOBAL_LINK_FLAGS", LinuxHostGlobalLinkFlags)
+
+	ExportedVars.ExportStringListStaticVariable("DEVICE_GLOBAL_RUSTC_FLAGS", deviceGlobalRustFlags)
+	ExportedVars.ExportStringListStaticVariable("DEVICE_GLOBAL_LINK_FLAGS",
+		android.RemoveListFromList(deviceGlobalLinkFlags, []string{
+			// The cc_config flags are retrieved from cc_toolchain by rust rules.
+			"${cc_config.DeviceGlobalLldflags}",
+			"-B${cc_config.ClangBin}",
+		}))
 }
 
 func HostPrebuiltTag(config android.Config) string {
@@ -137,5 +146,5 @@ func GetRustVersion(ctx android.PathContext) string {
 
 // BazelRustToolchainVars returns a string with
 func BazelRustToolchainVars(config android.Config) string {
-	return android.BazelToolchainVars(config, exportedVars)
+	return android.BazelToolchainVars(config, ExportedVars)
 }

@@ -470,6 +470,9 @@ type ApiScopeProperties struct {
 	// or the API file. They both have to use the same sdk_version as is used for
 	// compiling the implementation library.
 	Sdk_version *string
+
+	// Extra libs used when compiling stubs for this scope.
+	Libs []string
 }
 
 type sdkLibraryProperties struct {
@@ -1653,6 +1656,7 @@ func (module *SdkLibrary) createStubsLibrary(mctx android.DefaultableHookContext
 	props.Patch_module = module.properties.Patch_module
 	props.Installable = proptools.BoolPtr(false)
 	props.Libs = module.sdkLibraryProperties.Stub_only_libs
+	props.Libs = append(props.Libs, module.scopeToProperties[apiScope].Libs...)
 	props.Static_libs = module.sdkLibraryProperties.Stub_only_static_libs
 	// The stub-annotations library contains special versions of the annotations
 	// with CLASS retention policy, so that they're kept.
@@ -1725,6 +1729,7 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 	props.Libs = module.properties.Libs
 	props.Libs = append(props.Libs, module.properties.Static_libs...)
 	props.Libs = append(props.Libs, module.sdkLibraryProperties.Stub_only_libs...)
+	props.Libs = append(props.Libs, module.scopeToProperties[apiScope].Libs...)
 	props.Aidl.Include_dirs = module.deviceProperties.Aidl.Include_dirs
 	props.Aidl.Local_include_dirs = module.deviceProperties.Aidl.Local_include_dirs
 	props.Java_version = module.properties.Java_version
@@ -1746,11 +1751,9 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 		"BroadcastBehavior",
 		"DeprecationMismatch",
 		"HiddenSuperclass",
-		"HiddenTypeParameter",
 		"MissingPermission",
 		"SdkConstant",
 		"Todo",
-		"UnavailableSymbol",
 	}
 	droidstubsArgs = append(droidstubsArgs, android.JoinWithPrefix(disabledWarnings, "--hide "))
 
@@ -1826,7 +1829,7 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 		}
 	}
 
-	mctx.CreateModule(DroidstubsFactory, &props).(*Droidstubs).CallHookIfAvailable(mctx)
+	mctx.CreateModule(DroidstubsFactory, &props, module.sdkComponentPropertiesForChildLibrary()).(*Droidstubs).CallHookIfAvailable(mctx)
 }
 
 func (module *SdkLibrary) createApiLibrary(mctx android.DefaultableHookContext, apiScope *apiScope, alternativeFullApiSurfaceStub string) {
@@ -1837,6 +1840,8 @@ func (module *SdkLibrary) createApiLibrary(mctx android.DefaultableHookContext, 
 		Libs                  []string
 		Static_libs           []string
 		Full_api_surface_stub *string
+		System_modules        *string
+		Enable_validation     *bool
 	}{}
 
 	props.Name = proptools.StringPtr(module.apiLibraryModuleName(apiScope))
@@ -1862,6 +1867,7 @@ func (module *SdkLibrary) createApiLibrary(mctx android.DefaultableHookContext, 
 	props.Api_contributions = apiContributions
 	props.Libs = module.properties.Libs
 	props.Libs = append(props.Libs, module.sdkLibraryProperties.Stub_only_libs...)
+	props.Libs = append(props.Libs, module.scopeToProperties[apiScope].Libs...)
 	props.Libs = append(props.Libs, "stub-annotations")
 	props.Static_libs = module.sdkLibraryProperties.Stub_only_static_libs
 	props.Full_api_surface_stub = proptools.StringPtr(apiScope.kind.DefaultJavaLibraryName())
@@ -1875,7 +1881,18 @@ func (module *SdkLibrary) createApiLibrary(mctx android.DefaultableHookContext, 
 		props.Full_api_surface_stub = proptools.StringPtr(apiScope.kind.DefaultJavaLibraryName() + "_full.from-text")
 	}
 
-	mctx.CreateModule(ApiLibraryFactory, &props)
+	// java_sdk_library modules that set sdk_version as none does not depend on other api
+	// domains. Therefore, java_api_library created from such modules should not depend on
+	// full_api_surface_stubs but create and compile stubs by the java_api_library module
+	// itself.
+	if module.SdkVersion(mctx).Kind == android.SdkNone {
+		props.Full_api_surface_stub = nil
+	}
+
+	props.System_modules = module.deviceProperties.System_modules
+	props.Enable_validation = proptools.BoolPtr(true)
+
+	mctx.CreateModule(ApiLibraryFactory, &props, module.sdkComponentPropertiesForChildLibrary())
 }
 
 func (module *SdkLibrary) createTopLevelStubsLibrary(
@@ -2573,7 +2590,7 @@ func (module *SdkLibraryImport) createPrebuiltStubsSources(mctx android.Defaulta
 	// The stubs source is preferred if the java_sdk_library_import is preferred.
 	props.CopyUserSuppliedPropertiesFromPrebuilt(&module.prebuilt)
 
-	mctx.CreateModule(PrebuiltStubsSourcesFactory, &props)
+	mctx.CreateModule(PrebuiltStubsSourcesFactory, &props, module.sdkComponentPropertiesForChildLibrary())
 }
 
 func (module *SdkLibraryImport) createPrebuiltApiContribution(mctx android.DefaultableHookContext, apiScope *apiScope, scopeProperties *sdkLibraryScopeProperties) {
@@ -2592,7 +2609,7 @@ func (module *SdkLibraryImport) createPrebuiltApiContribution(mctx android.Defau
 	props.Api_file = api_file
 	props.Visibility = []string{"//visibility:override", "//visibility:public"}
 
-	mctx.CreateModule(ApiContributionImportFactory, &props)
+	mctx.CreateModule(ApiContributionImportFactory, &props, module.sdkComponentPropertiesForChildLibrary())
 }
 
 // Add the dependencies on the child module in the component deps mutator so that it

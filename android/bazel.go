@@ -81,6 +81,11 @@ type BazelConversionStatus struct {
 	// If non-nil, indicates that the module could not be converted successfully
 	// with bp2build. This will describe the reason the module could not be converted.
 	UnconvertedReason *UnconvertedReason
+
+	// The Partition this module will be installed on.
+	// TODO(b/306200980) Investigate how to handle modules that are installed in multiple
+	// partitions.
+	Partition string `blueprint:"mutated"`
 }
 
 // The reason a module could not be converted to a BUILD target via bp2build.
@@ -544,7 +549,18 @@ func (b *BazelModuleBase) shouldConvertWithBp2build(ctx shouldConvertModuleConte
 	}
 
 	moduleName := moduleNameWithPossibleOverride(ctx, module, p.moduleName)
+	// use "prebuilt_" + original module name as the java_import(_host) module name,
+	// to avoid the failure that a normal module and a prebuilt module with
+	// the same name are both allowlisted. This cannot be applied to all the *_import
+	// module types. For example, android_library_import has to use original module
+	// name here otherwise the *-nodeps targets cannot be handled correctly.
+	// TODO(b/304385140): remove this special casing
+	if p.moduleType == "java_import" || p.moduleType == "java_import_host" {
+		moduleName = module.Name()
+	}
+
 	allowlist := ctx.Config().Bp2buildPackageConfig
+
 	moduleNameAllowed := allowlist.moduleAlwaysConvert[moduleName]
 	moduleTypeAllowed := allowlist.moduleTypeAlwaysConvert[p.moduleType]
 	allowlistConvert := moduleNameAllowed || moduleTypeAllowed
@@ -623,9 +639,6 @@ func bp2buildDefaultTrueRecursively(packagePath string, config allowlists.Bp2Bui
 
 func registerBp2buildConversionMutator(ctx RegisterMutatorsContext) {
 	ctx.BottomUp("bp2build_conversion", bp2buildConversionMutator).Parallel()
-}
-
-func registerBp2buildDepsMutator(ctx RegisterMutatorsContext) {
 	ctx.BottomUp("bp2build_deps", bp2buildDepsMutator).Parallel()
 }
 
@@ -665,6 +678,9 @@ func bp2buildConversionMutator(ctx BottomUpMutatorContext) {
 	}
 
 	bModule.ConvertWithBp2build(ctx)
+
+	installCtx := &baseModuleContextToModuleInstallPathContext{ctx}
+	ctx.Module().base().setPartitionForBp2build(modulePartition(installCtx, true))
 
 	if len(ctx.Module().base().Bp2buildTargets()) == 0 && ctx.Module().base().GetUnconvertedReason() == nil {
 		panic(fmt.Errorf("illegal bp2build invariant: module '%s' was neither converted nor marked unconvertible", ctx.ModuleName()))

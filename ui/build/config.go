@@ -120,6 +120,9 @@ type configImpl struct {
 	includeTags    []string
 	sourceRootDirs []string
 
+	productReleaseConfigMaps       string
+	productReleaseConfigMapsLoaded bool
+
 	// Data source to write ninja weight list
 	ninjaWeightListSource NinjaWeightListSource
 }
@@ -205,39 +208,16 @@ func loadEnvConfig(ctx Context, config *configImpl, bc string) error {
 	return nil
 }
 
-func defaultBazelProdMode(cfg *configImpl) bool {
-	// Environment flag to disable Bazel for users which experience
-	// broken bazel-handled builds, or significant performance regressions.
-	if cfg.IsBazelMixedBuildForceDisabled() {
-		return false
-	}
-	// Darwin-host builds are currently untested with Bazel.
-	if runtime.GOOS == "darwin" {
-		return false
-	}
-	return true
-}
-
-func UploadOnlyConfig(ctx Context, args ...string) Config {
-	ret := &configImpl{
-		environ:       OsEnvironment(),
-		sandboxConfig: &SandboxConfig{},
-	}
-	ret.parseArgs(ctx, args)
-	srcDir := absPath(ctx, ".")
-	bc := os.Getenv("ANDROID_BUILD_ENVIRONMENT_CONFIG")
-	if err := loadEnvConfig(ctx, ret, bc); err != nil {
-		ctx.Fatalln("Failed to parse env config files: %v", err)
-	}
-	ret.metricsUploader = GetMetricsUploader(srcDir, ret.environ)
-	return Config{ret}
-}
-
 func NewConfig(ctx Context, args ...string) Config {
 	ret := &configImpl{
 		environ:               OsEnvironment(),
 		sandboxConfig:         &SandboxConfig{},
 		ninjaWeightListSource: DEFAULT,
+	}
+
+	// Skip soong tests by default on Linux
+	if runtime.GOOS == "linux" {
+		ret.skipSoongTests = true
 	}
 
 	// Default matching ninja
@@ -470,11 +450,6 @@ func NewConfig(ctx Context, args ...string) Config {
 		for k, v := range getRBEVars(ctx, Config{ret}) {
 			ret.environ.Set(k, v)
 		}
-	}
-
-	if ret.BuildFromTextStub() {
-		// TODO(b/271443071): support hidden api check for from-text stub build
-		ret.environ.Set("UNSAFE_DISABLE_HIDDENAPI_FLAGS", "true")
 	}
 
 	bpd := ret.BazelMetricsDir()
@@ -777,6 +752,8 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			c.skipConfig = true
 		} else if arg == "--skip-soong-tests" {
 			c.skipSoongTests = true
+		} else if arg == "--no-skip-soong-tests" {
+			c.skipSoongTests = false
 		} else if arg == "--skip-metrics-upload" {
 			c.skipMetricsUpload = true
 		} else if arg == "--mk-metrics" {
@@ -833,16 +810,6 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			}
 		} else if arg == "--ensure-allowlist-integrity" {
 			c.ensureAllowlistIntegrity = true
-		} else if strings.HasPrefix(arg, "--bazel-exit-code=") {
-			bazelExitCodeStr := strings.TrimPrefix(arg, "--bazel-exit-code=")
-			val, err := strconv.Atoi(bazelExitCodeStr)
-			if err == nil {
-				c.bazelExitCode = int32(val)
-			} else {
-				ctx.Fatalf("Error parsing bazel-exit-code", err)
-			}
-		} else if strings.HasPrefix(arg, "--bes-id=") {
-			c.besId = strings.TrimPrefix(arg, "--bes-id=")
 		} else if len(arg) > 0 && arg[0] == '-' {
 			parseArgNum := func(def int) int {
 				if len(arg) > 2 {
@@ -889,9 +856,6 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			}
 			c.arguments = append(c.arguments, arg)
 		}
-	}
-	if (!c.bazelProdMode) && (!c.bazelStagingMode) {
-		c.bazelProdMode = defaultBazelProdMode(c)
 	}
 }
 
@@ -964,6 +928,9 @@ func (c *configImpl) configureLocale(ctx Context) {
 }
 
 func (c *configImpl) Environment() *Environment {
+	if c.productReleaseConfigMapsLoaded {
+		c.environ.Set("PRODUCT_RELEASE_CONFIG_MAPS", c.productReleaseConfigMaps)
+	}
 	return c.environ
 }
 
@@ -1349,6 +1316,19 @@ func (c *configImpl) rbeProxyLogsDir() string {
 			return v
 		}
 	}
+	return c.rbeTmpDir()
+}
+
+func (c *configImpl) rbeDownloadTmpDir() string {
+	for _, f := range []string{"RBE_download_tmp_dir", "FLAG_download_tmp_dir"} {
+		if v, ok := c.environ.Get(f); ok {
+			return v
+		}
+	}
+	return c.rbeTmpDir()
+}
+
+func (c *configImpl) rbeTmpDir() string {
 	buildTmpDir := shared.TempDirForOutDir(c.SoongOutDir())
 	return filepath.Join(buildTmpDir, "rbe")
 }
@@ -1553,6 +1533,10 @@ func (c *configImpl) SoongAndroidMk() string {
 
 func (c *configImpl) SoongMakeVarsMk() string {
 	return filepath.Join(c.SoongOutDir(), "make_vars-"+c.TargetProduct()+".mk")
+}
+
+func (c *configImpl) SoongBuildMetrics() string {
+	return filepath.Join(c.LogsDir(), "soong_build_metrics.pb")
 }
 
 func (c *configImpl) ProductOut() string {

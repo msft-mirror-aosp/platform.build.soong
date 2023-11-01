@@ -35,11 +35,11 @@ import (
 // optimized at link time and may not be compatible with features that require
 // LTO, such as CFI.
 //
-// This file adds support to soong to automatically propogate LTO options to a
+// This file adds support to soong to automatically propagate LTO options to a
 // new variant of all static dependencies for each module with LTO enabled.
 
 type LTOProperties struct {
-	// Lto must violate capitialization style for acronyms so that it can be
+	// Lto must violate capitalization style for acronyms so that it can be
 	// referred to in blueprint files as "lto"
 	Lto struct {
 		Never *bool `android:"arch_variant"`
@@ -67,9 +67,11 @@ func (lto *lto) props() []interface{} {
 }
 
 func (lto *lto) begin(ctx BaseModuleContext) {
-	// First, determine the module indepedent default LTO mode.
-	ltoDefault := GlobalThinLTO(ctx)
+	// First, determine the module independent default LTO mode.
+	ltoDefault := true
 	if ctx.Config().IsEnvTrue("DISABLE_LTO") {
+		ltoDefault = false
+	} else if lto.Never() {
 		ltoDefault = false
 	} else if ctx.Host() {
 		// Performance and binary size are less important for host binaries.
@@ -145,6 +147,12 @@ func (lto *lto) flags(ctx BaseModuleContext, flags Flags) Flags {
 			}
 		}
 
+		// For ML training
+		if ctx.Config().IsEnvTrue("THINLTO_EMIT_INDEXES_AND_IMPORTS") {
+			ltoLdFlags = append(ltoLdFlags, "-Wl,--save-temps=import")
+			ltoLdFlags = append(ltoLdFlags, "-Wl,--thinlto-emit-index-files")
+		}
+
 		flags.Local.CFlags = append(flags.Local.CFlags, ltoCFlags...)
 		flags.Local.AsFlags = append(flags.Local.AsFlags, ltoCFlags...)
 		flags.Local.LdFlags = append(flags.Local.LdFlags, ltoCFlags...)
@@ -159,10 +167,6 @@ func (lto *lto) ThinLTO() bool {
 
 func (lto *lto) Never() bool {
 	return lto != nil && proptools.Bool(lto.Properties.Lto.Never)
-}
-
-func GlobalThinLTO(ctx android.BaseModuleContext) bool {
-	return !ctx.Config().IsEnvFalse("GLOBAL_THINLTO")
 }
 
 // Propagate lto requirements down from binaries
@@ -203,8 +207,6 @@ func ltoDepsMutator(mctx android.TopDownMutatorContext) {
 
 // Create lto variants for modules that need them
 func ltoMutator(mctx android.BottomUpMutatorContext) {
-	globalThinLTO := GlobalThinLTO(mctx)
-
 	if m, ok := mctx.Module().(*Module); ok && m.lto != nil {
 		// Create variations for LTO types required as static
 		// dependencies
@@ -216,10 +218,10 @@ func ltoMutator(mctx android.BottomUpMutatorContext) {
 			variationNames = append(variationNames, "lto-none")
 		}
 
-		if globalThinLTO && !m.lto.Properties.LtoEnabled {
+		if !m.lto.Properties.LtoEnabled {
 			mctx.SetDependencyVariation("lto-none")
 		}
-		if !globalThinLTO && m.lto.Properties.LtoEnabled {
+		if m.lto.Properties.LtoEnabled {
 			mctx.SetDependencyVariation("lto-thin")
 		}
 
