@@ -15,6 +15,7 @@
 package build
 
 import (
+	"android/soong/ui/tracer"
 	"fmt"
 	"io/fs"
 	"os"
@@ -192,8 +193,8 @@ func (pb PrimaryBuilderFactory) primaryBuilderInvocation() bootstrap.PrimaryBuil
 	if pb.config.multitreeBuild {
 		commonArgs = append(commonArgs, "--multitree-build")
 	}
-	if pb.config.buildFromTextStub {
-		commonArgs = append(commonArgs, "--build-from-text-stub")
+	if pb.config.buildFromSourceStub {
+		commonArgs = append(commonArgs, "--build-from-source-stub")
 	}
 
 	commonArgs = append(commonArgs, "-l", filepath.Join(pb.config.FileListDir(), "Android.bp.list"))
@@ -309,8 +310,8 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	if config.MultitreeBuild() {
 		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--multitree-build")
 	}
-	if config.buildFromTextStub {
-		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--build-from-text-stub")
+	if config.buildFromSourceStub {
+		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--build-from-source-stub")
 	}
 	if config.ensureAllowlistIntegrity {
 		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--ensure-allowlist-integrity")
@@ -631,6 +632,10 @@ func runSoong(ctx Context, config Config) {
 
 		if config.BazelBuildEnabled() || config.Bp2Build() {
 			checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(bp2buildFilesTag))
+		} else {
+			// Remove bazel files in the event that bazel is disabled for the build.
+			// These files may have been left over from a previous bazel-enabled build.
+			cleanBazelFiles(config)
 		}
 
 		if config.JsonModuleGraph() {
@@ -754,7 +759,7 @@ func loadSoongBuildMetrics(ctx Context, config Config, oldTimestamp time.Time) {
 		return
 	}
 
-	metricsData, err := os.ReadFile(config.SoongBuildMetrics())
+	metricsData, err := os.ReadFile(soongBuildMetricsFile)
 	if err != nil {
 		ctx.Verbosef("Failed to read %s: %s", soongBuildMetricsFile, err)
 		return
@@ -773,6 +778,31 @@ func loadSoongBuildMetrics(ctx Context, config Config, oldTimestamp time.Time) {
 		}
 		ctx.Tracer.Complete(desc, ctx.Thread,
 			event.GetStartTime(), event.GetStartTime()+event.GetRealTime())
+	}
+	for _, event := range soongBuildMetrics.PerfCounters {
+		timestamp := event.GetTime()
+		for _, group := range event.Groups {
+			counters := make([]tracer.Counter, 0, len(group.Counters))
+			for _, counter := range group.Counters {
+				counters = append(counters, tracer.Counter{
+					Name:  counter.GetName(),
+					Value: counter.GetValue(),
+				})
+			}
+			ctx.Tracer.CountersAtTime(group.GetName(), ctx.Thread, timestamp, counters)
+		}
+	}
+}
+
+func cleanBazelFiles(config Config) {
+	files := []string{
+		shared.JoinPath(config.SoongOutDir(), "bp2build"),
+		shared.JoinPath(config.SoongOutDir(), "workspace"),
+		shared.JoinPath(config.SoongOutDir(), bazel.SoongInjectionDirName),
+		shared.JoinPath(config.OutDir(), "bazel")}
+
+	for _, f := range files {
+		os.RemoveAll(f)
 	}
 }
 

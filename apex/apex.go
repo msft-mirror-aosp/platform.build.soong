@@ -135,6 +135,11 @@ type apexBundleProperties struct {
 	// List of filesystem images that are embedded inside this APEX bundle.
 	Filesystems []string
 
+	// List of module names which we don't want to add as transitive deps. This can be used as
+	// a workaround when the current implementation collects more than necessary. For example,
+	// Rust binaries with prefer_rlib:true add unnecessary dependencies.
+	Unwanted_transitive_deps []string
+
 	// The minimum SDK version that this APEX must support at minimum. This is usually set to
 	// the SDK version that the APEX was first introduced.
 	Min_sdk_version *string
@@ -454,6 +459,9 @@ type apexBundle struct {
 	// Path where this APEX was installed.
 	installedFile android.InstallPath
 
+	// fragment for this apex for apexkeys.txt
+	apexKeysPath android.WritablePath
+
 	// Installed locations of symlinks for backward compatibility.
 	compatSymlinks android.InstallPaths
 
@@ -474,9 +482,6 @@ type apexBundle struct {
 	nativeApisUsedByModuleFile   android.ModuleOutPath
 	nativeApisBackedByModuleFile android.ModuleOutPath
 	javaApisUsedByModuleFile     android.ModuleOutPath
-
-	// Collect the module directory for IDE info in java/jdeps.go.
-	modulePaths []string
 }
 
 // apexFileClass represents a type of file that can be included in APEX.
@@ -1885,7 +1890,7 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 		installSuffix = imageCapexSuffix
 	}
 	a.installedFile = ctx.InstallFile(a.installDir, a.Name()+installSuffix, a.outputFile,
-		a.compatSymlinks.Paths()...)
+		a.compatSymlinks...)
 
 	// filesInfo in mixed mode must retrieve all information about the apex's
 	// contents completely from the Starlark providers. It should never rely on
@@ -1923,6 +1928,7 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 
 		a.filesInfo = append(a.filesInfo, fileInfo)
 	}
+	a.apexKeysPath = writeApexKeys(ctx, a)
 }
 
 func (a *apexBundle) setCompression(ctx android.ModuleContext) {
@@ -1999,11 +2005,21 @@ type visitorContext struct {
 
 	// if true, raise error on duplicate apexFile
 	checkDuplicate bool
+
+	// visitor skips these from this list of module names
+	unwantedTransitiveDeps []string
 }
 
 func (vctx *visitorContext) normalizeFileInfo(mctx android.ModuleContext) {
 	encountered := make(map[string]apexFile)
 	for _, f := range vctx.filesInfo {
+		// Skips unwanted transitive deps. This happens, for example, with Rust binaries with prefer_rlib:true.
+		// TODO(b/295593640)
+		// Needs additional verification for the resulting APEX to ensure that skipped artifacts don't make problems.
+		// For example, DT_NEEDED modules should be found within the APEX unless they are marked in `requiredNativeLibs`.
+		if f.transitiveDep && f.module != nil && android.InList(mctx.OtherModuleName(f.module), vctx.unwantedTransitiveDeps) {
+			continue
+		}
 		dest := filepath.Join(f.installDir, f.builtFile.Base())
 		if e, ok := encountered[dest]; !ok {
 			encountered[dest] = f
@@ -2367,10 +2383,6 @@ func (a *apexBundle) shouldCheckDuplicate(ctx android.ModuleContext) bool {
 	if a.properties.IsCoverageVariant {
 		return false
 	}
-	// TODO(b/263308515) remove this
-	if a.testApex {
-		return false
-	}
 	if ctx.DeviceConfig().DeviceArch() == "" {
 		return false
 	}
@@ -2391,14 +2403,13 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	////////////////////////////////////////////////////////////////////////////////////////////
 	// 2) traverse the dependency tree to collect apexFile structs from them.
-	// Collect the module directory for IDE info in java/jdeps.go.
-	a.modulePaths = append(a.modulePaths, ctx.ModuleDir())
 
 	// TODO(jiyong): do this using WalkPayloadDeps
 	// TODO(jiyong): make this clean!!!
 	vctx := visitorContext{
-		handleSpecialLibs: !android.Bool(a.properties.Ignore_system_library_special_case),
-		checkDuplicate:    a.shouldCheckDuplicate(ctx),
+		handleSpecialLibs:      !android.Bool(a.properties.Ignore_system_library_special_case),
+		checkDuplicate:         a.shouldCheckDuplicate(ctx),
+		unwantedTransitiveDeps: a.properties.Unwanted_transitive_deps,
 	}
 	ctx.WalkDepsBlueprint(func(child, parent blueprint.Module) bool { return a.depVisitor(&vctx, ctx, child, parent) })
 	vctx.normalizeFileInfo(ctx)
@@ -2956,7 +2967,6 @@ func (a *apexBundle) IDEInfo(dpInfo *android.IdeInfo) {
 	dpInfo.Deps = append(dpInfo.Deps, a.properties.Java_libs...)
 	dpInfo.Deps = append(dpInfo.Deps, a.properties.Bootclasspath_fragments...)
 	dpInfo.Deps = append(dpInfo.Deps, a.properties.Systemserverclasspath_fragments...)
-	dpInfo.Paths = append(dpInfo.Paths, a.modulePaths...)
 }
 
 var (
@@ -3018,59 +3028,6 @@ func BaselineApexAvailable(moduleName string) []string {
 func makeApexAvailableBaseline() map[string][]string {
 	// The "Module separator"s below are employed to minimize merge conflicts.
 	m := make(map[string][]string)
-	//
-	// Module separator
-	//
-	m["com.android.appsearch"] = []string{
-		"icing-java-proto-lite",
-	}
-	//
-	// Module separator
-	//
-	m["com.android.btservices"] = []string{
-		// empty
-	}
-	//
-	// Module separator
-	//
-	m["com.android.cellbroadcast"] = []string{}
-	//
-	// Module separator
-	//
-	m["com.android.extservices"] = []string{
-		"ExtServices-core",
-		"libtextclassifier-java",
-		"textclassifier-statsd",
-		"TextClassifierNotificationLibNoManifest",
-		"TextClassifierServiceLibNoManifest",
-	}
-	//
-	// Module separator
-	//
-	m["com.android.neuralnetworks"] = []string{
-		"android.hardware.neuralnetworks@1.0",
-		"android.hardware.neuralnetworks@1.1",
-		"android.hardware.neuralnetworks@1.2",
-		"android.hardware.neuralnetworks@1.3",
-		"android.hidl.allocator@1.0",
-		"android.hidl.memory.token@1.0",
-		"android.hidl.memory@1.0",
-		"android.hidl.safe_union@1.0",
-		"libarect",
-		"libprocpartition",
-	}
-	//
-	// Module separator
-	//
-	m["com.android.media"] = []string{
-		// empty
-	}
-	//
-	// Module separator
-	//
-	m["com.android.media.swcodec"] = []string{
-		// empty
-	}
 	//
 	// Module separator
 	//

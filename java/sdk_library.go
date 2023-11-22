@@ -618,7 +618,18 @@ type sdkLibraryProperties struct {
 	Api_lint struct {
 		// Enable api linting.
 		Enabled *bool
+
+		// If API lint is enabled, this flag controls whether a set of legitimate lint errors
+		// are turned off. The default is true.
+		Legacy_errors_allowed *bool
 	}
+
+	// Determines if the module contributes to any api surfaces.
+	// This property should be set to true only if the module is listed under
+	// frameworks-base-api.bootclasspath in frameworks/base/api/Android.bp.
+	// Otherwise, this property should be set to false.
+	// Defaults to false.
+	Contribute_to_android_api *bool
 
 	// TODO: determines whether to create HTML doc or not
 	// Html_doc *bool
@@ -1747,13 +1758,15 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 			android.JoinWithPrefix(module.sdkLibraryProperties.Hidden_api_packages, " --hide-package "))
 	}
 	droidstubsArgs = append(droidstubsArgs, module.sdkLibraryProperties.Droiddoc_options...)
-	disabledWarnings := []string{
-		"BroadcastBehavior",
-		"DeprecationMismatch",
-		"HiddenSuperclass",
-		"MissingPermission",
-		"SdkConstant",
-		"Todo",
+	disabledWarnings := []string{"HiddenSuperclass"}
+	if proptools.BoolDefault(module.sdkLibraryProperties.Api_lint.Legacy_errors_allowed, true) {
+		disabledWarnings = append(disabledWarnings,
+			"BroadcastBehavior",
+			"DeprecationMismatch",
+			"MissingPermission",
+			"SdkConstant",
+			"Todo",
+		)
 	}
 	droidstubsArgs = append(droidstubsArgs, android.JoinWithPrefix(disabledWarnings, "--hide "))
 
@@ -1829,7 +1842,7 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 		}
 	}
 
-	mctx.CreateModule(DroidstubsFactory, &props).(*Droidstubs).CallHookIfAvailable(mctx)
+	mctx.CreateModule(DroidstubsFactory, &props, module.sdkComponentPropertiesForChildLibrary()).(*Droidstubs).CallHookIfAvailable(mctx)
 }
 
 func (module *SdkLibrary) createApiLibrary(mctx android.DefaultableHookContext, apiScope *apiScope, alternativeFullApiSurfaceStub string) {
@@ -1892,7 +1905,7 @@ func (module *SdkLibrary) createApiLibrary(mctx android.DefaultableHookContext, 
 	props.System_modules = module.deviceProperties.System_modules
 	props.Enable_validation = proptools.BoolPtr(true)
 
-	mctx.CreateModule(ApiLibraryFactory, &props)
+	mctx.CreateModule(ApiLibraryFactory, &props, module.sdkComponentPropertiesForChildLibrary())
 }
 
 func (module *SdkLibrary) createTopLevelStubsLibrary(
@@ -1958,6 +1971,10 @@ func (module *SdkLibrary) DepIsInSameApex(mctx android.BaseModuleContext, dep an
 // Implements android.ApexModule
 func (module *SdkLibrary) UniqueApexVariations() bool {
 	return module.uniqueApexVariations()
+}
+
+func (module *SdkLibrary) ContributeToApi() bool {
+	return proptools.BoolDefault(module.sdkLibraryProperties.Contribute_to_android_api, false)
 }
 
 // Creates the xml file that publicizes the runtime library
@@ -2590,7 +2607,7 @@ func (module *SdkLibraryImport) createPrebuiltStubsSources(mctx android.Defaulta
 	// The stubs source is preferred if the java_sdk_library_import is preferred.
 	props.CopyUserSuppliedPropertiesFromPrebuilt(&module.prebuilt)
 
-	mctx.CreateModule(PrebuiltStubsSourcesFactory, &props)
+	mctx.CreateModule(PrebuiltStubsSourcesFactory, &props, module.sdkComponentPropertiesForChildLibrary())
 }
 
 func (module *SdkLibraryImport) createPrebuiltApiContribution(mctx android.DefaultableHookContext, apiScope *apiScope, scopeProperties *sdkLibraryScopeProperties) {
@@ -2609,7 +2626,7 @@ func (module *SdkLibraryImport) createPrebuiltApiContribution(mctx android.Defau
 	props.Api_file = api_file
 	props.Visibility = []string{"//visibility:override", "//visibility:public"}
 
-	mctx.CreateModule(ApiContributionImportFactory, &props)
+	mctx.CreateModule(ApiContributionImportFactory, &props, module.sdkComponentPropertiesForChildLibrary())
 }
 
 // Add the dependencies on the child module in the component deps mutator so that it

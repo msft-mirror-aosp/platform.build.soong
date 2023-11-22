@@ -147,6 +147,18 @@ func (lto *lto) flags(ctx BaseModuleContext, flags Flags) Flags {
 			}
 		}
 
+		if !ctx.Config().IsEnvFalse("THINLTO_USE_MLGO") {
+			// Register allocation MLGO flags for ARM64.
+			if ctx.Arch().ArchType == android.Arm64 {
+				ltoLdFlags = append(ltoLdFlags, "-Wl,-mllvm,-regalloc-enable-advisor=release")
+			}
+			// Flags for training MLGO model.
+			if ctx.Config().IsEnvTrue("THINLTO_EMIT_INDEXES_AND_IMPORTS") {
+				ltoLdFlags = append(ltoLdFlags, "-Wl,--save-temps=import")
+				ltoLdFlags = append(ltoLdFlags, "-Wl,--thinlto-emit-index-files")
+			}
+		}
+
 		flags.Local.CFlags = append(flags.Local.CFlags, ltoCFlags...)
 		flags.Local.AsFlags = append(flags.Local.AsFlags, ltoCFlags...)
 		flags.Local.LdFlags = append(flags.Local.LdFlags, ltoCFlags...)

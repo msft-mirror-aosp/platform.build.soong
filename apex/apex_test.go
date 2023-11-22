@@ -5459,7 +5459,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 
 	checkBootDexJarPath := func(t *testing.T, ctx *android.TestContext, stem string, bootDexJarPath string) {
 		t.Helper()
-		s := ctx.ModuleForTests("platform-bootclasspath", "android_common")
+		s := ctx.ModuleForTests("dex_bootjars", "android_common")
 		foundLibfooJar := false
 		base := stem + ".jar"
 		for _, output := range s.AllOutputs() {
@@ -5909,8 +5909,8 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 	`
 
 		ctx := testDexpreoptWithApexes(t, bp, "", preparer, fragment)
-		checkBootDexJarPath(t, ctx, "libfoo", "out/soong/.intermediates/libfoo/android_common_apex10000/hiddenapi/libfoo.jar")
-		checkBootDexJarPath(t, ctx, "libbar", "out/soong/.intermediates/libbar/android_common_myapex/hiddenapi/libbar.jar")
+		checkBootDexJarPath(t, ctx, "libfoo", "out/soong/.intermediates/my-bootclasspath-fragment/android_common_myapex/hiddenapi-modular/encoded/libfoo.jar")
+		checkBootDexJarPath(t, ctx, "libbar", "out/soong/.intermediates/my-bootclasspath-fragment/android_common_myapex/hiddenapi-modular/encoded/libbar.jar")
 
 		// Verify the correct module jars contribute to the hiddenapi index file.
 		checkHiddenAPIIndexFromClassesInputs(t, ctx, ``)
@@ -7709,6 +7709,42 @@ func TestNoDupeApexFiles(t *testing.T) {
 		`)
 }
 
+func TestApexUnwantedTransitiveDeps(t *testing.T) {
+	bp := `
+	apex {
+		name: "myapex",
+		key: "myapex.key",
+		native_shared_libs: ["libfoo"],
+		updatable: false,
+		unwanted_transitive_deps: ["libbar"],
+	}
+
+	apex_key {
+		name: "myapex.key",
+		public_key: "testkey.avbpubkey",
+		private_key: "testkey.pem",
+	}
+
+	cc_library {
+		name: "libfoo",
+		srcs: ["foo.cpp"],
+		shared_libs: ["libbar"],
+		apex_available: ["myapex"],
+	}
+
+	cc_library {
+		name: "libbar",
+		srcs: ["bar.cpp"],
+		apex_available: ["myapex"],
+	}`
+	ctx := testApex(t, bp)
+	ensureExactContents(t, ctx, "myapex", "android_common_myapex", []string{
+		"*/libc++.so",
+		"*/libfoo.so",
+		// not libbar.so
+	})
+}
+
 func TestRejectNonInstallableJavaLibrary(t *testing.T) {
 	testApexError(t, `"myjar" is not configured to be compiled into dex`, `
 		apex {
@@ -9089,8 +9125,8 @@ func TestApexKeysTxt(t *testing.T) {
 		}
 	`)
 
-	apexKeysText := ctx.SingletonForTests("apex_keys_text")
-	content := apexKeysText.MaybeDescription("apexkeys.txt").BuildParams.Args["content"]
+	myapex := ctx.ModuleForTests("myapex", "android_common_myapex")
+	content := myapex.Output("apexkeys.txt").BuildParams.Args["content"]
 	ensureContains(t, content, `name="myapex.apex" public_key="vendor/foo/devkeys/testkey.avbpubkey" private_key="vendor/foo/devkeys/testkey.pem" container_certificate="vendor/foo/devkeys/test.x509.pem" container_private_key="vendor/foo/devkeys/test.pk8" partition="system" sign_tool="sign_myapex"`)
 }
 
@@ -9130,10 +9166,10 @@ func TestApexKeysTxtOverrides(t *testing.T) {
 		}
 	`)
 
-	apexKeysText := ctx.SingletonForTests("apex_keys_text")
-	content := apexKeysText.MaybeDescription("apexkeys.txt").BuildParams.Args["content"]
+	content := ctx.ModuleForTests("myapex", "android_common_myapex").Output("apexkeys.txt").BuildParams.Args["content"]
+	ensureContains(t, content, `name="myapex.apex" public_key="vendor/foo/devkeys/testkey.avbpubkey" private_key="vendor/foo/devkeys/testkey.pem" container_certificate="vendor/foo/devkeys/test.x509.pem" container_private_key="vendor/foo/devkeys/test.pk8" partition="system" sign_tool="sign_myapex"`)
+	content = ctx.ModuleForTests("myapex_set", "android_common_myapex_set").Output("apexkeys.txt").BuildParams.Args["content"]
 	ensureContains(t, content, `name="myapex_set.apex" public_key="PRESIGNED" private_key="PRESIGNED" container_certificate="PRESIGNED" container_private_key="PRESIGNED" partition="system"`)
-	ensureContains(t, content, `name="myapex.apex" public_key="PRESIGNED" private_key="PRESIGNED" container_certificate="PRESIGNED" container_private_key="PRESIGNED" partition="system"`)
 }
 
 func TestAllowedFiles(t *testing.T) {

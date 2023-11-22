@@ -48,6 +48,7 @@ func RegisterStubsBuildComponents(ctx android.RegistrationContext) {
 // Droidstubs
 type Droidstubs struct {
 	Javadoc
+	embeddableInModuleAndImport
 
 	properties              DroidstubsProperties
 	apiFile                 android.Path
@@ -184,6 +185,7 @@ func DroidstubsFactory() android.Module {
 
 	module.AddProperties(&module.properties,
 		&module.Javadoc.properties)
+	module.initModuleAndImport(module)
 
 	InitDroiddocModule(module, android.HostAndDeviceSupported)
 
@@ -773,6 +775,11 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			`         m %s-update-current-api\n\n`+
 			`      To submit the revised current.txt to the main Android repository,\n`+
 			`      you will need approval.\n`+
+			`If your build failed due to stub validation, you can resolve the errors with\n`+
+			`either of the two choices above and try re-building the target.\n`+
+			`If the mismatch between the stubs and the current.txt is intended,\n`+
+			`you can try re-building the target by executing the following command:\n`+
+			`m DISABLE_STUB_VALIDATION=true <your build target>\n`+
 			`******************************\n`, ctx.ModuleName())
 
 		rule.Command().
@@ -930,6 +937,8 @@ type PrebuiltStubsSourcesProperties struct {
 type PrebuiltStubsSources struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
+	embeddableInModuleAndImport
+
 	prebuilt android.Prebuilt
 
 	properties PrebuiltStubsSourcesProperties
@@ -1008,6 +1017,7 @@ func PrebuiltStubsSourcesFactory() android.Module {
 	module := &PrebuiltStubsSources{}
 
 	module.AddProperties(&module.properties)
+	module.initModuleAndImport(module)
 
 	android.InitPrebuiltModule(module, &module.properties.Srcs)
 	InitDroiddocModule(module, android.HostAndDeviceSupported)

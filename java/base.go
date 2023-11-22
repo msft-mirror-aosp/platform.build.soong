@@ -497,9 +497,6 @@ type Module struct {
 	// list of the xref extraction files
 	kytheFiles android.Paths
 
-	// Collect the module directory for IDE info in java/jdeps.go.
-	modulePaths []string
-
 	hideApexVariantFromMake bool
 
 	sdkVersion    android.SdkSpec
@@ -1946,19 +1943,22 @@ func (j *providesTransitiveHeaderJars) collectTransitiveHeaderJars(ctx android.M
 		}
 
 		dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
-		if dep.TransitiveLibsHeaderJars != nil {
-			transitiveLibs = append(transitiveLibs, dep.TransitiveLibsHeaderJars)
-		}
-		if dep.TransitiveStaticLibsHeaderJars != nil {
-			transitiveStaticLibs = append(transitiveStaticLibs, dep.TransitiveStaticLibsHeaderJars)
-		}
-
 		tag := ctx.OtherModuleDependencyTag(module)
 		_, isUsesLibDep := tag.(usesLibraryDependencyTag)
 		if tag == libTag || tag == r8LibraryJarTag || isUsesLibDep {
 			directLibs = append(directLibs, dep.HeaderJars...)
 		} else if tag == staticLibTag {
 			directStaticLibs = append(directStaticLibs, dep.HeaderJars...)
+		} else {
+			// Don't propagate transitive libs for other kinds of dependencies.
+			return
+		}
+
+		if dep.TransitiveLibsHeaderJars != nil {
+			transitiveLibs = append(transitiveLibs, dep.TransitiveLibsHeaderJars)
+		}
+		if dep.TransitiveStaticLibsHeaderJars != nil {
+			transitiveStaticLibs = append(transitiveStaticLibs, dep.TransitiveStaticLibsHeaderJars)
 		}
 	})
 	j.transitiveLibsHeaderJars = android.NewDepSet(android.POSTORDER, directLibs, transitiveLibs)
@@ -2012,7 +2012,6 @@ func (j *Module) IDEInfo(dpInfo *android.IdeInfo) {
 	if j.expandJarjarRules != nil {
 		dpInfo.Jarjar_rules = append(dpInfo.Jarjar_rules, j.expandJarjarRules.String())
 	}
-	dpInfo.Paths = append(dpInfo.Paths, j.modulePaths...)
 	dpInfo.Static_libs = append(dpInfo.Static_libs, j.properties.Static_libs...)
 	dpInfo.Libs = append(dpInfo.Libs, j.properties.Libs...)
 	dpInfo.SrcJars = append(dpInfo.SrcJars, j.annoSrcJars.Strings()...)

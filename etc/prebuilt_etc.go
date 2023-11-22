@@ -65,6 +65,7 @@ func RegisterPrebuiltEtcBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("prebuilt_firmware", PrebuiltFirmwareFactory)
 	ctx.RegisterModuleType("prebuilt_dsp", PrebuiltDSPFactory)
 	ctx.RegisterModuleType("prebuilt_rfsa", PrebuiltRFSAFactory)
+	ctx.RegisterModuleType("prebuilt_renderscript_bitcode", PrebuiltRenderScriptBitcodeFactory)
 
 	ctx.RegisterModuleType("prebuilt_defaults", defaultsFactory)
 
@@ -149,12 +150,16 @@ type PrebuiltEtc struct {
 	sourceFilePath android.Path
 	outputFilePath android.OutputPath
 	// The base install location, e.g. "etc" for prebuilt_etc, "usr/share" for prebuilt_usr_share.
-	installDirBase string
+	installDirBase               string
+	installDirBase64             string
+	installAvoidMultilibConflict bool
 	// The base install location when soc_specific property is set to true, e.g. "firmware" for
 	// prebuilt_firmware.
 	socInstallDirBase      string
 	installDirPath         android.InstallPath
 	additionalDependencies *android.Paths
+
+	makeClass string
 }
 
 type Defaults struct {
@@ -345,9 +350,16 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// If soc install dir was specified and SOC specific is set, set the installDirPath to the
 	// specified socInstallDirBase.
 	installBaseDir := p.installDirBase
+	if p.Target().Arch.ArchType.Multilib == "lib64" && p.installDirBase64 != "" {
+		installBaseDir = p.installDirBase64
+	}
 	if p.SocSpecific() && p.socInstallDirBase != "" {
 		installBaseDir = p.socInstallDirBase
 	}
+	if p.installAvoidMultilibConflict && !ctx.Host() && ctx.Config().HasMultilibConflict(ctx.Arch().ArchType) {
+		installBaseDir = filepath.Join(installBaseDir, ctx.Arch().ArchType.String())
+	}
+
 	p.installDirPath = android.PathForModuleInstall(ctx, installBaseDir, p.SubDir())
 
 	// Call InstallFile even when uninstallable to make the module included in the package
@@ -404,8 +416,14 @@ func (p *PrebuiltEtc) AndroidMkEntries() []android.AndroidMkEntries {
 	if p.InRecovery() && !p.onlyInRecovery() {
 		nameSuffix = ".recovery"
 	}
+
+	class := p.makeClass
+	if class == "" {
+		class = "ETC"
+	}
+
 	return []android.AndroidMkEntries{android.AndroidMkEntries{
-		Class:      "ETC",
+		Class:      class,
 		SubName:    nameSuffix,
 		OutputFile: android.OptionalPathForPath(p.outputFilePath),
 		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
@@ -568,6 +586,19 @@ func PrebuiltDSPFactory() android.Module {
 	InitPrebuiltEtcModule(module, "etc/dsp")
 	// This module is device-only
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_renderscript_bitcode installs a *.bc file into /system/lib or /system/lib64.
+func PrebuiltRenderScriptBitcodeFactory() android.Module {
+	module := &PrebuiltEtc{}
+	module.makeClass = "RENDERSCRIPT_BITCODE"
+	module.installDirBase64 = "lib64"
+	module.installAvoidMultilibConflict = true
+	InitPrebuiltEtcModule(module, "lib")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibBoth)
 	android.InitDefaultableModule(module)
 	return module
 }

@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"android/soong/testing"
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
@@ -130,6 +131,16 @@ type appProperties struct {
 
 	// Specifies the file that contains the allowlist for this app.
 	Privapp_allowlist *string `android:"path"`
+
+	// If set, create an RRO package which contains only resources having PRODUCT_CHARACTERISTICS
+	// and install the RRO package to /product partition, instead of passing --product argument
+	// to aapt2. Default is false.
+	// Setting this will make this APK identical to all targets, regardless of
+	// PRODUCT_CHARACTERISTICS.
+	Generate_product_characteristics_rro *bool
+
+	ProductCharacteristicsRROPackageName        *string `blueprint:"mutated"`
+	ProductCharacteristicsRROManifestModuleName *string `blueprint:"mutated"`
 }
 
 // android_app properties that can be overridden by override_android_app
@@ -308,6 +319,13 @@ func (a *AndroidApp) OverridablePropertiesDepsMutator(ctx android.BottomUpMutato
 }
 
 func (a *AndroidTestHelperApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	applicationId := a.appTestHelperAppProperties.Manifest_values.ApplicationId
+	if applicationId != nil {
+		if a.overridableAppProperties.Package_name != nil {
+			ctx.PropertyErrorf("manifest_values.applicationId", "property is not supported when property package_name is set.")
+		}
+		a.aapt.manifestValues.applicationId = *applicationId
+	}
 	a.generateAndroidBuildActions(ctx)
 }
 
@@ -447,8 +465,9 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 	aaptLinkFlags := []string{}
 
 	// Add TARGET_AAPT_CHARACTERISTICS values to AAPT link flags if they exist and --product flags were not provided.
+	autogenerateRRO := proptools.Bool(a.appProperties.Generate_product_characteristics_rro)
 	hasProduct := android.PrefixInList(a.aaptProperties.Aaptflags, "--product")
-	if !hasProduct && len(ctx.Config().ProductAAPTCharacteristics()) > 0 {
+	if !autogenerateRRO && !hasProduct && len(ctx.Config().ProductAAPTCharacteristics()) > 0 {
 		aaptLinkFlags = append(aaptLinkFlags, "--product", ctx.Config().ProductAAPTCharacteristics())
 	}
 
@@ -850,7 +869,7 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 			ctx.InstallFile(allowlistInstallPath, allowlistInstallFilename, a.privAppAllowlist.Path())
 		}
 
-		var extraInstalledPaths android.Paths
+		var extraInstalledPaths android.InstallPaths
 		for _, extra := range a.extraOutputFiles {
 			installed := ctx.InstallFile(a.installDir, extra.Base(), extra)
 			extraInstalledPaths = append(extraInstalledPaths, installed)
@@ -1049,6 +1068,8 @@ func (a *AndroidApp) OutputFiles(tag string) (android.Paths, error) {
 		}
 	case ".export-package.apk":
 		return []android.Path{a.exportPackage}, nil
+	case ".manifest.xml":
+		return []android.Path{a.aapt.manifestPath}, nil
 	}
 	return a.Library.OutputFiles(tag)
 }
@@ -1078,6 +1099,14 @@ func (a *AndroidApp) IDEInfo(dpInfo *android.IdeInfo) {
 	a.aapt.IDEInfo(dpInfo)
 }
 
+func (a *AndroidApp) productCharacteristicsRROPackageName() string {
+	return proptools.String(a.appProperties.ProductCharacteristicsRROPackageName)
+}
+
+func (a *AndroidApp) productCharacteristicsRROManifestModuleName() string {
+	return proptools.String(a.appProperties.ProductCharacteristicsRROManifestModuleName)
+}
+
 // android_app compiles sources and Android resources into an Android application package `.apk` file.
 func AndroidAppFactory() android.Module {
 	module := &AndroidApp{}
@@ -1104,7 +1133,64 @@ func AndroidAppFactory() android.Module {
 	android.InitApexModule(module)
 	android.InitBazelModule(module)
 
+	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
+		a := ctx.Module().(*AndroidApp)
+
+		characteristics := ctx.Config().ProductAAPTCharacteristics()
+		if characteristics == "default" || characteristics == "" {
+			module.appProperties.Generate_product_characteristics_rro = nil
+			// no need to create RRO
+			return
+		}
+
+		if !proptools.Bool(module.appProperties.Generate_product_characteristics_rro) {
+			return
+		}
+
+		rroPackageName := a.Name() + "__" + strings.ReplaceAll(characteristics, ",", "_") + "__auto_generated_characteristics_rro"
+		rroManifestName := rroPackageName + "_manifest"
+
+		a.appProperties.ProductCharacteristicsRROPackageName = proptools.StringPtr(rroPackageName)
+		a.appProperties.ProductCharacteristicsRROManifestModuleName = proptools.StringPtr(rroManifestName)
+
+		rroManifestProperties := struct {
+			Name  *string
+			Tools []string
+			Out   []string
+			Srcs  []string
+			Cmd   *string
+		}{
+			Name:  proptools.StringPtr(rroManifestName),
+			Tools: []string{"characteristics_rro_generator"},
+			Out:   []string{"AndroidManifest.xml"},
+			Srcs:  []string{":" + a.Name() + "{.manifest.xml}"},
+			Cmd:   proptools.StringPtr("$(location characteristics_rro_generator) $(in) $(out)"),
+		}
+		ctx.CreateModule(genrule.GenRuleFactory, &rroManifestProperties)
+
+		rroProperties := struct {
+			Name           *string
+			Filter_product *string
+			Aaptflags      []string
+			Manifest       *string
+			Resource_dirs  []string
+		}{
+			Name:           proptools.StringPtr(rroPackageName),
+			Filter_product: proptools.StringPtr(characteristics),
+			Aaptflags:      []string{"--auto-add-overlay"},
+			Manifest:       proptools.StringPtr(":" + rroManifestName),
+			Resource_dirs:  a.aaptProperties.Resource_dirs,
+		}
+		ctx.CreateModule(RuntimeResourceOverlayFactory, &rroProperties)
+	})
+
 	return module
+}
+
+// A dictionary of values to be overridden in the manifest.
+type Manifest_values struct {
+	// Overrides the value of package_name in the manifest
+	ApplicationId *string
 }
 
 type appTestProperties struct {
@@ -1116,6 +1202,8 @@ type appTestProperties struct {
 
 	// If specified, the mainline module package name in the test config is overwritten by it.
 	Mainline_package_name *string
+
+	Manifest_values Manifest_values
 }
 
 type AndroidTest struct {
@@ -1160,6 +1248,13 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			a.additionalAaptFlags = append(a.additionalAaptFlags, "--rename-instrumentation-target-package "+manifestPackageName)
 		}
 	}
+	applicationId := a.appTestProperties.Manifest_values.ApplicationId
+	if applicationId != nil {
+		if a.overridableAppProperties.Package_name != nil {
+			ctx.PropertyErrorf("manifest_values.applicationId", "property is not supported when property package_name is set.")
+		}
+		a.aapt.manifestValues.applicationId = *applicationId
+	}
 	a.generateAndroidBuildActions(ctx)
 
 	for _, module := range a.testProperties.Test_mainline_modules {
@@ -1171,6 +1266,7 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.testConfig = a.FixTestConfig(ctx, testConfig)
 	a.extraTestConfigs = android.PathsForModuleSrc(ctx, a.testProperties.Test_options.Extra_test_configs)
 	a.data = android.PathsForModuleSrc(ctx, a.testProperties.Data)
+	ctx.SetProvider(testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 }
 
 func (a *AndroidTest) FixTestConfig(ctx android.ModuleContext, testConfig android.Path) android.Path {
@@ -1264,6 +1360,8 @@ type appTestHelperAppProperties struct {
 
 	// Install the test into a folder named for the module in all test suites.
 	Per_testcase_directory *bool
+
+	Manifest_values Manifest_values
 }
 
 type AndroidTestHelperApp struct {
@@ -1560,7 +1658,7 @@ func (u *usesLibrary) verifyUsesLibraries(ctx android.ModuleContext, inputFile a
 	// non-linux build platforms where dexpreopt is generally disabled (the check may fail due to
 	// various unrelated reasons, such as a failure to get manifest from an APK).
 	global := dexpreopt.GetGlobalConfig(ctx)
-	if global.DisablePreopt || global.OnlyPreoptBootImageAndSystemServer {
+	if global.DisablePreopt || global.OnlyPreoptArtBootImage {
 		return inputFile
 	}
 

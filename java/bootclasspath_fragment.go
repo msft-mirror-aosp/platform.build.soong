@@ -23,6 +23,7 @@ import (
 
 	"android/soong/android"
 	"android/soong/dexpreopt"
+	"android/soong/testing"
 
 	"github.com/google/blueprint/proptools"
 
@@ -237,9 +238,6 @@ type BootclasspathFragmentModule struct {
 	properties bootclasspathFragmentProperties
 
 	sourceOnlyProperties SourceOnlyBootclasspathProperties
-
-	// Collect the module directory for IDE info in java/jdeps.go.
-	modulePaths []string
 
 	// Path to the boot image profile.
 	profilePath android.WritablePath
@@ -471,9 +469,6 @@ func (b *BootclasspathFragmentModule) GenerateAndroidBuildActions(ctx android.Mo
 	// Generate classpaths.proto config
 	b.generateClasspathProtoBuildActions(ctx)
 
-	// Collect the module directory for IDE info in java/jdeps.go.
-	b.modulePaths = append(b.modulePaths, ctx.ModuleDir())
-
 	// Gather the bootclasspath fragment's contents.
 	var contents []android.Module
 	ctx.VisitDirectDeps(func(module android.Module) {
@@ -505,6 +500,7 @@ func (b *BootclasspathFragmentModule) GenerateAndroidBuildActions(ctx android.Mo
 	if ctx.Module() != ctx.FinalModule() {
 		b.HideFromMake()
 	}
+	ctx.SetProvider(testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 }
 
 // getProfileProviderApex returns the name of the apex that provides a boot image profile, or an
@@ -582,7 +578,7 @@ func (b *BootclasspathFragmentModule) configuredJars(ctx android.ModuleContext) 
 		// So ignore it even if it is not in PRODUCT_APEX_BOOT_JARS.
 		// TODO(b/202896428): Add better way to handle this.
 		_, unknown = android.RemoveFromList("android.car-module", unknown)
-		if len(unknown) > 0 {
+		if isActiveModule(ctx.Module()) && len(unknown) > 0 {
 			ctx.ModuleErrorf("%s in contents must also be declared in PRODUCT_APEX_BOOT_JARS", unknown)
 		}
 	}
@@ -630,21 +626,6 @@ func (b *BootclasspathFragmentModule) generateHiddenAPIBuildActions(ctx android.
 	ctx.SetProvider(HiddenAPIInfoProvider, hiddenAPIInfo)
 
 	return output
-}
-
-// retrieveLegacyEncodedBootDexFiles attempts to retrieve the legacy encoded boot dex jar files.
-func retrieveLegacyEncodedBootDexFiles(ctx android.ModuleContext, contents []android.Module) bootDexJarByModule {
-	// If the current bootclasspath_fragment is the active module or a source module then retrieve the
-	// encoded dex files, otherwise return an empty map.
-	//
-	// An inactive (i.e. not preferred) bootclasspath_fragment needs to retrieve the encoded dex jars
-	// as they are still needed by an apex. An inactive prebuilt_bootclasspath_fragment does not need
-	// to do so and may not yet have access to dex boot jars from a prebuilt_apex/apex_set.
-	if isActiveModule(ctx.Module()) || !android.IsModulePrebuilt(ctx.Module()) {
-		return extractEncodedDexJarsFromModules(ctx, contents)
-	} else {
-		return nil
-	}
 }
 
 // createHiddenAPIFlagInput creates a HiddenAPIFlagInput struct and initializes it with information derived
@@ -816,7 +797,6 @@ func (b *BootclasspathFragmentModule) getProfilePath() android.Path {
 // Collect information for opening IDE project files in java/jdeps.go.
 func (b *BootclasspathFragmentModule) IDEInfo(dpInfo *android.IdeInfo) {
 	dpInfo.Deps = append(dpInfo.Deps, b.properties.Contents...)
-	dpInfo.Paths = append(dpInfo.Paths, b.modulePaths...)
 }
 
 type bootclasspathFragmentMemberType struct {

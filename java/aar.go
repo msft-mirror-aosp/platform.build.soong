@@ -102,6 +102,9 @@ type aaptProperties struct {
 
 	// true if RRO is enforced for any of the dependent modules
 	RROEnforcedForDependent bool `blueprint:"mutated"`
+
+	// Filter only specified product and ignore other products
+	Filter_product *string `blueprint:"mutated"`
 }
 
 type aapt struct {
@@ -134,6 +137,10 @@ type aapt struct {
 	resourcesNodesDepSet *android.DepSet[*resourcesNode]
 	rroDirsDepSet        *android.DepSet[rroDir]
 	manifestsDepSet      *android.DepSet[android.Path]
+
+	manifestValues struct {
+		applicationId string
+	}
 }
 
 type split struct {
@@ -156,6 +163,10 @@ func propagateRROEnforcementMutator(ctx android.TopDownMutatorContext) {
 
 func (a *aapt) useResourceProcessorBusyBox() bool {
 	return BoolDefault(a.aaptProperties.Use_resource_processor, false)
+}
+
+func (a *aapt) filterProduct() string {
+	return String(a.aaptProperties.Filter_product)
 }
 
 func (a *aapt) ExportPackage() android.Path {
@@ -380,7 +391,9 @@ func (a *aapt) buildActions(ctx android.ModuleContext, opts aaptBuildActionOptio
 	if len(transitiveManifestPaths) > 1 && !Bool(a.aaptProperties.Dont_merge_manifests) {
 		manifestMergerParams := ManifestMergerParams{
 			staticLibManifests: transitiveManifestPaths[1:],
-			isLibrary:          a.isLibrary}
+			isLibrary:          a.isLibrary,
+			packageName:        a.manifestValues.applicationId,
+		}
 		a.mergedManifestFile = manifestMerger(ctx, transitiveManifestPaths[0], manifestMergerParams)
 		if !a.isLibrary {
 			// Only use the merged manifest for applications.  For libraries, the transitive closure of manifests
@@ -426,7 +439,7 @@ func (a *aapt) buildActions(ctx android.ModuleContext, opts aaptBuildActionOptio
 	var compiledResDirs []android.Paths
 	for _, dir := range resDirs {
 		a.resourceFiles = append(a.resourceFiles, dir.files...)
-		compiledResDirs = append(compiledResDirs, aapt2Compile(ctx, dir.dir, dir.files, compileFlags).Paths())
+		compiledResDirs = append(compiledResDirs, aapt2Compile(ctx, dir.dir, dir.files, compileFlags, a.filterProduct()).Paths())
 	}
 
 	for i, zip := range resZips {
@@ -485,7 +498,7 @@ func (a *aapt) buildActions(ctx android.ModuleContext, opts aaptBuildActionOptio
 	}
 
 	for _, dir := range overlayDirs {
-		compiledOverlay = append(compiledOverlay, aapt2Compile(ctx, dir.dir, dir.files, compileFlags).Paths()...)
+		compiledOverlay = append(compiledOverlay, aapt2Compile(ctx, dir.dir, dir.files, compileFlags, a.filterProduct()).Paths()...)
 	}
 
 	var splitPackages android.WritablePaths
@@ -805,8 +818,11 @@ func (a *AndroidLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 	a.linter.manifest = a.aapt.manifestPath
 	a.linter.resources = a.aapt.resourceFiles
 
-	a.Module.extraProguardFlagFiles = append(a.Module.extraProguardFlagFiles,
-		a.proguardOptionsFile)
+	proguardSpecInfo := a.collectProguardSpecInfo(ctx)
+	ctx.SetProvider(ProguardSpecInfoProvider, proguardSpecInfo)
+	a.exportedProguardFlagFiles = proguardSpecInfo.ProguardFlagsFiles.ToList()
+	a.extraProguardFlagFiles = append(a.extraProguardFlagFiles, a.exportedProguardFlagFiles...)
+	a.extraProguardFlagFiles = append(a.extraProguardFlagFiles, a.proguardOptionsFile)
 
 	var extraSrcJars android.Paths
 	var extraCombinedJars android.Paths
@@ -831,10 +847,6 @@ func (a *AndroidLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 		BuildAAR(ctx, a.aarFile, a.outputFile, a.manifestPath, a.rTxt, res)
 		ctx.CheckbuildFile(a.aarFile)
 	}
-
-	proguardSpecInfo := a.collectProguardSpecInfo(ctx)
-	ctx.SetProvider(ProguardSpecInfoProvider, proguardSpecInfo)
-	a.exportedProguardFlagFiles = proguardSpecInfo.ProguardFlagsFiles.ToList()
 
 	prebuiltJniPackages := android.Paths{}
 	ctx.VisitDirectDeps(func(module android.Module) {
