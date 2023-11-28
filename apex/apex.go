@@ -482,9 +482,6 @@ type apexBundle struct {
 	nativeApisUsedByModuleFile   android.ModuleOutPath
 	nativeApisBackedByModuleFile android.ModuleOutPath
 	javaApisUsedByModuleFile     android.ModuleOutPath
-
-	// Collect the module directory for IDE info in java/jdeps.go.
-	modulePaths []string
 }
 
 // apexFileClass represents a type of file that can be included in APEX.
@@ -1893,7 +1890,7 @@ func (a *apexBundle) ProcessBazelQueryResponse(ctx android.ModuleContext) {
 		installSuffix = imageCapexSuffix
 	}
 	a.installedFile = ctx.InstallFile(a.installDir, a.Name()+installSuffix, a.outputFile,
-		a.compatSymlinks.Paths()...)
+		a.compatSymlinks...)
 
 	// filesInfo in mixed mode must retrieve all information about the apex's
 	// contents completely from the Starlark providers. It should never rely on
@@ -2406,8 +2403,6 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	////////////////////////////////////////////////////////////////////////////////////////////
 	// 2) traverse the dependency tree to collect apexFile structs from them.
-	// Collect the module directory for IDE info in java/jdeps.go.
-	a.modulePaths = append(a.modulePaths, ctx.ModuleDir())
 
 	// TODO(jiyong): do this using WalkPayloadDeps
 	// TODO(jiyong): make this clean!!!
@@ -2972,7 +2967,6 @@ func (a *apexBundle) IDEInfo(dpInfo *android.IdeInfo) {
 	dpInfo.Deps = append(dpInfo.Deps, a.properties.Java_libs...)
 	dpInfo.Deps = append(dpInfo.Deps, a.properties.Bootclasspath_fragments...)
 	dpInfo.Deps = append(dpInfo.Deps, a.properties.Systemserverclasspath_fragments...)
-	dpInfo.Paths = append(dpInfo.Paths, a.modulePaths...)
 }
 
 var (

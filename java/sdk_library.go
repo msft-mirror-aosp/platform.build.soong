@@ -624,6 +624,13 @@ type sdkLibraryProperties struct {
 		Legacy_errors_allowed *bool
 	}
 
+	// Determines if the module contributes to any api surfaces.
+	// This property should be set to true only if the module is listed under
+	// frameworks-base-api.bootclasspath in frameworks/base/api/Android.bp.
+	// Otherwise, this property should be set to false.
+	// Defaults to false.
+	Contribute_to_android_api *bool
+
 	// TODO: determines whether to create HTML doc or not
 	// Html_doc *bool
 }
@@ -1966,6 +1973,10 @@ func (module *SdkLibrary) UniqueApexVariations() bool {
 	return module.uniqueApexVariations()
 }
 
+func (module *SdkLibrary) ContributeToApi() bool {
+	return proptools.BoolDefault(module.sdkLibraryProperties.Contribute_to_android_api, false)
+}
+
 // Creates the xml file that publicizes the runtime library
 func (module *SdkLibrary) createXmlFile(mctx android.DefaultableHookContext) {
 	moduleMinApiLevel := module.Library.MinSdkVersion(mctx)
@@ -1982,6 +1993,7 @@ func (module *SdkLibrary) createXmlFile(mctx android.DefaultableHookContext) {
 		Min_device_sdk            *string
 		Max_device_sdk            *string
 		Sdk_library_min_api_level *string
+		Uses_libs_dependencies    []string
 	}{
 		Name:                      proptools.StringPtr(module.xmlPermissionsModuleName()),
 		Lib_name:                  proptools.StringPtr(module.BaseModuleName()),
@@ -1991,6 +2003,7 @@ func (module *SdkLibrary) createXmlFile(mctx android.DefaultableHookContext) {
 		Min_device_sdk:            module.commonSdkLibraryProperties.Min_device_sdk,
 		Max_device_sdk:            module.commonSdkLibraryProperties.Max_device_sdk,
 		Sdk_library_min_api_level: &moduleMinApiLevelStr,
+		Uses_libs_dependencies:    module.usesLibraryProperties.Uses_libs,
 	}
 
 	mctx.CreateModule(sdkLibraryXmlFactory, &props)
@@ -2957,6 +2970,11 @@ type sdkLibraryXmlProperties struct {
 	//
 	// This value comes from the ApiLevel of the MinSdkVersion property.
 	Sdk_library_min_api_level *string
+
+	// Uses-libs dependencies that the shared library requires to work correctly.
+	//
+	// This will add dependency="foo:bar" to the <library> section.
+	Uses_libs_dependencies []string
 }
 
 // java_sdk_library_xml builds the permission xml file for a java_sdk_library.
@@ -3065,6 +3083,13 @@ func formattedOptionalAttribute(attrName string, value *string) string {
 	return fmt.Sprintf(`        %s=\"%s\"\n`, attrName, *value)
 }
 
+func formattedDependenciesAttribute(dependencies []string) string {
+	if dependencies == nil {
+		return ""
+	}
+	return fmt.Sprintf(`        dependency=\"%s\"\n`, strings.Join(dependencies, ":"))
+}
+
 func (module *sdkLibraryXml) permissionsContents(ctx android.ModuleContext) string {
 	libName := proptools.String(module.properties.Lib_name)
 	libNameAttr := formattedOptionalAttribute("name", &libName)
@@ -3074,6 +3099,7 @@ func (module *sdkLibraryXml) permissionsContents(ctx android.ModuleContext) stri
 	implicitUntilAttr := formattedOptionalSdkLevelAttribute(ctx, "on-bootclasspath-before", module.properties.On_bootclasspath_before)
 	minSdkAttr := formattedOptionalSdkLevelAttribute(ctx, "min-device-sdk", module.properties.Min_device_sdk)
 	maxSdkAttr := formattedOptionalSdkLevelAttribute(ctx, "max-device-sdk", module.properties.Max_device_sdk)
+	dependenciesAttr := formattedDependenciesAttribute(module.properties.Uses_libs_dependencies)
 	// <library> is understood in all android versions whereas <apex-library> is only understood from API T (and ignored before that).
 	// similarly, min_device_sdk is only understood from T. So if a library is using that, we need to use the apex-library to make sure this library is not loaded before T
 	var libraryTag string
@@ -3107,6 +3133,7 @@ func (module *sdkLibraryXml) permissionsContents(ctx android.ModuleContext) stri
 		implicitUntilAttr,
 		minSdkAttr,
 		maxSdkAttr,
+		dependenciesAttr,
 		`    />\n`,
 		`</permissions>\n`}, "")
 }

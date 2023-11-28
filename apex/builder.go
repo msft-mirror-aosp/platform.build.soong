@@ -344,10 +344,12 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.OutputPath {
 	var fileContexts android.Path
 	var fileContextsDir string
+	isFileContextsModule := false
 	if a.properties.File_contexts == nil {
 		fileContexts = android.PathForSource(ctx, "system/sepolicy/apex", ctx.ModuleName()+"-file_contexts")
 	} else {
 		if m, t := android.SrcIsModuleWithTag(*a.properties.File_contexts); m != "" {
+			isFileContextsModule = true
 			otherModule := android.GetModuleFromPathDep(ctx, m, t)
 			fileContextsDir = ctx.OtherModuleDir(otherModule)
 		}
@@ -363,7 +365,7 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Output
 			ctx.PropertyErrorf("file_contexts", "should be under system/sepolicy, but found in  %q", fileContextsDir)
 		}
 	}
-	if !android.ExistentPathForSource(ctx, fileContexts.String()).Valid() {
+	if !isFileContextsModule && !android.ExistentPathForSource(ctx, fileContexts.String()).Valid() {
 		ctx.PropertyErrorf("file_contexts", "cannot find file_contexts file: %q", fileContexts.String())
 	}
 
@@ -372,12 +374,12 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Output
 	output := android.PathForModuleOut(ctx, "file_contexts")
 	rule := android.NewRuleBuilder(pctx, ctx)
 
-	forceLabel := "u:object_r:system_file:s0"
+	labelForRoot := "u:object_r:system_file:s0"
+	labelForManifest := "u:object_r:system_file:s0"
 	if a.SocSpecific() && !a.vndkApex {
-		// APEX on /vendor should label ./ and ./apex_manifest.pb as vendor_apex_metadata_file.
-		// The reason why we skip VNDK APEX is that aosp_{pixel device} targets install VNDK APEX on /vendor
-		// even though VNDK APEX is supposed to be installed on /system. (See com.android.vndk.current.on_vendor)
-		forceLabel = "u:object_r:vendor_apex_metadata_file:s0"
+		// APEX on /vendor should label ./ and ./apex_manifest.pb as vendor file.
+		labelForRoot = "u:object_r:vendor_file:s0"
+		labelForManifest = "u:object_r:vendor_apex_metadata_file:s0"
 	}
 	// remove old file
 	rule.Command().Text("rm").FlagWithOutput("-f ", output)
@@ -387,8 +389,8 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Output
 	rule.Command().Text("echo").Text(">>").Output(output)
 	if !useFileContextsAsIs {
 		// force-label /apex_manifest.pb and /
-		rule.Command().Text("echo").Text("/apex_manifest\\\\.pb").Text(forceLabel).Text(">>").Output(output)
-		rule.Command().Text("echo").Text("/").Text(forceLabel).Text(">>").Output(output)
+		rule.Command().Text("echo").Text("/apex_manifest\\\\.pb").Text(labelForManifest).Text(">>").Output(output)
+		rule.Command().Text("echo").Text("/").Text(labelForRoot).Text(">>").Output(output)
 	}
 
 	rule.Build("file_contexts."+a.Name(), "Generate file_contexts")
@@ -563,13 +565,8 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 		// Copy the test files (if any)
 		for _, d := range fi.dataPaths {
 			// TODO(eakammer): This is now the third repetition of ~this logic for test paths, refactoring should be possible
-			relPath := d.SrcPath.Rel()
-			dataPath := d.SrcPath.String()
-			if !strings.HasSuffix(dataPath, relPath) {
-				panic(fmt.Errorf("path %q does not end with %q", dataPath, relPath))
-			}
-
-			dataDest := imageDir.Join(ctx, fi.apexRelativePath(relPath), d.RelativeInstallPath).String()
+			relPath := d.ToRelativeInstallPath()
+			dataDest := imageDir.Join(ctx, fi.apexRelativePath(relPath)).String()
 
 			copyCommands = append(copyCommands, "cp -f "+d.SrcPath.String()+" "+dataDest)
 			implicitInputs = append(implicitInputs, d.SrcPath)
@@ -956,7 +953,7 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 
 	// Install to $OUT/soong/{target,host}/.../apex.
 	a.installedFile = ctx.InstallFile(a.installDir, a.Name()+installSuffix, a.outputFile,
-		a.compatSymlinks.Paths()...)
+		a.compatSymlinks...)
 
 	// installed-files.txt is dist'ed
 	a.installedFilesFile = a.buildInstalledFilesFile(ctx, a.outputFile, imageDir)
@@ -1095,7 +1092,8 @@ func (a *apexBundle) buildCannedFsConfig(ctx android.ModuleContext) android.Outp
 		if f.installDir == "bin" || strings.HasPrefix(f.installDir, "bin/") {
 			executablePaths = append(executablePaths, pathInApex)
 			for _, d := range f.dataPaths {
-				readOnlyPaths = append(readOnlyPaths, filepath.Join(f.installDir, d.RelativeInstallPath, d.SrcPath.Rel()))
+				rel := d.ToRelativeInstallPath()
+				readOnlyPaths = append(readOnlyPaths, filepath.Join(f.installDir, rel))
 			}
 			for _, s := range f.symlinks {
 				executablePaths = append(executablePaths, filepath.Join(f.installDir, s))
