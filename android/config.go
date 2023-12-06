@@ -691,6 +691,7 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		"framework-location":                {},
 		"framework-media":                   {},
 		"framework-mediaprovider":           {},
+		"framework-nfc":                     {},
 		"framework-ondevicepersonalization": {},
 		"framework-pdf":                     {},
 		"framework-permission":              {},
@@ -1423,6 +1424,10 @@ func (c *config) BazelModulesForceEnabledByFlag() map[string]struct{} {
 
 func (c *config) IsVndkDeprecated() bool {
 	return !Bool(c.productVariables.KeepVndk)
+}
+
+func (c *config) VendorApiLevel() string {
+	return String(c.productVariables.VendorApiLevel)
 }
 
 func (c *deviceConfig) Arches() []Arch {
