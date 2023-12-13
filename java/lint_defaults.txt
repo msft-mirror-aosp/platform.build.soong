@@ -122,10 +122,10 @@
 --warning_check RemoteViewLayout
 --warning_check SupportAnnotationUsage
 --warning_check UniqueConstants
-
-# TODO(b/294098365): these checks fail in AOSP, but pass downstream
---warning_check ForegroundServiceType
---warning_check MutableImplicitPendingIntent
+--warning_check UseSdkSuppress
+# TODO(b/303434307) The intent is for this to be set to error severity
+# once existing violations are cleaned up
+--warning_check FlaggedApi
 
 --warning_check ExactAlarm
 --warning_check ExpiredTargetSdkVersion
