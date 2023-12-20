@@ -618,8 +618,6 @@ func TestPrebuilts(t *testing.T) {
 	android.AssertStringEquals(t, "unexpected LOCAL_SOONG_MODULE_TYPE", "java_library", entries.EntryMap["LOCAL_SOONG_MODULE_TYPE"][0])
 	entries = android.AndroidMkEntriesForTest(t, ctx, barModule.Module())[0]
 	android.AssertStringEquals(t, "unexpected LOCAL_SOONG_MODULE_TYPE", "java_import", entries.EntryMap["LOCAL_SOONG_MODULE_TYPE"][0])
-	entries = android.AndroidMkEntriesForTest(t, ctx, ctx.ModuleForTests("sdklib", "android_common").Module())[0]
-	android.AssertStringEquals(t, "unexpected LOCAL_SOONG_MODULE_TYPE", "java_sdk_library_import", entries.EntryMap["LOCAL_SOONG_MODULE_TYPE"][0])
 }
 
 func assertDeepEquals(t *testing.T, message string, expected interface{}, actual interface{}) {
@@ -2226,7 +2224,8 @@ func TestTransitiveSrcFiles(t *testing.T) {
 		}
 	`)
 	c := ctx.ModuleForTests("c", "android_common").Module()
-	transitiveSrcFiles := android.Paths(ctx.ModuleProvider(c, JavaInfoProvider).(JavaInfo).TransitiveSrcFiles.ToList())
+	javaInfo, _ := android.SingletonModuleProvider(ctx, c, JavaInfoProvider)
+	transitiveSrcFiles := android.Paths(javaInfo.TransitiveSrcFiles.ToList())
 	android.AssertArrayString(t, "unexpected jar deps", []string{"b.java", "c.java"}, transitiveSrcFiles.Strings())
 }
 

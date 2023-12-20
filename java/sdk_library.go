@@ -673,8 +673,7 @@ type scopePaths struct {
 }
 
 func (paths *scopePaths) extractStubsLibraryInfoFromDependency(ctx android.ModuleContext, dep android.Module) error {
-	if ctx.OtherModuleHasProvider(dep, JavaInfoProvider) {
-		lib := ctx.OtherModuleProvider(dep, JavaInfoProvider).(JavaInfo)
+	if lib, ok := android.OtherModuleProvider(ctx, dep, JavaInfoProvider); ok {
 		paths.stubsHeaderPath = lib.HeaderJars
 		paths.stubsImplPath = lib.ImplementationJars
 
@@ -1451,7 +1450,7 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 
 	// Make the set of components exported by this module available for use elsewhere.
 	exportedComponentInfo := android.ExportedComponentsInfo{Components: android.SortedKeys(exportedComponents)}
-	ctx.SetProvider(android.ExportedComponentsInfoProvider, exportedComponentInfo)
+	android.SetProvider(ctx, android.ExportedComponentsInfoProvider, exportedComponentInfo)
 
 	// Provide additional information for inclusion in an sdk's generated .info file.
 	additionalSdkInfo := map[string]interface{}{}
@@ -1471,7 +1470,7 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 			scopeInfo["latest_removed_api"] = p.Path().String()
 		}
 	}
-	ctx.SetProvider(android.AdditionalSdkInfoProvider, android.AdditionalSdkInfo{additionalSdkInfo})
+	android.SetProvider(ctx, android.AdditionalSdkInfoProvider, android.AdditionalSdkInfo{additionalSdkInfo})
 }
 
 func (module *SdkLibrary) AndroidMkEntries() []android.AndroidMkEntries {
@@ -2036,8 +2035,8 @@ func PrebuiltJars(ctx android.BaseModuleContext, baseName string, s android.SdkS
 // If either this or the other module are on the platform then this will return
 // false.
 func withinSameApexesAs(ctx android.BaseModuleContext, other android.Module) bool {
-	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
-	otherApexInfo := ctx.OtherModuleProvider(other, android.ApexInfoProvider).(android.ApexInfo)
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
+	otherApexInfo, _ := android.OtherModuleProvider(ctx, other, android.ApexInfoProvider)
 	return len(otherApexInfo.InApexVariants) > 0 && reflect.DeepEqual(apexInfo.InApexVariants, otherApexInfo.InApexVariants)
 }
 
@@ -2379,7 +2378,8 @@ type SdkLibraryImport struct {
 	xmlPermissionsFileModule *sdkLibraryXml
 
 	// Build path to the dex implementation jar obtained from the prebuilt_apex, if any.
-	dexJarFile OptionalDexJarPath
+	dexJarFile    OptionalDexJarPath
+	dexJarFileErr error
 
 	// Expected install file path of the source module(sdk_library)
 	// or dex implementation jar obtained from the prebuilt_apex, if any.
@@ -2592,14 +2592,6 @@ func (module *SdkLibraryImport) DepsMutator(ctx android.BottomUpMutatorContext) 
 	}
 }
 
-func (module *SdkLibraryImport) AndroidMkEntries() []android.AndroidMkEntries {
-	// For an SDK library imported from a prebuilt APEX, we don't need a Make module for itself, as we
-	// don't need to install it. However, we need to add its dexpreopt outputs as sub-modules, if it
-	// is preopted.
-	dexpreoptEntries := module.dexpreopter.AndroidMkEntriesForApex()
-	return append(dexpreoptEntries, android.AndroidMkEntries{Disabled: true})
-}
-
 var _ android.ApexModule = (*SdkLibraryImport)(nil)
 
 // Implements android.ApexModule
@@ -2693,12 +2685,15 @@ func (module *SdkLibraryImport) GenerateAndroidBuildActions(ctx android.ModuleCo
 	if ctx.Device() {
 		// If this is a variant created for a prebuilt_apex then use the dex implementation jar
 		// obtained from the associated deapexer module.
-		ai := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+		ai, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 		if ai.ForPrebuiltApex {
 			// Get the path of the dex implementation jar from the `deapexer` module.
-			di := android.FindDeapexerProviderForModule(ctx)
-			if di == nil {
-				return // An error has been reported by FindDeapexerProviderForModule.
+			di, err := android.FindDeapexerProviderForModule(ctx)
+			if err != nil {
+				// An error was found, possibly due to multiple apexes in the tree that export this library
+				// Defer the error till a client tries to call DexJarBuildPath
+				module.dexJarFileErr = err
+				return
 			}
 			dexJarFileApexRootRelative := apexRootRelativePathToJavaLib(module.BaseModuleName())
 			if dexOutputPath := di.PrebuiltExportPath(dexJarFileApexRootRelative); dexOutputPath != nil {
@@ -2760,6 +2755,9 @@ func (module *SdkLibraryImport) SdkImplementationJars(ctx android.BaseModuleCont
 func (module *SdkLibraryImport) DexJarBuildPath() OptionalDexJarPath {
 	// The dex implementation jar extracted from the .apex file should be used in preference to the
 	// source.
+	if module.dexJarFileErr != nil {
+		panic(module.dexJarFileErr.Error())
+	}
 	if module.dexJarFile.IsSet() {
 		return module.dexJarFile
 	}
@@ -2960,7 +2958,7 @@ func (module *sdkLibraryXml) ShouldSupportSdkVersion(ctx android.BaseModuleConte
 // File path to the runtime implementation library
 func (module *sdkLibraryXml) implPath(ctx android.ModuleContext) string {
 	implName := proptools.String(module.properties.Lib_name)
-	if apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo); !apexInfo.IsForPlatform() {
+	if apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider); !apexInfo.IsForPlatform() {
 		// TODO(b/146468504): ApexVariationName() is only a soong module name, not apex name.
 		// In most cases, this works fine. But when apex_name is set or override_apex is used
 		// this can be wrong.
@@ -3067,7 +3065,8 @@ func (module *sdkLibraryXml) permissionsContents(ctx android.ModuleContext) stri
 }
 
 func (module *sdkLibraryXml) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	module.hideApexVariantFromMake = !ctx.Provider(android.ApexInfoProvider).(android.ApexInfo).IsForPlatform()
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
+	module.hideApexVariantFromMake = !apexInfo.IsForPlatform()
 
 	libName := proptools.String(module.properties.Lib_name)
 	module.selfValidate(ctx)

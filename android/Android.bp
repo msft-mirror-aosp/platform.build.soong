@@ -27,6 +27,7 @@ bootstrap_go_package {
         "androidmk-parser",
     ],
     srcs: [
+        "aconfig_providers.go",
         "androidmk.go",
         "apex.go",
         "apex_contributions.go",
@@ -79,6 +80,7 @@ bootstrap_go_package {
         "prebuilt.go",
         "prebuilt_build_tool.go",
         "proto.go",
+        "provider.go",
         "register.go",
         "rule_builder.go",
         "sandbox.go",

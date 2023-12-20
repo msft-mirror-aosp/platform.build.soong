@@ -77,6 +77,8 @@ type Module interface {
 	InstallInDebugRamdisk() bool
 	InstallInRecovery() bool
 	InstallInRoot() bool
+	InstallInOdm() bool
+	InstallInProduct() bool
 	InstallInVendor() bool
 	InstallForceOS() (*OsType, *ArchType)
 	PartitionTag(DeviceConfig) string
@@ -1399,6 +1401,14 @@ func (m *ModuleBase) InstallInRecovery() bool {
 	return Bool(m.commonProperties.Recovery)
 }
 
+func (m *ModuleBase) InstallInOdm() bool {
+	return false
+}
+
+func (m *ModuleBase) InstallInProduct() bool {
+	return false
+}
+
 func (m *ModuleBase) InstallInVendor() bool {
 	return Bool(m.commonProperties.Vendor) || Bool(m.commonProperties.Soc_specific) || Bool(m.commonProperties.Proprietary)
 }
@@ -1648,7 +1658,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	if !ctx.PrimaryArch() {
 		suffix = append(suffix, ctx.Arch().ArchType.String())
 	}
-	if apexInfo := ctx.Provider(ApexInfoProvider).(ApexInfo); !apexInfo.IsForPlatform() {
+	if apexInfo, _ := ModuleProvider(ctx, ApexInfoProvider); !apexInfo.IsForPlatform() {
 		suffix = append(suffix, apexInfo.ApexVariationName)
 	}
 
