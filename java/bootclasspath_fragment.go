@@ -385,6 +385,10 @@ func (i BootclasspathFragmentApexContentInfo) DexBootJarPathForContentModule(mod
 	}
 }
 
+func (i BootclasspathFragmentApexContentInfo) DexBootJarPathMap() bootDexJarByModule {
+	return i.contentModuleDexJarPaths
+}
+
 func (i BootclasspathFragmentApexContentInfo) ProfilePathOnHost() android.Path {
 	return i.profilePathOnHost
 }
@@ -534,7 +538,7 @@ func (b *BootclasspathFragmentModule) provideApexContentInfo(ctx android.ModuleC
 
 	if profile != nil {
 		info.profilePathOnHost = profile
-		info.profileInstallPathInApex = profileInstallPathInApex
+		info.profileInstallPathInApex = ProfileInstallPathInApex
 	}
 
 	// Make the apex content info available for other modules.
@@ -1034,10 +1038,6 @@ func (module *PrebuiltBootclasspathFragmentModule) produceHiddenAPIOutput(ctx an
 		return android.PathForModuleSrc(ctx, *src)
 	}
 
-	// Retrieve the dex files directly from the content modules. They in turn should retrieve the
-	// encoded dex jars from the prebuilt .apex files.
-	encodedBootDexJarsByModule := extractEncodedDexJarsFromModules(ctx, contents)
-
 	output := HiddenAPIOutput{
 		HiddenAPIFlagOutput: HiddenAPIFlagOutput{
 			AnnotationFlagsPath:   pathForSrc("hidden_api.annotation_flags", module.prebuiltProperties.Hidden_api.Annotation_flags),
@@ -1048,8 +1048,6 @@ func (module *PrebuiltBootclasspathFragmentModule) produceHiddenAPIOutput(ctx an
 			StubFlagsPath: pathForOptionalSrc(module.prebuiltProperties.Hidden_api.Stub_flags, nil),
 			AllFlagsPath:  pathForOptionalSrc(module.prebuiltProperties.Hidden_api.All_flags, nil),
 		},
-
-		EncodedBootDexFilesByModule: encodedBootDexJarsByModule,
 	}
 
 	// TODO: Temporarily fallback to stub_flags/all_flags properties until prebuilts have been updated.
@@ -1074,7 +1072,7 @@ func (module *PrebuiltBootclasspathFragmentModule) produceBootImageProfile(ctx a
 		return nil // An error has been reported by FindDeapexerProviderForModule.
 	}
 
-	return di.PrebuiltExportPath(profileInstallPathInApex)
+	return di.PrebuiltExportPath(ProfileInstallPathInApex)
 }
 
 func (b *PrebuiltBootclasspathFragmentModule) getProfilePath() android.Path {
@@ -1094,7 +1092,7 @@ var _ commonBootclasspathFragment = (*PrebuiltBootclasspathFragmentModule)(nil)
 func (module *PrebuiltBootclasspathFragmentModule) RequiredFilesFromPrebuiltApex(ctx android.BaseModuleContext) []string {
 	for _, apex := range module.ApexProperties.Apex_available {
 		if isProfileProviderApex(ctx, apex) {
-			return []string{profileInstallPathInApex}
+			return []string{ProfileInstallPathInApex}
 		}
 	}
 	return nil
