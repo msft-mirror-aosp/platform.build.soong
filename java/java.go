@@ -26,7 +26,7 @@ import (
 	"android/soong/bazel"
 	"android/soong/bazel/cquery"
 	"android/soong/remoteexec"
-
+	"android/soong/testing"
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
@@ -1059,6 +1059,10 @@ func (j *JavaTestImport) InstallInTestcases() bool {
 	return true
 }
 
+func (j *TestHost) IsNativeCoverageNeeded(ctx android.BaseModuleContext) bool {
+	return ctx.DeviceConfig().NativeCoverageEnabled()
+}
+
 func (j *TestHost) addDataDeviceBinsDeps(ctx android.BottomUpMutatorContext) {
 	if len(j.testHostProperties.Data_device_bins_first) > 0 {
 		deviceVariations := ctx.Config().AndroidFirstDeviceTarget.Variations()
@@ -1195,10 +1199,12 @@ func (j *TestHost) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	j.Test.generateAndroidBuildActionsWithConfig(ctx, configs)
+	ctx.SetProvider(testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 }
 
 func (j *Test) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	j.generateAndroidBuildActionsWithConfig(ctx, nil)
+	ctx.SetProvider(testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 }
 
 func (j *Test) generateAndroidBuildActionsWithConfig(ctx android.ModuleContext, configs []tradefed.Config) {
@@ -1705,7 +1711,6 @@ func metalavaStubCmd(ctx android.ModuleContext, rule *android.RuleBuilder,
 	cmd.BuiltTool("metalava").ImplicitTool(ctx.Config().HostJavaToolPath(ctx, "metalava.jar")).
 		Flag(config.JavacVmFlags).
 		Flag("-J--add-opens=java.base/java.util=ALL-UNNAMED").
-		FlagWithArg("-encoding ", "UTF-8").
 		FlagWithInputList("--source-files ", srcs, " ")
 
 	cmd.Flag("--no-banner").
@@ -1722,6 +1727,14 @@ func metalavaStubCmd(ctx android.ModuleContext, rule *android.RuleBuilder,
 		FlagWithArg("--hide ", "UnresolvedImport").
 		FlagWithArg("--hide ", "InvalidNullabilityOverride").
 		FlagWithArg("--hide ", "ChangedDefault")
+
+	// Force metalava to ignore classes on the classpath when an API file contains missing classes.
+	// See b/285140653 for more information.
+	cmd.FlagWithArg("--api-class-resolution ", "api")
+
+	// Force metalava to sort overloaded methods by their order in the source code.
+	// See b/285312164 for more information.
+	cmd.FlagWithArg("--api-overloaded-method-order ", "source")
 
 	return cmd
 }

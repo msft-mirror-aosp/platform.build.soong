@@ -33,6 +33,7 @@ import (
 	"android/soong/cc"
 	"android/soong/dexpreopt"
 	prebuilt_etc "android/soong/etc"
+	"android/soong/filesystem"
 	"android/soong/java"
 	"android/soong/rust"
 	"android/soong/sh"
@@ -7842,7 +7843,8 @@ func TestApexWithJniLibs(t *testing.T) {
 		apex {
 			name: "myapex",
 			key: "myapex.key",
-			jni_libs: ["mylib", "libfoo.rust"],
+			binaries: ["mybin"],
+			jni_libs: ["mylib", "mylib3", "libfoo.rust"],
 			updatable: false,
 		}
 
@@ -7864,6 +7866,24 @@ func TestApexWithJniLibs(t *testing.T) {
 		cc_library {
 			name: "mylib2",
 			srcs: ["mylib.cpp"],
+			system_shared_libs: [],
+			stl: "none",
+			apex_available: [ "myapex" ],
+		}
+
+		// Used as both a JNI library and a regular shared library.
+		cc_library {
+			name: "mylib3",
+			srcs: ["mylib.cpp"],
+			system_shared_libs: [],
+			stl: "none",
+			apex_available: [ "myapex" ],
+		}
+
+		cc_binary {
+			name: "mybin",
+			srcs: ["mybin.cpp"],
+			shared_libs: ["mylib3"],
 			system_shared_libs: [],
 			stl: "none",
 			apex_available: [ "myapex" ],
@@ -7892,10 +7912,12 @@ func TestApexWithJniLibs(t *testing.T) {
 
 	rule := ctx.ModuleForTests("myapex", "android_common_myapex_image").Rule("apexManifestRule")
 	// Notice mylib2.so (transitive dep) is not added as a jni_lib
-	ensureEquals(t, rule.Args["opt"], "-a jniLibs libfoo.rust.so mylib.so")
+	ensureEquals(t, rule.Args["opt"], "-a jniLibs libfoo.rust.so mylib.so mylib3.so")
 	ensureExactContents(t, ctx, "myapex", "android_common_myapex_image", []string{
+		"bin/mybin",
 		"lib64/mylib.so",
 		"lib64/mylib2.so",
+		"lib64/mylib3.so",
 		"lib64/libfoo.rust.so",
 		"lib64/libc++.so", // auto-added to libfoo.rust by Soong
 		"lib64/liblog.so", // auto-added to libfoo.rust by Soong
@@ -10694,4 +10716,55 @@ func TestCannedFsConfig_HasCustomConfig(t *testing.T) {
 
 	// Ensure that canned_fs_config has "cat my_config" at the end
 	ensureContains(t, cmd, `( echo '/ 1000 1000 0755'; echo '/apex_manifest.json 1000 1000 0644'; echo '/apex_manifest.pb 1000 1000 0644'; cat my_config ) >`)
+}
+
+func TestFileSystemShouldSkipApexLibraries(t *testing.T) {
+	context := android.GroupFixturePreparers(
+		android.PrepareForIntegrationTestWithAndroid,
+		cc.PrepareForIntegrationTestWithCc,
+		PrepareForTestWithApexBuildComponents,
+		prepareForTestWithMyapex,
+		filesystem.PrepareForTestWithFilesystemBuildComponents,
+	)
+	result := context.RunTestWithBp(t, `
+		android_system_image {
+			name: "myfilesystem",
+			deps: [
+				"libfoo",
+			],
+			linker_config_src: "linker.config.json",
+		}
+
+		cc_library {
+			name: "libfoo",
+			shared_libs: [
+				"libbar",
+			],
+			stl: "none",
+		}
+
+		cc_library {
+			name: "libbar",
+			stl: "none",
+			apex_available: ["myapex"],
+		}
+
+		apex {
+			name: "myapex",
+			native_shared_libs: ["libbar"],
+			key: "myapex.key",
+			updatable: false,
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`)
+
+	inputs := result.ModuleForTests("myfilesystem", "android_common").Output("deps.zip").Implicits
+	android.AssertStringListDoesNotContain(t, "filesystem should not have libbar",
+		inputs.Strings(),
+		"out/soong/.intermediates/libbar/android_arm64_armv8-a_shared/libbar.so")
 }
