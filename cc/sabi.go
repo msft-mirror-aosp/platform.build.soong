@@ -105,30 +105,17 @@ func classifySourceAbiDump(ctx android.BaseModuleContext) string {
 	if headerAbiChecker.explicitlyDisabled() {
 		return ""
 	}
-	// Return NDK if the library is both NDK and LLNDK.
-	if m.IsNdk(ctx.Config()) {
-		return "NDK"
-	}
-	if m.isImplementationForLLNDKPublic() {
-		return "LLNDK"
-	}
-	if m.UseVndk() && m.IsVndk() && !m.IsVndkPrivate() {
-		if m.IsVndkSp() {
-			if m.IsVndkExt() {
-				return "VNDK-SP-ext"
-			} else {
-				return "VNDK-SP"
-			}
-		} else {
-			if m.IsVndkExt() {
-				return "VNDK-ext"
-			} else {
-				return "VNDK-core"
-			}
+	if !m.InProduct() && !m.InVendor() {
+		// Return NDK if the library is both NDK and LLNDK.
+		if m.IsNdk(ctx.Config()) {
+			return "NDK"
 		}
-	}
-	if m.library.hasStubsVariants() && !m.InProduct() && !m.InVendor() {
-		return "PLATFORM"
+		if m.isImplementationForLLNDKPublic() {
+			return "LLNDK"
+		}
+		if m.library.hasStubsVariants() {
+			return "PLATFORM"
+		}
 	}
 	if headerAbiChecker.enabled() {
 		if m.InProduct() {
@@ -194,8 +181,8 @@ func shouldCreateSourceAbiDumpForLibrary(ctx android.BaseModuleContext) bool {
 		return false
 	}
 
-	isPlatformVariant := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo).IsForPlatform()
-	if isPlatformVariant {
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
+	if apexInfo.IsForPlatform() {
 		// Bionic libraries that are installed to the bootstrap directory are not ABI checked.
 		// Only the runtime APEX variants, which are the implementation libraries of bionic NDK stubs,
 		// are checked.

@@ -116,7 +116,8 @@ func (lto *lto) flags(ctx BaseModuleContext, flags Flags) Flags {
 		// better dead code elimination and CFG simplification, but do
 		// not perform costly optimizations for a balance between compile
 		// time, binary size and performance.
-		if !lto.ThinLTO() {
+		// Apply the same for Eng builds as well.
+		if !lto.ThinLTO() || ctx.Config().Eng() {
 			ltoLdFlags = append(ltoLdFlags, "-Wl,--lto-O0")
 		}
 
@@ -140,7 +141,7 @@ func (lto *lto) flags(ctx BaseModuleContext, flags Flags) Flags {
 		// Reduce the inlining threshold for a better balance of binary size and
 		// performance.
 		if !ctx.Darwin() {
-			if ctx.isPgoCompile() || ctx.isAfdoCompile() {
+			if ctx.isAfdoCompile() {
 				ltoLdFlags = append(ltoLdFlags, "-Wl,-plugin-opt,-import-instr-limit=40")
 			} else {
 				ltoLdFlags = append(ltoLdFlags, "-Wl,-plugin-opt,-import-instr-limit=5")

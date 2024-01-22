@@ -571,6 +571,7 @@ var PrepareForTestWithCcDefaultModules = android.GroupFixturePreparers(
 	android.MockFS{
 		"defaults/cc/common/libc.map.txt":      nil,
 		"defaults/cc/common/libdl.map.txt":     nil,
+		"defaults/cc/common/libft2.map.txt":    nil,
 		"defaults/cc/common/libm.map.txt":      nil,
 		"defaults/cc/common/ndk_libc++_shared": nil,
 		"defaults/cc/common/crtbegin_so.c":     nil,
@@ -797,7 +798,7 @@ func AssertExcludeFromRecoverySnapshotIs(t *testing.T, ctx *android.TestContext,
 func checkOverrides(t *testing.T, ctx *android.TestContext, singleton android.TestingSingleton, jsonPath string, expected []string) {
 	t.Helper()
 	out := singleton.MaybeOutput(jsonPath)
-	content := android.ContentFromFileRuleForTests(t, out)
+	content := android.ContentFromFileRuleForTests(t, ctx, out)
 
 	var flags snapshotJsonFlags
 	if err := json.Unmarshal([]byte(content), &flags); err != nil {

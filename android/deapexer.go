@@ -15,6 +15,7 @@
 package android
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -78,6 +79,10 @@ type DeapexerInfo struct {
 	//
 	// See Prebuilt.ApexInfoMutator for more information.
 	exports map[string]WritablePath
+
+	// name of the java libraries exported from the apex
+	// e.g. core-libart
+	exportedModuleNames []string
 }
 
 // ApexModuleName returns the name of the APEX module that provided the info.
@@ -96,18 +101,23 @@ func (i DeapexerInfo) PrebuiltExportPath(apexRelativePath string) WritablePath {
 	return path
 }
 
+func (i DeapexerInfo) GetExportedModuleNames() []string {
+	return i.exportedModuleNames
+}
+
 // Provider that can be used from within the `GenerateAndroidBuildActions` of a module that depends
 // on a `deapexer` module to retrieve its `DeapexerInfo`.
-var DeapexerProvider = blueprint.NewProvider(DeapexerInfo{})
+var DeapexerProvider = blueprint.NewProvider[DeapexerInfo]()
 
 // NewDeapexerInfo creates and initializes a DeapexerInfo that is suitable
 // for use with a prebuilt_apex module.
 //
 // See apex/deapexer.go for more information.
-func NewDeapexerInfo(apexModuleName string, exports map[string]WritablePath) DeapexerInfo {
+func NewDeapexerInfo(apexModuleName string, exports map[string]WritablePath, moduleNames []string) DeapexerInfo {
 	return DeapexerInfo{
-		apexModuleName: apexModuleName,
-		exports:        exports,
+		apexModuleName:      apexModuleName,
+		exports:             exports,
+		exportedModuleNames: moduleNames,
 	}
 }
 
@@ -146,11 +156,17 @@ type RequiresFilesFromPrebuiltApexTag interface {
 
 // FindDeapexerProviderForModule searches through the direct dependencies of the current context
 // module for a DeapexerTag dependency and returns its DeapexerInfo. If a single nonambiguous
-// deapexer module isn't found then errors are reported with ctx.ModuleErrorf and nil is returned.
-func FindDeapexerProviderForModule(ctx ModuleContext) *DeapexerInfo {
+// deapexer module isn't found then it returns it an error
+// clients should check the value of error and call ctx.ModuleErrof if a non nil error is received
+func FindDeapexerProviderForModule(ctx ModuleContext) (*DeapexerInfo, error) {
 	var di *DeapexerInfo
+	var err error
 	ctx.VisitDirectDepsWithTag(DeapexerTag, func(m Module) {
-		c := ctx.OtherModuleProvider(m, DeapexerProvider).(DeapexerInfo)
+		if err != nil {
+			// An err has been found. Do not visit further.
+			return
+		}
+		c, _ := OtherModuleProvider(ctx, m, DeapexerProvider)
 		p := &c
 		if di != nil {
 			// If two DeapexerInfo providers have been found then check if they are
@@ -159,17 +175,18 @@ func FindDeapexerProviderForModule(ctx ModuleContext) *DeapexerInfo {
 				di = selected
 				return
 			}
-			ctx.ModuleErrorf("Multiple installable prebuilt APEXes provide ambiguous deapexers: %s and %s",
-				di.ApexModuleName(), p.ApexModuleName())
+			err = fmt.Errorf("Multiple installable prebuilt APEXes provide ambiguous deapexers: %s and %s", di.ApexModuleName(), p.ApexModuleName())
 		}
 		di = p
 	})
-	if di != nil {
-		return di
+	if err != nil {
+		return nil, err
 	}
-	ai := ctx.Provider(ApexInfoProvider).(ApexInfo)
-	ctx.ModuleErrorf("No prebuilt APEX provides a deapexer module for APEX variant %s", ai.ApexVariationName)
-	return nil
+	if di != nil {
+		return di, nil
+	}
+	ai, _ := ModuleProvider(ctx, ApexInfoProvider)
+	return nil, fmt.Errorf("No prebuilt APEX provides a deapexer module for APEX variant %s", ai.ApexVariationName)
 }
 
 // removeCompressedApexSuffix removes the _compressed suffix from the name if present.

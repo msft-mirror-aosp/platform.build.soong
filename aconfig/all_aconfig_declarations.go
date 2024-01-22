@@ -16,6 +16,7 @@ package aconfig
 
 import (
 	"android/soong/android"
+	"fmt"
 )
 
 // A singleton module that collects all of the aconfig flags declared in the
@@ -35,19 +36,33 @@ type allAconfigDeclarationsSingleton struct {
 
 func (this *allAconfigDeclarationsSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 	// Find all of the aconfig_declarations modules
+	var packages = make(map[string]int)
 	var cacheFiles android.Paths
 	ctx.VisitAllModules(func(module android.Module) {
-		if !ctx.ModuleHasProvider(module, declarationsProviderKey) {
+		decl, ok := android.SingletonModuleProvider(ctx, module, android.AconfigDeclarationsProviderKey)
+		if !ok {
 			return
 		}
-		decl := ctx.ModuleProvider(module, declarationsProviderKey).(declarationsProviderData)
-		cacheFiles = append(cacheFiles, decl.IntermediatePath)
+		cacheFiles = append(cacheFiles, decl.IntermediateCacheOutputPath)
+		packages[decl.Package]++
 	})
+
+	var numOffendingPkg = 0
+	for pkg, cnt := range packages {
+		if cnt > 1 {
+			fmt.Printf("%d aconfig_declarations found for package %s\n", cnt, pkg)
+			numOffendingPkg++
+		}
+	}
+
+	if numOffendingPkg > 0 {
+		panic(fmt.Errorf("Only one aconfig_declarations allowed for each package."))
+	}
 
 	// Generate build action for aconfig
 	this.intermediatePath = android.PathForIntermediates(ctx, "all_aconfig_declarations.pb")
 	ctx.Build(pctx, android.BuildParams{
-		Rule:        allDeclarationsRule,
+		Rule:        AllDeclarationsRule,
 		Inputs:      cacheFiles,
 		Output:      this.intermediatePath,
 		Description: "all_aconfig_declarations",

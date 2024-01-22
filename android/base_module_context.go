@@ -75,30 +75,28 @@ type BaseModuleContext interface {
 	// It is intended for use inside the visit functions of Visit* and WalkDeps.
 	OtherModuleType(m blueprint.Module) string
 
-	// OtherModuleProvider returns the value for a provider for the given module.  If the value is
-	// not set it returns the zero value of the type of the provider, so the return value can always
-	// be type asserted to the type of the provider.  The value returned may be a deep copy of the
-	// value originally passed to SetProvider.
-	OtherModuleProvider(m blueprint.Module, provider blueprint.ProviderKey) interface{}
-
-	// OtherModuleHasProvider returns true if the provider for the given module has been set.
-	OtherModuleHasProvider(m blueprint.Module, provider blueprint.ProviderKey) bool
+	// otherModuleProvider returns the value for a provider for the given module.  If the value is
+	// not set it returns nil and false.  The value returned may be a deep copy of the value originally
+	// passed to SetProvider.
+	//
+	// This method shouldn't be used directly, prefer the type-safe android.OtherModuleProvider instead.
+	otherModuleProvider(m blueprint.Module, provider blueprint.AnyProviderKey) (any, bool)
 
 	// Provider returns the value for a provider for the current module.  If the value is
-	// not set it returns the zero value of the type of the provider, so the return value can always
-	// be type asserted to the type of the provider.  It panics if called before the appropriate
+	// not set it returns nil and false.  It panics if called before the appropriate
 	// mutator or GenerateBuildActions pass for the provider.  The value returned may be a deep
 	// copy of the value originally passed to SetProvider.
-	Provider(provider blueprint.ProviderKey) interface{}
+	//
+	// This method shouldn't be used directly, prefer the type-safe android.ModuleProvider instead.
+	provider(provider blueprint.AnyProviderKey) (any, bool)
 
-	// HasProvider returns true if the provider for the current module has been set.
-	HasProvider(provider blueprint.ProviderKey) bool
-
-	// SetProvider sets the value for a provider for the current module.  It panics if not called
+	// setProvider sets the value for a provider for the current module.  It panics if not called
 	// during the appropriate mutator or GenerateBuildActions pass for the provider, if the value
 	// is not of the appropriate type, or if the value has already been set.  The value should not
 	// be modified after being passed to SetProvider.
-	SetProvider(provider blueprint.ProviderKey, value interface{})
+	//
+	// This method shouldn't be used directly, prefer the type-safe android.SetProvider instead.
+	setProvider(provider blueprint.AnyProviderKey, value any)
 
 	GetDirectDepsWithTag(tag blueprint.DependencyTag) []Module
 
@@ -111,8 +109,6 @@ type BaseModuleContext interface {
 	// name, or nil if none exists.  If there are multiple dependencies on the same module it returns
 	// the first DependencyTag.
 	GetDirectDep(name string) (blueprint.Module, blueprint.DependencyTag)
-
-	ModuleFromName(name string) (blueprint.Module, bool)
 
 	// VisitDirectDepsBlueprint calls visit for each direct dependency.  If there are multiple
 	// direct dependencies on the same module visit will be called multiple times on that module
@@ -209,12 +205,6 @@ type BaseModuleContext interface {
 	// Calling this function prevents adding new dependencies.
 	getMissingDependencies() []string
 
-	// AddUnconvertedBp2buildDep stores module name of a direct dependency that was not converted via bp2build
-	AddUnconvertedBp2buildDep(dep string)
-
-	// AddMissingBp2buildDep stores the module name of a direct dependency that was not found.
-	AddMissingBp2buildDep(dep string)
-
 	Target() Target
 	TargetPrimary() bool
 
@@ -243,12 +233,8 @@ type baseModuleContext struct {
 
 	strictVisitDeps bool // If true, enforce that all dependencies are enabled
 
-	bazelConversionMode bool
 }
 
-func (b *baseModuleContext) isBazelConversionMode() bool {
-	return b.bazelConversionMode
-}
 func (b *baseModuleContext) OtherModuleName(m blueprint.Module) string {
 	return b.bp.OtherModuleName(m)
 }
@@ -272,19 +258,16 @@ func (b *baseModuleContext) OtherModuleReverseDependencyVariantExists(name strin
 func (b *baseModuleContext) OtherModuleType(m blueprint.Module) string {
 	return b.bp.OtherModuleType(m)
 }
-func (b *baseModuleContext) OtherModuleProvider(m blueprint.Module, provider blueprint.ProviderKey) interface{} {
+
+func (b *baseModuleContext) otherModuleProvider(m blueprint.Module, provider blueprint.AnyProviderKey) (any, bool) {
 	return b.bp.OtherModuleProvider(m, provider)
 }
-func (b *baseModuleContext) OtherModuleHasProvider(m blueprint.Module, provider blueprint.ProviderKey) bool {
-	return b.bp.OtherModuleHasProvider(m, provider)
-}
-func (b *baseModuleContext) Provider(provider blueprint.ProviderKey) interface{} {
+
+func (b *baseModuleContext) provider(provider blueprint.AnyProviderKey) (any, bool) {
 	return b.bp.Provider(provider)
 }
-func (b *baseModuleContext) HasProvider(provider blueprint.ProviderKey) bool {
-	return b.bp.HasProvider(provider)
-}
-func (b *baseModuleContext) SetProvider(provider blueprint.ProviderKey, value interface{}) {
+
+func (b *baseModuleContext) setProvider(provider blueprint.AnyProviderKey, value any) {
 	b.bp.SetProvider(provider, value)
 }
 
@@ -294,18 +277,6 @@ func (b *baseModuleContext) GetDirectDepWithTag(name string, tag blueprint.Depen
 
 func (b *baseModuleContext) blueprintBaseModuleContext() blueprint.BaseModuleContext {
 	return b.bp
-}
-
-// AddUnconvertedBp2buildDep stores module name of a dependency that was not converted to Bazel.
-func (b *baseModuleContext) AddUnconvertedBp2buildDep(dep string) {
-	unconvertedDeps := &b.Module().base().commonProperties.BazelConversionStatus.UnconvertedDeps
-	*unconvertedDeps = append(*unconvertedDeps, dep)
-}
-
-// AddMissingBp2buildDep stores module name of a dependency that was not found in a Android.bp file.
-func (b *baseModuleContext) AddMissingBp2buildDep(dep string) {
-	missingDeps := &b.Module().base().commonProperties.BazelConversionStatus.MissingDeps
-	*missingDeps = append(*missingDeps, dep)
 }
 
 func (b *baseModuleContext) AddMissingDependencies(deps []string) {
@@ -433,27 +404,6 @@ func (b *baseModuleContext) GetDirectDepsWithTag(tag blueprint.DependencyTag) []
 // first DependencyTag.
 func (b *baseModuleContext) GetDirectDep(name string) (blueprint.Module, blueprint.DependencyTag) {
 	return b.getDirectDepFirstTag(name)
-}
-
-func (b *baseModuleContext) ModuleFromName(name string) (blueprint.Module, bool) {
-	if !b.isBazelConversionMode() {
-		panic("cannot call ModuleFromName if not in bazel conversion mode")
-	}
-	var m blueprint.Module
-	var ok bool
-	if moduleName, _ := SrcIsModuleWithTag(name); moduleName != "" {
-		m, ok = b.bp.ModuleFromName(moduleName)
-	} else {
-		m, ok = b.bp.ModuleFromName(name)
-	}
-	if !ok {
-		return m, ok
-	}
-	// If this module is not preferred, tried to get the prebuilt version instead
-	if a, aOk := m.(Module); aOk && !IsModulePrebuilt(a) && !IsModulePreferred(a) {
-		return b.ModuleFromName("prebuilt_" + name)
-	}
-	return m, ok
 }
 
 func (b *baseModuleContext) VisitDirectDepsBlueprint(visit func(blueprint.Module)) {

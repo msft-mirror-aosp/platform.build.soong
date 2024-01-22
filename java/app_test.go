@@ -2109,7 +2109,7 @@ func TestJNISDK(t *testing.T) {
 		Output("libjni.so").Output.String()
 	sdkJNI := ctx.ModuleForTests("libjni", "android_arm64_armv8-a_sdk_shared").
 		Output("libjni.so").Output.String()
-	vendorJNI := ctx.ModuleForTests("libvendorjni", "android_arm64_armv8-a_shared").
+	vendorJNI := ctx.ModuleForTests("libvendorjni", "android_vendor_arm64_armv8-a_shared").
 		Output("libvendorjni.so").Output.String()
 
 	for _, test := range testCases {
@@ -3357,7 +3357,7 @@ func TestUsesLibraries(t *testing.T) {
 	cmd := app.Rule("dexpreopt").RuleParams.Command
 	android.AssertStringDoesContain(t, "dexpreopt app cmd context", cmd, "--context-json=")
 	android.AssertStringDoesContain(t, "dexpreopt app cmd product_packages", cmd,
-		"--product-packages=out/soong/.intermediates/app/android_common/dexpreopt/product_packages.txt")
+		"--product-packages=out/soong/.intermediates/app/android_common/dexpreopt/app/product_packages.txt")
 }
 
 func TestDexpreoptBcp(t *testing.T) {
@@ -4332,4 +4332,49 @@ func TestApexGlobalMinSdkVersionOverride(t *testing.T) {
 		"--minSdkVersion  T",
 	)
 
+}
+
+func TestAppFlagsPackages(t *testing.T) {
+	ctx := testApp(t, `
+		android_app {
+			name: "foo",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			flags_packages: [
+				"bar",
+				"baz",
+			],
+		}
+		aconfig_declarations {
+			name: "bar",
+			package: "com.example.package.bar",
+			srcs: [
+				"bar.aconfig",
+			],
+		}
+		aconfig_declarations {
+			name: "baz",
+			package: "com.example.package.baz",
+			srcs: [
+				"baz.aconfig",
+			],
+		}
+	`)
+
+	foo := ctx.ModuleForTests("foo", "android_common")
+
+	// android_app module depends on aconfig_declarations listed in flags_packages
+	android.AssertBoolEquals(t, "foo expected to depend on bar", true,
+		CheckModuleHasDependency(t, ctx, "foo", "android_common", "bar"))
+
+	android.AssertBoolEquals(t, "foo expected to depend on baz", true,
+		CheckModuleHasDependency(t, ctx, "foo", "android_common", "baz"))
+
+	aapt2LinkRule := foo.Rule("android/soong/java.aapt2Link")
+	linkInFlags := aapt2LinkRule.Args["inFlags"]
+	android.AssertStringDoesContain(t,
+		"aapt2 link command expected to pass feature flags arguments",
+		linkInFlags,
+		"--feature-flags @out/soong/.intermediates/bar/intermediate.txt --feature-flags @out/soong/.intermediates/baz/intermediate.txt",
+	)
 }

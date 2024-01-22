@@ -30,6 +30,7 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -159,7 +160,7 @@ type AndroidMkEntriesContext interface {
 }
 
 type AndroidMkExtraEntriesContext interface {
-	Provider(provider blueprint.ProviderKey) interface{}
+	Provider(provider blueprint.AnyProviderKey) (any, bool)
 }
 
 type androidMkExtraEntriesContext struct {
@@ -167,8 +168,8 @@ type androidMkExtraEntriesContext struct {
 	mod blueprint.Module
 }
 
-func (a *androidMkExtraEntriesContext) Provider(provider blueprint.ProviderKey) interface{} {
-	return a.ctx.ModuleProvider(a.mod, provider)
+func (a *androidMkExtraEntriesContext) Provider(provider blueprint.AnyProviderKey) (any, bool) {
+	return a.ctx.moduleProvider(a.mod, provider)
 }
 
 type AndroidMkExtraEntriesFunc func(ctx AndroidMkExtraEntriesContext, entries *AndroidMkEntries)
@@ -275,13 +276,16 @@ func (a *AndroidMkEntries) AddStrings(name string, value ...string) {
 }
 
 // AddCompatibilityTestSuites adds the supplied test suites to the EntryMap, with special handling
-// for partial MTS test suites.
+// for partial MTS and MCTS test suites.
 func (a *AndroidMkEntries) AddCompatibilityTestSuites(suites ...string) {
-	// MTS supports a full test suite and partial per-module MTS test suites, with naming mts-${MODULE}.
-	// To reduce repetition, if we find a partial MTS test suite without an full MTS test suite,
+	// M(C)TS supports a full test suite and partial per-module MTS test suites, with naming mts-${MODULE}.
+	// To reduce repetition, if we find a partial M(C)TS test suite without an full M(C)TS test suite,
 	// we add the full test suite to our list.
 	if PrefixInList(suites, "mts-") && !InList("mts", suites) {
 		suites = append(suites, "mts")
+	}
+	if PrefixInList(suites, "mcts-") && !InList("mcts", suites) {
+		suites = append(suites, "mcts")
 	}
 	a.AddStrings("LOCAL_COMPATIBILITY_SUITE", suites...)
 }
@@ -486,25 +490,13 @@ func (a *AndroidMkEntries) GetDistForGoals(mod blueprint.Module) []string {
 	return generateDistContributionsForMake(distContributions)
 }
 
-// Write the license variables to Make for AndroidMkData.Custom(..) methods that do not call WriteAndroidMkData(..)
-// It's required to propagate the license metadata even for module types that have non-standard interfaces to Make.
-func (a *AndroidMkEntries) WriteLicenseVariables(w io.Writer) {
-	AndroidMkEmitAssignList(w, "LOCAL_LICENSE_KINDS", a.EntryMap["LOCAL_LICENSE_KINDS"])
-	AndroidMkEmitAssignList(w, "LOCAL_LICENSE_CONDITIONS", a.EntryMap["LOCAL_LICENSE_CONDITIONS"])
-	AndroidMkEmitAssignList(w, "LOCAL_NOTICE_FILE", a.EntryMap["LOCAL_NOTICE_FILE"])
-	if pn, ok := a.EntryMap["LOCAL_LICENSE_PACKAGE_NAME"]; ok {
-		AndroidMkEmitAssignList(w, "LOCAL_LICENSE_PACKAGE_NAME", pn)
-	}
-}
-
 // fillInEntries goes through the common variable processing and calls the extra data funcs to
 // generate and fill in AndroidMkEntries's in-struct data, ready to be flushed to a file.
 type fillInEntriesContext interface {
 	ModuleDir(module blueprint.Module) string
 	ModuleSubDir(module blueprint.Module) string
 	Config() Config
-	ModuleProvider(module blueprint.Module, provider blueprint.ProviderKey) interface{}
-	ModuleHasProvider(module blueprint.Module, provider blueprint.ProviderKey) bool
+	moduleProvider(module blueprint.Module, provider blueprint.AnyProviderKey) (any, bool)
 	ModuleType(module blueprint.Module) string
 }
 
@@ -534,15 +526,6 @@ func (a *AndroidMkEntries) fillInEntries(ctx fillInEntriesContext, mod blueprint
 	// Collect make variable assignment entries.
 	a.SetString("LOCAL_PATH", ctx.ModuleDir(mod))
 	a.SetString("LOCAL_MODULE", name+a.SubName)
-	a.AddStrings("LOCAL_LICENSE_KINDS", base.commonProperties.Effective_license_kinds...)
-	a.AddStrings("LOCAL_LICENSE_CONDITIONS", base.commonProperties.Effective_license_conditions...)
-	a.AddStrings("LOCAL_NOTICE_FILE", base.commonProperties.Effective_license_text.Strings()...)
-	// TODO(b/151177513): Does this code need to set LOCAL_MODULE_IS_CONTAINER ?
-	if base.commonProperties.Effective_package_name != nil {
-		a.SetString("LOCAL_LICENSE_PACKAGE_NAME", *base.commonProperties.Effective_package_name)
-	} else if len(base.commonProperties.Effective_licenses) > 0 {
-		a.SetString("LOCAL_LICENSE_PACKAGE_NAME", strings.Join(base.commonProperties.Effective_licenses, " "))
-	}
 	a.SetString("LOCAL_MODULE_CLASS", a.Class)
 	a.SetString("LOCAL_PREBUILT_MODULE_FILE", a.OutputFile.String())
 	a.AddStrings("LOCAL_REQUIRED_MODULES", a.Required...)
@@ -558,6 +541,10 @@ func (a *AndroidMkEntries) fillInEntries(ctx fillInEntriesContext, mod blueprint
 		a.SetPath("LOCAL_SOONG_INSTALLED_MODULE", base.katiInstalls[len(base.katiInstalls)-1].to)
 		a.SetString("LOCAL_SOONG_INSTALL_PAIRS", base.katiInstalls.BuiltInstalled())
 		a.SetPaths("LOCAL_SOONG_INSTALL_SYMLINKS", base.katiSymlinks.InstallPaths().Paths())
+	}
+
+	if len(base.testData) > 0 {
+		a.AddStrings("LOCAL_TEST_DATA", androidMkDataPaths(base.testData)...)
 	}
 
 	if am, ok := mod.(ApexModule); ok {
@@ -639,9 +626,12 @@ func (a *AndroidMkEntries) fillInEntries(ctx fillInEntriesContext, mod blueprint
 		}
 	}
 
-	if ctx.ModuleHasProvider(mod, LicenseMetadataProvider) {
-		licenseMetadata := ctx.ModuleProvider(mod, LicenseMetadataProvider).(*LicenseMetadataInfo)
+	if licenseMetadata, ok := SingletonModuleProvider(ctx, mod, LicenseMetadataProvider); ok {
 		a.SetPath("LOCAL_SOONG_LICENSE_METADATA", licenseMetadata.LicenseMetadataPath)
+	}
+
+	if _, ok := SingletonModuleProvider(ctx, mod, ModuleInfoJSONProvider); ok {
+		a.SetBool("LOCAL_SOONG_MODULE_INFO_JSON", true)
 	}
 
 	extraCtx := &androidMkExtraEntriesContext{
@@ -661,14 +651,14 @@ func (a *AndroidMkEntries) fillInEntries(ctx fillInEntriesContext, mod blueprint
 	}
 }
 
+func (a *AndroidMkEntries) disabled() bool {
+	return a.Disabled || !a.OutputFile.Valid()
+}
+
 // write  flushes the AndroidMkEntries's in-struct data populated by AndroidMkEntries into the
 // given Writer object.
 func (a *AndroidMkEntries) write(w io.Writer) {
-	if a.Disabled {
-		return
-	}
-
-	if !a.OutputFile.Valid() {
+	if a.disabled() {
 		return
 	}
 
@@ -714,7 +704,9 @@ func (c *androidMkSingleton) GenerateBuildActions(ctx SingletonContext) {
 		return
 	}
 
-	err := translateAndroidMk(ctx, absolutePath(transMk.String()), androidMkModulesList)
+	moduleInfoJSON := PathForOutput(ctx, "module-info"+String(ctx.Config().productVariables.Make_suffix)+".json")
+
+	err := translateAndroidMk(ctx, absolutePath(transMk.String()), moduleInfoJSON, androidMkModulesList)
 	if err != nil {
 		ctx.Errorf(err.Error())
 	}
@@ -725,14 +717,16 @@ func (c *androidMkSingleton) GenerateBuildActions(ctx SingletonContext) {
 	})
 }
 
-func translateAndroidMk(ctx SingletonContext, absMkFile string, mods []blueprint.Module) error {
+func translateAndroidMk(ctx SingletonContext, absMkFile string, moduleInfoJSONPath WritablePath, mods []blueprint.Module) error {
 	buf := &bytes.Buffer{}
+
+	var moduleInfoJSONs []*ModuleInfoJSON
 
 	fmt.Fprintln(buf, "LOCAL_MODULE_MAKEFILE := $(lastword $(MAKEFILE_LIST))")
 
 	typeStats := make(map[string]int)
 	for _, mod := range mods {
-		err := translateAndroidMkModule(ctx, buf, mod)
+		err := translateAndroidMkModule(ctx, buf, &moduleInfoJSONs, mod)
 		if err != nil {
 			os.Remove(absMkFile)
 			return err
@@ -754,10 +748,36 @@ func translateAndroidMk(ctx SingletonContext, absMkFile string, mods []blueprint
 		fmt.Fprintf(buf, "STATS.SOONG_MODULE_TYPE.%s := %d\n", mod_type, typeStats[mod_type])
 	}
 
-	return pathtools.WriteFileIfChanged(absMkFile, buf.Bytes(), 0666)
+	err := pathtools.WriteFileIfChanged(absMkFile, buf.Bytes(), 0666)
+	if err != nil {
+		return err
+	}
+
+	return writeModuleInfoJSON(ctx, moduleInfoJSONs, moduleInfoJSONPath)
 }
 
-func translateAndroidMkModule(ctx SingletonContext, w io.Writer, mod blueprint.Module) error {
+func writeModuleInfoJSON(ctx SingletonContext, moduleInfoJSONs []*ModuleInfoJSON, moduleInfoJSONPath WritablePath) error {
+	moduleInfoJSONBuf := &strings.Builder{}
+	moduleInfoJSONBuf.WriteString("[")
+	for i, moduleInfoJSON := range moduleInfoJSONs {
+		if i != 0 {
+			moduleInfoJSONBuf.WriteString(",\n")
+		}
+		moduleInfoJSONBuf.WriteString("{")
+		moduleInfoJSONBuf.WriteString(strconv.Quote(moduleInfoJSON.core.RegisterName))
+		moduleInfoJSONBuf.WriteString(":")
+		err := encodeModuleInfoJSON(moduleInfoJSONBuf, moduleInfoJSON)
+		moduleInfoJSONBuf.WriteString("}")
+		if err != nil {
+			return err
+		}
+	}
+	moduleInfoJSONBuf.WriteString("]")
+	WriteFileRule(ctx, moduleInfoJSONPath, moduleInfoJSONBuf.String())
+	return nil
+}
+
+func translateAndroidMkModule(ctx SingletonContext, w io.Writer, moduleInfoJSONs *[]*ModuleInfoJSON, mod blueprint.Module) error {
 	defer func() {
 		if r := recover(); r != nil {
 			panic(fmt.Errorf("%s in translateAndroidMkModule for module %s variant %s",
@@ -766,17 +786,23 @@ func translateAndroidMkModule(ctx SingletonContext, w io.Writer, mod blueprint.M
 	}()
 
 	// Additional cases here require review for correct license propagation to make.
+	var err error
 	switch x := mod.(type) {
 	case AndroidMkDataProvider:
-		return translateAndroidModule(ctx, w, mod, x)
+		err = translateAndroidModule(ctx, w, moduleInfoJSONs, mod, x)
 	case bootstrap.GoBinaryTool:
-		return translateGoBinaryModule(ctx, w, mod, x)
+		err = translateGoBinaryModule(ctx, w, mod, x)
 	case AndroidMkEntriesProvider:
-		return translateAndroidMkEntriesModule(ctx, w, mod, x)
+		err = translateAndroidMkEntriesModule(ctx, w, moduleInfoJSONs, mod, x)
 	default:
 		// Not exported to make so no make variables to set.
-		return nil
 	}
+
+	if err != nil {
+		return err
+	}
+
+	return err
 }
 
 // A simple, special Android.mk entry output func to make it possible to build blueprint tools using
@@ -819,8 +845,8 @@ func (data *AndroidMkData) fillInData(ctx fillInEntriesContext, mod blueprint.Mo
 
 // A support func for the deprecated AndroidMkDataProvider interface. Use AndroidMkEntryProvider
 // instead.
-func translateAndroidModule(ctx SingletonContext, w io.Writer, mod blueprint.Module,
-	provider AndroidMkDataProvider) error {
+func translateAndroidModule(ctx SingletonContext, w io.Writer, moduleInfoJSONs *[]*ModuleInfoJSON,
+	mod blueprint.Module, provider AndroidMkDataProvider) error {
 
 	amod := mod.(Module).base()
 	if shouldSkipAndroidMkProcessing(amod) {
@@ -870,6 +896,7 @@ func translateAndroidModule(ctx SingletonContext, w io.Writer, mod blueprint.Mod
 		case "*java.SystemModules": // doesn't go through base_rules
 		case "*java.systemModulesImport": // doesn't go through base_rules
 		case "*phony.phony": // license properties written
+		case "*phony.PhonyRule": // writes phony deps and acts like `.PHONY`
 		case "*selinux.selinuxContextsModule": // license properties written
 		case "*sysprop.syspropLibrary": // license properties written
 		default:
@@ -882,17 +909,19 @@ func translateAndroidModule(ctx SingletonContext, w io.Writer, mod blueprint.Mod
 		WriteAndroidMkData(w, data)
 	}
 
+	if !data.Entries.disabled() {
+		if moduleInfoJSON, ok := SingletonModuleProvider(ctx, mod, ModuleInfoJSONProvider); ok {
+			*moduleInfoJSONs = append(*moduleInfoJSONs, moduleInfoJSON)
+		}
+	}
+
 	return nil
 }
 
 // A support func for the deprecated AndroidMkDataProvider interface. Use AndroidMkEntryProvider
 // instead.
 func WriteAndroidMkData(w io.Writer, data AndroidMkData) {
-	if data.Disabled {
-		return
-	}
-
-	if !data.OutputFile.Valid() {
+	if data.Entries.disabled() {
 		return
 	}
 
@@ -907,16 +936,24 @@ func WriteAndroidMkData(w io.Writer, data AndroidMkData) {
 	fmt.Fprintln(w, "include "+data.Include)
 }
 
-func translateAndroidMkEntriesModule(ctx SingletonContext, w io.Writer, mod blueprint.Module,
-	provider AndroidMkEntriesProvider) error {
+func translateAndroidMkEntriesModule(ctx SingletonContext, w io.Writer, moduleInfoJSONs *[]*ModuleInfoJSON,
+	mod blueprint.Module, provider AndroidMkEntriesProvider) error {
 	if shouldSkipAndroidMkProcessing(mod.(Module).base()) {
 		return nil
 	}
 
+	entriesList := provider.AndroidMkEntries()
+
 	// Any new or special cases here need review to verify correct propagation of license information.
-	for _, entries := range provider.AndroidMkEntries() {
+	for _, entries := range entriesList {
 		entries.fillInEntries(ctx, mod)
 		entries.write(w)
+	}
+
+	if len(entriesList) > 0 && !entriesList[0].disabled() {
+		if moduleInfoJSON, ok := SingletonModuleProvider(ctx, mod, ModuleInfoJSONProvider); ok {
+			*moduleInfoJSONs = append(*moduleInfoJSONs, moduleInfoJSON)
+		}
 	}
 
 	return nil
@@ -956,10 +993,13 @@ func shouldSkipAndroidMkProcessing(module *ModuleBase) bool {
 
 // A utility func to format LOCAL_TEST_DATA outputs. See the comments on DataPath to understand how
 // to use this func.
-func AndroidMkDataPaths(data []DataPath) []string {
+func androidMkDataPaths(data []DataPath) []string {
 	var testFiles []string
 	for _, d := range data {
 		rel := d.SrcPath.Rel()
+		if d.WithoutRel {
+			rel = d.SrcPath.Base()
+		}
 		path := d.SrcPath.String()
 		// LOCAL_TEST_DATA requires the rel portion of the path to be removed from the path.
 		if !strings.HasSuffix(path, rel) {

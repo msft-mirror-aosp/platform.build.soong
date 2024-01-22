@@ -25,14 +25,12 @@ import (
 	"strings"
 
 	"android/soong/testing"
-	"android/soong/ui/metrics/bp2build_metrics_proto"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/aidl_library"
 	"android/soong/android"
-	"android/soong/bazel/cquery"
 	"android/soong/cc/config"
 	"android/soong/fuzz"
 	"android/soong/genrule"
@@ -141,6 +139,8 @@ type Deps struct {
 
 	// List of libs that need to be excluded for APEX variant
 	ExcludeLibsForApex []string
+	// List of libs that need to be excluded for non-APEX variant
+	ExcludeLibsForNonApex []string
 }
 
 // PathDeps is a struct containing file paths to dependencies of a module.
@@ -301,8 +301,8 @@ type BaseProperties struct {
 	// Set by DepsMutator.
 	AndroidMkSystemSharedLibs []string `blueprint:"mutated"`
 
-	// The name of the image this module is built for, suffixed with a '.'
-	ImageVariationPrefix string `blueprint:"mutated"`
+	// The name of the image this module is built for
+	ImageVariation string `blueprint:"mutated"`
 
 	// The VNDK version this module is built against. If empty, the module is not
 	// build against the VNDK.
@@ -525,11 +525,11 @@ type ModuleContextIntf interface {
 	inRamdisk() bool
 	inVendorRamdisk() bool
 	inRecovery() bool
+	InVendorOrProduct() bool
 	selectedStl() string
 	baseModuleName() string
 	getVndkExtendsModuleName() string
 	isAfdoCompile() bool
-	isPgoCompile() bool
 	isOrderfileCompile() bool
 	isCfi() bool
 	isFuzzer() bool
@@ -545,6 +545,7 @@ type ModuleContextIntf interface {
 	isPreventInstall() bool
 	isCfiAssemblySupportEnabled() bool
 	getSharedFlags() *SharedFlags
+	notInPlatform() bool
 }
 
 type SharedFlags struct {
@@ -590,7 +591,6 @@ type Generator interface {
 	GeneratorFlags(ctx ModuleContext, flags Flags, deps PathDeps) Flags
 	GeneratorSources(ctx ModuleContext) GeneratedSource
 	GeneratorBuildActions(ctx ModuleContext, flags Flags, deps PathDeps)
-	GeneratorBp2build(ctx android.Bp2buildMutatorContext, module *Module) bool
 }
 
 // compiler is the interface for a compiler helper object. Different module decorators may implement
@@ -619,12 +619,15 @@ type linker interface {
 	link(ctx ModuleContext, flags Flags, deps PathDeps, objs Objects) android.Path
 	appendLdflags([]string)
 	unstrippedOutputFilePath() android.Path
+	strippedAllOutputFilePath() android.Path
 
 	nativeCoverage() bool
 	coverageOutputFilePath() android.OptionalPath
 
 	// Get the deps that have been explicitly specified in the properties.
 	linkerSpecifiedDeps(specifiedDeps specifiedDeps) specifiedDeps
+
+	moduleInfoJSON(ctx ModuleContext, moduleInfoJSON *android.ModuleInfoJSON)
 }
 
 // specifiedDeps is a tuple struct representing dependencies of a linked binary owned by the linker.
@@ -728,6 +731,8 @@ type libraryDependencyTag struct {
 
 	// Whether or not this dependency has to be followed for the apex variants
 	excludeInApex bool
+	// Whether or not this dependency has to be followed for the non-apex variants
+	excludeInNonApex bool
 
 	// If true, don't automatically export symbols from the static library into a shared library.
 	unexportedSymbols bool
@@ -827,19 +832,6 @@ func IsTestPerSrcDepTag(depTag blueprint.DependencyTag) bool {
 	return ok && ccDepTag == testPerSrcDepTag
 }
 
-// bazelHandler is the interface for a helper object related to deferring to Bazel for
-// processing a cc module (during Bazel mixed builds). Individual module types should define
-// their own bazel handler if they support being handled by Bazel.
-type BazelHandler interface {
-	// QueueBazelCall invokes request-queueing functions on the BazelContext
-	//so that these requests are handled when Bazel's cquery is invoked.
-	QueueBazelCall(ctx android.BaseModuleContext, label string)
-
-	// ProcessBazelQueryResponse uses information retrieved from Bazel to set properties
-	// on the current module with given label.
-	ProcessBazelQueryResponse(ctx android.ModuleContext, label string)
-}
-
 // Module contains the properties and members used by all C/C++ module types, and implements
 // the blueprint.Module interface.  It delegates to compiler, linker, and installer interfaces
 // to construct the output file.  Behavior can be customized with a Customizer, or "decorator",
@@ -857,15 +849,12 @@ type BazelHandler interface {
 type Module struct {
 	fuzz.FuzzModule
 
-	android.BazelModuleBase
-
 	VendorProperties VendorProperties
 	Properties       BaseProperties
 
 	// initialize before calling Init
 	hod        android.HostOrDeviceSupported
 	multilib   android.Multilib
-	bazelable  bool
 	testModule bool
 
 	// Allowable SdkMemberTypes of this module type.
@@ -876,11 +865,10 @@ type Module struct {
 	// type-specific logic. These members may reference different objects or the same object.
 	// Functions of these decorators will be invoked to initialize and register type-specific
 	// build statements.
-	generators   []Generator
-	compiler     compiler
-	linker       linker
-	installer    installer
-	bazelHandler BazelHandler
+	generators []Generator
+	compiler   compiler
+	linker     linker
+	installer  installer
 
 	features  []feature
 	stl       *stl
@@ -891,7 +879,6 @@ type Module struct {
 	vndkdep   *vndkdep
 	lto       *lto
 	afdo      *afdo
-	pgo       *pgo
 	orderfile *orderfile
 
 	library libraryInterface
@@ -923,6 +910,9 @@ type Module struct {
 	apexSdkVersion android.ApiLevel
 
 	hideApexVariantFromMake bool
+
+	// Aconfig files for all transitive deps.  Also exposed via TransitiveDeclarationsInfo
+	mergedAconfigFiles map[string]android.Paths
 }
 
 func (c *Module) AddJSONData(d *map[string]interface{}) {
@@ -1274,9 +1264,6 @@ func (c *Module) Init() android.Module {
 	if c.afdo != nil {
 		c.AddProperties(c.afdo.props()...)
 	}
-	if c.pgo != nil {
-		c.AddProperties(c.pgo.props()...)
-	}
 	if c.orderfile != nil {
 		c.AddProperties(c.orderfile.props()...)
 	}
@@ -1285,9 +1272,6 @@ func (c *Module) Init() android.Module {
 	}
 
 	android.InitAndroidArchModule(c, c.hod, c.multilib)
-	if c.bazelable {
-		android.InitBazelModule(c)
-	}
 	android.InitApexModule(c)
 	android.InitDefaultableModule(c)
 
@@ -1302,7 +1286,7 @@ func (c *Module) UseVndk() bool {
 
 func (c *Module) canUseSdk() bool {
 	return c.Os() == android.Android && c.Target().NativeBridge == android.NativeBridgeDisabled &&
-		!c.UseVndk() && !c.InRamdisk() && !c.InRecovery() && !c.InVendorRamdisk()
+		!c.InVendorOrProduct() && !c.InRamdisk() && !c.InRecovery() && !c.InVendorRamdisk()
 }
 
 func (c *Module) UseSdk() bool {
@@ -1402,13 +1386,6 @@ func (c *Module) IsVndk() bool {
 func (c *Module) isAfdoCompile() bool {
 	if afdo := c.afdo; afdo != nil {
 		return afdo.Properties.FdoProfilePath != nil
-	}
-	return false
-}
-
-func (c *Module) isPgoCompile() bool {
-	if pgo := c.pgo; pgo != nil {
-		return pgo.Properties.PgoCompile
 	}
 	return false
 }
@@ -1550,8 +1527,6 @@ func isBionic(name string) bool {
 }
 
 func InstallToBootstrap(name string, config android.Config) bool {
-	// NOTE: also update //build/bazel/rules/apex/cc.bzl#_installed_to_bootstrap
-	// if this list is updated.
 	if name == "libclang_rt.hwasan" || name == "libc_hwasan" {
 		return true
 	}
@@ -1693,6 +1668,10 @@ func (ctx *moduleContextImpl) useVndk() bool {
 	return ctx.mod.UseVndk()
 }
 
+func (ctx *moduleContextImpl) InVendorOrProduct() bool {
+	return ctx.mod.InVendorOrProduct()
+}
+
 func (ctx *moduleContextImpl) isNdk(config android.Config) bool {
 	return ctx.mod.IsNdk(config)
 }
@@ -1719,10 +1698,6 @@ func (ctx *moduleContextImpl) isVndk() bool {
 
 func (ctx *moduleContextImpl) isAfdoCompile() bool {
 	return ctx.mod.isAfdoCompile()
-}
-
-func (ctx *moduleContextImpl) isPgoCompile() bool {
-	return ctx.mod.isPgoCompile()
 }
 
 func (ctx *moduleContextImpl) isOrderfileCompile() bool {
@@ -1777,11 +1752,13 @@ func (ctx *moduleContextImpl) getVndkExtendsModuleName() string {
 }
 
 func (ctx *moduleContextImpl) isForPlatform() bool {
-	return ctx.ctx.Provider(android.ApexInfoProvider).(android.ApexInfo).IsForPlatform()
+	apexInfo, _ := android.ModuleProvider(ctx.ctx, android.ApexInfoProvider)
+	return apexInfo.IsForPlatform()
 }
 
 func (ctx *moduleContextImpl) apexVariationName() string {
-	return ctx.ctx.Provider(android.ApexInfoProvider).(android.ApexInfo).ApexVariationName
+	apexInfo, _ := android.ModuleProvider(ctx.ctx, android.ApexInfoProvider)
+	return apexInfo.ApexVariationName
 }
 
 func (ctx *moduleContextImpl) apexSdkVersion() android.ApiLevel {
@@ -1817,6 +1794,10 @@ func (ctx *moduleContextImpl) isCfiAssemblySupportEnabled() bool {
 	return ctx.mod.isCfiAssemblySupportEnabled()
 }
 
+func (ctx *moduleContextImpl) notInPlatform() bool {
+	return ctx.mod.NotInPlatform()
+}
+
 func newBaseModule(hod android.HostOrDeviceSupported, multilib android.Multilib) *Module {
 	return &Module{
 		hod:      hod,
@@ -1837,7 +1818,6 @@ func newModule(hod android.HostOrDeviceSupported, multilib android.Multilib) *Mo
 	module.vndkdep = &vndkdep{}
 	module.lto = &lto{}
 	module.afdo = &afdo{}
-	module.pgo = &pgo{}
 	module.orderfile = &orderfile{}
 	return module
 }
@@ -1921,7 +1901,7 @@ func GetSubnameProperty(actx android.ModuleContext, c LinkableInterface) string 
 	}
 
 	llndk := c.IsLlndk()
-	if llndk || (c.UseVndk() && c.HasNonSystemVariants()) {
+	if llndk || (c.InVendorOrProduct() && c.HasNonSystemVariants()) {
 		// .vendor.{version} suffix is added for vendor variant or .product.{version} suffix is
 		// added for product variant only when we have vendor and product variants with core
 		// variant. The suffix is not added for vendor-only or product-only module.
@@ -1952,170 +1932,6 @@ func GetSubnameProperty(actx android.ModuleContext, c LinkableInterface) string 
 	return subName
 }
 
-var _ android.MixedBuildBuildable = (*Module)(nil)
-
-func (c *Module) getBazelModuleLabel(ctx android.BaseModuleContext) string {
-	var bazelModuleLabel string
-	if c.typ() == fullLibrary && c.static() {
-		// cc_library is a special case in bp2build; two targets are generated -- one for each
-		// of the shared and static variants. The shared variant keeps the module name, but the
-		// static variant uses a different suffixed name.
-		bazelModuleLabel = bazelLabelForStaticModule(ctx, c)
-	} else {
-		bazelModuleLabel = c.GetBazelLabel(ctx, c)
-	}
-	labelNoPrebuilt := bazelModuleLabel
-	if c.IsPrebuilt() {
-		labelNoPrebuilt = android.RemoveOptionalPrebuiltPrefixFromBazelLabel(bazelModuleLabel)
-	}
-	return labelNoPrebuilt
-}
-
-func (c *Module) QueueBazelCall(ctx android.BaseModuleContext) {
-	c.bazelHandler.QueueBazelCall(ctx, c.getBazelModuleLabel(ctx))
-}
-
-// IsMixedBuildSupported returns true if the module should be analyzed by Bazel
-// in any of the --bazel-mode(s).
-func (c *Module) IsMixedBuildSupported(ctx android.BaseModuleContext) bool {
-	if !allEnabledSanitizersSupportedByBazel(ctx, c) {
-		//TODO(b/278772861) support sanitizers in Bazel rules
-		return false
-	}
-	if !imageVariantSupportedByBazel(c) {
-		return false
-	}
-	if c.IsSdkVariant() {
-		return false
-	}
-	return c.bazelHandler != nil
-}
-
-func imageVariantSupportedByBazel(c *Module) bool {
-	if c.IsLlndk() {
-		return false
-	}
-	if c.InVendor() {
-		return false
-	}
-	if c.InProduct() {
-		return false
-	}
-	if c.InRamdisk() {
-		return false
-	}
-	if c.InVendorRamdisk() {
-		return false
-	}
-	if c.InRecovery() {
-		return false
-	}
-	return true
-}
-
-func allEnabledSanitizersSupportedByBazel(ctx android.BaseModuleContext, c *Module) bool {
-	if c.sanitize == nil {
-		return true
-	}
-	sanitizeProps := &c.sanitize.Properties.SanitizeMutated
-
-	unsupportedSanitizers := []*bool{
-		sanitizeProps.Safestack,
-		sanitizeProps.Scudo,
-		BoolPtr(len(c.sanitize.Properties.Sanitize.Recover) > 0),
-	}
-	for _, san := range unsupportedSanitizers {
-		if Bool(san) {
-			return false
-		}
-	}
-
-	for _, san := range Sanitizers {
-		if san == intOverflow {
-			// TODO(b/261058727): enable mixed builds for all modules with UBSan
-			// Currently we can only support ubsan when minimum runtime is used.
-			ubsanEnabled := Bool(sanitizeProps.Integer_overflow) || len(sanitizeProps.Misc_undefined) > 0
-			if !ubsanEnabled || c.MinimalRuntimeNeeded() {
-				continue
-			}
-		} else if san == cfi {
-			apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
-			// Only allow cfi if this is an apex variant
-			if !apexInfo.IsForPlatform() {
-				continue
-			}
-		}
-		if c.sanitize.isSanitizerEnabled(san) {
-			return false
-		}
-	}
-
-	return true
-}
-
-func GetApexConfigKey(ctx android.BaseModuleContext) *android.ApexConfigKey {
-	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
-	if !apexInfo.IsForPlatform() {
-		apexKey := android.ApexConfigKey{
-			WithinApex:     true,
-			ApexSdkVersion: findApexSdkVersion(ctx, apexInfo).String(),
-			ApiDomain:      findApiDomain(apexInfo),
-		}
-		return &apexKey
-	}
-
-	return nil
-}
-
-// Returns the api domain of a module for an apexInfo group
-// Input:
-// ai.InApexModules: [com.android.foo, test_com.android.foo, com.google.android.foo]
-// Return:
-// com.android.foo
-
-// If a module is included in multiple api domains (collated by min_sdk_version), it will return
-// the first match. The other matches have the same build actions since they share a min_sdk_version, so returning
-// the first match is fine.
-func findApiDomain(ai android.ApexInfo) string {
-	// Remove any test apexes
-	matches, _ := android.FilterList(ai.InApexModules, ai.TestApexes)
-	// Remove any google apexes. Rely on naming convention.
-	pred := func(s string) bool { return !strings.HasPrefix(s, "com.google") }
-	matches = android.FilterListPred(matches, pred)
-	if len(matches) > 0 {
-		// Return the first match
-		return android.SortedUniqueStrings(matches)[0]
-	} else {
-		// No apex in the tree has a dependency on this module
-		return ""
-	}
-}
-
-func (c *Module) ProcessBazelQueryResponse(ctx android.ModuleContext) {
-	bazelModuleLabel := c.getBazelModuleLabel(ctx)
-	c.bazelHandler.ProcessBazelQueryResponse(ctx, bazelModuleLabel)
-
-	c.Properties.SubName = GetSubnameProperty(ctx, c)
-	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
-	if !apexInfo.IsForPlatform() {
-		c.hideApexVariantFromMake = true
-	}
-
-	c.makeLinkType = GetMakeLinkType(ctx, c)
-
-	mctx := &moduleContext{
-		ModuleContext: ctx,
-		moduleContextImpl: moduleContextImpl{
-			mod: c,
-		},
-	}
-	mctx.ctx = mctx
-
-	// TODO(b/244432500): Get the tradefed config from the bazel target instead
-	// of generating it with Soong.
-	c.maybeInstall(mctx, apexInfo)
-}
-
 func moduleContextFromAndroidModuleContext(actx android.ModuleContext, c *Module) ModuleContext {
 	ctx := &moduleContext{
 		ModuleContext: actx,
@@ -2138,6 +1954,7 @@ var (
 		"libdl_android": true,
 		"libm":          true,
 		"libdl":         true,
+		"libz":          true,
 		// art apex
 		"libandroidio":    true,
 		"libdexfile":      true,
@@ -2177,6 +1994,10 @@ func (c *Module) stubLibraryMultipleApexViolation(ctx android.ModuleContext) boo
 	return false
 }
 
+func (d *Defaults) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	android.CollectDependencyAconfigFiles(ctx, &d.mergedAconfigFiles)
+}
+
 func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	// Handle the case of a test module split by `test_per_src` mutator.
 	//
@@ -2189,7 +2010,7 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	}
 
 	c.Properties.SubName = GetSubnameProperty(actx, c)
-	apexInfo := actx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	apexInfo, _ := android.ModuleProvider(actx, android.ApexInfoProvider)
 	if !apexInfo.IsForPlatform() {
 		c.hideApexVariantFromMake = true
 	}
@@ -2263,9 +2084,6 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	if c.afdo != nil {
 		flags = c.afdo.flags(ctx, flags)
 	}
-	if c.pgo != nil {
-		flags = c.pgo.flags(ctx, flags)
-	}
 	if c.orderfile != nil {
 		flags = c.orderfile.flags(ctx, flags)
 	}
@@ -2332,10 +2150,46 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		}
 	}
 	if c.testModule {
-		ctx.SetProvider(testing.TestModuleProviderKey, testing.TestModuleProviderData{})
+		android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 	}
+	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: deps.GeneratedSources.Strings()})
+
+	android.CollectDependencyAconfigFiles(ctx, &c.mergedAconfigFiles)
 
 	c.maybeInstall(ctx, apexInfo)
+
+	if c.linker != nil {
+		moduleInfoJSON := ctx.ModuleInfoJSON()
+		c.linker.moduleInfoJSON(ctx, moduleInfoJSON)
+		moduleInfoJSON.SharedLibs = c.Properties.AndroidMkSharedLibs
+		moduleInfoJSON.StaticLibs = c.Properties.AndroidMkStaticLibs
+		moduleInfoJSON.SystemSharedLibs = c.Properties.AndroidMkSystemSharedLibs
+		moduleInfoJSON.RuntimeDependencies = c.Properties.AndroidMkRuntimeLibs
+
+		moduleInfoJSON.Dependencies = append(moduleInfoJSON.Dependencies, c.Properties.AndroidMkSharedLibs...)
+		moduleInfoJSON.Dependencies = append(moduleInfoJSON.Dependencies, c.Properties.AndroidMkStaticLibs...)
+		moduleInfoJSON.Dependencies = append(moduleInfoJSON.Dependencies, c.Properties.AndroidMkHeaderLibs...)
+		moduleInfoJSON.Dependencies = append(moduleInfoJSON.Dependencies, c.Properties.AndroidMkWholeStaticLibs...)
+
+		if c.sanitize != nil && len(moduleInfoJSON.Class) > 0 &&
+			(moduleInfoJSON.Class[0] == "STATIC_LIBRARIES" || moduleInfoJSON.Class[0] == "HEADER_LIBRARIES") {
+			if Bool(c.sanitize.Properties.SanitizeMutated.Cfi) {
+				moduleInfoJSON.SubName += ".cfi"
+			}
+			if Bool(c.sanitize.Properties.SanitizeMutated.Hwaddress) {
+				moduleInfoJSON.SubName += ".hwasan"
+			}
+			if Bool(c.sanitize.Properties.SanitizeMutated.Scs) {
+				moduleInfoJSON.SubName += ".scs"
+			}
+		}
+		moduleInfoJSON.SubName += c.Properties.SubName
+
+		if c.Properties.IsSdkVariant && c.Properties.SdkAndPlatformVariantVisibleToMake {
+			moduleInfoJSON.Uninstallable = true
+		}
+
+	}
 }
 
 func (c *Module) maybeUnhideFromMake() {
@@ -2347,16 +2201,15 @@ func (c *Module) maybeUnhideFromMake() {
 	// is explicitly referenced via .bootstrap suffix or the module is marked with
 	// 'bootstrap: true').
 	if c.HasStubsVariants() && c.NotInPlatform() && !c.InRamdisk() &&
-		!c.InRecovery() && !c.UseVndk() && !c.static() && !c.isCoverageVariant() &&
+		!c.InRecovery() && !c.InVendorOrProduct() && !c.static() && !c.isCoverageVariant() &&
 		c.IsStubs() && !c.InVendorRamdisk() {
 		c.Properties.HideFromMake = false // unhide
 		// Note: this is still non-installable
 	}
 }
 
-// maybeInstall is called at the end of both GenerateAndroidBuildActions and
-// ProcessBazelQueryResponse to run the install hooks for installable modules,
-// like binaries and tests.
+// maybeInstall is called at the end of both GenerateAndroidBuildActions to run the
+// install hooks for installable modules, like binaries and tests.
 func (c *Module) maybeInstall(ctx ModuleContext, apexInfo android.ApexInfo) {
 	if !proptools.BoolDefault(c.Installable(), true) {
 		// If the module has been specifically configure to not be installed then
@@ -2377,12 +2230,6 @@ func (c *Module) maybeInstall(ctx ModuleContext, apexInfo android.ApexInfo) {
 			return
 		}
 	}
-}
-
-func (c *Module) setAndroidMkVariablesFromCquery(info cquery.CcAndroidMkInfo) {
-	c.Properties.AndroidMkSharedLibs = info.LocalSharedLibs
-	c.Properties.AndroidMkStaticLibs = info.LocalStaticLibs
-	c.Properties.AndroidMkWholeStaticLibs = info.LocalWholeStaticLibs
 }
 
 func (c *Module) toolchain(ctx android.BaseModuleContext) config.Toolchain {
@@ -2411,14 +2258,14 @@ func (c *Module) begin(ctx BaseModuleContext) {
 	if c.coverage != nil {
 		c.coverage.begin(ctx)
 	}
+	if c.afdo != nil {
+		c.afdo.begin(ctx)
+	}
 	if c.lto != nil {
 		c.lto.begin(ctx)
 	}
 	if c.orderfile != nil {
 		c.orderfile.begin(ctx)
-	}
-	if c.pgo != nil {
-		c.pgo.begin(ctx)
 	}
 	if ctx.useSdk() && c.IsSdkVariant() {
 		version, err := nativeApiLevelFromUser(ctx, ctx.sdkVersion())
@@ -2573,9 +2420,9 @@ func GetApiImports(c LinkableInterface, actx android.BottomUpMutatorContext) mul
 		if actx.OtherModuleExists("api_imports") {
 			apiImportModule = actx.AddDependency(c, nil, "api_imports")
 			if len(apiImportModule) > 0 && apiImportModule[0] != nil {
-				apiInfo := actx.OtherModuleProvider(apiImportModule[0], multitree.ApiImportsProvider).(multitree.ApiImportInfo)
+				apiInfo, _ := android.OtherModuleProvider(actx, apiImportModule[0], multitree.ApiImportsProvider)
 				apiImportInfo = apiInfo
-				actx.SetProvider(multitree.ApiImportsProvider, apiInfo)
+				android.SetProvider(actx, multitree.ApiImportsProvider, apiInfo)
 			}
 		}
 	}
@@ -2590,16 +2437,16 @@ func GetSnapshot(c LinkableInterface, snapshotInfo **SnapshotInfo, actx android.
 		// Only retrieve the snapshot on demand in order to avoid circular dependencies
 		// between the modules in the snapshot and the snapshot itself.
 		var snapshotModule []blueprint.Module
-		if c.InVendor() && c.VndkVersion() == actx.DeviceConfig().VndkVersion() {
+		if c.InVendor() && c.VndkVersion() == actx.DeviceConfig().VndkVersion() && actx.OtherModuleExists("vendor_snapshot") {
 			snapshotModule = actx.AddVariationDependencies(nil, nil, "vendor_snapshot")
-		} else if recoverySnapshotVersion := actx.DeviceConfig().RecoverySnapshotVersion(); recoverySnapshotVersion != "current" && recoverySnapshotVersion != "" && c.InRecovery() {
+		} else if recoverySnapshotVersion := actx.DeviceConfig().RecoverySnapshotVersion(); recoverySnapshotVersion != "current" && recoverySnapshotVersion != "" && c.InRecovery() && actx.OtherModuleExists("recovery_snapshot") {
 			snapshotModule = actx.AddVariationDependencies(nil, nil, "recovery_snapshot")
 		}
 		if len(snapshotModule) > 0 && snapshotModule[0] != nil {
-			snapshot := actx.OtherModuleProvider(snapshotModule[0], SnapshotInfoProvider).(SnapshotInfo)
+			snapshot, _ := android.OtherModuleProvider(actx, snapshotModule[0], SnapshotInfoProvider)
 			*snapshotInfo = &snapshot
 			// republish the snapshot for use in later mutators on this module
-			actx.SetProvider(SnapshotInfoProvider, snapshot)
+			android.SetProvider(actx, SnapshotInfoProvider, snapshot)
 		}
 	}
 	if *snapshotInfo == nil {
@@ -2818,6 +2665,9 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		}
 		if inList(lib, deps.ExcludeLibsForApex) {
 			depTag.excludeInApex = true
+		}
+		if inList(lib, deps.ExcludeLibsForNonApex) {
+			depTag.excludeInNonApex = true
 		}
 
 		name, version := StubsLibNameAndVersion(lib)
@@ -3184,7 +3034,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		depPaths.ReexportedGeneratedHeaders = append(depPaths.ReexportedGeneratedHeaders, exporter.GeneratedHeaders...)
 	}
 
-	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 	c.apexSdkVersion = findApexSdkVersion(ctx, apexInfo)
 
 	skipModuleList := map[string]bool{}
@@ -3194,7 +3044,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 	ctx.VisitDirectDeps(func(dep android.Module) {
 		if dep.Name() == "api_imports" {
-			apiImportInfo = ctx.OtherModuleProvider(dep, multitree.ApiImportsProvider).(multitree.ApiImportInfo)
+			apiImportInfo, _ = android.OtherModuleProvider(ctx, dep, multitree.ApiImportsProvider)
 			hasApiImportInfo = true
 		}
 	})
@@ -3245,12 +3095,10 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		}
 
 		if depTag == aidlLibraryTag {
-			if ctx.OtherModuleHasProvider(dep, aidl_library.AidlLibraryProvider) {
+			if aidlLibraryInfo, ok := android.OtherModuleProvider(ctx, dep, aidl_library.AidlLibraryProvider); ok {
 				depPaths.AidlLibraryInfos = append(
 					depPaths.AidlLibraryInfos,
-					ctx.OtherModuleProvider(
-						dep,
-						aidl_library.AidlLibraryProvider).(aidl_library.AidlLibraryInfo),
+					aidlLibraryInfo,
 				)
 			}
 		}
@@ -3315,10 +3163,10 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			// version mutator, so the stubs variant is created from the shared variant that
 			// already has the reuseObjTag dependency on the static variant.
 			if !c.library.buildStubs() {
-				staticAnalogue := ctx.OtherModuleProvider(dep, StaticLibraryInfoProvider).(StaticLibraryInfo)
+				staticAnalogue, _ := android.OtherModuleProvider(ctx, dep, StaticLibraryInfoProvider)
 				objs := staticAnalogue.ReuseObjects
 				depPaths.Objs = depPaths.Objs.Append(objs)
-				depExporterInfo := ctx.OtherModuleProvider(dep, FlagExporterInfoProvider).(FlagExporterInfo)
+				depExporterInfo, _ := android.OtherModuleProvider(ctx, dep, FlagExporterInfoProvider)
 				reexportExporter(depExporterInfo)
 			}
 			return
@@ -3335,8 +3183,11 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			if !apexInfo.IsForPlatform() && libDepTag.excludeInApex {
 				return
 			}
+			if apexInfo.IsForPlatform() && libDepTag.excludeInNonApex {
+				return
+			}
 
-			depExporterInfo := ctx.OtherModuleProvider(dep, FlagExporterInfoProvider).(FlagExporterInfo)
+			depExporterInfo, _ := android.OtherModuleProvider(ctx, dep, FlagExporterInfoProvider)
 
 			var ptr *android.Paths
 			var depPtr *android.Paths
@@ -3345,7 +3196,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 			switch {
 			case libDepTag.header():
-				if !ctx.OtherModuleHasProvider(dep, HeaderLibraryInfoProvider) {
+				if _, isHeaderLib := android.OtherModuleProvider(ctx, dep, HeaderLibraryInfoProvider); !isHeaderLib {
 					if !ctx.Config().AllowMissingDependencies() {
 						ctx.ModuleErrorf("module %q is not a header library", depName)
 					} else {
@@ -3354,7 +3205,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					return
 				}
 			case libDepTag.shared():
-				if !ctx.OtherModuleHasProvider(dep, SharedLibraryInfoProvider) {
+				if _, isSharedLib := android.OtherModuleProvider(ctx, dep, SharedLibraryInfoProvider); !isSharedLib {
 					if !ctx.Config().AllowMissingDependencies() {
 						ctx.ModuleErrorf("module %q is not a shared library", depName)
 					} else {
@@ -3391,7 +3242,8 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					panic(fmt.Errorf("unexpected library dependency order %d", libDepTag.Order))
 				}
 			case libDepTag.static():
-				if !ctx.OtherModuleHasProvider(dep, StaticLibraryInfoProvider) {
+				staticLibraryInfo, isStaticLib := android.OtherModuleProvider(ctx, dep, StaticLibraryInfoProvider)
+				if !isStaticLib {
 					if !ctx.Config().AllowMissingDependencies() {
 						ctx.ModuleErrorf("module %q is not a static library", depName)
 					} else {
@@ -3406,7 +3258,6 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					break
 				}
 
-				staticLibraryInfo := ctx.OtherModuleProvider(dep, StaticLibraryInfoProvider).(StaticLibraryInfo)
 				linkFile = android.OptionalPathForPath(staticLibraryInfo.StaticLibrary)
 				if libDepTag.wholeStatic {
 					ptr = &depPaths.WholeStaticLibs
@@ -3516,7 +3367,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					if lib.buildStubs() && dep.(android.ApexModule).InAnyApex() {
 						// Add the dependency to the APEX(es) providing the library so that
 						// m <module> can trigger building the APEXes as well.
-						depApexInfo := ctx.OtherModuleProvider(dep, android.ApexInfoProvider).(android.ApexInfo)
+						depApexInfo, _ := android.OtherModuleProvider(ctx, dep, android.ApexInfoProvider)
 						for _, an := range depApexInfo.InApexVariants {
 							c.Properties.ApexesProvidingSharedLibs = append(
 								c.Properties.ApexesProvidingSharedLibs, an)
@@ -3592,20 +3443,20 @@ func ShouldUseStubForApex(ctx android.ModuleContext, dep android.Module) bool {
 		panic(fmt.Errorf("Not an APEX module: %q", ctx.ModuleName()))
 	}
 
-	useVndk := false
+	inVendorOrProduct := false
 	bootstrap := false
 	if linkable, ok := ctx.Module().(LinkableInterface); !ok {
 		panic(fmt.Errorf("Not a Linkable module: %q", ctx.ModuleName()))
 	} else {
-		useVndk = linkable.UseVndk()
+		inVendorOrProduct = linkable.InVendorOrProduct()
 		bootstrap = linkable.Bootstrap()
 	}
 
-	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 
 	useStubs := false
 
-	if lib := moduleLibraryInterface(dep); lib.buildStubs() && useVndk { // LLNDK
+	if lib := moduleLibraryInterface(dep); lib.buildStubs() && inVendorOrProduct { // LLNDK
 		if !apexInfo.IsForPlatform() {
 			// For platform libraries, use current version of LLNDK
 			// If this is for use_vendor apex we will apply the same rules
@@ -3635,7 +3486,7 @@ func ShouldUseStubForApex(ctx android.ModuleContext, dep android.Module) bool {
 			// Another exception: if this module is a test for an APEX, then
 			// it is linked with the non-stub variant of a module in the APEX
 			// as if this is part of the APEX.
-			testFor := ctx.Provider(android.ApexTestForInfoProvider).(android.ApexTestForInfo)
+			testFor, _ := android.ModuleProvider(ctx, android.ApexTestForInfoProvider)
 			for _, apexContents := range testFor.ApexContents {
 				if apexContents.DirectlyInApex(depName) {
 					useStubs = false
@@ -3681,9 +3532,9 @@ func ChooseStubOrImpl(ctx android.ModuleContext, dep android.Module) (SharedLibr
 		panic(fmt.Errorf("Unexpected dependency tag: %T", depTag))
 	}
 
-	sharedLibraryInfo := ctx.OtherModuleProvider(dep, SharedLibraryInfoProvider).(SharedLibraryInfo)
-	depExporterInfo := ctx.OtherModuleProvider(dep, FlagExporterInfoProvider).(FlagExporterInfo)
-	sharedLibraryStubsInfo := ctx.OtherModuleProvider(dep, SharedLibraryStubsProvider).(SharedLibraryStubsInfo)
+	sharedLibraryInfo, _ := android.OtherModuleProvider(ctx, dep, SharedLibraryInfoProvider)
+	depExporterInfo, _ := android.OtherModuleProvider(ctx, dep, FlagExporterInfoProvider)
+	sharedLibraryStubsInfo, _ := android.OtherModuleProvider(ctx, dep, SharedLibraryStubsProvider)
 
 	if !libDepTag.explicitlyVersioned && len(sharedLibraryStubsInfo.SharedStubLibraries) > 0 {
 		// when to use (unspecified) stubs, use the latest one.
@@ -3757,7 +3608,7 @@ func MakeLibName(ctx android.ModuleContext, c LinkableInterface, ccDep LinkableI
 		// The vendor module is a no-vendor-variant VNDK library.  Depend on the
 		// core module instead.
 		return libName
-	} else if ccDep.UseVndk() && nonSystemVariantsExist {
+	} else if ccDep.InVendorOrProduct() && nonSystemVariantsExist {
 		// The vendor and product modules in Make will have been renamed to not conflict with the
 		// core module, so update the dependency name here accordingly.
 		return libName + ccDep.SubName()
@@ -3832,6 +3683,11 @@ func (c *Module) OutputFiles(tag string) (android.Paths, error) {
 	case "unstripped":
 		if c.linker != nil {
 			return android.PathsIfNonNil(c.linker.unstrippedOutputFilePath()), nil
+		}
+		return nil, nil
+	case "stripped_all":
+		if c.linker != nil {
+			return android.PathsIfNonNil(c.linker.strippedAllOutputFilePath()), nil
 		}
 		return nil, nil
 	default:
@@ -3929,7 +3785,7 @@ func (c *Module) Object() bool {
 }
 
 func GetMakeLinkType(actx android.ModuleContext, c LinkableInterface) string {
-	if c.UseVndk() {
+	if c.InVendorOrProduct() {
 		if c.IsLlndk() {
 			if !c.IsLlndkPublic() {
 				return "native:vndk_private"
@@ -4218,70 +4074,14 @@ func (c *Module) typ() moduleType {
 	return unknownType
 }
 
-// ConvertWithBp2build converts Module to Bazel for bp2build.
-func (c *Module) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
-	if len(c.generators) > 0 {
-		allConverted := true
-		for _, generator := range c.generators {
-			allConverted = allConverted && generator.GeneratorBp2build(ctx, c)
-		}
-		if allConverted {
-			return
-		}
-	}
-
-	prebuilt := c.IsPrebuilt()
-	switch c.typ() {
-	case binary:
-		if prebuilt {
-			prebuiltBinaryBp2Build(ctx, c)
-		} else {
-			binaryBp2build(ctx, c)
-		}
-	case testBin:
-		if !prebuilt {
-			testBinaryBp2build(ctx, c)
-		}
-	case object:
-		if prebuilt {
-			prebuiltObjectBp2Build(ctx, c)
-		} else {
-			objectBp2Build(ctx, c)
-		}
-	case fullLibrary:
-		if !prebuilt {
-			libraryBp2Build(ctx, c)
-		} else {
-			prebuiltLibraryBp2Build(ctx, c)
-		}
-	case headerLibrary:
-		libraryHeadersBp2Build(ctx, c)
-	case staticLibrary:
-		if prebuilt {
-			prebuiltLibraryStaticBp2Build(ctx, c, false)
-		} else {
-			sharedOrStaticLibraryBp2Build(ctx, c, true)
-		}
-	case sharedLibrary:
-		if prebuilt {
-			prebuiltLibrarySharedBp2Build(ctx, c)
-		} else {
-			sharedOrStaticLibraryBp2Build(ctx, c, false)
-		}
-	case ndkPrebuiltStl:
-		ndkPrebuiltStlBp2build(ctx, c)
-	case ndkLibrary:
-		ndkLibraryBp2build(ctx, c)
-	default:
-		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_TYPE_UNSUPPORTED, "")
-	}
-}
-
 // Defaults
 type Defaults struct {
 	android.ModuleBase
 	android.DefaultsModuleBase
 	android.ApexModuleBase
+
+	// Aconfig files for all transitive deps.  Also exposed via TransitiveDeclarationsInfo
+	mergedAconfigFiles map[string]android.Paths
 }
 
 // cc_defaults provides a set of properties that can be inherited by other cc
@@ -4323,7 +4123,6 @@ func DefaultsFactory(props ...interface{}) android.Module {
 		&VndkProperties{},
 		&LTOProperties{},
 		&AfdoProperties{},
-		&PgoProperties{},
 		&OrderfileProperties{},
 		&android.ProtoProperties{},
 		// RustBindgenProperties is included here so that cc_defaults can be used for rust_bindgen modules.

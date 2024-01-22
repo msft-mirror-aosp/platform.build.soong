@@ -152,7 +152,7 @@ func TestPlatformBootclasspath_Fragments(t *testing.T) {
 	).RunTest(t)
 
 	pbcp := result.Module("platform-bootclasspath", "android_common")
-	info := result.ModuleProvider(pbcp, java.MonolithicHiddenAPIInfoProvider).(java.MonolithicHiddenAPIInfo)
+	info, _ := android.SingletonModuleProvider(result, pbcp, java.MonolithicHiddenAPIInfoProvider)
 
 	for _, category := range java.HiddenAPIFlagFileCategories {
 		name := category.PropertyName
@@ -234,7 +234,7 @@ func TestPlatformBootclasspath_LegacyPrebuiltFragment(t *testing.T) {
 	)
 
 	pbcp := result.Module("myplatform-bootclasspath", "android_common")
-	info := result.ModuleProvider(pbcp, java.MonolithicHiddenAPIInfoProvider).(java.MonolithicHiddenAPIInfo)
+	info, _ := android.SingletonModuleProvider(result, pbcp, java.MonolithicHiddenAPIInfoProvider)
 
 	android.AssertArrayString(t, "stub flags", []string{"prebuilt-stub-flags.csv:out/soong/.intermediates/mybootclasspath-fragment/android_common_myapex/modular-hiddenapi/signature-patterns.csv"}, info.StubFlagSubsets.RelativeToTop())
 	android.AssertArrayString(t, "all flags", []string{"prebuilt-all-flags.csv:out/soong/.intermediates/mybootclasspath-fragment/android_common_myapex/modular-hiddenapi/signature-patterns.csv"}, info.FlagSubsets.RelativeToTop())
@@ -252,6 +252,11 @@ func TestPlatformBootclasspathDependencies(t *testing.T) {
 		java.FixtureWithLastReleaseApis("foo"),
 		java.PrepareForTestWithDexpreopt,
 		dexpreopt.FixtureDisableDexpreoptBootImages(false),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
+		}),
 	).RunTestWithBp(t, `
 		apex {
 			name: "com.android.art",
@@ -382,11 +387,14 @@ func TestPlatformBootclasspathDependencies(t *testing.T) {
 
 	// Make sure that the myplatform-bootclasspath has the correct dependencies.
 	CheckModuleDependencies(t, result.TestContext, "myplatform-bootclasspath", "android_common", []string{
+		// source vs prebuilt selection metadata module
+		`platform:all_apex_contributions`,
+
 		// The following are stubs.
-		`platform:android_stubs_current`,
-		`platform:android_system_stubs_current`,
-		`platform:android_test_stubs_current`,
-		`platform:legacy.core.platform.api.stubs`,
+		`platform:android_stubs_current_exportable`,
+		`platform:android_system_stubs_current_exportable`,
+		`platform:android_test_stubs_current_exportable`,
+		`platform:legacy.core.platform.api.stubs.exportable`,
 
 		// Needed for generating the boot image.
 		`platform:dex2oatd`,
@@ -419,6 +427,9 @@ func TestPlatformBootclasspath_AlwaysUsePrebuiltSdks(t *testing.T) {
 		java.PrepareForTestWithJavaSdkLibraryFiles,
 		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
 			variables.Always_use_prebuilt_sdks = proptools.BoolPtr(true)
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
 		}),
 		java.FixtureWithPrebuiltApis(map[string][]string{
 			"current": {},
@@ -534,13 +545,16 @@ func TestPlatformBootclasspath_AlwaysUsePrebuiltSdks(t *testing.T) {
 
 	// Make sure that the myplatform-bootclasspath has the correct dependencies.
 	CheckModuleDependencies(t, result.TestContext, "myplatform-bootclasspath", "android_common", []string{
+		// source vs prebuilt selection metadata module
+		`platform:all_apex_contributions`,
+
 		// The following are stubs.
 		"platform:prebuilt_sdk_public_current_android",
 		"platform:prebuilt_sdk_system_current_android",
 		"platform:prebuilt_sdk_test_current_android",
 
 		// Not a prebuilt as no prebuilt existed when it was added.
-		"platform:legacy.core.platform.api.stubs",
+		"platform:legacy.core.platform.api.stubs.exportable",
 
 		// The platform_bootclasspath intentionally adds dependencies on both source and prebuilt
 		// modules when available as it does not know which one will be preferred.

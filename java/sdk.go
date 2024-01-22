@@ -47,9 +47,7 @@ func defaultJavaLanguageVersion(ctx android.EarlyModuleContext, s android.SdkSpe
 	if err != nil {
 		ctx.PropertyErrorf("sdk_version", "%s", err)
 	}
-	if sdk.FinalOrFutureInt() <= 23 {
-		return JAVA_VERSION_7
-	} else if sdk.FinalOrFutureInt() <= 29 {
+	if sdk.FinalOrFutureInt() <= 29 {
 		return JAVA_VERSION_8
 	} else if sdk.FinalOrFutureInt() <= 31 {
 		return JAVA_VERSION_9
@@ -262,8 +260,7 @@ func createFrameworkAidl(stubsModules []string, path android.WritablePath, ctx a
 
 	ctx.VisitAllModules(func(module android.Module) {
 		// Collect dex jar paths for the modules listed above.
-		if ctx.ModuleHasProvider(module, JavaInfoProvider) {
-			j := ctx.ModuleProvider(module, JavaInfoProvider).(JavaInfo)
+		if j, ok := android.SingletonModuleProvider(ctx, module, JavaInfoProvider); ok {
 			name := ctx.ModuleName(module)
 			if i := android.IndexList(name, stubsModules); i != -1 {
 				stubsJars[i] = j.HeaderJars

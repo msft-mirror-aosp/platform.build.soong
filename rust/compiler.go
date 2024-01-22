@@ -239,6 +239,8 @@ type baseCompiler struct {
 
 	distFile android.OptionalPath
 
+	installDeps android.InstallPaths
+
 	// unstripped output file.
 	unstrippedOutputFile android.Path
 
@@ -330,7 +332,7 @@ func (compiler *baseCompiler) featureFlags(ctx ModuleContext, flags Flags) Flags
 }
 
 func (compiler *baseCompiler) cfgFlags(ctx ModuleContext, flags Flags) Flags {
-	if ctx.RustModule().UseVndk() {
+	if ctx.RustModule().InVendorOrProduct() {
 		compiler.Properties.Cfgs = append(compiler.Properties.Cfgs, "android_vndk")
 		if ctx.RustModule().InVendor() {
 			compiler.Properties.Cfgs = append(compiler.Properties.Cfgs, "android_vendor")
@@ -518,7 +520,7 @@ func (compiler *baseCompiler) installDir(ctx ModuleContext) android.InstallPath 
 		dir = filepath.Join(dir, ctx.Arch().ArchType.String())
 	}
 
-	if compiler.location == InstallInData && ctx.RustModule().UseVndk() {
+	if compiler.location == InstallInData && ctx.RustModule().InVendorOrProduct() {
 		if ctx.RustModule().InProduct() {
 			dir = filepath.Join(dir, "product")
 		} else if ctx.RustModule().InVendor() {
@@ -538,7 +540,12 @@ func (compiler *baseCompiler) nativeCoverage() bool {
 
 func (compiler *baseCompiler) install(ctx ModuleContext) {
 	path := ctx.RustModule().OutputFile()
-	compiler.path = ctx.InstallFile(compiler.installDir(ctx), path.Path().Base(), path.Path())
+	compiler.path = ctx.InstallFile(compiler.installDir(ctx), path.Path().Base(), path.Path(), compiler.installDeps...)
+}
+
+func (compiler *baseCompiler) installTestData(ctx ModuleContext, data []android.DataPath) {
+	installedData := ctx.InstallTestData(compiler.installDir(ctx), data)
+	compiler.installDeps = append(compiler.installDeps, installedData...)
 }
 
 func (compiler *baseCompiler) getStem(ctx ModuleContext) string {

@@ -171,7 +171,7 @@ func (p *vndkPrebuiltLibraryDecorator) link(ctx ModuleContext,
 			p.androidMkSuffix = ""
 		}
 
-		ctx.SetProvider(SharedLibraryInfoProvider, SharedLibraryInfo{
+		android.SetProvider(ctx, SharedLibraryInfoProvider, SharedLibraryInfo{
 			SharedLibrary: in,
 			Target:        ctx.Target(),
 
@@ -185,6 +185,11 @@ func (p *vndkPrebuiltLibraryDecorator) link(ctx ModuleContext,
 
 	ctx.Module().HideFromMake()
 	return nil
+}
+
+func (p *vndkPrebuiltLibraryDecorator) moduleInfoJSON(ctx ModuleContext, moduleInfoJSON *android.ModuleInfoJSON) {
+	p.libraryDecorator.moduleInfoJSON(ctx, moduleInfoJSON)
+	moduleInfoJSON.SubName += p.androidMkSuffix
 }
 
 func (p *vndkPrebuiltLibraryDecorator) MatchesWithDevice(config android.DeviceConfig) bool {

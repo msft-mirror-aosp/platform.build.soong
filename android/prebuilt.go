@@ -277,6 +277,9 @@ func InitSingleSourcePrebuiltModule(module PrebuiltInterface, srcProps interface
 		}
 		value := srcPropsValue.FieldByIndex(srcFieldIndex)
 		if value.Kind() == reflect.Ptr {
+			if value.IsNil() {
+				return nil
+			}
 			value = value.Elem()
 		}
 		if value.Kind() != reflect.String {
@@ -391,12 +394,19 @@ func RegisterPrebuiltsPostDepsMutators(ctx RegisterMutatorsContext) {
 	ctx.BottomUp("prebuilt_postdeps", PrebuiltPostDepsMutator).Parallel()
 }
 
+// Returns the name of the source module corresponding to a prebuilt module
+// For source modules, it returns its own name
+type baseModuleName interface {
+	BaseModuleName() string
+}
+
 // PrebuiltRenameMutator ensures that there always is a module with an
 // undecorated name.
 func PrebuiltRenameMutator(ctx BottomUpMutatorContext) {
 	m := ctx.Module()
 	if p := GetEmbeddedPrebuilt(m); p != nil {
-		name := m.base().BaseModuleName()
+		bmn, _ := m.(baseModuleName)
+		name := bmn.BaseModuleName()
 		if !ctx.OtherModuleExists(name) {
 			ctx.Rename(name)
 			p.properties.PrebuiltRenamedToSource = true
@@ -413,7 +423,8 @@ func PrebuiltSourceDepsMutator(ctx BottomUpMutatorContext) {
 	// If this module is a prebuilt, is enabled and has not been renamed to source then add a
 	// dependency onto the source if it is present.
 	if p := GetEmbeddedPrebuilt(m); p != nil && m.Enabled() && !p.properties.PrebuiltRenamedToSource {
-		name := m.base().BaseModuleName()
+		bmn, _ := m.(baseModuleName)
+		name := bmn.BaseModuleName()
 		if ctx.OtherModuleReverseDependencyVariantExists(name) {
 			ctx.AddReverseDependency(ctx.Module(), PrebuiltDepTag, name)
 			p.properties.SourceExists = true
@@ -461,15 +472,18 @@ func PrebuiltSelectModuleMutator(ctx BottomUpMutatorContext) {
 		// Propagate the provider received from `all_apex_contributions`
 		// to the source module
 		ctx.VisitDirectDepsWithTag(acDepTag, func(am Module) {
-			if ctx.Config().Bp2buildMode() {
-				// This provider key is not applicable in bp2build
-				return
-			}
-			psi := ctx.OtherModuleProvider(am, PrebuiltSelectionInfoProvider).(PrebuiltSelectionInfoMap)
-			ctx.SetProvider(PrebuiltSelectionInfoProvider, psi)
+			psi, _ := OtherModuleProvider(ctx, am, PrebuiltSelectionInfoProvider)
+			SetProvider(ctx, PrebuiltSelectionInfoProvider, psi)
 		})
 
 	} else if s, ok := ctx.Module().(Module); ok {
+		// Use `all_apex_contributions` for source vs prebuilt selection.
+		psi := PrebuiltSelectionInfoMap{}
+		ctx.VisitDirectDepsWithTag(PrebuiltDepTag, func(am Module) {
+			// The value of psi gets overwritten with the provider from the last visited prebuilt.
+			// But all prebuilts have the same value of the provider, so this should be idempontent.
+			psi, _ = OtherModuleProvider(ctx, am, PrebuiltSelectionInfoProvider)
+		})
 		ctx.VisitDirectDepsWithTag(PrebuiltDepTag, func(prebuiltModule Module) {
 			p := GetEmbeddedPrebuilt(prebuiltModule)
 			if p.usePrebuilt(ctx, s, prebuiltModule) {
@@ -479,11 +493,49 @@ func PrebuiltSelectModuleMutator(ctx BottomUpMutatorContext) {
 				s.ReplacedByPrebuilt()
 			}
 		})
+
+		// If any module in this mainline module family has been flagged using apex_contributions, disable every other module in that family
+		// Add source
+		allModules := []Module{s}
+		// Add each prebuilt
+		ctx.VisitDirectDepsWithTag(PrebuiltDepTag, func(prebuiltModule Module) {
+			allModules = append(allModules, prebuiltModule)
+		})
+		hideUnflaggedModules(ctx, psi, allModules)
+
 	}
+
 	// If this is `all_apex_contributions`, set a provider containing
 	// metadata about source vs prebuilts selection
 	if am, ok := m.(*allApexContributions); ok {
 		am.SetPrebuiltSelectionInfoProvider(ctx)
+	}
+}
+
+// If any module in this mainline module family has been flagged using apex_contributions, disable every other module in that family
+func hideUnflaggedModules(ctx BottomUpMutatorContext, psi PrebuiltSelectionInfoMap, allModulesInFamily []Module) {
+	var selectedModuleInFamily Module
+	// query all_apex_contributions to see if any module in this family has been selected
+	for _, moduleInFamily := range allModulesInFamily {
+		// validate that are no duplicates
+		if psi.IsSelected(moduleInFamily.Name()) {
+			if selectedModuleInFamily == nil {
+				// Store this so we can validate that there are no duplicates
+				selectedModuleInFamily = moduleInFamily
+			} else {
+				// There are duplicate modules from the same mainline module family
+				ctx.ModuleErrorf("Found duplicate variations of the same module in apex_contributions: %s and %s. Please remove one of these.\n", selectedModuleInFamily.Name(), moduleInFamily.Name())
+			}
+		}
+	}
+
+	// If a module has been selected, hide all other modules
+	if selectedModuleInFamily != nil {
+		for _, moduleInFamily := range allModulesInFamily {
+			if moduleInFamily.Name() != selectedModuleInFamily.Name() {
+				moduleInFamily.HideFromMake()
+			}
+		}
 	}
 }
 
@@ -493,7 +545,8 @@ func PrebuiltSelectModuleMutator(ctx BottomUpMutatorContext) {
 func PrebuiltPostDepsMutator(ctx BottomUpMutatorContext) {
 	m := ctx.Module()
 	if p := GetEmbeddedPrebuilt(m); p != nil {
-		name := m.base().BaseModuleName()
+		bmn, _ := m.(baseModuleName)
+		name := bmn.BaseModuleName()
 		if p.properties.UsePrebuilt {
 			if p.properties.SourceExists {
 				ctx.ReplaceDependenciesIf(name, func(from blueprint.Module, tag blueprint.DependencyTag, to blueprint.Module) bool {
@@ -537,13 +590,13 @@ func isSelected(psi PrebuiltSelectionInfoMap, m Module) bool {
 
 		// Stub library created by java_sdk_library_import
 		if p := GetEmbeddedPrebuilt(m); p != nil {
-			return psi.IsSelected(sln, PrebuiltNameFromSource(sln))
+			return psi.IsSelected(PrebuiltNameFromSource(sln))
 		}
 
 		// Stub library created by java_sdk_library
-		return psi.IsSelected(sln, sln)
+		return psi.IsSelected(sln)
 	}
-	return psi.IsSelected(m.base().BaseModuleName(), m.Name())
+	return psi.IsSelected(m.Name())
 }
 
 // usePrebuilt returns true if a prebuilt should be used instead of the source module.  The prebuilt
@@ -552,9 +605,7 @@ func (p *Prebuilt) usePrebuilt(ctx BaseMutatorContext, source Module, prebuilt M
 	// Use `all_apex_contributions` for source vs prebuilt selection.
 	psi := PrebuiltSelectionInfoMap{}
 	ctx.VisitDirectDepsWithTag(PrebuiltDepTag, func(am Module) {
-		if ctx.OtherModuleHasProvider(am, PrebuiltSelectionInfoProvider) {
-			psi = ctx.OtherModuleProvider(am, PrebuiltSelectionInfoProvider).(PrebuiltSelectionInfoMap)
-		}
+		psi, _ = OtherModuleProvider(ctx, am, PrebuiltSelectionInfoProvider)
 	})
 
 	// If the source module is explicitly listed in the metadata module, use that
@@ -570,55 +621,20 @@ func (p *Prebuilt) usePrebuilt(ctx BaseMutatorContext, source Module, prebuilt M
 	// fall back to the existing source vs prebuilt selection.
 	// TODO: Drop the fallback mechanisms
 
-	if !ctx.Config().Bp2buildMode() {
-		if p.srcsSupplier != nil && len(p.srcsSupplier(ctx, prebuilt)) == 0 {
-			return false
-		}
+	if p.srcsSupplier != nil && len(p.srcsSupplier(ctx, prebuilt)) == 0 {
+		return false
+	}
 
-		// Skip prebuilt modules under unexported namespaces so that we won't
-		// end up shadowing non-prebuilt module when prebuilt module under same
-		// name happens to have a `Prefer` property set to true.
-		if ctx.Config().KatiEnabled() && !prebuilt.ExportedToMake() {
-			return false
-		}
+	// Skip prebuilt modules under unexported namespaces so that we won't
+	// end up shadowing non-prebuilt module when prebuilt module under same
+	// name happens to have a `Prefer` property set to true.
+	if ctx.Config().KatiEnabled() && !prebuilt.ExportedToMake() {
+		return false
 	}
 
 	// If source is not available or is disabled then always use the prebuilt.
 	if source == nil || !source.Enabled() {
-		// If in bp2build mode, we need to check product variables & Soong config variables, which may
-		// have overridden the "enabled" property but have not been merged into the property value as
-		// they would in a non-bp2build mode invocation
-		if ctx.Config().Bp2buildMode() && source != nil {
-			productVariableProps, errs := ProductVariableProperties(ctx, source)
-			if productConfigProps, exists := productVariableProps["Enabled"]; len(errs) == 0 && exists && len(productConfigProps) == 1 {
-				var prop ProductConfigOrSoongConfigProperty
-				var value bool
-				for p, v := range productConfigProps {
-					prop = p
-					actual, ok := v.(*bool)
-					if ok {
-						value = proptools.Bool(actual)
-					}
-				}
-				if scv, ok := prop.(SoongConfigProperty); ok {
-					// If the product config var is enabled but the value of enabled is false still, the
-					// prebuilt is preferred. Otherwise, check if the prebulit is explicitly preferred
-					if ctx.Config().VendorConfig(scv.namespace).Bool(strings.ToLower(scv.name)) && !value {
-						return true
-					}
-				} else {
-					// TODO: b/300998219 - handle product vars
-					// We don't handle product variables yet, so return based on the non-product specific
-					// value of enabled
-					return true
-				}
-			} else {
-				// No "enabled" property override, return true since this module isn't enabled
-				return true
-			}
-		} else {
-			return true
-		}
+		return true
 	}
 
 	// If the use_source_config_var property is set then it overrides the prefer property setting.

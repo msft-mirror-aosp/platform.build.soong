@@ -418,11 +418,11 @@ func VndkMutator(mctx android.BottomUpMutatorContext) {
 	lib, isLib := m.linker.(*libraryDecorator)
 	prebuiltLib, isPrebuiltLib := m.linker.(*prebuiltLibraryLinker)
 
-	if m.UseVndk() && isLib && lib.hasLLNDKStubs() {
+	if m.InVendorOrProduct() && isLib && lib.hasLLNDKStubs() {
 		m.VendorProperties.IsLLNDK = true
 		m.VendorProperties.IsVNDKPrivate = Bool(lib.Properties.Llndk.Private)
 	}
-	if m.UseVndk() && isPrebuiltLib && prebuiltLib.hasLLNDKStubs() {
+	if m.InVendorOrProduct() && isPrebuiltLib && prebuiltLib.hasLLNDKStubs() {
 		m.VendorProperties.IsLLNDK = true
 		m.VendorProperties.IsVNDKPrivate = Bool(prebuiltLib.Properties.Llndk.Private)
 	}
@@ -772,7 +772,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 		prop.MinSdkVersion = m.MinSdkVersion()
 
 		if ctx.Config().VndkSnapshotBuildArtifacts() {
-			exportedInfo := ctx.ModuleProvider(m, FlagExporterInfoProvider).(FlagExporterInfo)
+			exportedInfo, _ := android.SingletonModuleProvider(ctx, m, FlagExporterInfoProvider)
 			prop.ExportedFlags = exportedInfo.Flags
 			prop.ExportedDirs = exportedInfo.IncludeDirs.Strings()
 			prop.ExportedSystemDirs = exportedInfo.SystemIncludeDirs.Strings()
@@ -797,7 +797,7 @@ func (c *vndkSnapshotSingleton) GenerateBuildActions(ctx android.SingletonContex
 			return
 		}
 
-		apexInfo := ctx.ModuleProvider(module, android.ApexInfoProvider).(android.ApexInfo)
+		apexInfo, _ := android.SingletonModuleProvider(ctx, module, android.ApexInfoProvider)
 
 		vndkType, ok := isVndkSnapshotAware(ctx.DeviceConfig(), m, apexInfo)
 		if !ok {
