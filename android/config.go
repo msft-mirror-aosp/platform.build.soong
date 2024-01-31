@@ -1309,6 +1309,10 @@ func (c *config) VendorApiLevel() string {
 	return String(c.productVariables.VendorApiLevel)
 }
 
+func (c *config) VendorApiLevelFrozen() bool {
+	return c.productVariables.GetBuildFlagBool("RELEASE_BOARD_API_LEVEL_FROZEN")
+}
+
 func (c *deviceConfig) Arches() []Arch {
 	var arches []Arch
 	for _, target := range c.config.Targets[Android] {
@@ -1968,6 +1972,10 @@ func (c *deviceConfig) CheckVendorSeappViolations() bool {
 func (c *config) GetBuildFlag(name string) (string, bool) {
 	val, ok := c.productVariables.BuildFlags[name]
 	return val, ok
+}
+
+func (c *config) UseResourceProcessorByDefault() bool {
+	return c.productVariables.GetBuildFlagBool("RELEASE_USE_RESOURCE_PROCESSOR_BY_DEFAULT")
 }
 
 var (
