@@ -124,6 +124,10 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexBundleName, moduleDir st
 		pathForSymbol := filepath.Join("$(PRODUCT_OUT)", "apex", apexBundleName, fi.installDir)
 		modulePath := pathForSymbol
 		fmt.Fprintln(w, "LOCAL_MODULE_PATH :=", modulePath)
+		// AconfigUpdateAndroidMkData may have added elements to Extra.  Process them here.
+		for _, extra := range apexAndroidMkData.Extra {
+			extra(w, fi.builtFile)
+		}
 
 		// For non-flattend APEXes, the merged notice file is attached to the APEX itself.
 		// We don't need to have notice file for the individual modules in it. Otherwise,
@@ -139,9 +143,6 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexBundleName, moduleDir st
 				archStr := fi.module.Target().Arch.ArchType.String()
 				fmt.Fprintln(w, "LOCAL_MODULE_TARGET_ARCH :=", archStr)
 			}
-		} else if fi.isBazelPrebuilt && fi.arch != "" {
-			// This apexFile comes from Bazel
-			fmt.Fprintln(w, "LOCAL_MODULE_TARGET_ARCH :=", fi.arch)
 		}
 		if fi.jacocoReportClassesFile != nil {
 			fmt.Fprintln(w, "LOCAL_SOONG_JACOCO_REPORT_CLASSES_JAR :=", fi.jacocoReportClassesFile.String())
@@ -185,21 +186,17 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexBundleName, moduleDir st
 			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_android_app_set.mk")
 		case nativeSharedLib, nativeExecutable, nativeTest:
 			fmt.Fprintln(w, "LOCAL_MODULE_STEM :=", fi.stem())
-			if fi.isBazelPrebuilt {
-				fmt.Fprintln(w, "LOCAL_SOONG_UNSTRIPPED_BINARY :=", fi.unstrippedBuiltFile)
-			} else {
-				if ccMod, ok := fi.module.(*cc.Module); ok {
-					if ccMod.UnstrippedOutputFile() != nil {
-						fmt.Fprintln(w, "LOCAL_SOONG_UNSTRIPPED_BINARY :=", ccMod.UnstrippedOutputFile().String())
-					}
-					ccMod.AndroidMkWriteAdditionalDependenciesForSourceAbiDiff(w)
-					if ccMod.CoverageOutputFile().Valid() {
-						fmt.Fprintln(w, "LOCAL_PREBUILT_COVERAGE_ARCHIVE :=", ccMod.CoverageOutputFile().String())
-					}
-				} else if rustMod, ok := fi.module.(*rust.Module); ok {
-					if rustMod.UnstrippedOutputFile() != nil {
-						fmt.Fprintln(w, "LOCAL_SOONG_UNSTRIPPED_BINARY :=", rustMod.UnstrippedOutputFile().String())
-					}
+			if ccMod, ok := fi.module.(*cc.Module); ok {
+				if ccMod.UnstrippedOutputFile() != nil {
+					fmt.Fprintln(w, "LOCAL_SOONG_UNSTRIPPED_BINARY :=", ccMod.UnstrippedOutputFile().String())
+				}
+				ccMod.AndroidMkWriteAdditionalDependenciesForSourceAbiDiff(w)
+				if ccMod.CoverageOutputFile().Valid() {
+					fmt.Fprintln(w, "LOCAL_PREBUILT_COVERAGE_ARCHIVE :=", ccMod.CoverageOutputFile().String())
+				}
+			} else if rustMod, ok := fi.module.(*rust.Module); ok {
+				if rustMod.UnstrippedOutputFile() != nil {
+					fmt.Fprintln(w, "LOCAL_SOONG_UNSTRIPPED_BINARY :=", rustMod.UnstrippedOutputFile().String())
 				}
 			}
 			fmt.Fprintln(w, "include $(BUILD_SYSTEM)/soong_cc_rust_prebuilt.mk")
@@ -236,6 +233,7 @@ func (a *apexBundle) writeRequiredModules(w io.Writer, moduleNames []string) {
 
 func (a *apexBundle) androidMkForType() android.AndroidMkData {
 	return android.AndroidMkData{
+		// While we do not provide a value for `Extra`, AconfigUpdateAndroidMkData may add some, which we must honor.
 		Custom: func(w io.Writer, name, prefix, moduleDir string, data android.AndroidMkData) {
 			moduleNames := []string{}
 			if a.installable() {
@@ -245,7 +243,6 @@ func (a *apexBundle) androidMkForType() android.AndroidMkData {
 			fmt.Fprintln(w, "\ninclude $(CLEAR_VARS)  # apex.apexBundle")
 			fmt.Fprintln(w, "LOCAL_PATH :=", moduleDir)
 			fmt.Fprintln(w, "LOCAL_MODULE :=", name)
-			data.Entries.WriteLicenseVariables(w)
 			fmt.Fprintln(w, "LOCAL_MODULE_CLASS := ETC") // do we need a new class?
 			fmt.Fprintln(w, "LOCAL_PREBUILT_MODULE_FILE :=", a.outputFile.String())
 			fmt.Fprintln(w, "LOCAL_MODULE_PATH :=", a.installDir.String())
@@ -277,6 +274,10 @@ func (a *apexBundle) androidMkForType() android.AndroidMkData {
 
 			android.AndroidMkEmitAssignList(w, "LOCAL_OVERRIDES_MODULES", a.overridableProperties.Overrides)
 			a.writeRequiredModules(w, moduleNames)
+			// AconfigUpdateAndroidMkData may have added elements to Extra.  Process them here.
+			for _, extra := range data.Extra {
+				extra(w, a.outputFile)
+			}
 
 			fmt.Fprintln(w, "include $(BUILD_PREBUILT)")
 			fmt.Fprintln(w, "ALL_MODULES.$(my_register_name).BUNDLE :=", a.bundleModuleFile.String())

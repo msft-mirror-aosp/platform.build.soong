@@ -20,8 +20,7 @@ import (
 	"strconv"
 	"strings"
 
-	"android/soong/ui/metrics/bp2build_metrics_proto"
-
+	"github.com/google/blueprint"
 	"github.com/google/blueprint/pathtools"
 	"github.com/google/blueprint/proptools"
 
@@ -195,6 +194,12 @@ type CommonProperties struct {
 
 	// If true, then only the headers are built and not the implementation jar.
 	Headers_only *bool
+
+	// A list of files or dependencies to make available to the build sandbox. This is
+	// useful if source files are symlinks, the targets of the symlinks must be listed here.
+	// Note that currently not all actions implemented by android_apps are sandboxed, so you
+	// may only see this being necessary in lint builds.
+	Compile_data []string `android:"path"`
 }
 
 // Properties that are specific to device modules. Host module factories should not add these when
@@ -406,7 +411,6 @@ type Module struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
 	android.ApexModuleBase
-	android.BazelModuleBase
 
 	// Functionality common to Module and Import.
 	embeddableInModuleAndImport
@@ -512,13 +516,8 @@ type Module struct {
 	// or the module should override Stem().
 	stem string
 
-	// Aconfig "cache files" that went directly into this module.  Transitive ones are
-	// tracked via JavaInfo.TransitiveAconfigFiles
-	// TODO: Extract to something standalone to propagate tags via GeneratedJavaLibraryModule
-	aconfigIntermediates android.Paths
-
-	// Aconfig files for all transitive deps.  Also exposed via JavaInfo
-	transitiveAconfigFiles *android.DepSet[android.Path]
+	// Single aconfig "cache file" merged from this module and all dependencies.
+	mergedAconfigFiles map[string]android.Paths
 }
 
 func (j *Module) CheckStableSdkVersion(ctx android.BaseModuleContext) error {
@@ -618,7 +617,7 @@ func (j *Module) provideHiddenAPIPropertyInfo(ctx android.ModuleContext) {
 	// Populate with package rules from the properties.
 	hiddenAPIInfo.extractPackageRulesFromProperties(&j.deviceProperties.HiddenAPIPackageProperties)
 
-	ctx.SetProvider(hiddenAPIPropertyInfoProvider, hiddenAPIInfo)
+	android.SetProvider(ctx, hiddenAPIPropertyInfoProvider, hiddenAPIInfo)
 }
 
 func (j *Module) OutputFiles(tag string) (android.Paths, error) {
@@ -685,7 +684,7 @@ func (j *Module) shouldInstrumentInApex(ctx android.BaseModuleContext) bool {
 	// Force enable the instrumentation for java code that is built for APEXes ...
 	// except for the jacocoagent itself (because instrumenting jacocoagent using jacocoagent
 	// doesn't make sense) or framework libraries (e.g. libraries found in the InstrumentFrameworkModules list) unless EMMA_INSTRUMENT_FRAMEWORK is true.
-	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 	isJacocoAgent := ctx.ModuleName() == "jacocoagent"
 	if j.DirectlyInAnyApex() && !isJacocoAgent && !apexInfo.IsForPlatform() {
 		if !inList(ctx.ModuleName(), config.InstrumentFrameworkModules) {
@@ -1041,37 +1040,6 @@ func (j *Module) collectJavacFlags(
 			// just adding a symlink under the root doesn't help.)
 			patchPaths := []string{".", ctx.Config().SoongOutDir()}
 
-			// b/150878007
-			//
-			// Workaround to support *Bazel-executed* JDK9 javac in Bazel's
-			// execution root for --patch-module. If this javac command line is
-			// invoked within Bazel's execution root working directory, the top
-			// level directories (e.g. libcore/, tools/, frameworks/) are all
-			// symlinks. JDK9 javac does not traverse into symlinks, which causes
-			// --patch-module to fail source file lookups when invoked in the
-			// execution root.
-			//
-			// Short of patching javac or enumerating *all* directories as possible
-			// input dirs, manually add the top level dir of the source files to be
-			// compiled.
-			topLevelDirs := map[string]bool{}
-			for _, srcFilePath := range srcFiles {
-				srcFileParts := strings.Split(srcFilePath.String(), "/")
-				// Ignore source files that are already in the top level directory
-				// as well as generated files in the out directory. The out
-				// directory may be an absolute path, which means srcFileParts[0] is the
-				// empty string, so check that as well. Note that "out" in Bazel's execution
-				// root is *not* a symlink, which doesn't cause problems for --patch-modules
-				// anyway, so it's fine to not apply this workaround for generated
-				// source files.
-				if len(srcFileParts) > 1 &&
-					srcFileParts[0] != "" &&
-					srcFileParts[0] != "out" {
-					topLevelDirs[srcFileParts[0]] = true
-				}
-			}
-			patchPaths = append(patchPaths, android.SortedKeys(topLevelDirs)...)
-
 			classPath := flags.classpath.FormJavaClassPath("")
 			if classPath != "" {
 				patchPaths = append(patchPaths, classPath)
@@ -1174,6 +1142,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	uniqueSrcFiles = append(uniqueSrcFiles, uniqueJavaFiles...)
 	uniqueSrcFiles = append(uniqueSrcFiles, uniqueKtFiles...)
 	j.uniqueSrcFiles = uniqueSrcFiles
+	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: uniqueSrcFiles.Strings()})
 
 	// We don't currently run annotation processors in turbine, which means we can't use turbine
 	// generated header jars when an annotation processor that generates API is enabled.  One
@@ -1208,7 +1177,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			return
 		}
 
-		ctx.SetProvider(JavaInfoProvider, JavaInfo{
+		android.SetProvider(ctx, JavaInfoProvider, JavaInfo{
 			HeaderJars:                     android.PathsIfNonNil(j.headerJarFile),
 			TransitiveLibsHeaderJars:       j.transitiveLibsHeaderJars,
 			TransitiveStaticLibsHeaderJars: j.transitiveStaticLibsHeaderJars,
@@ -1602,7 +1571,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	// Enable dex compilation for the APEX variants, unless it is disabled explicitly
 	compileDex := j.dexProperties.Compile_dex
-	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 	if j.DirectlyInAnyApex() && !apexInfo.IsForPlatform() {
 		if compileDex == nil {
 			compileDex = proptools.BoolPtr(true)
@@ -1615,7 +1584,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	if ctx.Device() && (Bool(j.properties.Installable) || Bool(compileDex)) {
 		if j.hasCode(ctx) {
 			if j.shouldInstrumentStatic(ctx) {
-				j.dexer.extraProguardFlagFiles = append(j.dexer.extraProguardFlagFiles,
+				j.dexer.extraProguardFlagsFiles = append(j.dexer.extraProguardFlagsFiles,
 					android.PathForSource(ctx, "build/make/core/proguard.jacoco.flags"))
 			}
 			// Dex compilation
@@ -1657,7 +1626,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			j.dexJarFile = makeDexJarPathFromPath(dexOutputFile)
 
 			// Dexpreopting
-			j.dexpreopt(ctx, dexOutputFile)
+			j.dexpreopt(ctx, android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName()), dexOutputFile)
 
 			outputFile = dexOutputFile
 		} else {
@@ -1675,30 +1644,11 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	}
 
 	if ctx.Device() {
-		lintSDKVersion := func(apiLevel android.ApiLevel) int {
+		lintSDKVersion := func(apiLevel android.ApiLevel) android.ApiLevel {
 			if !apiLevel.IsPreview() {
-				return apiLevel.FinalInt()
+				return apiLevel
 			} else {
-				// When running metalava, we pass --version-codename. When that value
-				// is not REL, metalava will add 1 to the --current-version argument.
-				// On old branches, PLATFORM_SDK_VERSION is the latest version (for that
-				// branch) and the codename is REL, except potentially on the most
-				// recent non-master branch. On that branch, it goes through two other
-				// phases before it gets to the phase previously described:
-				//  - PLATFORM_SDK_VERSION has not been updated yet, and the codename
-				//    is not rel. This happens for most of the internal branch's life
-				//    while the branch has been cut but is still under active development.
-				//  - PLATFORM_SDK_VERSION has been set, but the codename is still not
-				//    REL. This happens briefly during the release process. During this
-				//    state the code to add --current-version is commented out, and then
-				//    that commenting out is reverted after the codename is set to REL.
-				// On the master branch, the PLATFORM_SDK_VERSION always represents a
-				// prior version and the codename is always non-REL.
-				//
-				// We need to add one here to match metalava adding 1. Technically
-				// this means that in the state described in the second bullet point
-				// above, this number is 1 higher than it should be.
-				return ctx.Config().PlatformSdkVersion().FinalInt() + 1
+				return ctx.Config().DefaultAppTargetSdk(ctx)
 			}
 		}
 
@@ -1713,6 +1663,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		j.linter.compileSdkKind = j.SdkVersion(ctx).Kind
 		j.linter.javaLanguageLevel = flags.javaVersion.String()
 		j.linter.kotlinLanguageLevel = "1.3"
+		j.linter.compile_data = android.PathsForModuleSrc(ctx, j.properties.Compile_data)
 		if !apexInfo.IsForPlatform() && ctx.Config().UnbundledBuildApps() {
 			j.linter.buildModuleReportZip = true
 		}
@@ -1723,9 +1674,9 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	ctx.CheckbuildFile(outputFile)
 
-	j.collectTransitiveAconfigFiles(ctx)
+	android.CollectDependencyAconfigFiles(ctx, &j.mergedAconfigFiles)
 
-	ctx.SetProvider(JavaInfoProvider, JavaInfo{
+	android.SetProvider(ctx, JavaInfoProvider, JavaInfo{
 		HeaderJars:                     android.PathsIfNonNil(j.headerJarFile),
 		TransitiveLibsHeaderJars:       j.transitiveLibsHeaderJars,
 		TransitiveStaticLibsHeaderJars: j.transitiveStaticLibsHeaderJars,
@@ -1740,7 +1691,6 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		ExportedPluginClasses:          j.exportedPluginClasses,
 		ExportedPluginDisableTurbine:   j.exportedDisableTurbine,
 		JacocoReportClassesFile:        j.jacocoReportClassesFile,
-		TransitiveAconfigFiles:         j.transitiveAconfigFiles,
 	})
 
 	// Save the output file with no relative path so that it doesn't end up in a subdirectory when used as a resource
@@ -1756,7 +1706,7 @@ func (j *Module) collectProguardSpecInfo(ctx android.ModuleContext) ProguardSpec
 	transitiveProguardFlags := []*android.DepSet[android.Path]{}
 
 	ctx.VisitDirectDeps(func(m android.Module) {
-		depProguardInfo := ctx.OtherModuleProvider(m, ProguardSpecInfoProvider).(ProguardSpecInfo)
+		depProguardInfo, _ := android.OtherModuleProvider(ctx, m, ProguardSpecInfoProvider)
 		depTag := ctx.OtherModuleDependencyTag(m)
 
 		if depProguardInfo.UnconditionallyExportedProguardFlags != nil {
@@ -1942,7 +1892,7 @@ func (j *providesTransitiveHeaderJars) collectTransitiveHeaderJars(ctx android.M
 			return
 		}
 
-		dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
+		dep, _ := android.OtherModuleProvider(ctx, module, JavaInfoProvider)
 		tag := ctx.OtherModuleDependencyTag(module)
 		_, isUsesLibDep := tag.(usesLibraryDependencyTag)
 		if tag == libTag || tag == r8LibraryJarTag || isUsesLibDep {
@@ -1979,7 +1929,7 @@ func (j *Module) ImplementationJars() android.Paths {
 	return android.Paths{j.implementationJarFile}
 }
 
-func (j *Module) DexJarBuildPath() OptionalDexJarPath {
+func (j *Module) DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath {
 	return j.dexJarFile
 }
 
@@ -2067,7 +2017,7 @@ func (j *Module) collectTransitiveSrcFiles(ctx android.ModuleContext, mine andro
 	ctx.VisitDirectDeps(func(module android.Module) {
 		tag := ctx.OtherModuleDependencyTag(module)
 		if tag == staticLibTag {
-			depInfo := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
+			depInfo, _ := android.OtherModuleProvider(ctx, module, JavaInfoProvider)
 			if depInfo.TransitiveSrcFiles != nil {
 				fromDeps = append(fromDeps, depInfo.TransitiveSrcFiles)
 			}
@@ -2079,34 +2029,6 @@ func (j *Module) collectTransitiveSrcFiles(ctx android.ModuleContext, mine andro
 
 func (j *Module) IsInstallable() bool {
 	return Bool(j.properties.Installable)
-}
-
-func (j *Module) collectTransitiveAconfigFiles(ctx android.ModuleContext) {
-	// Aconfig files from this module
-	mine := j.aconfigIntermediates
-
-	// Aconfig files from transitive dependencies
-	fromDeps := []*android.DepSet[android.Path]{}
-	ctx.VisitDirectDeps(func(module android.Module) {
-		dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
-		if dep.TransitiveAconfigFiles != nil {
-			fromDeps = append(fromDeps, dep.TransitiveAconfigFiles)
-		}
-	})
-
-	// DepSet containing aconfig files myself and from dependencies
-	j.transitiveAconfigFiles = android.NewDepSet(android.POSTORDER, mine, fromDeps)
-}
-
-func (j *Module) AddAconfigIntermediate(path android.Path) {
-	j.aconfigIntermediates = append(j.aconfigIntermediates, path)
-}
-
-func (j *Module) getTransitiveAconfigFiles() *android.DepSet[android.Path] {
-	if j.transitiveAconfigFiles == nil {
-		panic(fmt.Errorf("java.Moduile: getTransitiveAconfigFiles called before collectTransitiveAconfigFiles module=%s", j.Name()))
-	}
-	return j.transitiveAconfigFiles
 }
 
 type sdkLinkType int
@@ -2267,15 +2189,14 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			case staticLibTag:
 				ctx.ModuleErrorf("dependency on java_sdk_library %q can only be in libs", otherName)
 			}
-		} else if ctx.OtherModuleHasProvider(module, JavaInfoProvider) {
-			dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
-			if sdkLinkType != javaPlatform &&
-				ctx.OtherModuleHasProvider(module, SyspropPublicStubInfoProvider) {
-				// dep is a sysprop implementation library, but this module is not linking against
-				// the platform, so it gets the sysprop public stubs library instead.  Replace
-				// dep with the JavaInfo from the SyspropPublicStubInfoProvider.
-				syspropDep := ctx.OtherModuleProvider(module, SyspropPublicStubInfoProvider).(SyspropPublicStubInfo)
-				dep = syspropDep.JavaInfo
+		} else if dep, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
+			if sdkLinkType != javaPlatform {
+				if syspropDep, ok := android.OtherModuleProvider(ctx, module, SyspropPublicStubInfoProvider); ok {
+					// dep is a sysprop implementation library, but this module is not linking against
+					// the platform, so it gets the sysprop public stubs library instead.  Replace
+					// dep with the JavaInfo from the SyspropPublicStubInfoProvider.
+					dep = syspropDep.JavaInfo
+				}
 			}
 			switch tag {
 			case bootClasspathTag:
@@ -2347,7 +2268,7 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			case syspropPublicStubDepTag:
 				// This is a sysprop implementation library, forward the JavaInfoProvider from
 				// the corresponding sysprop public stub library as SyspropPublicStubInfoProvider.
-				ctx.SetProvider(SyspropPublicStubInfoProvider, SyspropPublicStubInfo{
+				android.SetProvider(ctx, SyspropPublicStubInfoProvider, SyspropPublicStubInfo{
 					JavaInfo: dep,
 				})
 			}
@@ -2410,22 +2331,3 @@ type ModuleWithStem interface {
 }
 
 var _ ModuleWithStem = (*Module)(nil)
-
-func (j *Module) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
-	switch ctx.ModuleType() {
-	case "java_library", "java_library_host", "java_library_static", "tradefed_java_library_host":
-		if lib, ok := ctx.Module().(*Library); ok {
-			javaLibraryBp2Build(ctx, lib)
-		}
-	case "java_binary_host":
-		if binary, ok := ctx.Module().(*Binary); ok {
-			javaBinaryHostBp2Build(ctx, binary)
-		}
-	case "java_test_host":
-		if testHost, ok := ctx.Module().(*TestHost); ok {
-			javaTestHostBp2Build(ctx, testHost)
-		}
-	default:
-		ctx.MarkBp2buildUnconvertible(bp2build_metrics_proto.UnconvertedReasonType_TYPE_UNSUPPORTED, "")
-	}
-}

@@ -22,7 +22,6 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
-	"android/soong/bazel"
 	"android/soong/java/config"
 )
 
@@ -183,6 +182,17 @@ func InitDroiddocModule(module android.DefaultableModule, hod android.HostOrDevi
 
 func apiCheckEnabled(ctx android.ModuleContext, apiToCheck ApiToCheck, apiVersionTag string) bool {
 	if ctx.Config().IsEnvTrue("WITHOUT_CHECK_API") {
+		if ctx.Config().BuildFromTextStub() {
+			ctx.ModuleErrorf("Generating stubs from api signature files is not available " +
+				"with WITHOUT_CHECK_API=true, as sync between the source Java files and the " +
+				"api signature files is not guaranteed.\n" +
+				"In order to utilize WITHOUT_CHECK_API, generate stubs from the source Java " +
+				"files with BUILD_FROM_SOURCE_STUB=true.\n" +
+				"However, the usage of WITHOUT_CHECK_API is not preferred as the incremental " +
+				"build is slower when generating stubs from the source Java files.\n" +
+				"Consider updating the api signature files and generating the stubs from " +
+				"them instead.")
+		}
 		return false
 	} else if String(apiToCheck.Api_file) != "" && String(apiToCheck.Removed_api_file) != "" {
 		return true
@@ -209,6 +219,8 @@ type Javadoc struct {
 
 	docZip      android.WritablePath
 	stubsSrcJar android.WritablePath
+
+	exportableStubsSrcJar android.WritablePath
 }
 
 func (j *Javadoc) OutputFiles(tag string) (android.Paths, error) {
@@ -364,8 +376,7 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 
 		switch tag {
 		case bootClasspathTag:
-			if ctx.OtherModuleHasProvider(module, JavaInfoProvider) {
-				dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
+			if dep, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
 				deps.bootClasspath = append(deps.bootClasspath, dep.ImplementationJars...)
 			} else if sm, ok := module.(SystemModulesProvider); ok {
 				// A system modules dependency has been added to the bootclasspath
@@ -377,8 +388,7 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 		case libTag, sdkLibTag:
 			if dep, ok := module.(SdkLibraryDependency); ok {
 				deps.classpath = append(deps.classpath, dep.SdkHeaderJars(ctx, j.SdkVersion(ctx))...)
-			} else if ctx.OtherModuleHasProvider(module, JavaInfoProvider) {
-				dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
+			} else if dep, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
 				deps.classpath = append(deps.classpath, dep.HeaderJars...)
 				deps.aidlIncludeDirs = append(deps.aidlIncludeDirs, dep.AidlIncludeDirs...)
 			} else if dep, ok := module.(android.SourceFileProducer); ok {
@@ -388,8 +398,7 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 				ctx.ModuleErrorf("depends on non-java module %q", otherName)
 			}
 		case java9LibTag:
-			if ctx.OtherModuleHasProvider(module, JavaInfoProvider) {
-				dep := ctx.OtherModuleProvider(module, JavaInfoProvider).(JavaInfo)
+			if dep, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
 				deps.java9Classpath = append(deps.java9Classpath, dep.HeaderJars...)
 			} else {
 				ctx.ModuleErrorf("depends on non-java module %q", otherName)
@@ -401,6 +410,15 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 			sm := module.(SystemModulesProvider)
 			outputDir, outputDeps := sm.OutputDirAndDeps()
 			deps.systemModules = &systemModules{outputDir, outputDeps}
+		case aconfigDeclarationTag:
+			if dep, ok := android.OtherModuleProvider(ctx, module, android.AconfigDeclarationsProviderKey); ok {
+				deps.aconfigProtoFiles = append(deps.aconfigProtoFiles, dep.IntermediateCacheOutputPath)
+			} else {
+				ctx.ModuleErrorf("Only aconfig_declarations module type is allowed for "+
+					"flags_packages property, but %s is not aconfig_declarations module type",
+					module.Name(),
+				)
+			}
 		}
 	})
 	// do not pass exclude_srcs directly when expanding srcFiles since exclude_srcs
@@ -852,7 +870,6 @@ type ExportedDroiddocDirProperties struct {
 
 type ExportedDroiddocDir struct {
 	android.ModuleBase
-	android.BazelModuleBase
 
 	properties ExportedDroiddocDirProperties
 
@@ -865,7 +882,6 @@ func ExportedDroiddocDirFactory() android.Module {
 	module := &ExportedDroiddocDir{}
 	module.AddProperties(&module.properties)
 	android.InitAndroidModule(module)
-	android.InitBazelModule(module)
 	return module
 }
 
@@ -875,28 +891,6 @@ func (d *ExportedDroiddocDir) GenerateAndroidBuildActions(ctx android.ModuleCont
 	path := String(d.properties.Path)
 	d.dir = android.PathForModuleSrc(ctx, path)
 	d.deps = android.PathsForModuleSrc(ctx, []string{filepath.Join(path, "**/*")})
-}
-
-// ConvertWithBp2build implements android.BazelModule.
-func (d *ExportedDroiddocDir) ConvertWithBp2build(ctx android.Bp2buildMutatorContext) {
-	props := bazel.BazelTargetModuleProperties{
-		// Use the native py_library rule.
-		Rule_class:        "droiddoc_exported_dir",
-		Bzl_load_location: "//build/bazel/rules/droiddoc:droiddoc_exported_dir.bzl",
-	}
-
-	type BazelAttrs struct {
-		Dir  *string
-		Srcs bazel.LabelListAttribute
-	}
-
-	attrs := &BazelAttrs{
-		Dir:  proptools.StringPtr(*d.properties.Path),
-		Srcs: bazel.MakeLabelListAttribute(android.BazelLabelForModuleSrc(ctx, []string{filepath.Join(*d.properties.Path, "**/*")})),
-	}
-
-	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: d.Name()}, attrs)
-
 }
 
 // Defaults

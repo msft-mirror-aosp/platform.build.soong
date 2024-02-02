@@ -24,16 +24,6 @@ import (
 	"github.com/google/blueprint/proptools"
 )
 
-// TODO(b/267229066): Remove globalAfdoProfileProjects after implementing bp2build converter for fdo_profile
-var (
-	globalAfdoProfileProjects = []string{
-		"vendor/google_data/pgo_profile/sampling/",
-		"toolchain/pgo-profiles/sampling/",
-	}
-)
-
-var afdoProfileProjectsConfigKey = android.NewOnceKey("AfdoProfileProjects")
-
 // This flag needs to be in both CFlags and LdFlags to ensure correct symbol ordering
 const afdoFlagsFormat = "-fprofile-sample-use=%s -fprofile-sample-accurate"
 
@@ -62,6 +52,13 @@ type afdo struct {
 
 func (afdo *afdo) props() []interface{} {
 	return []interface{}{&afdo.Properties}
+}
+
+func (afdo *afdo) begin(ctx BaseModuleContext) {
+	// Disable on eng builds for faster build.
+	if ctx.Config().Eng() {
+		afdo.Properties.Afdo = false
+	}
 }
 
 // afdoEnabled returns true for binaries and shared libraries
@@ -140,8 +137,7 @@ func (c *Module) fdoProfileMutator(ctx android.BottomUpMutatorContext) {
 	}
 
 	ctx.VisitDirectDepsWithTag(FdoProfileTag, func(m android.Module) {
-		if ctx.OtherModuleHasProvider(m, FdoProfileProvider) {
-			info := ctx.OtherModuleProvider(m, FdoProfileProvider).(FdoProfileInfo)
+		if info, ok := android.OtherModuleProvider(ctx, m, FdoProfileProvider); ok {
 			c.afdo.Properties.FdoProfilePath = proptools.StringPtr(info.Path.String())
 		}
 	})

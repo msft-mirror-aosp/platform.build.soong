@@ -91,6 +91,10 @@ type BaseLinkerProperties struct {
 	// compiling crt or libc.
 	Nocrt *bool `android:"arch_variant"`
 
+	// don't link in crt_pad_segment. This flag is currently only used internal to
+	// soong for testing and for vndk prebuilt shared libraries.
+	No_crt_pad_segment *bool `android:"arch_variant"`
+
 	// deprecated and ignored because lld makes it unnecessary. See b/189475744.
 	Group_static_libs *bool `android:"arch_variant"`
 
@@ -214,6 +218,11 @@ type BaseLinkerProperties struct {
 			// variant of the C/C++ module.
 			Exclude_static_libs []string
 		}
+		Non_apex struct {
+			// list of shared libs that should not be used to build the non-apex
+			// variant of the C/C++ module.
+			Exclude_shared_libs []string
+		}
 	} `android:"arch_variant"`
 
 	// make android::build:GetBuildNumber() available containing the build ID.
@@ -246,6 +255,10 @@ func (blp *BaseLinkerProperties) crt() bool {
 
 func (blp *BaseLinkerProperties) libCrt() bool {
 	return blp.No_libcrt == nil || !*blp.No_libcrt
+}
+
+func (blp *BaseLinkerProperties) crtPadSegment() bool {
+	return blp.No_crt_pad_segment == nil || !*blp.No_crt_pad_segment
 }
 
 func NewBaseLinker(sanitize *sanitize) *baseLinker {
@@ -300,6 +313,10 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	// variants.
 	deps.ExcludeLibsForApex = append(deps.ExcludeLibsForApex, linker.Properties.Target.Apex.Exclude_shared_libs...)
 	deps.ExcludeLibsForApex = append(deps.ExcludeLibsForApex, linker.Properties.Target.Apex.Exclude_static_libs...)
+	// Record the libraries that need to be excluded when building for non-APEX variants
+	// for the same reason above. This is used for marking deps and marked deps are
+	// ignored for non-apex variants.
+	deps.ExcludeLibsForNonApex = append(deps.ExcludeLibsForNonApex, linker.Properties.Target.Non_apex.Exclude_shared_libs...)
 
 	if Bool(linker.Properties.Use_version_lib) {
 		deps.WholeStaticLibs = append(deps.WholeStaticLibs, "libbuildversion")
@@ -637,6 +654,9 @@ func (linker *baseLinker) linkerSpecifiedDeps(specifiedDeps specifiedDeps) speci
 	}
 
 	return specifiedDeps
+}
+
+func (linker *baseLinker) moduleInfoJSON(ctx ModuleContext, moduleInfoJSON *android.ModuleInfoJSON) {
 }
 
 // Injecting version symbols

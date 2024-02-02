@@ -264,11 +264,40 @@ var (
 			Command:     `${config.Zip2ZipCmd} -i ${in} -o ${out} -x 'META-INF/services/**/*'`,
 			CommandDeps: []string{"${config.Zip2ZipCmd}"},
 		})
+
+	writeCombinedProguardFlagsFileRule = pctx.AndroidStaticRule("writeCombinedProguardFlagsFileRule",
+		blueprint.RuleParams{
+			Command: `rm -f $out && ` +
+				`for f in $in; do ` +
+				` echo  && ` +
+				` echo "# including $$f" && ` +
+				` cat $$f; ` +
+				`done > $out`,
+		})
+
+	gatherReleasedFlaggedApisRule = pctx.AndroidStaticRule("gatherReleasedFlaggedApisRule",
+		blueprint.RuleParams{
+			Command: `${aconfig} dump-cache --format='{fully_qualified_name}={state:bool}' ` +
+				`--out ${out} ` +
+				`${flags_path} ` +
+				`${filter_args} `,
+			CommandDeps: []string{"${aconfig}"},
+			Description: "aconfig_bool",
+		}, "flags_path", "filter_args")
+
+	generateMetalavaRevertAnnotationsRule = pctx.AndroidStaticRule("generateMetalavaRevertAnnotationsRule",
+		blueprint.RuleParams{
+			Command:     `${keep-flagged-apis} ${in} > ${out}`,
+			CommandDeps: []string{"${keep-flagged-apis}"},
+		})
 )
 
 func init() {
 	pctx.Import("android/soong/android")
 	pctx.Import("android/soong/java/config")
+
+	pctx.HostBinToolVariable("aconfig", "aconfig")
+	pctx.HostBinToolVariable("keep-flagged-apis", "keep-flagged-apis")
 }
 
 type javaBuilderFlags struct {
@@ -683,6 +712,15 @@ func TransformZipAlign(ctx android.ModuleContext, outputFile android.WritablePat
 		Input:       inputFile,
 		Output:      outputFile,
 		Validations: validations,
+	})
+}
+
+func writeCombinedProguardFlagsFile(ctx android.ModuleContext, outputFile android.WritablePath, files android.Paths) {
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        writeCombinedProguardFlagsFileRule,
+		Description: "write combined proguard flags file",
+		Inputs:      files,
+		Output:      outputFile,
 	})
 }
 

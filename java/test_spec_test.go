@@ -27,16 +27,12 @@ func TestTestSpec(t *testing.T) {
 	java_test {
 		name: "java-test-module-name-two",
 	}`
-	result := runTest(t, android.FixtureExpectsNoErrors, bp)
+	result := runTestSpecTest(t, android.FixtureExpectsNoErrors, bp)
 
-	module := result.ModuleForTests(
-		"module-name", "",
-	).Module().(*soongTesting.TestSpecModule)
+	module := result.ModuleForTests("module-name", "")
 
 	// Check that the provider has the right contents
-	data := result.ModuleProvider(
-		module, soongTesting.TestSpecProviderKey,
-	).(soongTesting.TestSpecProviderData)
+	data, _ := android.SingletonModuleProvider(result, module.Module(), soongTesting.TestSpecProviderKey)
 	if !strings.HasSuffix(
 		data.IntermediatePath.String(), "/intermediateTestSpecMetadata.pb",
 	) {
@@ -46,13 +42,8 @@ func TestTestSpec(t *testing.T) {
 		)
 	}
 
-	buildParamsSlice := module.BuildParamsForTests()
-	var metadata = ""
-	for _, params := range buildParamsSlice {
-		if params.Rule.String() == "android/soong/android.writeFile" {
-			metadata = params.Args["content"]
-		}
-	}
+	metadata := android.ContentFromFileRuleForTests(t, result.TestContext,
+		module.Output(data.IntermediatePath.String()))
 
 	metadataList := make([]*test_spec_proto.TestSpec_OwnershipMetadata, 0, 2)
 	teamId := "12345"
@@ -72,13 +63,11 @@ func TestTestSpec(t *testing.T) {
 	}
 	testSpecMetadata := test_spec_proto.TestSpec{OwnershipMetadataList: metadataList}
 	protoData, _ := proto.Marshal(&testSpecMetadata)
-	rawData := string(protoData)
-	formattedData := strings.ReplaceAll(rawData, "\n", "\\n")
-	expectedMetadata := "'" + formattedData + "\\n'"
+	expectedMetadata := string(protoData)
 
 	if metadata != expectedMetadata {
 		t.Errorf(
-			"Retrieved metadata: %s is not equal to expectedMetadata: %s", metadata,
+			"Retrieved metadata: %s doesn't contain expectedMetadata: %s", metadata,
 			expectedMetadata,
 		)
 	}
@@ -121,11 +110,11 @@ func TestTestSpec(t *testing.T) {
 	}
 }
 
-func runTest(
+func runTestSpecTest(
 	t *testing.T, errorHandler android.FixtureErrorHandler, bp string,
 ) *android.TestResult {
 	return android.GroupFixturePreparers(
-		soongTesting.PrepareForTestWithTestSpecBuildComponents,
+		soongTesting.PrepareForTestWithTestingBuildComponents,
 		PrepareForIntegrationTestWithJava,
 	).
 		ExtendWithErrorHandler(errorHandler).

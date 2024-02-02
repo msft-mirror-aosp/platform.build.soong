@@ -23,13 +23,14 @@ import (
 	"testing"
 )
 
-func checkJsonContents(t *testing.T, ctx android.TestingSingleton, jsonPath string, key string, value string) {
-	jsonOut := ctx.MaybeOutput(jsonPath)
+func checkJsonContents(t *testing.T, ctx *android.TestContext, snapshotSingleton android.TestingSingleton, jsonPath string, key string, value string) {
+	jsonOut := snapshotSingleton.MaybeOutput(jsonPath)
 	if jsonOut.Rule == nil {
 		t.Errorf("%q expected but not found", jsonPath)
 		return
 	}
-	if !strings.Contains(jsonOut.Args["content"], fmt.Sprintf("%q:%q", key, value)) {
+	content := android.ContentFromFileRuleForTests(t, ctx, jsonOut)
+	if !strings.Contains(content, fmt.Sprintf("%q:%q", key, value)) {
 		t.Errorf("%q must include %q:%q but it only has %v", jsonPath, key, value, jsonOut.Args["content"])
 	}
 }
@@ -167,8 +168,8 @@ func TestVendorSnapshotCapture(t *testing.T) {
 			filepath.Join(staticDir, "libvendor_available.a.json"),
 			filepath.Join(staticDir, "libvendor_available.cfi.a.json"))
 
-		checkJsonContents(t, snapshotSingleton, filepath.Join(staticDir, "libb.a.json"), "MinSdkVersion", "apex_inherit")
-		checkJsonContents(t, snapshotSingleton, filepath.Join(staticDir, "libvendor_available.a.json"), "MinSdkVersion", "29")
+		checkJsonContents(t, ctx, snapshotSingleton, filepath.Join(staticDir, "libb.a.json"), "MinSdkVersion", "apex_inherit")
+		checkJsonContents(t, ctx, snapshotSingleton, filepath.Join(staticDir, "libvendor_available.a.json"), "MinSdkVersion", "29")
 
 		// For binary executables, all vendor:true and vendor_available modules are captured.
 		if archType == "arm64" {
@@ -340,6 +341,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 		vendor: true,
 		nocrt: true,
 		no_libcrt: true,
+		no_crt_pad_segment: true,
 		stl: "none",
 		system_shared_libs: [],
 		compile_multilib: "64",
@@ -457,6 +459,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 		vendor: true,
 		nocrt: true,
 		no_libcrt: true,
+		no_crt_pad_segment: true,
 		stl: "none",
 		system_shared_libs: [],
 	}
@@ -466,6 +469,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 		vendor: true,
 		nocrt: true,
 		no_libcrt: true,
+		no_crt_pad_segment: true,
 		stl: "none",
 		system_shared_libs: [],
 		shared_libs: ["libvndk", "libvendor_available", "libllndk"],
@@ -486,6 +490,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 		vendor: true,
 		nocrt: true,
 		no_libcrt: true,
+		no_crt_pad_segment: true,
 		stl: "none",
 		system_shared_libs: [],
 		static_libs: ["libvendor"],
@@ -500,6 +505,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 		vendor: true,
 		nocrt: true,
 		no_libcrt: true,
+		no_crt_pad_segment: true,
 		stl: "none",
 		system_shared_libs: [],
 		vndk: {
@@ -596,6 +602,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 		target_arch: "arm64",
 		compile_multilib: "both",
 		vendor: true,
+		no_crt_pad_segment: true,
 		shared_libs: [
 			"libvendor_without_snapshot",
 			"libvendor_available",
@@ -619,6 +626,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 		target_arch: "arm64",
 		compile_multilib: "both",
 		vendor: true,
+		no_crt_pad_segment: true,
 		overrides: ["libvendor"],
 		shared_libs: [
 			"libvendor_without_snapshot",
@@ -656,6 +664,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 		target_arch: "arm64",
 		compile_multilib: "32",
 		vendor: true,
+		no_crt_pad_segment: true,
 		arch: {
 			arm: {
 				src: "lib32.so",
@@ -682,6 +691,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 		target_arch: "arm64",
 		compile_multilib: "64",
 		vendor: true,
+		no_crt_pad_segment: true,
 		arch: {
 			arm64: {
 				src: "lib64.so",
@@ -721,6 +731,7 @@ func TestVendorSnapshotUse(t *testing.T) {
 		target_arch: "arm64",
 		compile_multilib: "both",
 		vendor: true,
+		no_crt_pad_segment: true,
 		arch: {
 			arm64: {
 				src: "libvendor_available.so",

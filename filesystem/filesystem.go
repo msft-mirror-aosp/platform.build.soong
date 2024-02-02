@@ -36,7 +36,9 @@ func registerBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("android_filesystem", filesystemFactory)
 	ctx.RegisterModuleType("android_system_image", systemImageFactory)
 	ctx.RegisterModuleType("avb_add_hash_footer", avbAddHashFooterFactory)
+	ctx.RegisterModuleType("avb_add_hash_footer_defaults", avbAddHashFooterDefaultsFactory)
 	ctx.RegisterModuleType("avb_gen_vbmeta_image", avbGenVbmetaImageFactory)
+	ctx.RegisterModuleType("avb_gen_vbmeta_image_defaults", avbGenVbmetaImageDefaultsFactory)
 }
 
 type filesystem struct {
@@ -510,6 +512,6 @@ func sha1sum(values []string) string {
 
 var _ cc.UseCoverage = (*filesystem)(nil)
 
-func (*filesystem) IsNativeCoverageNeeded(ctx android.BaseModuleContext) bool {
+func (*filesystem) IsNativeCoverageNeeded(ctx android.IncomingTransitionContext) bool {
 	return ctx.Device() && ctx.DeviceConfig().NativeCoverageEnabled()
 }

@@ -287,16 +287,6 @@ func TestGenruleCmd(t *testing.T) {
 			expect: "echo foo > __SBOX_SANDBOX_DIR__/out/out2",
 		},
 		{
-			name:       "depfile",
-			moduleName: "depfile_allowed_for_test",
-			prop: `
-				out: ["out"],
-				depfile: true,
-				cmd: "echo foo > $(out) && touch $(depfile)",
-			`,
-			expect: "echo foo > __SBOX_SANDBOX_DIR__/out/out && touch __SBOX_DEPFILE__",
-		},
-		{
 			name: "gendir",
 			prop: `
 				out: ["out"],
@@ -390,24 +380,6 @@ func TestGenruleCmd(t *testing.T) {
 					cmd: "echo $(foo) > $(out)",
 			`,
 			err: `unknown variable '$(foo)'`,
-		},
-		{
-			name: "error depfile",
-			prop: `
-				out: ["out"],
-				cmd: "echo foo > $(out) && touch $(depfile)",
-			`,
-			err: "$(depfile) used without depfile property",
-		},
-		{
-			name:       "error no depfile",
-			moduleName: "depfile_allowed_for_test",
-			prop: `
-				out: ["out"],
-				depfile: true,
-				cmd: "echo foo > $(out)",
-			`,
-			err: "specified depfile=true but did not include a reference to '${depfile}' in cmd",
 		},
 		{
 			name: "error no out",
@@ -543,7 +515,7 @@ func TestGenruleHashInputs(t *testing.T) {
 	for _, test := range testcases {
 		t.Run(test.name, func(t *testing.T) {
 			gen := result.ModuleForTests(test.name, "")
-			manifest := android.RuleBuilderSboxProtoForTests(t, gen.Output("genrule.sbox.textproto"))
+			manifest := android.RuleBuilderSboxProtoForTests(t, result.TestContext, gen.Output("genrule.sbox.textproto"))
 			hash := manifest.Commands[0].GetInputHash()
 
 			android.AssertStringEquals(t, "hash", test.expectedHash, hash)
@@ -692,60 +664,6 @@ func TestGenSrcs(t *testing.T) {
 
 			android.AssertPathsRelativeToTopEquals(t, "files", test.files, gen.outputFiles)
 		})
-	}
-}
-
-func TestGenruleAllowlistingDepfile(t *testing.T) {
-	tests := []struct {
-		name       string
-		prop       string
-		err        string
-		moduleName string
-	}{
-		{
-			name: `error when module is not allowlisted`,
-			prop: `
-				depfile: true,
-				cmd: "cat $(in) > $(out) && cat $(depfile)",
-			`,
-			err: "depfile: Deprecated to ensure the module type is convertible to Bazel",
-		},
-		{
-			name: `no error when module is allowlisted`,
-			prop: `
-				depfile: true,
-				cmd: "cat $(in) > $(out) && cat $(depfile)",
-			`,
-			moduleName: `depfile_allowed_for_test`,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			moduleName := "foo"
-			if test.moduleName != "" {
-				moduleName = test.moduleName
-			}
-			bp := fmt.Sprintf(`
-			gensrcs {
-			   name: "%s",
-			   srcs: ["data.txt"],
-			   %s
-			}`, moduleName, test.prop)
-
-			var expectedErrors []string
-			if test.err != "" {
-				expectedErrors = append(expectedErrors, test.err)
-			}
-			android.GroupFixturePreparers(
-				prepareForGenRuleTest,
-				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-					variables.GenruleSandboxing = proptools.BoolPtr(true)
-				}),
-			).
-				ExtendWithErrorHandler(android.FixtureExpectsAllErrorsToMatchAPattern(expectedErrors)).
-				RunTestWithBp(t, bp)
-		})
-
 	}
 }
 
@@ -1037,31 +955,6 @@ func TestPrebuiltTool(t *testing.T) {
 			android.AssertStringEquals(t, "command", expectedCmd, gen.rawCommands[0])
 		})
 	}
-}
-
-func TestGenruleWithBazel(t *testing.T) {
-	bp := `
-		genrule {
-				name: "foo",
-				out: ["one.txt", "two.txt"],
-				bazel_module: { label: "//foo/bar:bar" },
-		}
-	`
-
-	result := android.GroupFixturePreparers(
-		prepareForGenRuleTest, android.FixtureModifyConfig(func(config android.Config) {
-			config.BazelContext = android.MockBazelContext{
-				OutputBaseDir: "outputbase",
-				LabelToOutputFiles: map[string][]string{
-					"//foo/bar:bar": []string{"bazelone.txt", "bazeltwo.txt"}}}
-		})).RunTestWithBp(t, testGenruleBp()+bp)
-
-	gen := result.Module("foo", "").(*Module)
-
-	expectedOutputFiles := []string{"outputbase/execroot/__main__/bazelone.txt",
-		"outputbase/execroot/__main__/bazeltwo.txt"}
-	android.AssertDeepEquals(t, "output files", expectedOutputFiles, gen.outputFiles.Strings())
-	android.AssertDeepEquals(t, "output deps", expectedOutputFiles, gen.outputDeps.Strings())
 }
 
 func TestGenruleWithGlobPaths(t *testing.T) {

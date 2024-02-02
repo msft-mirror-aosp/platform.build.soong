@@ -50,6 +50,7 @@ type AndroidMkContext interface {
 	InVendorRamdisk() bool
 	InRecovery() bool
 	NotInPlatform() bool
+	InVendorOrProduct() bool
 }
 
 type subAndroidMkProvider interface {
@@ -82,8 +83,9 @@ func (c *Module) AndroidMkEntries() []android.AndroidMkEntries {
 		// causing multiple ART APEXes (com.android.art and com.android.art.debug)
 		// to be installed. And this is breaking some older devices (like marlin)
 		// where system.img is small.
-		Required: c.Properties.AndroidMkRuntimeLibs,
-		Include:  "$(BUILD_SYSTEM)/soong_cc_rust_prebuilt.mk",
+		Required:     c.Properties.AndroidMkRuntimeLibs,
+		OverrideName: c.BaseModuleName(),
+		Include:      "$(BUILD_SYSTEM)/soong_cc_rust_prebuilt.mk",
 
 		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
 			func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
@@ -100,20 +102,11 @@ func (c *Module) AndroidMkEntries() []android.AndroidMkEntries {
 				if len(c.Properties.AndroidMkSharedLibs) > 0 {
 					entries.AddStrings("LOCAL_SHARED_LIBRARIES", c.Properties.AndroidMkSharedLibs...)
 				}
-				if len(c.Properties.AndroidMkStaticLibs) > 0 {
-					entries.AddStrings("LOCAL_STATIC_LIBRARIES", c.Properties.AndroidMkStaticLibs...)
-				}
-				if len(c.Properties.AndroidMkWholeStaticLibs) > 0 {
-					entries.AddStrings("LOCAL_WHOLE_STATIC_LIBRARIES", c.Properties.AndroidMkWholeStaticLibs...)
-				}
-				if len(c.Properties.AndroidMkHeaderLibs) > 0 {
-					entries.AddStrings("LOCAL_HEADER_LIBRARIES", c.Properties.AndroidMkHeaderLibs...)
-				}
 				if len(c.Properties.AndroidMkRuntimeLibs) > 0 {
 					entries.AddStrings("LOCAL_RUNTIME_LIBRARIES", c.Properties.AndroidMkRuntimeLibs...)
 				}
 				entries.SetString("LOCAL_SOONG_LINK_TYPE", c.makeLinkType)
-				if c.UseVndk() {
+				if c.InVendorOrProduct() {
 					entries.SetBool("LOCAL_USE_VNDK", true)
 					if c.IsVndk() && !c.static() {
 						entries.SetString("LOCAL_SOONG_VNDK_VERSION", c.VndkVersion())
@@ -133,6 +126,7 @@ func (c *Module) AndroidMkEntries() []android.AndroidMkEntries {
 					entries.SetString("SOONG_SDK_VARIANT_MODULES",
 						"$(SOONG_SDK_VARIANT_MODULES) $(patsubst %.sdk,%,$(LOCAL_MODULE))")
 				}
+				android.SetAconfigFileMkEntries(c.AndroidModuleBase(), entries, c.mergedAconfigFiles)
 			},
 		},
 		ExtraFooters: []android.AndroidMkExtraFootersFunc{
@@ -172,15 +166,6 @@ func androidMkWriteExtraTestConfigs(extraTestConfigs android.Paths, entries *and
 			func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 				entries.AddStrings("LOCAL_EXTRA_FULL_TEST_CONFIGS", extraTestConfigs.Strings()...)
 			})
-	}
-}
-
-func AndroidMkWriteTestData(data []android.DataPath, entries *android.AndroidMkEntries) {
-	testFiles := android.AndroidMkDataPaths(data)
-	if len(testFiles) > 0 {
-		entries.ExtraEntries = append(entries.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
-			entries.AddStrings("LOCAL_TEST_DATA", testFiles...)
-		})
 	}
 }
 
@@ -310,7 +295,7 @@ func (library *libraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries 
 	// they can be exceptionally used directly when APEXes are not available (e.g. during the
 	// very early stage in the boot process).
 	if len(library.Properties.Stubs.Versions) > 0 && !ctx.Host() && ctx.NotInPlatform() &&
-		!ctx.InRamdisk() && !ctx.InVendorRamdisk() && !ctx.InRecovery() && !ctx.UseVndk() && !ctx.static() {
+		!ctx.InRamdisk() && !ctx.InVendorRamdisk() && !ctx.InRecovery() && !ctx.InVendorOrProduct() && !ctx.static() {
 		if library.buildStubs() && library.isLatestStubVersion() {
 			entries.SubName = ""
 		}
@@ -379,11 +364,6 @@ func (benchmark *benchmarkDecorator) AndroidMkEntries(ctx AndroidMkContext, entr
 			entries.SetBool("LOCAL_DISABLE_AUTO_GENERATE_TEST_CONFIG", true)
 		}
 	})
-	dataPaths := []android.DataPath{}
-	for _, srcPath := range benchmark.data {
-		dataPaths = append(dataPaths, android.DataPath{SrcPath: srcPath})
-	}
-	AndroidMkWriteTestData(dataPaths, entries)
 }
 
 func (test *testBinary) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
@@ -411,40 +391,16 @@ func (test *testBinary) AndroidMkEntries(ctx AndroidMkContext, entries *android.
 		test.Properties.Test_options.CommonTestOptions.SetAndroidMkEntries(entries)
 	})
 
-	AndroidMkWriteTestData(test.data, entries)
 	androidMkWriteExtraTestConfigs(test.extraTestConfigs, entries)
 }
 
 func (fuzz *fuzzBinary) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
 	ctx.subAndroidMk(entries, fuzz.binaryDecorator)
 
-	var fuzzFiles []string
-	for _, d := range fuzz.fuzzPackagedModule.Corpus {
-		fuzzFiles = append(fuzzFiles,
-			filepath.Dir(fuzz.fuzzPackagedModule.CorpusIntermediateDir.String())+":corpus/"+d.Base())
-	}
-
-	for _, d := range fuzz.fuzzPackagedModule.Data {
-		fuzzFiles = append(fuzzFiles,
-			filepath.Dir(fuzz.fuzzPackagedModule.DataIntermediateDir.String())+":data/"+d.Rel())
-	}
-
-	if fuzz.fuzzPackagedModule.Dictionary != nil {
-		fuzzFiles = append(fuzzFiles,
-			filepath.Dir(fuzz.fuzzPackagedModule.Dictionary.String())+":"+fuzz.fuzzPackagedModule.Dictionary.Base())
-	}
-
-	if fuzz.fuzzPackagedModule.Config != nil {
-		fuzzFiles = append(fuzzFiles,
-			filepath.Dir(fuzz.fuzzPackagedModule.Config.String())+":config.json")
-	}
-
 	entries.ExtraEntries = append(entries.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 		entries.SetBool("LOCAL_IS_FUZZ_TARGET", true)
-		if len(fuzzFiles) > 0 {
-			entries.AddStrings("LOCAL_TEST_DATA", fuzzFiles...)
-		}
 		if fuzz.installedSharedDeps != nil {
+			// TOOD: move to install dep
 			entries.AddStrings("LOCAL_FUZZ_INSTALLED_SHARED_DEPS", fuzz.installedSharedDeps...)
 		}
 	})
