@@ -53,6 +53,7 @@ type RuleBuilder struct {
 	remoteable       RemoteRuleSupports
 	rbeParams        *remoteexec.REParams
 	outDir           WritablePath
+	sboxOutSubDir    string
 	sboxTools        bool
 	sboxInputs       bool
 	sboxManifestPath WritablePath
@@ -65,7 +66,16 @@ func NewRuleBuilder(pctx PackageContext, ctx BuilderContext) *RuleBuilder {
 		pctx:           pctx,
 		ctx:            ctx,
 		temporariesSet: make(map[WritablePath]bool),
+		sboxOutSubDir:  sboxOutSubDir,
 	}
+}
+
+// SetSboxOutDirDirAsEmpty sets the out subdirectory to an empty string
+// This is useful for sandboxing actions that change the execution root to a path in out/ (e.g mixed builds)
+// For such actions, SetSboxOutDirDirAsEmpty ensures that the path does not become $SBOX_SANDBOX_DIR/out/out/bazel/output/execroot/__main__/...
+func (rb *RuleBuilder) SetSboxOutDirDirAsEmpty() *RuleBuilder {
+	rb.sboxOutSubDir = ""
+	return rb
 }
 
 // RuleBuilderInstall is a tuple of install from and to locations.
@@ -326,41 +336,6 @@ func (r *RuleBuilder) Outputs() WritablePaths {
 	return outputList
 }
 
-func (r *RuleBuilder) symlinkOutputSet() map[string]WritablePath {
-	symlinkOutputs := make(map[string]WritablePath)
-	for _, c := range r.commands {
-		for _, symlinkOutput := range c.symlinkOutputs {
-			symlinkOutputs[symlinkOutput.String()] = symlinkOutput
-		}
-	}
-	return symlinkOutputs
-}
-
-// SymlinkOutputs returns the list of paths that the executor (Ninja) would
-// verify, after build edge completion, that:
-//
-// 1) Created output symlinks match the list of paths in this list exactly (no more, no fewer)
-// 2) Created output files are *not* declared in this list.
-//
-// These symlink outputs are expected to be a subset of outputs or implicit
-// outputs, or they would fail validation at build param construction time
-// later, to support other non-rule-builder approaches for constructing
-// statements.
-func (r *RuleBuilder) SymlinkOutputs() WritablePaths {
-	symlinkOutputs := r.symlinkOutputSet()
-
-	var symlinkOutputList WritablePaths
-	for _, symlinkOutput := range symlinkOutputs {
-		symlinkOutputList = append(symlinkOutputList, symlinkOutput)
-	}
-
-	sort.Slice(symlinkOutputList, func(i, j int) bool {
-		return symlinkOutputList[i].String() < symlinkOutputList[j].String()
-	})
-
-	return symlinkOutputList
-}
-
 func (r *RuleBuilder) depFileSet() map[string]WritablePath {
 	depFiles := make(map[string]WritablePath)
 	for _, c := range r.commands {
@@ -464,13 +439,23 @@ func (r *RuleBuilder) depFileMergerCmd(depFiles WritablePaths) *RuleBuilderComma
 		Inputs(depFiles.Paths())
 }
 
+// BuildWithNinjaVars adds the built command line to the build graph, with dependencies on Inputs and Tools, and output files for
+// Outputs. This function will not escape Ninja variables, so it may be used to write sandbox manifests using Ninja variables.
+func (r *RuleBuilder) BuildWithUnescapedNinjaVars(name string, desc string) {
+	r.build(name, desc, false)
+}
+
 // Build adds the built command line to the build graph, with dependencies on Inputs and Tools, and output files for
 // Outputs.
 func (r *RuleBuilder) Build(name string, desc string) {
+	r.build(name, desc, true)
+}
+
+func (r *RuleBuilder) build(name string, desc string, ninjaEscapeCommandString bool) {
 	name = ninjaNameEscape(name)
 
 	if len(r.missingDeps) > 0 {
-		r.ctx.Build(pctx, BuildParams{
+		r.ctx.Build(r.pctx, BuildParams{
 			Rule:        ErrorRule,
 			Outputs:     r.Outputs(),
 			Description: desc,
@@ -570,7 +555,7 @@ func (r *RuleBuilder) Build(name string, desc string) {
 							To:   proto.String(sboxOutSubDir),
 						},
 						{
-							From: proto.String(PathForOutput(r.ctx).String()),
+							From: proto.String(r.ctx.Config().OutDir()),
 							To:   proto.String(sboxOutSubDir),
 						},
 					},
@@ -582,12 +567,10 @@ func (r *RuleBuilder) Build(name string, desc string) {
 
 		// Add copy rules to the manifest to copy each output file from the sbox directory.
 		// to the output directory after running the commands.
-		sboxOutputs := make([]string, len(outputs))
-		for i, output := range outputs {
+		for _, output := range outputs {
 			rel := Rel(r.ctx, r.outDir.String(), output.String())
-			sboxOutputs[i] = filepath.Join(sboxOutDir, rel)
 			command.CopyAfter = append(command.CopyAfter, &sbox_proto.Copy{
-				From: proto.String(filepath.Join(sboxOutSubDir, rel)),
+				From: proto.String(filepath.Join(r.sboxOutSubDir, rel)),
 				To:   proto.String(output.String()),
 			})
 		}
@@ -611,12 +594,36 @@ func (r *RuleBuilder) Build(name string, desc string) {
 				name, r.sboxManifestPath.String(), r.outDir.String())
 		}
 
-		// Create a rule to write the manifest as a the textproto.
-		pbText, err := prototext.Marshal(&manifest)
+		// Create a rule to write the manifest as textproto. Pretty print it by indenting and
+		// splitting across multiple lines.
+		pbText, err := prototext.MarshalOptions{Indent: " "}.Marshal(&manifest)
 		if err != nil {
 			ReportPathErrorf(r.ctx, "sbox manifest failed to marshal: %q", err)
 		}
-		WriteFileRule(r.ctx, r.sboxManifestPath, string(pbText))
+		if ninjaEscapeCommandString {
+			WriteFileRule(r.ctx, r.sboxManifestPath, string(pbText))
+		} else {
+			// We need  to have a rule to write files that is
+			// defined on the RuleBuilder's pctx in order to
+			// write Ninja variables in the string.
+			// The WriteFileRule function above rule can only write
+			// raw strings because it is defined on the android
+			// package's pctx, and it can't access variables defined
+			// in another context.
+			r.ctx.Build(r.pctx, BuildParams{
+				Rule: r.ctx.Rule(r.pctx, "unescapedWriteFile", blueprint.RuleParams{
+					Command:        `rm -rf ${out} && cat ${out}.rsp > ${out}`,
+					Rspfile:        "${out}.rsp",
+					RspfileContent: "${content}",
+					Description:    "write file",
+				}, "content"),
+				Output:      r.sboxManifestPath,
+				Description: "write sbox manifest " + r.sboxManifestPath.Base(),
+				Args: map[string]string{
+					"content": string(pbText),
+				},
+			})
+		}
 
 		// Generate a new string to use as the command line of the sbox rule.  This uses
 		// a RuleBuilderCommand as a convenience method of building the command line, then
@@ -715,9 +722,13 @@ func (r *RuleBuilder) Build(name string, desc string) {
 		pool = localPool
 	}
 
+	if ninjaEscapeCommandString {
+		commandString = proptools.NinjaEscape(commandString)
+	}
+
 	r.ctx.Build(r.pctx, BuildParams{
-		Rule: r.ctx.Rule(pctx, name, blueprint.RuleParams{
-			Command:        proptools.NinjaEscape(commandString),
+		Rule: r.ctx.Rule(r.pctx, name, blueprint.RuleParams{
+			Command:        commandString,
 			CommandDeps:    proptools.NinjaEscapeList(tools.Strings()),
 			Restat:         r.restat,
 			Rspfile:        proptools.NinjaEscape(rspFile),
@@ -730,7 +741,6 @@ func (r *RuleBuilder) Build(name string, desc string) {
 		Validations:     r.Validations(),
 		Output:          output,
 		ImplicitOutputs: implicitOutputs,
-		SymlinkOutputs:  r.SymlinkOutputs(),
 		Depfile:         depFile,
 		Deps:            depFormat,
 		Description:     desc,
@@ -744,17 +754,16 @@ func (r *RuleBuilder) Build(name string, desc string) {
 type RuleBuilderCommand struct {
 	rule *RuleBuilder
 
-	buf            strings.Builder
-	inputs         Paths
-	implicits      Paths
-	orderOnlys     Paths
-	validations    Paths
-	outputs        WritablePaths
-	symlinkOutputs WritablePaths
-	depFiles       WritablePaths
-	tools          Paths
-	packagedTools  []PackagingSpec
-	rspFiles       []rspFileAndPaths
+	buf           strings.Builder
+	inputs        Paths
+	implicits     Paths
+	orderOnlys    Paths
+	validations   Paths
+	outputs       WritablePaths
+	depFiles      WritablePaths
+	tools         Paths
+	packagedTools []PackagingSpec
+	rspFiles      []rspFileAndPaths
 }
 
 type rspFileAndPaths struct {
@@ -826,7 +835,7 @@ func (c *RuleBuilderCommand) PathForOutput(path WritablePath) string {
 
 func sboxPathForToolRel(ctx BuilderContext, path Path) string {
 	// Errors will be handled in RuleBuilder.Build where we have a context to report them
-	toolDir := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "", false)
+	toolDir := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "")
 	relOutSoong, isRelOutSoong, _ := maybeRelErr(toolDir.String(), path.String())
 	if isRelOutSoong {
 		// The tool is in the Soong output directory, it will be copied to __SBOX_OUT_DIR__/tools/out
@@ -846,7 +855,7 @@ func (r *RuleBuilder) _sboxPathForInputRel(path Path) (rel string, inSandbox boo
 		// When sandboxing inputs all inputs have to be copied into the sandbox.  Input files that
 		// are outputs of other rules could be an arbitrary absolute path if OUT_DIR is set, so they
 		// will be copied to relative paths under __SBOX_OUT_DIR__/out.
-		rel, isRelOut, _ := maybeRelErr(PathForOutput(r.ctx).String(), path.String())
+		rel, isRelOut, _ := maybeRelErr(r.ctx.Config().OutDir(), path.String())
 		if isRelOut {
 			return filepath.Join(sboxOutSubDir, rel), true
 		}
@@ -1148,11 +1157,15 @@ func (c *RuleBuilderCommand) Outputs(paths WritablePaths) *RuleBuilderCommand {
 
 // OutputDir adds the output directory to the command line. This is only available when used with RuleBuilder.Sbox,
 // and will be the temporary output directory managed by sbox, not the final one.
-func (c *RuleBuilderCommand) OutputDir() *RuleBuilderCommand {
+func (c *RuleBuilderCommand) OutputDir(subPathComponents ...string) *RuleBuilderCommand {
 	if !c.rule.sbox {
 		panic("OutputDir only valid with Sbox")
 	}
-	return c.Text(sboxOutDir)
+	path := sboxOutDir
+	if len(subPathComponents) > 0 {
+		path = filepath.Join(append([]string{sboxOutDir}, subPathComponents...)...)
+	}
+	return c.Text(path)
 }
 
 // DepFile adds the specified depfile path to the paths returned by RuleBuilder.DepFiles and adds it to the command
@@ -1175,42 +1188,6 @@ func (c *RuleBuilderCommand) ImplicitOutput(path WritablePath) *RuleBuilderComma
 // the command line.
 func (c *RuleBuilderCommand) ImplicitOutputs(paths WritablePaths) *RuleBuilderCommand {
 	c.outputs = append(c.outputs, paths...)
-	return c
-}
-
-// ImplicitSymlinkOutput declares the specified path as an implicit output that
-// will be a symlink instead of a regular file. Does not modify the command
-// line.
-func (c *RuleBuilderCommand) ImplicitSymlinkOutput(path WritablePath) *RuleBuilderCommand {
-	checkPathNotNil(path)
-	c.symlinkOutputs = append(c.symlinkOutputs, path)
-	return c.ImplicitOutput(path)
-}
-
-// ImplicitSymlinkOutputs declares the specified paths as implicit outputs that
-// will be a symlinks instead of regular files. Does not modify the command
-// line.
-func (c *RuleBuilderCommand) ImplicitSymlinkOutputs(paths WritablePaths) *RuleBuilderCommand {
-	for _, path := range paths {
-		c.ImplicitSymlinkOutput(path)
-	}
-	return c
-}
-
-// SymlinkOutput declares the specified path as an output that will be a symlink
-// instead of a regular file. Modifies the command line.
-func (c *RuleBuilderCommand) SymlinkOutput(path WritablePath) *RuleBuilderCommand {
-	checkPathNotNil(path)
-	c.symlinkOutputs = append(c.symlinkOutputs, path)
-	return c.Output(path)
-}
-
-// SymlinkOutputsl declares the specified paths as outputs that will be symlinks
-// instead of regular files. Modifies the command line.
-func (c *RuleBuilderCommand) SymlinkOutputs(paths WritablePaths) *RuleBuilderCommand {
-	for _, path := range paths {
-		c.SymlinkOutput(path)
-	}
 	return c
 }
 
@@ -1296,9 +1273,9 @@ func (c *RuleBuilderCommand) String() string {
 
 // RuleBuilderSboxProtoForTests takes the BuildParams for the manifest passed to RuleBuilder.Sbox()
 // and returns sbox testproto generated by the RuleBuilder.
-func RuleBuilderSboxProtoForTests(t *testing.T, params TestingBuildParams) *sbox_proto.Manifest {
+func RuleBuilderSboxProtoForTests(t *testing.T, ctx *TestContext, params TestingBuildParams) *sbox_proto.Manifest {
 	t.Helper()
-	content := ContentFromFileRuleForTests(t, params)
+	content := ContentFromFileRuleForTests(t, ctx, params)
 	manifest := sbox_proto.Manifest{}
 	err := prototext.Unmarshal([]byte(content), &manifest)
 	if err != nil {

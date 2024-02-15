@@ -277,6 +277,9 @@ func InitSingleSourcePrebuiltModule(module PrebuiltInterface, srcProps interface
 		}
 		value := srcPropsValue.FieldByIndex(srcFieldIndex)
 		if value.Kind() == reflect.Ptr {
+			if value.IsNil() {
+				return nil
+			}
 			value = value.Elem()
 		}
 		if value.Kind() != reflect.String {
@@ -387,8 +390,14 @@ func RegisterPrebuiltsPreArchMutators(ctx RegisterMutatorsContext) {
 
 func RegisterPrebuiltsPostDepsMutators(ctx RegisterMutatorsContext) {
 	ctx.BottomUp("prebuilt_source", PrebuiltSourceDepsMutator).Parallel()
-	ctx.TopDown("prebuilt_select", PrebuiltSelectModuleMutator).Parallel()
+	ctx.BottomUp("prebuilt_select", PrebuiltSelectModuleMutator).Parallel()
 	ctx.BottomUp("prebuilt_postdeps", PrebuiltPostDepsMutator).Parallel()
+}
+
+// Returns the name of the source module corresponding to a prebuilt module
+// For source modules, it returns its own name
+type baseModuleName interface {
+	BaseModuleName() string
 }
 
 // PrebuiltRenameMutator ensures that there always is a module with an
@@ -396,7 +405,8 @@ func RegisterPrebuiltsPostDepsMutators(ctx RegisterMutatorsContext) {
 func PrebuiltRenameMutator(ctx BottomUpMutatorContext) {
 	m := ctx.Module()
 	if p := GetEmbeddedPrebuilt(m); p != nil {
-		name := m.base().BaseModuleName()
+		bmn, _ := m.(baseModuleName)
+		name := bmn.BaseModuleName()
 		if !ctx.OtherModuleExists(name) {
 			ctx.Rename(name)
 			p.properties.PrebuiltRenamedToSource = true
@@ -406,22 +416,51 @@ func PrebuiltRenameMutator(ctx BottomUpMutatorContext) {
 
 // PrebuiltSourceDepsMutator adds dependencies to the prebuilt module from the
 // corresponding source module, if one exists for the same variant.
+// Add a dependency from the prebuilt to `all_apex_contributions`
+// The metadata will be used for source vs prebuilts selection
 func PrebuiltSourceDepsMutator(ctx BottomUpMutatorContext) {
 	m := ctx.Module()
 	// If this module is a prebuilt, is enabled and has not been renamed to source then add a
 	// dependency onto the source if it is present.
 	if p := GetEmbeddedPrebuilt(m); p != nil && m.Enabled() && !p.properties.PrebuiltRenamedToSource {
-		name := m.base().BaseModuleName()
+		bmn, _ := m.(baseModuleName)
+		name := bmn.BaseModuleName()
 		if ctx.OtherModuleReverseDependencyVariantExists(name) {
 			ctx.AddReverseDependency(ctx.Module(), PrebuiltDepTag, name)
 			p.properties.SourceExists = true
 		}
+		// Add a dependency from the prebuilt to the `all_apex_contributions`
+		// metadata module
+		// TODO: When all branches contain this singleton module, make this strict
+		// TODO: Add this dependency only for mainline prebuilts and not every prebuilt module
+		if ctx.OtherModuleExists("all_apex_contributions") {
+			ctx.AddDependency(m, acDepTag, "all_apex_contributions")
+		}
+
+	}
+}
+
+// checkInvariantsForSourceAndPrebuilt checks if invariants are kept when replacing
+// source with prebuilt. Note that the current module for the context is the source module.
+func checkInvariantsForSourceAndPrebuilt(ctx BaseModuleContext, s, p Module) {
+	if _, ok := s.(OverrideModule); ok {
+		// skip the check when the source module is `override_X` because it's only a placeholder
+		// for the actual source module. The check will be invoked for the actual module.
+		return
+	}
+	if sourcePartition, prebuiltPartition := s.PartitionTag(ctx.DeviceConfig()), p.PartitionTag(ctx.DeviceConfig()); sourcePartition != prebuiltPartition {
+		ctx.OtherModuleErrorf(p, "partition is different: %s(%s) != %s(%s)",
+			sourcePartition, ctx.ModuleName(), prebuiltPartition, ctx.OtherModuleName(p))
 	}
 }
 
 // PrebuiltSelectModuleMutator marks prebuilts that are used, either overriding source modules or
 // because the source module doesn't exist.  It also disables installing overridden source modules.
-func PrebuiltSelectModuleMutator(ctx TopDownMutatorContext) {
+//
+// If the visited module is the metadata module `all_apex_contributions`, it sets a
+// provider containing metadata about whether source or prebuilt of mainline modules should be used.
+// This logic was added here to prevent the overhead of creating a new mutator.
+func PrebuiltSelectModuleMutator(ctx BottomUpMutatorContext) {
 	m := ctx.Module()
 	if p := GetEmbeddedPrebuilt(m); p != nil {
 		if p.srcsSupplier == nil && p.srcsPropertyName == "" {
@@ -430,14 +469,73 @@ func PrebuiltSelectModuleMutator(ctx TopDownMutatorContext) {
 		if !p.properties.SourceExists {
 			p.properties.UsePrebuilt = p.usePrebuilt(ctx, nil, m)
 		}
+		// Propagate the provider received from `all_apex_contributions`
+		// to the source module
+		ctx.VisitDirectDepsWithTag(acDepTag, func(am Module) {
+			psi, _ := OtherModuleProvider(ctx, am, PrebuiltSelectionInfoProvider)
+			SetProvider(ctx, PrebuiltSelectionInfoProvider, psi)
+		})
+
 	} else if s, ok := ctx.Module().(Module); ok {
+		// Use `all_apex_contributions` for source vs prebuilt selection.
+		psi := PrebuiltSelectionInfoMap{}
+		ctx.VisitDirectDepsWithTag(PrebuiltDepTag, func(am Module) {
+			// The value of psi gets overwritten with the provider from the last visited prebuilt.
+			// But all prebuilts have the same value of the provider, so this should be idempontent.
+			psi, _ = OtherModuleProvider(ctx, am, PrebuiltSelectionInfoProvider)
+		})
 		ctx.VisitDirectDepsWithTag(PrebuiltDepTag, func(prebuiltModule Module) {
 			p := GetEmbeddedPrebuilt(prebuiltModule)
 			if p.usePrebuilt(ctx, s, prebuiltModule) {
+				checkInvariantsForSourceAndPrebuilt(ctx, s, prebuiltModule)
+
 				p.properties.UsePrebuilt = true
 				s.ReplacedByPrebuilt()
 			}
 		})
+
+		// If any module in this mainline module family has been flagged using apex_contributions, disable every other module in that family
+		// Add source
+		allModules := []Module{s}
+		// Add each prebuilt
+		ctx.VisitDirectDepsWithTag(PrebuiltDepTag, func(prebuiltModule Module) {
+			allModules = append(allModules, prebuiltModule)
+		})
+		hideUnflaggedModules(ctx, psi, allModules)
+
+	}
+
+	// If this is `all_apex_contributions`, set a provider containing
+	// metadata about source vs prebuilts selection
+	if am, ok := m.(*allApexContributions); ok {
+		am.SetPrebuiltSelectionInfoProvider(ctx)
+	}
+}
+
+// If any module in this mainline module family has been flagged using apex_contributions, disable every other module in that family
+func hideUnflaggedModules(ctx BottomUpMutatorContext, psi PrebuiltSelectionInfoMap, allModulesInFamily []Module) {
+	var selectedModuleInFamily Module
+	// query all_apex_contributions to see if any module in this family has been selected
+	for _, moduleInFamily := range allModulesInFamily {
+		// validate that are no duplicates
+		if isSelected(psi, moduleInFamily) {
+			if selectedModuleInFamily == nil {
+				// Store this so we can validate that there are no duplicates
+				selectedModuleInFamily = moduleInFamily
+			} else {
+				// There are duplicate modules from the same mainline module family
+				ctx.ModuleErrorf("Found duplicate variations of the same module in apex_contributions: %s and %s. Please remove one of these.\n", selectedModuleInFamily.Name(), moduleInFamily.Name())
+			}
+		}
+	}
+
+	// If a module has been selected, hide all other modules
+	if selectedModuleInFamily != nil {
+		for _, moduleInFamily := range allModulesInFamily {
+			if moduleInFamily.Name() != selectedModuleInFamily.Name() {
+				moduleInFamily.HideFromMake()
+			}
+		}
 	}
 }
 
@@ -447,14 +545,31 @@ func PrebuiltSelectModuleMutator(ctx TopDownMutatorContext) {
 func PrebuiltPostDepsMutator(ctx BottomUpMutatorContext) {
 	m := ctx.Module()
 	if p := GetEmbeddedPrebuilt(m); p != nil {
-		name := m.base().BaseModuleName()
+		bmn, _ := m.(baseModuleName)
+		name := bmn.BaseModuleName()
+		psi := PrebuiltSelectionInfoMap{}
+		ctx.VisitDirectDepsWithTag(acDepTag, func(am Module) {
+			psi, _ = OtherModuleProvider(ctx, am, PrebuiltSelectionInfoProvider)
+		})
+
 		if p.properties.UsePrebuilt {
 			if p.properties.SourceExists {
 				ctx.ReplaceDependenciesIf(name, func(from blueprint.Module, tag blueprint.DependencyTag, to blueprint.Module) bool {
+					if sdkLibrary, ok := m.(interface{ SdkLibraryName() *string }); ok && sdkLibrary.SdkLibraryName() != nil {
+						// Do not replace deps to the top-level prebuilt java_sdk_library hook.
+						// This hook has been special-cased in #isSelected to be _always_ active, even in next builds
+						// for dexpreopt and hiddenapi processing.
+						// If we do not special-case this here, rdeps referring to a java_sdk_library in next builds via libs
+						// will get prebuilt stubs
+						// TODO (b/308187268): Remove this after the apexes have been added to apex_contributions
+						if psi.IsSelected(*sdkLibrary.SdkLibraryName()) {
+							return false
+						}
+					}
+
 					if t, ok := tag.(ReplaceSourceWithPrebuilt); ok {
 						return t.ReplaceSourceWithPrebuilt()
 					}
-
 					return true
 				})
 			}
@@ -464,9 +579,74 @@ func PrebuiltPostDepsMutator(ctx BottomUpMutatorContext) {
 	}
 }
 
+// A wrapper around PrebuiltSelectionInfoMap.IsSelected with special handling for java_sdk_library
+// java_sdk_library is a macro that creates
+// 1. top-level impl library
+// 2. stub libraries (suffixed with .stubs...)
+//
+// java_sdk_library_import is a macro that creates
+// 1. top-level "impl" library
+// 2. stub libraries (suffixed with .stubs...)
+//
+// the impl of java_sdk_library_import is a "hook" for hiddenapi and dexpreopt processing. It does not have an impl jar, but acts as a shim
+// to provide the jar deapxed from the prebuilt apex
+//
+// isSelected uses `all_apex_contributions` to supersede source vs prebuilts selection of the stub libraries. It does not supersede the
+// selection of the top-level "impl" library so that this hook can work
+//
+// TODO (b/308174306) - Fix this when we need to support multiple prebuilts in main
+func isSelected(psi PrebuiltSelectionInfoMap, m Module) bool {
+	if sdkLibrary, ok := m.(interface{ SdkLibraryName() *string }); ok && sdkLibrary.SdkLibraryName() != nil {
+		sln := proptools.String(sdkLibrary.SdkLibraryName())
+
+		// This is the top-level library
+		// Do not supersede the existing prebuilts vs source selection mechanisms
+		// TODO (b/308187268): Remove this after the apexes have been added to apex_contributions
+		if bmn, ok := m.(baseModuleName); ok && sln == bmn.BaseModuleName() {
+			return false
+		}
+
+		// Stub library created by java_sdk_library_import
+		// java_sdk_library creates several child modules (java_import + prebuilt_stubs_sources) dynamically.
+		// This code block ensures that these child modules are selected if the top-level java_sdk_library_import is listed
+		// in the selected apex_contributions.
+		if javaImport, ok := m.(createdByJavaSdkLibraryName); ok && javaImport.CreatedByJavaSdkLibraryName() != nil {
+			return psi.IsSelected(PrebuiltNameFromSource(proptools.String(javaImport.CreatedByJavaSdkLibraryName())))
+		}
+
+		// Stub library created by java_sdk_library
+		return psi.IsSelected(sln)
+	}
+	return psi.IsSelected(m.Name())
+}
+
+// implemented by child modules of java_sdk_library_import
+type createdByJavaSdkLibraryName interface {
+	CreatedByJavaSdkLibraryName() *string
+}
+
 // usePrebuilt returns true if a prebuilt should be used instead of the source module.  The prebuilt
 // will be used if it is marked "prefer" or if the source module is disabled.
-func (p *Prebuilt) usePrebuilt(ctx TopDownMutatorContext, source Module, prebuilt Module) bool {
+func (p *Prebuilt) usePrebuilt(ctx BaseMutatorContext, source Module, prebuilt Module) bool {
+	// Use `all_apex_contributions` for source vs prebuilt selection.
+	psi := PrebuiltSelectionInfoMap{}
+	ctx.VisitDirectDepsWithTag(PrebuiltDepTag, func(am Module) {
+		psi, _ = OtherModuleProvider(ctx, am, PrebuiltSelectionInfoProvider)
+	})
+
+	// If the source module is explicitly listed in the metadata module, use that
+	if source != nil && isSelected(psi, source) {
+		return false
+	}
+	// If the prebuilt module is explicitly listed in the metadata module, use that
+	if isSelected(psi, prebuilt) {
+		return true
+	}
+
+	// If the baseModuleName could not be found in the metadata module,
+	// fall back to the existing source vs prebuilt selection.
+	// TODO: Drop the fallback mechanisms
+
 	if p.srcsSupplier != nil && len(p.srcsSupplier(ctx, prebuilt)) == 0 {
 		return false
 	}

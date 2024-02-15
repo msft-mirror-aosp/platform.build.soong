@@ -25,21 +25,31 @@ var (
 	riscv64Cflags = []string{
 		// Help catch common 32/64-bit errors.
 		"-Werror=implicit-function-declaration",
-		"-fno-emulated-tls",
-		// A temporary fix for SExtWRemoval miscompilation bug.
-		"-mllvm",
-		"-riscv-disable-sextw-removal=true",
+		"-march=rv64gcv_zba_zbb_zbs",
+		// Equivalent to "-munaligned-access", but our clang doesn't have that yet.
+		"-Xclang -target-feature -Xclang +unaligned-scalar-mem",
+		"-Xclang -target-feature -Xclang +unaligned-vector-mem",
+		// Until https://gitlab.com/qemu-project/qemu/-/issues/1976 is fixed...
+		"-mno-implicit-float",
+		// (https://github.com/google/android-riscv64/issues/124)
+		"-mllvm -jump-is-expensive=false",
 	}
 
 	riscv64ArchVariantCflags = map[string][]string{}
 
 	riscv64Ldflags = []string{
 		"-Wl,--hash-style=gnu",
+		"-march=rv64gcv_zba_zbb_zbs",
+		// Equivalent to "-munaligned-access", but our clang doesn't have that yet.
+		"-Xclang -target-feature -Xclang +unaligned-scalar-mem",
+		"-Xclang -target-feature -Xclang +unaligned-vector-mem",
+		// We should change the default for this in clang, but for now...
+		// (https://github.com/google/android-riscv64/issues/124)
+		"-Wl,-mllvm -Wl,-jump-is-expensive=false",
 	}
 
 	riscv64Lldflags = append(riscv64Ldflags,
 		"-Wl,-z,max-page-size=4096",
-		"-Wl,-plugin-opt,-emulated-tls=0",
 	)
 
 	riscv64Cppflags = []string{}

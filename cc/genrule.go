@@ -62,7 +62,6 @@ func GenRuleFactory() android.Module {
 	android.InitAndroidArchModule(module, android.HostAndDeviceSupported, android.MultilibBoth)
 
 	android.InitApexModule(module)
-	android.InitBazelModule(module)
 
 	return module
 }
@@ -80,15 +79,7 @@ var _ android.ImageInterface = (*GenruleExtraProperties)(nil)
 func (g *GenruleExtraProperties) ImageMutatorBegin(ctx android.BaseModuleContext) {}
 
 func (g *GenruleExtraProperties) CoreVariantNeeded(ctx android.BaseModuleContext) bool {
-	if ctx.DeviceConfig().VndkVersion() == "" {
-		return true
-	}
-
-	if ctx.DeviceConfig().ProductVndkVersion() != "" && ctx.ProductSpecific() {
-		return false
-	}
-
-	return !(ctx.SocSpecific() || ctx.DeviceSpecific())
+	return !(ctx.SocSpecific() || ctx.DeviceSpecific() || ctx.ProductSpecific())
 }
 
 func (g *GenruleExtraProperties) RamdiskVariantNeeded(ctx android.BaseModuleContext) bool {
@@ -116,32 +107,32 @@ func (g *GenruleExtraProperties) RecoveryVariantNeeded(ctx android.BaseModuleCon
 }
 
 func (g *GenruleExtraProperties) ExtraImageVariations(ctx android.BaseModuleContext) []string {
-	if ctx.DeviceConfig().VndkVersion() == "" {
-		return nil
-	}
-
 	var variants []string
-	if Bool(g.Vendor_available) || Bool(g.Odm_available) || ctx.SocSpecific() || ctx.DeviceSpecific() {
-		vndkVersion := ctx.DeviceConfig().VndkVersion()
-		// If vndkVersion is current, we can always use PlatformVndkVersion.
-		// If not, we assume modules under proprietary paths are compatible for
-		// BOARD_VNDK_VERSION. The other modules are regarded as AOSP, that is
-		// PLATFORM_VNDK_VERSION.
-		if vndkVersion == "current" || !snapshot.IsVendorProprietaryModule(ctx) {
-			variants = append(variants, VendorVariationPrefix+ctx.DeviceConfig().PlatformVndkVersion())
-		} else {
-			variants = append(variants, VendorVariationPrefix+vndkVersion)
+	vndkVersion := ctx.DeviceConfig().VndkVersion()
+	vendorVariantRequired := Bool(g.Vendor_available) || Bool(g.Odm_available) || ctx.SocSpecific() || ctx.DeviceSpecific()
+	productVariantRequired := Bool(g.Product_available) || ctx.ProductSpecific()
+
+	if vndkVersion == "" {
+		if vendorVariantRequired {
+			variants = append(variants, VendorVariation)
 		}
-	}
-
-	if ctx.DeviceConfig().ProductVndkVersion() == "" {
-		return variants
-	}
-
-	if Bool(g.Product_available) || ctx.ProductSpecific() {
-		variants = append(variants, ProductVariationPrefix+ctx.DeviceConfig().PlatformVndkVersion())
-		if vndkVersion := ctx.DeviceConfig().ProductVndkVersion(); vndkVersion != "current" {
-			variants = append(variants, ProductVariationPrefix+vndkVersion)
+		if productVariantRequired {
+			variants = append(variants, ProductVariation)
+		}
+	} else {
+		if vendorVariantRequired {
+			// If vndkVersion is current, we can always use PlatformVndkVersion.
+			// If not, we assume modules under proprietary paths are compatible for
+			// BOARD_VNDK_VERSION. The other modules are regarded as AOSP, that is
+			// PLATFORM_VNDK_VERSION.
+			if vndkVersion == "current" || !snapshot.IsVendorProprietaryModule(ctx) {
+				variants = append(variants, VendorVariationPrefix+ctx.DeviceConfig().PlatformVndkVersion())
+			} else {
+				variants = append(variants, VendorVariationPrefix+vndkVersion)
+			}
+		}
+		if productVariantRequired {
+			variants = append(variants, ProductVariationPrefix+ctx.DeviceConfig().PlatformVndkVersion())
 		}
 	}
 

@@ -44,7 +44,8 @@ type hiddenAPI struct {
 	//
 	// This must be the path to the unencoded dex jar as the encoded dex jar indirectly depends on
 	// this file so using the encoded dex jar here would result in a cycle in the ninja rules.
-	bootDexJarPath OptionalDexJarPath
+	bootDexJarPath    OptionalDexJarPath
+	bootDexJarPathErr error
 
 	// The paths to the classes jars that contain classes and class members annotated with
 	// the UnsupportedAppUsage annotation that need to be extracted as part of the hidden API
@@ -56,7 +57,10 @@ type hiddenAPI struct {
 	uncompressDexState *bool
 }
 
-func (h *hiddenAPI) bootDexJar() OptionalDexJarPath {
+func (h *hiddenAPI) bootDexJar(ctx android.ModuleErrorfContext) OptionalDexJarPath {
+	if h.bootDexJarPathErr != nil {
+		ctx.ModuleErrorf(h.bootDexJarPathErr.Error())
+	}
 	return h.bootDexJarPath
 }
 
@@ -77,7 +81,7 @@ type hiddenAPIModule interface {
 }
 
 type hiddenAPIIntf interface {
-	bootDexJar() OptionalDexJarPath
+	bootDexJar(ctx android.ModuleErrorfContext) OptionalDexJarPath
 	classesJars() android.Paths
 	uncompressDex() *bool
 }
@@ -94,7 +98,7 @@ func (h *hiddenAPI) initHiddenAPI(ctx android.ModuleContext, dexJar OptionalDexJ
 	// processing.
 	classesJars := android.Paths{classesJar}
 	ctx.VisitDirectDepsWithTag(hiddenApiAnnotationsTag, func(dep android.Module) {
-		javaInfo := ctx.OtherModuleProvider(dep, JavaInfoProvider).(JavaInfo)
+		javaInfo, _ := android.OtherModuleProvider(ctx, dep, JavaInfoProvider)
 		classesJars = append(classesJars, javaInfo.ImplementationJars...)
 	})
 	h.classesJarPaths = classesJars
@@ -106,7 +110,7 @@ func (h *hiddenAPI) initHiddenAPI(ctx android.ModuleContext, dexJar OptionalDexJ
 	h.uncompressDexState = uncompressedDexState
 
 	// If hiddenapi processing is disabled treat this as inactive.
-	if ctx.Config().IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") {
+	if ctx.Config().DisableHiddenApiChecks() {
 		return
 	}
 
@@ -124,6 +128,11 @@ func (h *hiddenAPI) initHiddenAPI(ctx android.ModuleContext, dexJar OptionalDexJ
 	// bootclassloader. If information is gathered for modules not on the list then that will cause
 	// failures in the CtsHiddenApiBlocklist... tests.
 	h.active = isModuleInBootClassPath(ctx, module)
+}
+
+// Store any error encountered during the initialization of hiddenapi structure (e.g. unflagged co-existing prebuilt apexes)
+func (h *hiddenAPI) initHiddenAPIError(err error) {
+	h.bootDexJarPathErr = err
 }
 
 func isModuleInBootClassPath(ctx android.BaseModuleContext, module android.Module) bool {
@@ -305,7 +314,7 @@ func hiddenAPIEncodeDex(ctx android.ModuleContext, dexInput, flagsCSV android.Pa
 	})
 
 	if uncompressDex {
-		TransformZipAlign(ctx, output, encodeRuleOutput)
+		TransformZipAlign(ctx, output, encodeRuleOutput, nil)
 	}
 
 	return output

@@ -28,13 +28,20 @@ var (
 
 	armCflags = []string{
 		"-fomit-frame-pointer",
+		// Revert this after b/322359235 is fixed
+		"-mllvm", "-enable-shrink-wrap=false",
 	}
 
-	armCppflags = []string{}
+	armCppflags = []string{
+		// Revert this after b/322359235 is fixed
+		"-mllvm", "-enable-shrink-wrap=false",
+  }
 
 	armLdflags = []string{
 		"-Wl,--hash-style=gnu",
 		"-Wl,-m,armelf",
+		// Revert this after b/322359235 is fixed
+		"-Wl,-mllvm", "-Wl,-enable-shrink-wrap=false",
 	}
 
 	armLldflags = armLdflags
@@ -43,9 +50,7 @@ var (
 
 	armNoFixCortexA8LdFlags = []string{"-Wl,--no-fix-cortex-a8"}
 
-	armArmCflags = []string{
-		"-fstrict-aliasing",
-	}
+	armArmCflags = []string{}
 
 	armThumbCflags = []string{
 		"-mthumb",
@@ -185,12 +190,7 @@ func init() {
 	exportedVars.ExportString("ArmClangTriple", clangTriple)
 
 	exportedVars.ExportStringListStaticVariable("ArmLdflags", armLdflags)
-	exportedVars.ExportStringList("ArmLldflags", armLldflags)
-	pctx.VariableFunc("ArmLldflags", func(ctx android.PackageVarContext) string {
-		maxPageSizeFlag := "-Wl,-z,max-page-size=" + ctx.Config().MaxPageSizeSupported()
-		flags := append(armLldflags, maxPageSizeFlag)
-		return strings.Join(flags, " ")
-	})
+	exportedVars.ExportStringListStaticVariable("ArmLldflags", armLldflags)
 
 	exportedVars.ExportStringListStaticVariable("ArmFixCortexA8LdFlags", armFixCortexA8LdFlags)
 	exportedVars.ExportStringListStaticVariable("ArmNoFixCortexA8LdFlags", armNoFixCortexA8LdFlags)

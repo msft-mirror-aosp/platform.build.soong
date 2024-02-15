@@ -19,16 +19,12 @@ import (
 	"io"
 
 	"android/soong/android"
-	"android/soong/bazel"
 	"android/soong/dexpreopt"
-
-	"github.com/google/blueprint/proptools"
 )
 
 type DeviceHostConverter struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
-	android.BazelModuleBase
 
 	properties DeviceHostConverterProperties
 
@@ -80,7 +76,6 @@ func HostForDeviceFactory() android.Module {
 	module.AddProperties(&module.properties)
 
 	InitJavaModule(module, android.DeviceSupported)
-	android.InitBazelModule(module)
 	return module
 }
 
@@ -102,8 +97,7 @@ func (d *DeviceHostConverter) GenerateAndroidBuildActions(ctx android.ModuleCont
 	}
 
 	ctx.VisitDirectDepsWithTag(deviceHostConverterDepTag, func(m android.Module) {
-		if ctx.OtherModuleHasProvider(m, JavaInfoProvider) {
-			dep := ctx.OtherModuleProvider(m, JavaInfoProvider).(JavaInfo)
+		if dep, ok := android.OtherModuleProvider(ctx, m, JavaInfoProvider); ok {
 			d.headerJars = append(d.headerJars, dep.HeaderJars...)
 			d.implementationJars = append(d.implementationJars, dep.ImplementationJars...)
 			d.implementationAndResourceJars = append(d.implementationAndResourceJars, dep.ImplementationAndResourcesJars...)
@@ -136,13 +130,16 @@ func (d *DeviceHostConverter) GenerateAndroidBuildActions(ctx android.ModuleCont
 		d.combinedHeaderJar = d.headerJars[0]
 	}
 
-	ctx.SetProvider(JavaInfoProvider, JavaInfo{
+	android.SetProvider(ctx, JavaInfoProvider, JavaInfo{
 		HeaderJars:                     d.headerJars,
 		ImplementationAndResourcesJars: d.implementationAndResourceJars,
 		ImplementationJars:             d.implementationJars,
 		ResourceJars:                   d.resourceJars,
 		SrcJarArgs:                     d.srcJarArgs,
 		SrcJarDeps:                     d.srcJarDeps,
+		StubsLinkType:                  Implementation,
+		// TODO: Not sure if aconfig flags that have been moved between device and host variants
+		// make sense.
 	})
 
 }
@@ -155,7 +152,7 @@ func (d *DeviceHostConverter) ImplementationAndResourcesJars() android.Paths {
 	return d.implementationAndResourceJars
 }
 
-func (d *DeviceHostConverter) DexJarBuildPath() android.Path {
+func (d *DeviceHostConverter) DexJarBuildPath(ctx android.ModuleErrorfContext) android.Path {
 	return nil
 }
 
@@ -190,33 +187,4 @@ func (d *DeviceHostConverter) AndroidMk() android.AndroidMkData {
 			},
 		},
 	}
-}
-
-type bazelDeviceHostConverterAttributes struct {
-	Exports bazel.LabelListAttribute
-}
-
-func (d *DeviceHostConverter) ConvertWithBp2build(ctx android.TopDownMutatorContext) {
-	ctx.CreateBazelTargetModule(
-		bazel.BazelTargetModuleProperties{
-			Rule_class:        "java_host_for_device",
-			Bzl_load_location: "//build/bazel/rules/java:host_for_device.bzl",
-		},
-		android.CommonAttributes{Name: d.Name()},
-		&bazelDeviceHostConverterAttributes{
-			Exports: bazel.MakeLabelListAttribute(android.BazelLabelForModuleDeps(ctx, d.properties.Libs)),
-		},
-	)
-	neverLinkAttrs := &javaLibraryAttributes{
-		Exports:   bazel.MakeSingleLabelListAttribute(bazel.Label{Label: ":" + d.Name()}),
-		Neverlink: bazel.BoolAttribute{Value: proptools.BoolPtr(true)},
-		javaCommonAttributes: &javaCommonAttributes{
-			Sdk_version: bazel.StringAttribute{Value: proptools.StringPtr("none")},
-		},
-	}
-	ctx.CreateBazelTargetModule(
-		javaLibraryBazelTargetModuleProperties(),
-		android.CommonAttributes{Name: d.Name() + "-neverlink"},
-		neverLinkAttrs)
-
 }

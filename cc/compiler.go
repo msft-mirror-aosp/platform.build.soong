@@ -116,10 +116,17 @@ type BaseCompilerProperties struct {
 	// if set to false, use -std=c++* instead of -std=gnu++*
 	Gnu_extensions *bool
 
+	// cc Build rules targeting BPF must set this to true. The correct fix is to
+	// ban targeting bpf in cc rules instead use bpf_rules. (b/323415017)
+	Bpf_target *bool
+
 	Yacc *YaccProperties
 	Lex  *LexProperties
 
 	Aidl struct {
+		// List of aidl_library modules
+		Libs []string
+
 		// list of directories that will be added to the aidl include paths.
 		Include_dirs []string
 
@@ -186,13 +193,13 @@ type BaseCompilerProperties struct {
 			// build the recovery variant of the C/C++ module.
 			Exclude_generated_sources []string
 		}
-		Vendor_ramdisk struct {
+		Ramdisk, Vendor_ramdisk struct {
 			// list of source files that should not be used to
-			// build the vendor ramdisk variant of the C/C++ module.
+			// build the ramdisk variants of the C/C++ module.
 			Exclude_srcs []string `android:"path"`
 
-			// List of additional cflags that should be used to build the vendor ramdisk
-			// variant of the C/C++ module.
+			// List of additional cflags that should be used to build the ramdisk
+			// variants of the C/C++ module.
 			Cflags []string
 		}
 		Platform struct {
@@ -272,6 +279,7 @@ func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 	deps.GeneratedSources = append(deps.GeneratedSources, compiler.Properties.Generated_sources...)
 	deps.GeneratedSources = removeListFromList(deps.GeneratedSources, compiler.Properties.Exclude_generated_sources)
 	deps.GeneratedHeaders = append(deps.GeneratedHeaders, compiler.Properties.Generated_headers...)
+	deps.AidlLibs = append(deps.AidlLibs, compiler.Properties.Aidl.Libs...)
 
 	android.ProtoDeps(ctx, &compiler.Proto)
 	if compiler.hasSrcExt(".proto") {
@@ -335,7 +343,7 @@ func parseCStd(cStdPtr *string) string {
 // per-target values, module type values, and per-module Blueprints properties
 func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps PathDeps) Flags {
 	tc := ctx.toolchain()
-	modulePath := android.PathForModuleSrc(ctx).String()
+	modulePath := ctx.ModuleDir()
 
 	compiler.srcsBeforeGen = android.PathsForModuleSrcExcludes(ctx, compiler.Properties.Srcs, compiler.Properties.Exclude_srcs)
 	compiler.srcsBeforeGen = append(compiler.srcsBeforeGen, deps.GeneratedSources...)
@@ -347,6 +355,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 	CheckBadCompilerFlags(ctx, "vendor.cflags", compiler.Properties.Target.Vendor.Cflags)
 	CheckBadCompilerFlags(ctx, "product.cflags", compiler.Properties.Target.Product.Cflags)
 	CheckBadCompilerFlags(ctx, "recovery.cflags", compiler.Properties.Target.Recovery.Cflags)
+	CheckBadCompilerFlags(ctx, "ramdisk.cflags", compiler.Properties.Target.Ramdisk.Cflags)
 	CheckBadCompilerFlags(ctx, "vendor_ramdisk.cflags", compiler.Properties.Target.Vendor_ramdisk.Cflags)
 	CheckBadCompilerFlags(ctx, "platform.cflags", compiler.Properties.Target.Platform.Cflags)
 
@@ -380,7 +389,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		flags.Local.YasmFlags = append(flags.Local.YasmFlags, "-I"+modulePath)
 	}
 
-	if !(ctx.useSdk() || ctx.useVndk()) || ctx.Host() {
+	if !(ctx.useSdk() || ctx.InVendorOrProduct()) || ctx.Host() {
 		flags.SystemIncludeFlags = append(flags.SystemIncludeFlags,
 			"${config.CommonGlobalIncludes}",
 			tc.IncludeFlags())
@@ -397,10 +406,19 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 			"-isystem "+getCurrentIncludePath(ctx).Join(ctx, config.NDKTriple(tc)).String())
 	}
 
-	if ctx.useVndk() {
+	if ctx.InVendorOrProduct() {
 		flags.Global.CommonFlags = append(flags.Global.CommonFlags, "-D__ANDROID_VNDK__")
 		if ctx.inVendor() {
 			flags.Global.CommonFlags = append(flags.Global.CommonFlags, "-D__ANDROID_VENDOR__")
+
+			vendorApiLevel := ctx.Config().VendorApiLevel()
+			if vendorApiLevel == "" {
+				// TODO(b/314036847): This is a fallback for UDC targets.
+				// This must be a build failure when UDC is no longer built
+				// from this source tree.
+				vendorApiLevel = ctx.Config().PlatformSdkVersion().String()
+			}
+			flags.Global.CommonFlags = append(flags.Global.CommonFlags, "-D__ANDROID_VENDOR_API__="+vendorApiLevel)
 		} else if ctx.inProduct() {
 			flags.Global.CommonFlags = append(flags.Global.CommonFlags, "-D__ANDROID_PRODUCT__")
 		}
@@ -465,8 +483,13 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 			target += strconv.Itoa(android.FutureApiLevelInt)
 		} else {
 			apiLevel := nativeApiLevelOrPanic(ctx, version)
-			target += apiLevel.String()
+			target += strconv.Itoa(apiLevel.FinalOrFutureInt())
 		}
+	}
+
+	// bpf targets don't need the default target triple. b/308826679
+	if proptools.Bool(compiler.Properties.Bpf_target) {
+		target = "--target=bpf"
 	}
 
 	flags.Global.CFlags = append(flags.Global.CFlags, target)
@@ -484,8 +507,12 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 
 	flags.Global.AsFlags = append(flags.Global.AsFlags, tc.Asflags())
 	flags.Global.CppFlags = append([]string{"${config.CommonGlobalCppflags}"}, flags.Global.CppFlags...)
+
+	// bpf targets don't need the target specific toolchain cflags. b/308826679
+	if !proptools.Bool(compiler.Properties.Bpf_target) {
+		flags.Global.CommonFlags = append(flags.Global.CommonFlags, tc.Cflags())
+	}
 	flags.Global.CommonFlags = append(flags.Global.CommonFlags,
-		tc.Cflags(),
 		"${config.CommonGlobalCflags}",
 		fmt.Sprintf("${config.%sGlobalCflags}", hod))
 
@@ -507,7 +534,11 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 
 	flags.Global.YasmFlags = append(flags.Global.YasmFlags, tc.YasmFlags())
 
-	flags.Global.CommonFlags = append(flags.Global.CommonFlags, tc.ToolchainCflags())
+	// bpf targets don't need the target specific toolchain cflags. b/308826679
+	if !proptools.Bool(compiler.Properties.Bpf_target) {
+		flags.Global.CommonFlags = append(flags.Global.CommonFlags, tc.ToolchainCflags())
+	}
+
 
 	cStd := parseCStd(compiler.Properties.C_std)
 	cppStd := parseCppStd(compiler.Properties.Cpp_std)
@@ -531,6 +562,9 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 
 	if ctx.inVendorRamdisk() {
 		flags.Local.CFlags = append(flags.Local.CFlags, esc(compiler.Properties.Target.Vendor_ramdisk.Cflags)...)
+	}
+	if ctx.inRamdisk() {
+		flags.Local.CFlags = append(flags.Local.CFlags, esc(compiler.Properties.Target.Ramdisk.Cflags)...)
 	}
 	if !ctx.useSdk() {
 		flags.Local.CFlags = append(flags.Local.CFlags, esc(compiler.Properties.Target.Platform.Cflags)...)
@@ -561,7 +595,12 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 			"-I"+android.PathForModuleGen(ctx, "yacc", ctx.ModuleDir()).String())
 	}
 
-	if compiler.hasSrcExt(".aidl") {
+	if len(compiler.Properties.Aidl.Libs) > 0 &&
+		(len(compiler.Properties.Aidl.Include_dirs) > 0 || len(compiler.Properties.Aidl.Local_include_dirs) > 0) {
+		ctx.ModuleErrorf("aidl.libs and (aidl.include_dirs or aidl.local_include_dirs) can't be set at the same time. For aidl headers, please only use aidl.libs prop")
+	}
+
+	if compiler.hasAidl(deps) {
 		flags.aidlFlags = append(flags.aidlFlags, compiler.Properties.Aidl.Flags...)
 		if len(compiler.Properties.Aidl.Local_include_dirs) > 0 {
 			localAidlIncludeDirs := android.PathsForModuleSrc(ctx, compiler.Properties.Aidl.Local_include_dirs)
@@ -569,6 +608,14 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		}
 		if len(compiler.Properties.Aidl.Include_dirs) > 0 {
 			rootAidlIncludeDirs := android.PathsForSource(ctx, compiler.Properties.Aidl.Include_dirs)
+			flags.aidlFlags = append(flags.aidlFlags, includeDirsToFlags(rootAidlIncludeDirs))
+		}
+
+		var rootAidlIncludeDirs android.Paths
+		for _, aidlLibraryInfo := range deps.AidlLibraryInfos {
+			rootAidlIncludeDirs = append(rootAidlIncludeDirs, aidlLibraryInfo.IncludeDirs.ToList()...)
+		}
+		if len(rootAidlIncludeDirs) > 0 {
 			flags.aidlFlags = append(flags.aidlFlags, includeDirsToFlags(rootAidlIncludeDirs))
 		}
 
@@ -582,8 +629,14 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		}
 		flags.aidlFlags = append(flags.aidlFlags, "--min_sdk_version="+aidlMinSdkVersion)
 
-		flags.Local.CommonFlags = append(flags.Local.CommonFlags,
-			"-I"+android.PathForModuleGen(ctx, "aidl").String())
+		if compiler.hasSrcExt(".aidl") {
+			flags.Local.CommonFlags = append(flags.Local.CommonFlags,
+				"-I"+android.PathForModuleGen(ctx, "aidl").String())
+		}
+		if len(deps.AidlLibraryInfos) > 0 {
+			flags.Local.CommonFlags = append(flags.Local.CommonFlags,
+				"-I"+android.PathForModuleGen(ctx, "aidl_library").String())
+		}
 	}
 
 	if compiler.hasSrcExt(".rscript") || compiler.hasSrcExt(".fs") {
@@ -660,6 +713,10 @@ func ndkPathDeps(ctx ModuleContext) android.Paths {
 	return nil
 }
 
+func (compiler *baseCompiler) hasAidl(deps PathDeps) bool {
+	return len(deps.AidlLibraryInfos) > 0 || compiler.hasSrcExt(".aidl")
+}
+
 func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathDeps) Objects {
 	pathDeps := deps.GeneratedDeps
 	pathDeps = append(pathDeps, ndkPathDeps(ctx)...)
@@ -668,7 +725,7 @@ func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathD
 
 	srcs := append(android.Paths(nil), compiler.srcsBeforeGen...)
 
-	srcs, genDeps, info := genSources(ctx, srcs, buildFlags)
+	srcs, genDeps, info := genSources(ctx, deps.AidlLibraryInfos, srcs, buildFlags)
 	pathDeps = append(pathDeps, genDeps...)
 
 	compiler.pathDeps = pathDeps
@@ -680,7 +737,7 @@ func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathD
 
 	// Compile files listed in c.Properties.Srcs into objects
 	objs := compileObjs(ctx, buildFlags, "", srcs,
-		android.PathsForModuleSrc(ctx, compiler.Properties.Tidy_disabled_srcs),
+		append(android.PathsForModuleSrc(ctx, compiler.Properties.Tidy_disabled_srcs), compiler.generatedSources...),
 		android.PathsForModuleSrc(ctx, compiler.Properties.Tidy_timeout_srcs),
 		pathDeps, compiler.cFlagsDeps)
 

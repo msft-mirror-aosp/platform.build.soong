@@ -35,6 +35,7 @@ bootstrap_go_package {
         "blueprint",
         "blueprint-bootstrap",
         "blueprint-microfactory",
+        "soong-android",
         "soong-finder",
         "soong-remoteexec",
         "soong-shared",
@@ -46,6 +47,7 @@ bootstrap_go_package {
         "soong-ui-tracer",
     ],
     srcs: [
+        "androidmk_denylist.go",
         "build.go",
         "cleanbuild.go",
         "config.go",
@@ -74,7 +76,6 @@ bootstrap_go_package {
         "proc_sync_test.go",
         "rbe_test.go",
         "staging_snapshot_test.go",
-        "upload_test.go",
         "util_test.go",
     ],
     darwin: {

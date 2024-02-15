@@ -35,15 +35,16 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 	envCopy["PATH"] = os.Getenv("PATH")
 
 	config := &config{
-		productVariables: productVariables{
+		productVariables: ProductVariables{
 			DeviceName:                          stringPtr("test_device"),
 			DeviceProduct:                       stringPtr("test_product"),
 			Platform_sdk_version:                intPtr(30),
+			Platform_sdk_version_or_codename:    stringPtr("S"),
 			Platform_sdk_codename:               stringPtr("S"),
 			Platform_base_sdk_extension_version: intPtr(1),
 			Platform_version_active_codenames:   []string{"S", "Tiramisu"},
-			DeviceSystemSdkVersions:             []string{"14", "15"},
-			Platform_systemsdk_versions:         []string{"29", "30"},
+			DeviceSystemSdkVersions:             []string{"29", "30", "S"},
+			Platform_systemsdk_versions:         []string{"29", "30", "S", "Tiramisu"},
 			AAPTConfig:                          []string{"normal", "large", "xlarge", "hdpi", "xhdpi", "xxhdpi"},
 			AAPTPreferredConfig:                 stringPtr("xhdpi"),
 			AAPTCharacteristics:                 stringPtr("nosdcard"),
@@ -61,11 +62,7 @@ func TestConfig(buildDir string, env map[string]string, bp string, fs map[string
 		// passed to PathForSource or PathForModuleSrc.
 		TestAllowNonExistentPaths: true,
 
-		BazelContext:              noopBazelContext{},
-		BuildMode:                 BazelProdMode,
-		mixedBuildDisabledModules: make(map[string]struct{}),
-		mixedBuildEnabledModules:  make(map[string]struct{}),
-		bazelForceEnabledModules:  make(map[string]struct{}),
+		BuildMode: AnalysisNoBazel,
 	}
 	config.deviceConfig = &deviceConfig{
 		config: config,

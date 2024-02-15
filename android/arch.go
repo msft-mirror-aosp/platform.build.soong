@@ -425,7 +425,8 @@ func osMutator(bpctx blueprint.BottomUpMutatorContext) {
 	// blueprint.BottomUpMutatorContext because android.BottomUpMutatorContext
 	// filters out non-Soong modules.  Now that we've handled them, create a
 	// normal android.BottomUpMutatorContext.
-	mctx := bottomUpMutatorContextFactory(bpctx, module, false, false)
+	mctx := bottomUpMutatorContextFactory(bpctx, module, false)
+	defer bottomUpMutatorContextPool.Put(mctx)
 
 	base := module.base()
 
@@ -446,8 +447,10 @@ func osMutator(bpctx blueprint.BottomUpMutatorContext) {
 		}
 	}
 
+	createCommonOSVariant := base.commonProperties.CreateCommonOSVariant
+
 	// If there are no supported OSes then disable the module.
-	if len(moduleOSList) == 0 {
+	if len(moduleOSList) == 0 && !createCommonOSVariant {
 		base.Disable()
 		return
 	}
@@ -458,7 +461,6 @@ func osMutator(bpctx blueprint.BottomUpMutatorContext) {
 		osNames[i] = os.String()
 	}
 
-	createCommonOSVariant := base.commonProperties.CreateCommonOSVariant
 	if createCommonOSVariant {
 		// A CommonOS variant was requested so add it to the list of OS variants to
 		// create. It needs to be added to the end because it needs to depend on the
@@ -570,7 +572,8 @@ func archMutator(bpctx blueprint.BottomUpMutatorContext) {
 	// blueprint.BottomUpMutatorContext because android.BottomUpMutatorContext
 	// filters out non-Soong modules.  Now that we've handled them, create a
 	// normal android.BottomUpMutatorContext.
-	mctx := bottomUpMutatorContextFactory(bpctx, module, false, false)
+	mctx := bottomUpMutatorContextFactory(bpctx, module, false)
+	defer bottomUpMutatorContextPool.Put(mctx)
 
 	base := module.base()
 
@@ -1057,9 +1060,7 @@ func mergePropertyStruct(ctx ArchVariantContext, dst interface{}, srcValue refle
 	// order checks the `android:"variant_prepend"` tag to handle properties where the
 	// arch-specific value needs to come before the generic value, for example for lists of
 	// include directories.
-	order := func(property string,
-		dstField, srcField reflect.StructField,
-		dstValue, srcValue interface{}) (proptools.Order, error) {
+	order := func(dstField, srcField reflect.StructField) (proptools.Order, error) {
 		if proptools.HasTag(dstField, "android", "variant_prepend") {
 			return proptools.Prepend, nil
 		} else {
@@ -1884,10 +1885,10 @@ func decodeMultilibTargets(multilib string, targets []Target, prefer32 bool) ([]
 		buildTargets = filterMultilibTargets(targets, "lib64")
 		// Reverse the targets so that the first architecture can depend on the second
 		// architecture module in order to merge the outputs.
-		reverseSliceInPlace(buildTargets)
+		ReverseSliceInPlace(buildTargets)
 	case "darwin_universal_common_first":
 		archTargets := filterMultilibTargets(targets, "lib64")
-		reverseSliceInPlace(archTargets)
+		ReverseSliceInPlace(archTargets)
 		buildTargets = append(getCommonTargets(targets), archTargets...)
 	default:
 		return nil, fmt.Errorf(`compile_multilib must be "both", "first", "32", "64", "prefer32" or "first_prefer32" found %q`,

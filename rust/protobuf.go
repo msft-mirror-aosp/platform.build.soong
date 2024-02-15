@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"android/soong/android"
+	"android/soong/cc"
 )
 
 var (
@@ -52,14 +53,18 @@ type ProtobufProperties struct {
 
 	// List of libraries which export include paths required for this module
 	Header_libs []string `android:"arch_variant,variant_prepend"`
+
+	// List of exported include paths containing proto files for dependent rust_protobuf modules.
+	Exported_include_dirs []string
 }
 
 type protobufDecorator struct {
 	*BaseSourceProvider
 
-	Properties ProtobufProperties
-	protoNames []string
-	grpcNames  []string
+	Properties       ProtobufProperties
+	protoNames       []string
+	additionalCrates []string
+	grpcNames        []string
 
 	grpcProtoFlags android.ProtoFlags
 	protoFlags     android.ProtoFlags
@@ -73,7 +78,8 @@ func (proto *protobufDecorator) GenerateSource(ctx ModuleContext, deps PathDeps)
 	outDir := android.PathForModuleOut(ctx)
 	protoFiles := android.PathsForModuleSrc(ctx, proto.Properties.Protos)
 	grpcFiles := android.PathsForModuleSrc(ctx, proto.Properties.Grpc_protos)
-	protoPluginPath := ctx.Config().HostToolPath(ctx, "protoc-gen-rust-deprecated")
+
+	protoPluginPath := ctx.Config().HostToolPath(ctx, "protoc-gen-rust")
 
 	commonProtoFlags = append(commonProtoFlags, defaultProtobufFlags...)
 	commonProtoFlags = append(commonProtoFlags, proto.Properties.Proto_flags...)
@@ -167,6 +173,10 @@ func (proto *protobufDecorator) GenerateSource(ctx ModuleContext, deps PathDeps)
 	// stemFile must be first here as the first path in BaseSourceProvider.OutputFiles is the library entry-point.
 	proto.BaseSourceProvider.OutputFiles = append(android.Paths{stemFile}, outputs.Paths()...)
 
+	android.SetProvider(ctx, cc.FlagExporterInfoProvider, cc.FlagExporterInfo{
+		IncludeDirs: android.PathsForModuleSrc(ctx, proto.Properties.Exported_include_dirs),
+	})
+
 	// mod_stem.rs is the entry-point for our library modules, so this is what we return.
 	return stemFile
 }
@@ -175,8 +185,14 @@ func (proto *protobufDecorator) genModFileContents() string {
 	lines := []string{
 		"// @Soong generated Source",
 	}
+
 	for _, protoName := range proto.protoNames {
 		lines = append(lines, fmt.Sprintf("pub mod %s;", protoName))
+	}
+
+	for _, crate := range proto.additionalCrates {
+		lines = append(lines, fmt.Sprintf("pub use %s::*;", crate))
+
 	}
 
 	for _, grpcName := range proto.grpcNames {
@@ -187,13 +203,7 @@ func (proto *protobufDecorator) genModFileContents() string {
 		lines = append(
 			lines,
 			"pub mod empty {",
-			"    pub use protobuf::well_known_types::Empty;",
-			"}",
-			"pub mod wrappers {",
-			"    pub use protobuf::well_known_types::{",
-			"        DoubleValue, FloatValue, Int64Value, UInt64Value, Int32Value, UInt32Value,",
-			"        BoolValue, StringValue, BytesValue",
-			"    };",
+			"    pub use protobuf::well_known_types::empty::Empty;",
 			"}")
 	}
 
@@ -206,7 +216,7 @@ func (proto *protobufDecorator) SourceProviderProps() []interface{} {
 
 func (proto *protobufDecorator) SourceProviderDeps(ctx DepsContext, deps Deps) Deps {
 	deps = proto.BaseSourceProvider.SourceProviderDeps(ctx, deps)
-	deps.Rustlibs = append(deps.Rustlibs, "libprotobuf_deprecated")
+	deps.Rustlibs = append(deps.Rustlibs, "libprotobuf")
 	deps.HeaderLibs = append(deps.SharedLibs, proto.Properties.Header_libs...)
 
 	if len(proto.Properties.Grpc_protos) > 0 {
@@ -219,7 +229,7 @@ func (proto *protobufDecorator) SourceProviderDeps(ctx DepsContext, deps Deps) D
 
 // rust_protobuf generates protobuf rust code from the provided proto file. This uses the protoc-gen-rust plugin for
 // protoc. Additional flags to the protoc command can be passed via the proto_flags property. This module type will
-// create library variants that can be used as a crate dependency by adding it to the rlibs, dylibs, and rustlibs
+// create library variants that can be used as a crate dependency by adding it to the rlibs and rustlibs
 // properties of other modules.
 func RustProtobufFactory() android.Module {
 	module, _ := NewRustProtobuf(android.HostAndDeviceSupported)

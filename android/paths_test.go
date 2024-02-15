@@ -37,6 +37,22 @@ var commonValidatePathTestCases = []strsTestCase{
 		out: "",
 	},
 	{
+		in:  []string{"", ""},
+		out: "",
+	},
+	{
+		in:  []string{"a", ""},
+		out: "a",
+	},
+	{
+		in:  []string{"", "a"},
+		out: "a",
+	},
+	{
+		in:  []string{"", "a", ""},
+		out: "a",
+	},
+	{
 		in:  []string{"a/b"},
 		out: "a/b",
 	},
@@ -252,8 +268,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "host binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     hostTarget.Os,
-					target: hostTarget,
+					archModuleContext: archModuleContext{
+						os:     hostTarget.Os,
+						target: hostTarget,
+					},
 				},
 			},
 			in:           []string{"bin", "my_test"},
@@ -265,8 +283,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "system binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 				},
 			},
 			in:           []string{"bin", "my_test"},
@@ -277,8 +297,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "vendor binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 					earlyModuleContext: earlyModuleContext{
 						kind: socSpecificModule,
 					},
@@ -292,8 +314,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "odm binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 					earlyModuleContext: earlyModuleContext{
 						kind: deviceSpecificModule,
 					},
@@ -307,8 +331,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "product binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 					earlyModuleContext: earlyModuleContext{
 						kind: productSpecificModule,
 					},
@@ -322,8 +348,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "system_ext binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 					earlyModuleContext: earlyModuleContext{
 						kind: systemExtSpecificModule,
 					},
@@ -337,8 +365,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "root binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 				},
 				inRoot: true,
 			},
@@ -350,8 +380,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "recovery binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 				},
 				inRecovery: true,
 			},
@@ -363,8 +395,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "recovery root binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 				},
 				inRecovery: true,
 				inRoot:     true,
@@ -378,8 +412,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "ramdisk binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 				},
 				inRamdisk: true,
 			},
@@ -391,8 +427,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "ramdisk root binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 				},
 				inRamdisk: true,
 				inRoot:    true,
@@ -405,8 +443,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "vendor_ramdisk binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 				},
 				inVendorRamdisk: true,
 			},
@@ -418,8 +458,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "vendor_ramdisk root binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 				},
 				inVendorRamdisk: true,
 				inRoot:          true,
@@ -432,8 +474,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "debug_ramdisk binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 				},
 				inDebugRamdisk: true,
 			},
@@ -445,8 +489,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "system native test binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 				},
 				inData: true,
 			},
@@ -458,8 +504,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "vendor native test binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 					earlyModuleContext: earlyModuleContext{
 						kind: socSpecificModule,
 					},
@@ -474,8 +522,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "odm native test binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 					earlyModuleContext: earlyModuleContext{
 						kind: deviceSpecificModule,
 					},
@@ -490,8 +540,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "product native test binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 					earlyModuleContext: earlyModuleContext{
 						kind: productSpecificModule,
 					},
@@ -507,8 +559,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "system_ext native test binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 					earlyModuleContext: earlyModuleContext{
 						kind: systemExtSpecificModule,
 					},
@@ -524,8 +578,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "sanitized system binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 				},
 				inSanitizerDir: true,
 			},
@@ -537,8 +593,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "sanitized vendor binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 					earlyModuleContext: earlyModuleContext{
 						kind: socSpecificModule,
 					},
@@ -553,8 +611,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "sanitized odm binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 					earlyModuleContext: earlyModuleContext{
 						kind: deviceSpecificModule,
 					},
@@ -569,8 +629,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "sanitized product binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 					earlyModuleContext: earlyModuleContext{
 						kind: productSpecificModule,
 					},
@@ -586,8 +648,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "sanitized system_ext binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 					earlyModuleContext: earlyModuleContext{
 						kind: systemExtSpecificModule,
 					},
@@ -603,8 +667,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "sanitized system native test binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 				},
 				inData:         true,
 				inSanitizerDir: true,
@@ -617,8 +683,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "sanitized vendor native test binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 					earlyModuleContext: earlyModuleContext{
 						kind: socSpecificModule,
 					},
@@ -634,8 +702,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "sanitized odm native test binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 					earlyModuleContext: earlyModuleContext{
 						kind: deviceSpecificModule,
 					},
@@ -651,8 +721,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "sanitized product native test binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 					earlyModuleContext: earlyModuleContext{
 						kind: productSpecificModule,
 					},
@@ -668,8 +740,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "sanitized system_ext native test binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 					earlyModuleContext: earlyModuleContext{
 						kind: systemExtSpecificModule,
 					},
@@ -684,8 +758,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "device testcases",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 				},
 				inTestcases: true,
 			},
@@ -696,8 +772,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "host testcases",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     hostTarget.Os,
-					target: hostTarget,
+					archModuleContext: archModuleContext{
+						os:     hostTarget.Os,
+						target: hostTarget,
+					},
 				},
 				inTestcases: true,
 			},
@@ -708,8 +786,10 @@ func TestPathForModuleInstall(t *testing.T) {
 			name: "forced host testcases",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 				},
 				inTestcases: true,
 				forceOS:     &Linux,
@@ -755,8 +835,10 @@ func TestPathForModuleInstallRecoveryAsBoot(t *testing.T) {
 			name: "ramdisk binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 				},
 				inRamdisk: true,
 				inRoot:    true,
@@ -770,8 +852,10 @@ func TestPathForModuleInstallRecoveryAsBoot(t *testing.T) {
 			name: "vendor_ramdisk binary",
 			ctx: &testModuleInstallPathContext{
 				baseModuleContext: baseModuleContext{
-					os:     deviceTarget.Os,
-					target: deviceTarget,
+					archModuleContext: archModuleContext{
+						os:     deviceTarget.Os,
+						target: deviceTarget,
+					},
 				},
 				inVendorRamdisk: true,
 				inRoot:          true,
@@ -805,8 +889,10 @@ func TestBaseDirForInstallPath(t *testing.T) {
 
 	ctx := &testModuleInstallPathContext{
 		baseModuleContext: baseModuleContext{
-			os:     deviceTarget.Os,
-			target: deviceTarget,
+			archModuleContext: archModuleContext{
+				os:     deviceTarget.Os,
+				target: deviceTarget,
+			},
 		},
 	}
 	ctx.baseModuleContext.config = testConfig
@@ -1475,8 +1561,10 @@ func TestPathRelativeToTop(t *testing.T) {
 
 	ctx := &testModuleInstallPathContext{
 		baseModuleContext: baseModuleContext{
-			os:     deviceTarget.Os,
-			target: deviceTarget,
+			archModuleContext: archModuleContext{
+				os:     deviceTarget.Os,
+				target: deviceTarget,
+			},
 		},
 	}
 	ctx.baseModuleContext.config = testConfig

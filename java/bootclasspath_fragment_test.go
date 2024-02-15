@@ -40,6 +40,12 @@ func TestBootclasspathFragment_UnknownImageName(t *testing.T) {
 				image_name: "unknown",
 				contents: ["foo"],
 			}
+
+			java_library {
+				name: "foo",
+				srcs: ["foo.java"],
+				installable: true,
+			}
 		`)
 }
 
@@ -52,6 +58,11 @@ func TestPrebuiltBootclasspathFragment_UnknownImageName(t *testing.T) {
 				name: "unknown-bootclasspath-fragment",
 				image_name: "unknown",
 				contents: ["foo"],
+			}
+
+			java_import {
+				name: "foo",
+				jars: ["foo.jar"],
 			}
 		`)
 }
@@ -72,6 +83,18 @@ func TestBootclasspathFragmentInconsistentArtConfiguration_Platform(t *testing.T
 					"apex",
 				],
 			}
+
+			java_library {
+				name: "foo",
+				srcs: ["foo.java"],
+				installable: true,
+			}
+
+			java_library {
+				name: "bar",
+				srcs: ["bar.java"],
+				installable: true,
+			}
 		`)
 }
 
@@ -91,6 +114,18 @@ func TestBootclasspathFragmentInconsistentArtConfiguration_ApexMixture(t *testin
 					"apex1",
 					"apex2",
 				],
+			}
+
+			java_library {
+				name: "foo",
+				srcs: ["foo.java"],
+				installable: true,
+			}
+
+			java_library {
+				name: "bar",
+				srcs: ["bar.java"],
+				installable: true,
 			}
 		`)
 }
@@ -187,6 +222,11 @@ func TestBootclasspathFragment_StubLibs(t *testing.T) {
 		PrepareForTestWithJavaSdkLibraryFiles,
 		FixtureWithLastReleaseApis("mysdklibrary", "myothersdklibrary", "mycoreplatform"),
 		FixtureConfigureApexBootJars("someapex:mysdklibrary"),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
+		}),
 	).RunTestWithBp(t, `
 		bootclasspath_fragment {
 			name: "myfragment",
@@ -237,16 +277,16 @@ func TestBootclasspathFragment_StubLibs(t *testing.T) {
 	`)
 
 	fragment := result.Module("myfragment", "android_common")
-	info := result.ModuleProvider(fragment, HiddenAPIInfoProvider).(HiddenAPIInfo)
+	info, _ := android.SingletonModuleProvider(result, fragment, HiddenAPIInfoProvider)
 
 	stubsJar := "out/soong/.intermediates/mystublib/android_common/dex/mystublib.jar"
 
 	// Stubs jars for mysdklibrary
-	publicStubsJar := "out/soong/.intermediates/mysdklibrary.stubs/android_common/dex/mysdklibrary.stubs.jar"
-	systemStubsJar := "out/soong/.intermediates/mysdklibrary.stubs.system/android_common/dex/mysdklibrary.stubs.system.jar"
+	publicStubsJar := "out/soong/.intermediates/mysdklibrary.stubs.exportable/android_common/dex/mysdklibrary.stubs.exportable.jar"
+	systemStubsJar := "out/soong/.intermediates/mysdklibrary.stubs.exportable.system/android_common/dex/mysdklibrary.stubs.exportable.system.jar"
 
 	// Stubs jars for myothersdklibrary
-	otherPublicStubsJar := "out/soong/.intermediates/myothersdklibrary.stubs/android_common/dex/myothersdklibrary.stubs.jar"
+	otherPublicStubsJar := "out/soong/.intermediates/myothersdklibrary.stubs.exportable/android_common/dex/myothersdklibrary.stubs.exportable.jar"
 
 	// Check that SdkPublic uses public stubs for all sdk libraries.
 	android.AssertPathsRelativeToTopEquals(t, "public dex stubs jar", []string{otherPublicStubsJar, publicStubsJar, stubsJar}, info.TransitiveStubDexJarsByScope.StubDexJarsForScope(PublicHiddenAPIScope))
@@ -279,6 +319,60 @@ func TestBootclasspathFragment_StubLibs(t *testing.T) {
 	}
 
 	android.AssertPathsRelativeToTopEquals(t, "widest dex stubs jar", expectedWidestPaths, info.TransitiveStubDexJarsByScope.StubDexJarsForWidestAPIScope())
+}
+
+func TestFromTextWidestApiScope(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForTestWithBootclasspathFragment,
+		PrepareForTestWithJavaSdkLibraryFiles,
+		android.FixtureModifyConfig(func(config android.Config) {
+			config.SetBuildFromTextStub(true)
+		}),
+		FixtureWithLastReleaseApis("mysdklibrary", "android-non-updatable"),
+		FixtureConfigureApexBootJars("someapex:mysdklibrary"),
+	).RunTestWithBp(t, `
+		bootclasspath_fragment {
+			name: "myfragment",
+			contents: ["mysdklibrary"],
+			additional_stubs: [
+				"android-non-updatable",
+			],
+			hidden_api: {
+				split_packages: ["*"],
+			},
+		}
+		java_sdk_library {
+			name: "mysdklibrary",
+			srcs: ["a.java"],
+			shared_library: false,
+			public: {enabled: true},
+			system: {enabled: true},
+		}
+		java_sdk_library {
+			name: "android-non-updatable",
+			srcs: ["b.java"],
+			compile_dex: true,
+			public: {
+				enabled: true,
+			},
+			system: {
+				enabled: true,
+			},
+			test: {
+				enabled: true,
+			},
+			module_lib: {
+				enabled: true,
+			},
+		}
+	`)
+
+	fragment := result.ModuleForTests("myfragment", "android_common")
+	dependencyStubDexFlag := "--dependency-stub-dex=out/soong/.intermediates/default/java/android-non-updatable.stubs.test_module_lib/android_common/dex/android-non-updatable.stubs.test_module_lib.jar"
+	stubFlagsCommand := fragment.Output("modular-hiddenapi/stub-flags.csv").RuleParams.Command
+	android.AssertStringDoesContain(t,
+		"Stub flags generating command does not include the expected dependency stub dex file",
+		stubFlagsCommand, dependencyStubDexFlag)
 }
 
 func TestSnapshotWithBootclasspathFragment_HiddenAPI(t *testing.T) {
@@ -367,16 +461,16 @@ func TestSnapshotWithBootclasspathFragment_HiddenAPI(t *testing.T) {
 
 	// Make sure that the library exports hidden API properties for use by the bootclasspath_fragment.
 	library := result.Module("mynewlibrary", "android_common")
-	info := result.ModuleProvider(library, hiddenAPIPropertyInfoProvider).(HiddenAPIPropertyInfo)
+	info, _ := android.SingletonModuleProvider(result, library, hiddenAPIPropertyInfoProvider)
 	android.AssertArrayString(t, "split packages", []string{"sdklibrary", "newlibrary"}, info.SplitPackages)
 	android.AssertArrayString(t, "package prefixes", []string{"newlibrary.all.mine"}, info.PackagePrefixes)
 	android.AssertArrayString(t, "single packages", []string{"newlibrary.mine"}, info.SinglePackages)
 	for _, c := range HiddenAPIFlagFileCategories {
 		expectedMaxTargetQPaths := []string(nil)
-		if c.PropertyName == "max_target_q" {
+		if c.PropertyName() == "max_target_q" {
 			expectedMaxTargetQPaths = []string{"my-new-max-target-q.txt"}
 		}
-		android.AssertPathsRelativeToTopEquals(t, c.PropertyName, expectedMaxTargetQPaths, info.FlagFilesByCategory[c])
+		android.AssertPathsRelativeToTopEquals(t, c.PropertyName(), expectedMaxTargetQPaths, info.FlagFilesByCategory[c])
 	}
 
 	// Make sure that the signature-patterns.csv is passed all the appropriate package properties

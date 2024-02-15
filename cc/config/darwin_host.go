@@ -29,11 +29,6 @@ var (
 		"-fPIC",
 		"-funwind-tables",
 
-		// Workaround differences in inttypes.h between host and target.
-		//See bug 12708004.
-		"-D__STDC_FORMAT_MACROS",
-		"-D__STDC_CONSTANT_MACROS",
-
 		"-isysroot ${macSdkRoot}",
 		"-mmacosx-version-min=${macMinVersion}",
 		"-DMACOSX_DEPLOYMENT_TARGET=${macMinVersion}",
@@ -79,7 +74,7 @@ func init() {
 	pctx.VariableFunc("macSdkRoot", func(ctx android.PackageVarContext) string {
 		return getMacTools(ctx).sdkRoot
 	})
-	pctx.StaticVariable("macMinVersion", "10.13")
+	pctx.StaticVariable("macMinVersion", "10.14")
 	pctx.VariableFunc("MacArPath", func(ctx android.PackageVarContext) string {
 		return getMacTools(ctx).arPath
 	})

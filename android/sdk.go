@@ -830,6 +830,9 @@ type SdkMemberContext interface {
 	// IsTargetBuildBeforeTiramisu return true if the target build release for which this snapshot is
 	// being generated is before Tiramisu, i.e. S.
 	IsTargetBuildBeforeTiramisu() bool
+
+	// ModuleErrorf reports an error at the line number of the module type in the module definition.
+	ModuleErrorf(fmt string, args ...interface{})
 }
 
 // ExportedComponentsInfo contains information about the components that this module exports to an
@@ -857,11 +860,11 @@ type ExportedComponentsInfo struct {
 	Components []string
 }
 
-var ExportedComponentsInfoProvider = blueprint.NewProvider(ExportedComponentsInfo{})
+var ExportedComponentsInfoProvider = blueprint.NewProvider[ExportedComponentsInfo]()
 
 // AdditionalSdkInfo contains additional properties to add to the generated SDK info file.
 type AdditionalSdkInfo struct {
 	Properties map[string]interface{}
 }
 
-var AdditionalSdkInfoProvider = blueprint.NewProvider(AdditionalSdkInfo{})
+var AdditionalSdkInfoProvider = blueprint.NewProvider[AdditionalSdkInfo]()

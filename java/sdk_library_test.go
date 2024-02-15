@@ -35,6 +35,14 @@ func TestJavaSdkLibrary(t *testing.T) {
 			"29": {"foo"},
 			"30": {"bar", "barney", "baz", "betty", "foo", "fred", "quuz", "wilma"},
 		}),
+		android.FixtureModifyConfig(func(config android.Config) {
+			config.SetApiLibraries([]string{"foo"})
+		}),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
+		}),
 	).RunTestWithBp(t, `
 		droiddoc_exported_dir {
 			name: "droiddoc-templates-sdk",
@@ -71,6 +79,8 @@ func TestJavaSdkLibrary(t *testing.T) {
 		    name: "quuz",
 				public: {
 					jars: ["c.jar"],
+					current_api: "api/current.txt",
+					removed_api: "api/removed.txt",
 				},
 		}
 		java_sdk_library_import {
@@ -121,18 +131,22 @@ func TestJavaSdkLibrary(t *testing.T) {
 	result.ModuleForTests(apiScopeSystem.stubsSourceModuleName("foo"), "android_common")
 	result.ModuleForTests(apiScopeTest.stubsSourceModuleName("foo"), "android_common")
 	result.ModuleForTests(apiScopePublic.stubsSourceModuleName("foo")+".api.contribution", "")
+	result.ModuleForTests(apiScopePublic.apiLibraryModuleName("foo"), "android_common")
 	result.ModuleForTests("foo"+sdkXmlFileSuffix, "android_common")
 	result.ModuleForTests("foo.api.public.28", "")
 	result.ModuleForTests("foo.api.system.28", "")
 	result.ModuleForTests("foo.api.test.28", "")
 
-	exportedComponentsInfo := result.ModuleProvider(foo.Module(), android.ExportedComponentsInfoProvider).(android.ExportedComponentsInfo)
+	exportedComponentsInfo, _ := android.SingletonModuleProvider(result, foo.Module(), android.ExportedComponentsInfoProvider)
 	expectedFooExportedComponents := []string{
 		"foo-removed.api.public.latest",
 		"foo-removed.api.system.latest",
 		"foo.api.public.latest",
 		"foo.api.system.latest",
 		"foo.stubs",
+		"foo.stubs.exportable",
+		"foo.stubs.exportable.system",
+		"foo.stubs.exportable.test",
 		"foo.stubs.source",
 		"foo.stubs.source.system",
 		"foo.stubs.source.test",
@@ -168,6 +182,9 @@ func TestJavaSdkLibrary(t *testing.T) {
 		android.AssertDeepEquals(t, "qux exports (required)", []string{"fred", "quuz", "foo", "bar"}, requiredSdkLibs)
 		android.AssertDeepEquals(t, "qux exports (optional)", []string{}, optionalSdkLibs)
 	}
+
+	// test if quuz have created the api_contribution module
+	result.ModuleForTests(apiScopePublic.stubsSourceModuleName("quuz")+".api.contribution", "")
 
 	fooDexJar := result.ModuleForTests("foo", "android_common").Rule("d8")
 	// tests if kotlinc generated files are NOT excluded from output of foo.
@@ -407,10 +424,9 @@ func TestJavaSdkLibrary_StubOrImplOnlyLibs(t *testing.T) {
 		android.AssertStringListContainsEquals(t, "bad combined inputs for "+sdklib, combineJarInputs, depPath, combined)
 	}
 	for _, expectation := range expectations {
-		verify("sdklib", expectation.lib, expectation.on_impl_classpath, expectation.in_impl_combined)
 		verify("sdklib.impl", expectation.lib, expectation.on_impl_classpath, expectation.in_impl_combined)
 
-		stubName := apiScopePublic.stubsLibraryModuleName("sdklib")
+		stubName := apiScopePublic.sourceStubLibraryModuleName("sdklib")
 		verify(stubName, expectation.lib, expectation.on_stub_classpath, expectation.in_stub_combined)
 	}
 }
@@ -521,6 +537,11 @@ func TestJavaSdkLibrary_Deps(t *testing.T) {
 		prepareForJavaTest,
 		PrepareForTestWithJavaSdkLibraryFiles,
 		FixtureWithLastReleaseApis("sdklib"),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
+		}),
 	).RunTestWithBp(t, `
 		java_sdk_library {
 			name: "sdklib",
@@ -539,6 +560,7 @@ func TestJavaSdkLibrary_Deps(t *testing.T) {
 		`sdklib.api.public.latest`,
 		`sdklib.impl`,
 		`sdklib.stubs`,
+		`sdklib.stubs.exportable`,
 		`sdklib.stubs.source`,
 		`sdklib.xml`,
 	})
@@ -911,6 +933,11 @@ func TestJavaSdkLibraryImport_WithSource(t *testing.T) {
 		prepareForJavaTest,
 		PrepareForTestWithJavaSdkLibraryFiles,
 		FixtureWithLastReleaseApis("sdklib"),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
+		}),
 	).RunTestWithBp(t, `
 		java_sdk_library {
 			name: "sdklib",
@@ -937,11 +964,13 @@ func TestJavaSdkLibraryImport_WithSource(t *testing.T) {
 		`sdklib.api.public.latest`,
 		`sdklib.impl`,
 		`sdklib.stubs`,
+		`sdklib.stubs.exportable`,
 		`sdklib.stubs.source`,
 		`sdklib.xml`,
 	})
 
 	CheckModuleDependencies(t, result.TestContext, "prebuilt_sdklib", "android_common", []string{
+		`all_apex_contributions`,
 		`prebuilt_sdklib.stubs`,
 		`sdklib.impl`,
 		// This should be prebuilt_sdklib.stubs but is set to sdklib.stubs because the
@@ -957,6 +986,11 @@ func testJavaSdkLibraryImport_Preferred(t *testing.T, prefer string, preparer an
 		PrepareForTestWithJavaSdkLibraryFiles,
 		FixtureWithLastReleaseApis("sdklib"),
 		preparer,
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
+		}),
 	).RunTestWithBp(t, `
 		java_sdk_library {
 			name: "sdklib",
@@ -1009,11 +1043,13 @@ func testJavaSdkLibraryImport_Preferred(t *testing.T, prefer string, preparer an
 		`sdklib.api.public.latest`,
 		`sdklib.impl`,
 		`sdklib.stubs`,
+		`sdklib.stubs.exportable`,
 		`sdklib.stubs.source`,
 		`sdklib.xml`,
 	})
 
 	CheckModuleDependencies(t, result.TestContext, "prebuilt_sdklib", "android_common", []string{
+		`all_apex_contributions`,
 		`dex2oatd`,
 		`prebuilt_sdklib.stubs`,
 		`prebuilt_sdklib.stubs.source`,
@@ -1058,6 +1094,131 @@ func TestJavaSdkLibraryImport_Preferred(t *testing.T) {
 				}
 			}))
 	})
+}
+
+// If a module is listed in `mainline_module_contributions, it should be used
+// It will supersede any other source vs prebuilt selection mechanism like `prefer` attribute
+func TestSdkLibraryImport_MetadataModuleSupersedesPreferred(t *testing.T) {
+	bp := `
+		apex_contributions {
+			name: "my_mainline_module_contributions",
+			api_domain: "my_mainline_module",
+			contents: [
+				// legacy mechanism prefers the prebuilt
+				// mainline_module_contributions supersedes this since source is listed explicitly
+				"sdklib.prebuilt_preferred_using_legacy_flags",
+
+				// legacy mechanism prefers the source
+				// mainline_module_contributions supersedes this since prebuilt is listed explicitly
+				"prebuilt_sdklib.source_preferred_using_legacy_flags",
+			],
+		}
+		java_sdk_library {
+			name: "sdklib.prebuilt_preferred_using_legacy_flags",
+			srcs: ["a.java"],
+			sdk_version: "none",
+			system_modules: "none",
+			public: {
+				enabled: true,
+			},
+			system: {
+				enabled: true,
+			}
+		}
+		java_sdk_library_import {
+			name: "sdklib.prebuilt_preferred_using_legacy_flags",
+			prefer: true, // prebuilt is preferred using legacy mechanism
+			public: {
+				jars: ["a.jar"],
+				stub_srcs: ["a.java"],
+				current_api: "current.txt",
+				removed_api: "removed.txt",
+				annotations: "annotations.zip",
+			},
+			system: {
+				jars: ["a.jar"],
+				stub_srcs: ["a.java"],
+				current_api: "current.txt",
+				removed_api: "removed.txt",
+				annotations: "annotations.zip",
+			},
+		}
+		java_sdk_library {
+			name: "sdklib.source_preferred_using_legacy_flags",
+			srcs: ["a.java"],
+			sdk_version: "none",
+			system_modules: "none",
+			public: {
+				enabled: true,
+			},
+			system: {
+				enabled: true,
+			}
+		}
+		java_sdk_library_import {
+			name: "sdklib.source_preferred_using_legacy_flags",
+			prefer: false, // source is preferred using legacy mechanism
+			public: {
+				jars: ["a.jar"],
+				stub_srcs: ["a.java"],
+				current_api: "current.txt",
+				removed_api: "removed.txt",
+				annotations: "annotations.zip",
+			},
+			system: {
+				jars: ["a.jar"],
+				stub_srcs: ["a.java"],
+				current_api: "current.txt",
+				removed_api: "removed.txt",
+				annotations: "annotations.zip",
+			},
+		}
+
+		// rdeps
+		java_library {
+			name: "public",
+			srcs: ["a.java"],
+			libs: [
+				// this should get source since source is listed in my_mainline_module_contributions
+				"sdklib.prebuilt_preferred_using_legacy_flags.stubs",
+				"sdklib.prebuilt_preferred_using_legacy_flags.stubs.system",
+
+				// this should get prebuilt since source is listed in my_mainline_module_contributions
+				"sdklib.source_preferred_using_legacy_flags.stubs",
+				"sdklib.source_preferred_using_legacy_flags.stubs.system",
+
+			],
+		}
+	`
+	result := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		PrepareForTestWithJavaSdkLibraryFiles,
+		FixtureWithLastReleaseApis("sdklib.source_preferred_using_legacy_flags", "sdklib.prebuilt_preferred_using_legacy_flags"),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": "my_mainline_module_contributions",
+			}
+		}),
+	).RunTestWithBp(t, bp)
+
+	// Make sure that rdeps get the correct source vs prebuilt based on mainline_module_contributions
+	public := result.ModuleForTests("public", "android_common")
+	rule := public.Output("javac/public.jar")
+	inputs := rule.Implicits.Strings()
+	expectedInputs := []string{
+		// source
+		"out/soong/.intermediates/sdklib.prebuilt_preferred_using_legacy_flags.stubs/android_common/turbine-combined/sdklib.prebuilt_preferred_using_legacy_flags.stubs.jar",
+		"out/soong/.intermediates/sdklib.prebuilt_preferred_using_legacy_flags.stubs.system/android_common/turbine-combined/sdklib.prebuilt_preferred_using_legacy_flags.stubs.system.jar",
+
+		// prebuilt
+		"out/soong/.intermediates/prebuilt_sdklib.source_preferred_using_legacy_flags.stubs/android_common/combined/sdklib.source_preferred_using_legacy_flags.stubs.jar",
+		"out/soong/.intermediates/prebuilt_sdklib.source_preferred_using_legacy_flags.stubs.system/android_common/combined/sdklib.source_preferred_using_legacy_flags.stubs.system.jar",
+	}
+	for _, expected := range expectedInputs {
+		if !android.InList(expected, inputs) {
+			t.Errorf("expected %q to contain %q", inputs, expected)
+		}
+	}
 }
 
 func TestJavaSdkLibraryEnforce(t *testing.T) {
@@ -1288,7 +1449,7 @@ func TestJavaSdkLibraryDist(t *testing.T) {
 
 	for _, tt := range testCases {
 		t.Run(tt.module, func(t *testing.T) {
-			m := result.ModuleForTests(tt.module+".stubs", "android_common").Module().(*Library)
+			m := result.ModuleForTests(apiScopePublic.exportableStubsLibraryModuleName(tt.module), "android_common").Module().(*Library)
 			dists := m.Dists()
 			if len(dists) != 1 {
 				t.Fatalf("expected exactly 1 dist entry, got %d", len(dists))
@@ -1411,4 +1572,351 @@ func TestJavaSdkLibrary_StubOnlyLibs_PassedToDroidstubs(t *testing.T) {
 	// The foo.stubs.source should depend on bar-lib
 	fooStubsSources := result.ModuleForTests("foo.stubs.source", "android_common").Module().(*Droidstubs)
 	android.AssertStringListContains(t, "foo stubs should depend on bar-lib", fooStubsSources.Javadoc.properties.Libs, "bar-lib")
+}
+
+func TestJavaSdkLibrary_Scope_Libs_PassedToDroidstubs(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		PrepareForTestWithJavaSdkLibraryFiles,
+		FixtureWithLastReleaseApis("foo"),
+	).RunTestWithBp(t, `
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java"],
+			public: {
+				enabled: true,
+				libs: ["bar-lib"],
+			},
+		}
+
+		java_library {
+			name: "bar-lib",
+			srcs: ["b.java"],
+		}
+		`)
+
+	// The foo.stubs.source should depend on bar-lib
+	fooStubsSources := result.ModuleForTests("foo.stubs.source", "android_common").Module().(*Droidstubs)
+	android.AssertStringListContains(t, "foo stubs should depend on bar-lib", fooStubsSources.Javadoc.properties.Libs, "bar-lib")
+}
+
+func TestJavaSdkLibrary_ApiLibrary(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		PrepareForTestWithJavaSdkLibraryFiles,
+		FixtureWithLastReleaseApis("foo"),
+		android.FixtureModifyConfig(func(config android.Config) {
+			config.SetApiLibraries([]string{"foo"})
+		}),
+	).RunTestWithBp(t, `
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java", "b.java"],
+			api_packages: ["foo"],
+			system: {
+				enabled: true,
+			},
+			module_lib: {
+				enabled: true,
+			},
+			test: {
+				enabled: true,
+			},
+		}
+	`)
+
+	testCases := []struct {
+		scope              *apiScope
+		apiContributions   []string
+		fullApiSurfaceStub string
+	}{
+		{
+			scope:              apiScopePublic,
+			apiContributions:   []string{"foo.stubs.source.api.contribution"},
+			fullApiSurfaceStub: "android_stubs_current",
+		},
+		{
+			scope:              apiScopeSystem,
+			apiContributions:   []string{"foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
+			fullApiSurfaceStub: "android_system_stubs_current",
+		},
+		{
+			scope:              apiScopeTest,
+			apiContributions:   []string{"foo.stubs.source.test.api.contribution", "foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
+			fullApiSurfaceStub: "android_test_stubs_current",
+		},
+		{
+			scope:              apiScopeModuleLib,
+			apiContributions:   []string{"foo.stubs.source.module_lib.api.contribution", "foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
+			fullApiSurfaceStub: "android_module_lib_stubs_current_full.from-text",
+		},
+	}
+
+	for _, c := range testCases {
+		m := result.ModuleForTests(c.scope.apiLibraryModuleName("foo"), "android_common").Module().(*ApiLibrary)
+		android.AssertArrayString(t, "Module expected to contain api contributions", c.apiContributions, m.properties.Api_contributions)
+		android.AssertStringEquals(t, "Module expected to contain full api surface api library", c.fullApiSurfaceStub, *m.properties.Full_api_surface_stub)
+	}
+}
+
+func TestStaticDepStubLibrariesVisibility(t *testing.T) {
+	android.GroupFixturePreparers(
+		prepareForJavaTest,
+		PrepareForTestWithJavaSdkLibraryFiles,
+		FixtureWithLastReleaseApis("foo"),
+		android.FixtureMergeMockFs(
+			map[string][]byte{
+				"A.java": nil,
+				"dir/Android.bp": []byte(
+					`
+					java_library {
+						name: "bar",
+						srcs: ["A.java"],
+						libs: ["foo.stubs.from-source"],
+					}
+					`),
+				"dir/A.java": nil,
+			},
+		).ExtendWithErrorHandler(
+			android.FixtureExpectsAtLeastOneErrorMatchingPattern(
+				`module "bar" variant "android_common": depends on //.:foo.stubs.from-source which is not visible to this module`)),
+	).RunTestWithBp(t, `
+		java_sdk_library {
+			name: "foo",
+			srcs: ["A.java"],
+		}
+	`)
+}
+
+func TestSdkLibraryDependency(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		PrepareForTestWithJavaSdkLibraryFiles,
+		FixtureWithPrebuiltApis(map[string][]string{
+			"30": {"bar", "foo"},
+		}),
+	).RunTestWithBp(t,
+		`
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java", "b.java"],
+			api_packages: ["foo"],
+		}
+
+		java_sdk_library {
+			name: "bar",
+			srcs: ["c.java", "b.java"],
+			libs: [
+				"foo",
+			],
+			uses_libs: [
+				"foo",
+			],
+		}
+`)
+
+	barPermissions := result.ModuleForTests("bar.xml", "android_common").Rule("java_sdk_xml")
+
+	android.AssertStringDoesContain(t, "bar.xml java_sdk_xml command", barPermissions.RuleParams.Command, `dependency=\"foo\"`)
+}
+
+func TestSdkLibraryExportableStubsLibrary(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		PrepareForTestWithJavaSdkLibraryFiles,
+		FixtureWithLastReleaseApis("foo"),
+		android.FixtureModifyConfig(func(config android.Config) {
+			config.SetApiLibraries([]string{"foo"})
+		}),
+	).RunTestWithBp(t, `
+		aconfig_declarations {
+			name: "bar",
+			package: "com.example.package",
+			srcs: [
+				"bar.aconfig",
+			],
+		}
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java", "b.java"],
+			api_packages: ["foo"],
+			system: {
+				enabled: true,
+			},
+			module_lib: {
+				enabled: true,
+			},
+			test: {
+				enabled: true,
+			},
+			aconfig_declarations: [
+				"bar",
+			],
+		}
+	`)
+
+	exportableStubsLibraryModuleName := apiScopePublic.exportableStubsLibraryModuleName("foo")
+	exportableSourceStubsLibraryModuleName := apiScopePublic.exportableSourceStubsLibraryModuleName("foo")
+
+	// Check modules generation
+	topLevelModule := result.ModuleForTests(exportableStubsLibraryModuleName, "android_common")
+	result.ModuleForTests(exportableSourceStubsLibraryModuleName, "android_common")
+
+	// Check static lib dependency
+	android.AssertBoolEquals(t, "exportable top level stubs library module depends on the"+
+		"exportable source stubs library module", true,
+		CheckModuleHasDependency(t, result.TestContext, exportableStubsLibraryModuleName,
+			"android_common", exportableSourceStubsLibraryModuleName),
+	)
+	android.AssertArrayString(t, "exportable source stub library is a static lib of the"+
+		"top level exportable stubs library", []string{exportableSourceStubsLibraryModuleName},
+		topLevelModule.Module().(*Library).properties.Static_libs)
+}
+
+// For java libraries depending on java_sdk_library(_import) via libs, assert that
+// rdep gets stubs of source if source is listed in apex_contributions and prebuilt has prefer (legacy mechanism)
+func TestStubResolutionOfJavaSdkLibraryInLibs(t *testing.T) {
+	bp := `
+		apex_contributions {
+			name: "my_mainline_module_contributions",
+			api_domain: "my_mainline_module",
+			contents: ["sdklib"], // source is selected using apex_contributions, but prebuilt is selected using prefer
+		}
+		java_sdk_library {
+			name: "sdklib",
+			srcs: ["a.java"],
+			sdk_version: "none",
+			system_modules: "none",
+			public: {
+				enabled: true,
+			},
+		}
+		java_sdk_library_import {
+			name: "sdklib",
+			public: {
+				jars: ["a.jar"],
+				stub_srcs: ["a.java"],
+				current_api: "current.txt",
+				removed_api: "removed.txt",
+				annotations: "annotations.zip",
+			},
+			prefer: true, // Set prefer explicitly on the prebuilt. We will assert that rdep gets source in a test case.
+		}
+		// rdeps
+		java_library {
+			name: "mymodule",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			libs: ["sdklib",], // this should be dynamically resolved to sdklib.stubs (source) or prebuilt_sdklib.stubs (prebuilt)
+		}
+	`
+
+	fixture := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		PrepareForTestWithJavaSdkLibraryFiles,
+		FixtureWithLastReleaseApis("sdklib"),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				// We can use any of the apex contribution build flags from build/soong/android/config.go#mainlineApexContributionBuildFlags here
+				"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": "my_mainline_module_contributions",
+			}
+		}),
+	)
+
+	result := fixture.RunTestWithBp(t, bp)
+	// Make sure that rdeps get the correct source vs prebuilt based on mainline_module_contributions
+	public := result.ModuleForTests("mymodule", "android_common")
+	rule := public.Output("javac/mymodule.jar")
+	inputs := rule.Implicits.Strings()
+	android.AssertStringListContains(t, "Could not find the expected stub on classpath", inputs, "out/soong/.intermediates/sdklib.stubs/android_common/turbine-combined/sdklib.stubs.jar")
+}
+
+// test that rdep gets resolved to the correct version of a java_sdk_library (source or a specific prebuilt)
+func TestMultipleSdkLibraryPrebuilts(t *testing.T) {
+	bp := `
+		apex_contributions {
+			name: "my_mainline_module_contributions",
+			api_domain: "my_mainline_module",
+			contents: ["%s"],
+		}
+		java_sdk_library {
+			name: "sdklib",
+			srcs: ["a.java"],
+			sdk_version: "none",
+			system_modules: "none",
+			public: {
+				enabled: true,
+			},
+		}
+		java_sdk_library_import {
+			name: "sdklib.v1", //prebuilt
+			source_module_name: "sdklib",
+			public: {
+				jars: ["a.jar"],
+				stub_srcs: ["a.java"],
+				current_api: "current.txt",
+				removed_api: "removed.txt",
+				annotations: "annotations.zip",
+			},
+		}
+		java_sdk_library_import {
+			name: "sdklib.v2", //prebuilt
+			source_module_name: "sdklib",
+			public: {
+				jars: ["a.jar"],
+				stub_srcs: ["a.java"],
+				current_api: "current.txt",
+				removed_api: "removed.txt",
+				annotations: "annotations.zip",
+			},
+		}
+		// rdeps
+		java_library {
+			name: "mymodule",
+			srcs: ["a.java"],
+			libs: ["sdklib.stubs",],
+		}
+	`
+	testCases := []struct {
+		desc                   string
+		selectedDependencyName string
+		expectedStubPath       string
+	}{
+		{
+			desc:                   "Source library is selected using apex_contributions",
+			selectedDependencyName: "sdklib",
+			expectedStubPath:       "out/soong/.intermediates/sdklib.stubs/android_common/turbine-combined/sdklib.stubs.jar",
+		},
+		{
+			desc:                   "Prebuilt library v1 is selected using apex_contributions",
+			selectedDependencyName: "prebuilt_sdklib.v1",
+			expectedStubPath:       "out/soong/.intermediates/prebuilt_sdklib.v1.stubs/android_common/combined/sdklib.stubs.jar",
+		},
+		{
+			desc:                   "Prebuilt library v2 is selected using apex_contributions",
+			selectedDependencyName: "prebuilt_sdklib.v2",
+			expectedStubPath:       "out/soong/.intermediates/prebuilt_sdklib.v2.stubs/android_common/combined/sdklib.stubs.jar",
+		},
+	}
+
+	fixture := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		PrepareForTestWithJavaSdkLibraryFiles,
+		FixtureWithLastReleaseApis("sdklib", "sdklib.v1", "sdklib.v2"),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": "my_mainline_module_contributions",
+			}
+		}),
+	)
+
+	for _, tc := range testCases {
+		result := fixture.RunTestWithBp(t, fmt.Sprintf(bp, tc.selectedDependencyName))
+
+		// Make sure that rdeps get the correct source vs prebuilt based on mainline_module_contributions
+		public := result.ModuleForTests("mymodule", "android_common")
+		rule := public.Output("javac/mymodule.jar")
+		inputs := rule.Implicits.Strings()
+		android.AssertStringListContains(t, "Could not find the expected stub on classpath", inputs, tc.expectedStubPath)
+	}
 }

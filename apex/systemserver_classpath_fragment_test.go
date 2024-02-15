@@ -97,7 +97,7 @@ func TestSystemserverclasspathFragmentContents(t *testing.T) {
 
 	ctx := result.TestContext
 
-	ensureExactContents(t, ctx, "myapex", "android_common_myapex_image", []string{
+	ensureExactContents(t, ctx, "myapex", "android_common_myapex", []string{
 		"etc/classpaths/systemserverclasspath.pb",
 		"javalib/foo.jar",
 		"javalib/bar.jar",
@@ -105,7 +105,8 @@ func TestSystemserverclasspathFragmentContents(t *testing.T) {
 		"javalib/baz.jar",
 	})
 
-	java.CheckModuleDependencies(t, ctx, "myapex", "android_common_myapex_image", []string{
+	java.CheckModuleDependencies(t, ctx, "myapex", "android_common_myapex", []string{
+		`dex2oatd`,
 		`myapex.key`,
 		`mysystemserverclasspathfragment`,
 	})
@@ -157,11 +158,12 @@ func TestSystemserverclasspathFragmentNoGeneratedProto(t *testing.T) {
 		}
 	`)
 
-	ensureExactContents(t, result.TestContext, "myapex", "android_common_myapex_image", []string{
+	ensureExactContents(t, result.TestContext, "myapex", "android_common_myapex", []string{
 		"javalib/foo.jar",
 	})
 
-	java.CheckModuleDependencies(t, result.TestContext, "myapex", "android_common_myapex_image", []string{
+	java.CheckModuleDependencies(t, result.TestContext, "myapex", "android_common_myapex", []string{
+		`dex2oatd`,
 		`myapex.key`,
 		`mysystemserverclasspathfragment`,
 	})
@@ -272,24 +274,26 @@ func TestPrebuiltSystemserverclasspathFragmentContents(t *testing.T) {
 	ctx := result.TestContext
 
 	java.CheckModuleDependencies(t, ctx, "myapex", "android_common_myapex", []string{
-		`myapex.apex.selector`,
+		`dex2oatd`,
+		`prebuilt_myapex.apex.selector`,
+		`prebuilt_myapex.deapexer`,
 		`prebuilt_mysystemserverclasspathfragment`,
 	})
 
 	java.CheckModuleDependencies(t, ctx, "mysystemserverclasspathfragment", "android_common_myapex", []string{
-		`myapex.deapexer`,
 		`prebuilt_bar`,
 		`prebuilt_foo`,
+		`prebuilt_myapex.deapexer`,
 	})
 
-	ensureExactDeapexedContents(t, ctx, "myapex", "android_common", []string{
+	ensureExactDeapexedContents(t, ctx, "prebuilt_myapex", "android_common", []string{
 		"javalib/foo.jar",
 		"javalib/bar.jar",
 		"javalib/bar.jar.prof",
 	})
 
-	assertProfileGuided(t, ctx, "foo", "android_common_myapex", false)
-	assertProfileGuided(t, ctx, "bar", "android_common_myapex", true)
+	assertProfileGuidedPrebuilt(t, ctx, "myapex", "foo", false)
+	assertProfileGuidedPrebuilt(t, ctx, "myapex", "bar", true)
 }
 
 func TestSystemserverclasspathFragmentStandaloneContents(t *testing.T) {
@@ -361,7 +365,7 @@ func TestSystemserverclasspathFragmentStandaloneContents(t *testing.T) {
 
 	ctx := result.TestContext
 
-	ensureExactContents(t, ctx, "myapex", "android_common_myapex_image", []string{
+	ensureExactContents(t, ctx, "myapex", "android_common_myapex", []string{
 		"etc/classpaths/systemserverclasspath.pb",
 		"javalib/foo.jar",
 		"javalib/bar.jar",
@@ -428,23 +432,31 @@ func TestPrebuiltStandaloneSystemserverclasspathFragmentContents(t *testing.T) {
 	ctx := result.TestContext
 
 	java.CheckModuleDependencies(t, ctx, "mysystemserverclasspathfragment", "android_common_myapex", []string{
-		`myapex.deapexer`,
 		`prebuilt_bar`,
 		`prebuilt_foo`,
+		`prebuilt_myapex.deapexer`,
 	})
 
-	ensureExactDeapexedContents(t, ctx, "myapex", "android_common", []string{
+	ensureExactDeapexedContents(t, ctx, "prebuilt_myapex", "android_common", []string{
 		"javalib/foo.jar",
 		"javalib/bar.jar",
 		"javalib/bar.jar.prof",
 	})
 
-	assertProfileGuided(t, ctx, "foo", "android_common_myapex", false)
-	assertProfileGuided(t, ctx, "bar", "android_common_myapex", true)
+	assertProfileGuidedPrebuilt(t, ctx, "myapex", "foo", false)
+	assertProfileGuidedPrebuilt(t, ctx, "myapex", "bar", true)
 }
 
 func assertProfileGuided(t *testing.T, ctx *android.TestContext, moduleName string, variant string, expected bool) {
 	dexpreopt := ctx.ModuleForTests(moduleName, variant).Rule("dexpreopt")
+	actual := strings.Contains(dexpreopt.RuleParams.Command, "--profile-file=")
+	if expected != actual {
+		t.Fatalf("Expected profile-guided to be %v, got %v", expected, actual)
+	}
+}
+
+func assertProfileGuidedPrebuilt(t *testing.T, ctx *android.TestContext, apexName string, moduleName string, expected bool) {
+	dexpreopt := ctx.ModuleForTests(apexName, "android_common_"+apexName).Rule("dexpreopt." + moduleName)
 	actual := strings.Contains(dexpreopt.RuleParams.Command, "--profile-file=")
 	if expected != actual {
 		t.Fatalf("Expected profile-guided to be %v, got %v", expected, actual)

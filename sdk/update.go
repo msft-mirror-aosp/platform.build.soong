@@ -166,10 +166,7 @@ func (s *sdk) collectMembers(ctx android.ModuleContext) {
 			// Keep track of which multilib variants are used by the sdk.
 			s.multilibUsages = s.multilibUsages.addArchType(child.Target().Arch.ArchType)
 
-			var exportedComponentsInfo android.ExportedComponentsInfo
-			if ctx.OtherModuleHasProvider(child, android.ExportedComponentsInfoProvider) {
-				exportedComponentsInfo = ctx.OtherModuleProvider(child, android.ExportedComponentsInfoProvider).(android.ExportedComponentsInfo)
-			}
+			exportedComponentsInfo, _ := android.OtherModuleProvider(ctx, child, android.ExportedComponentsInfoProvider)
 
 			var container android.Module
 			if parent != ctx.Module() {
@@ -455,11 +452,14 @@ be unnecessary as every module in the sdk already has its own licenses property.
 
 	for _, module := range builder.prebuiltOrder {
 		// Prune any empty property sets.
-		module = module.transform(pruneEmptySetTransformer{})
+		module = transformModule(module, pruneEmptySetTransformer{})
 
 		// Transform the module module to make it suitable for use in the snapshot.
-		module.transform(snapshotTransformer)
-		bpFile.AddModule(module)
+		module = transformModule(module, snapshotTransformer)
+		module = transformModule(module, emptyClasspathContentsTransformation{})
+		if module != nil {
+			bpFile.AddModule(module)
+		}
 	}
 
 	// generate Android.bp
@@ -604,7 +604,7 @@ func (s *sdk) generateInfoData(ctx android.ModuleContext, memberVariantDeps []sd
 				name:       name,
 			}
 
-			additionalSdkInfo := ctx.OtherModuleProvider(module, android.AdditionalSdkInfoProvider).(android.AdditionalSdkInfo)
+			additionalSdkInfo, _ := android.OtherModuleProvider(ctx, module, android.AdditionalSdkInfoProvider)
 			info.memberSpecific = additionalSdkInfo.Properties
 
 			name2Info[name] = info
@@ -835,9 +835,11 @@ type snapshotTransformation struct {
 }
 
 func (t snapshotTransformation) transformModule(module *bpModule) *bpModule {
-	// If the module is an internal member then use a unique name for it.
-	name := module.Name()
-	module.setProperty("name", t.builder.snapshotSdkMemberName(name, true))
+	if module != nil {
+		// If the module is an internal member then use a unique name for it.
+		name := module.Name()
+		module.setProperty("name", t.builder.snapshotSdkMemberName(name, true))
+	}
 	return module
 }
 
@@ -848,6 +850,25 @@ func (t snapshotTransformation) transformProperty(_ string, value interface{}, t
 	} else {
 		return value, tag
 	}
+}
+
+type emptyClasspathContentsTransformation struct {
+	identityTransformation
+}
+
+func (t emptyClasspathContentsTransformation) transformModule(module *bpModule) *bpModule {
+	classpathModuleTypes := []string{
+		"prebuilt_bootclasspath_fragment",
+		"prebuilt_systemserverclasspath_fragment",
+	}
+	if module != nil && android.InList(module.moduleType, classpathModuleTypes) {
+		if contents, ok := module.bpPropertySet.properties["contents"].([]string); ok {
+			if len(contents) == 0 {
+				return nil
+			}
+		}
+	}
+	return module
 }
 
 type pruneEmptySetTransformer struct {
@@ -1147,7 +1168,7 @@ func (s *snapshotBuilder) AddPrebuiltModule(member android.SdkMember, moduleType
 
 	// The licenses are the same for all variants.
 	mctx := s.ctx
-	licenseInfo := mctx.OtherModuleProvider(variant, android.LicenseInfoProvider).(android.LicenseInfo)
+	licenseInfo, _ := android.OtherModuleProvider(mctx, variant, android.LicenseInfoProvider)
 	if len(licenseInfo.Licenses) > 0 {
 		m.AddPropertyWithTag("licenses", licenseInfo.Licenses, s.OptionalSdkMemberReferencePropertyTag())
 	}
@@ -1393,7 +1414,7 @@ func selectApexVariantsWhereAvailable(ctx *memberContext, variants []android.Mod
 		variantsByApex := make(map[string]android.Module)
 		conflictDetected := false
 		for _, variant := range list {
-			apexInfo := moduleCtx.OtherModuleProvider(variant, android.ApexInfoProvider).(android.ApexInfo)
+			apexInfo, _ := android.OtherModuleProvider(moduleCtx, variant, android.ApexInfoProvider)
 			apexVariationName := apexInfo.ApexVariationName
 			// If there are two variants for a specific APEX variation then there is conflict.
 			if _, ok := variantsByApex[apexVariationName]; ok {
@@ -1961,6 +1982,10 @@ type memberContext struct {
 
 	// The set of traits required of this member.
 	requiredTraits android.SdkMemberTraitSet
+}
+
+func (m *memberContext) ModuleErrorf(fmt string, args ...interface{}) {
+	m.sdkMemberContext.ModuleErrorf(fmt, args...)
 }
 
 func (m *memberContext) SdkModuleContext() android.ModuleContext {

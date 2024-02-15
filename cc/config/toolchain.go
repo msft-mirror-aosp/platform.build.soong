@@ -20,6 +20,12 @@ import (
 	"android/soong/android"
 )
 
+func init() {
+	exportedVars.ExportStringListStaticVariable("DarwinAvailableLibraries", darwinAvailableLibraries)
+	exportedVars.ExportStringListStaticVariable("LinuxAvailableLibraries", linuxAvailableLibraries)
+	exportedVars.ExportStringListStaticVariable("WindowsAvailableLibraries", windowsAvailableLibraries)
+}
+
 type toolchainFactory func(arch android.Arch) Toolchain
 
 var toolchainFactories = make(map[android.OsType]map[android.ArchType]toolchainFactory)
@@ -94,6 +100,7 @@ type Toolchain interface {
 	CrtEndStaticBinary() []string
 	CrtEndSharedBinary() []string
 	CrtEndSharedLibrary() []string
+	CrtPadSegmentSharedLibrary() []string
 
 	// DefaultSharedLibraries returns the list of shared libraries that will be added to all
 	// targets unless they explicitly specify system_shared_libs.
@@ -149,12 +156,13 @@ func (toolchainBase) LibclangRuntimeLibraryArch() string {
 
 type toolchainNoCrt struct{}
 
-func (toolchainNoCrt) CrtBeginStaticBinary() []string  { return nil }
-func (toolchainNoCrt) CrtBeginSharedBinary() []string  { return nil }
-func (toolchainNoCrt) CrtBeginSharedLibrary() []string { return nil }
-func (toolchainNoCrt) CrtEndStaticBinary() []string    { return nil }
-func (toolchainNoCrt) CrtEndSharedBinary() []string    { return nil }
-func (toolchainNoCrt) CrtEndSharedLibrary() []string   { return nil }
+func (toolchainNoCrt) CrtBeginStaticBinary() []string       { return nil }
+func (toolchainNoCrt) CrtBeginSharedBinary() []string       { return nil }
+func (toolchainNoCrt) CrtBeginSharedLibrary() []string      { return nil }
+func (toolchainNoCrt) CrtEndStaticBinary() []string         { return nil }
+func (toolchainNoCrt) CrtEndSharedBinary() []string         { return nil }
+func (toolchainNoCrt) CrtEndSharedLibrary() []string        { return nil }
+func (toolchainNoCrt) CrtPadSegmentSharedLibrary() []string { return nil }
 
 func (toolchainBase) DefaultSharedLibraries() []string {
 	return nil
@@ -255,5 +263,3 @@ func LibFuzzerRuntimeLibrary(t Toolchain) string {
 func LibFuzzerRuntimeInterceptors(t Toolchain) string {
 	return LibclangRuntimeLibrary(t, "fuzzer_interceptors")
 }
-
-var inList = android.InList

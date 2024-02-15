@@ -32,7 +32,7 @@ type GlobalConfig struct {
 	DisablePreoptBootImages bool     // disable prepot for boot images
 	DisablePreoptModules    []string // modules with preopt disabled by product-specific config
 
-	OnlyPreoptBootImageAndSystemServer bool // only preopt jars in the boot image or system server
+	OnlyPreoptArtBootImage bool // only preopt jars in the ART boot image
 
 	PreoptWithUpdatableBcp bool // If updatable boot jars are included in dexpreopt or not.
 
@@ -45,7 +45,8 @@ type GlobalConfig struct {
 	BootJars     android.ConfiguredJarList // modules for jars that form the boot class path
 	ApexBootJars android.ConfiguredJarList // jars within apex that form the boot class path
 
-	ArtApexJars android.ConfiguredJarList // modules for jars that are in the ART APEX
+	ArtApexJars              android.ConfiguredJarList // modules for jars that are in the ART APEX
+	TestOnlyArtBootImageJars android.ConfiguredJarList // modules for jars to be included in the ART boot image for testing
 
 	SystemServerJars               android.ConfiguredJarList // system_server classpath jars on the platform
 	SystemServerApps               []string                  // apps that are loaded into system server
@@ -97,7 +98,9 @@ type GlobalConfig struct {
 	// measure, as it masks real errors and affects performance.
 	RelaxUsesLibraryCheck bool
 
-	EnableUffdGc bool // preopt with the assumption that userfaultfd GC will be used on device.
+	// "true" to force preopt with CMC GC (a.k.a., UFFD GC); "false" to force preopt with CC GC;
+	// "default" to determine the GC type based on the kernel version file.
+	EnableUffdGc string
 }
 
 var allPlatformSystemServerJarsKey = android.NewOnceKey("allPlatformSystemServerJars")
@@ -153,6 +156,7 @@ type GlobalSoongConfig struct {
 	Zip2zip          android.Path
 	ManifestCheck    android.Path
 	ConstructContext android.Path
+	UffdGcFlag       android.WritablePath
 }
 
 type ModuleConfig struct {
@@ -183,8 +187,6 @@ type ModuleConfig struct {
 	PreoptBootClassPathDexFiles     android.Paths // file paths of boot class path files
 	PreoptBootClassPathDexLocations []string      // virtual locations of boot class path files
 
-	PreoptExtractedApk bool // Overrides OnlyPreoptModules
-
 	NoCreateAppImage    bool
 	ForceCreateAppImage bool
 
@@ -197,7 +199,7 @@ var pctx = android.NewPackageContext("android/soong/dexpreopt")
 
 func init() {
 	pctx.Import("android/soong/android")
-	android.RegisterSingletonType("dexpreopt-soong-config", func() android.Singleton {
+	android.RegisterParallelSingletonType("dexpreopt-soong-config", func() android.Singleton {
 		return &globalSoongConfigSingleton{}
 	})
 }
@@ -321,7 +323,7 @@ func getGlobalConfigRaw(ctx android.PathContext) globalConfigAndRaw {
 				missingDepsCtx.AddMissingDependencies([]string{err.Error()})
 			}
 		} else {
-			android.ReportPathErrorf(ctx, "%w", err)
+			android.ReportPathErrorf(ctx, "%s", err)
 		}
 	}
 
@@ -538,6 +540,7 @@ func createGlobalSoongConfig(ctx android.ModuleContext) *GlobalSoongConfig {
 		Zip2zip:          ctx.Config().HostToolPath(ctx, "zip2zip"),
 		ManifestCheck:    ctx.Config().HostToolPath(ctx, "manifest_check"),
 		ConstructContext: ctx.Config().HostToolPath(ctx, "construct_context"),
+		UffdGcFlag:       getUffdGcFlagPath(ctx),
 	}
 }
 
@@ -589,6 +592,7 @@ type globalJsonSoongConfig struct {
 	Zip2zip          string
 	ManifestCheck    string
 	ConstructContext string
+	UffdGcFlag       string
 }
 
 // ParseGlobalSoongConfig parses the given data assumed to be read from the
@@ -610,6 +614,7 @@ func ParseGlobalSoongConfig(ctx android.PathContext, data []byte) (*GlobalSoongC
 		Zip2zip:          constructPath(ctx, jc.Zip2zip),
 		ManifestCheck:    constructPath(ctx, jc.ManifestCheck),
 		ConstructContext: constructPath(ctx, jc.ConstructContext),
+		UffdGcFlag:       constructWritablePath(ctx, jc.UffdGcFlag),
 	}
 
 	return config, nil
@@ -634,11 +639,14 @@ func checkBootJarsConfigConsistency(ctx android.SingletonContext, dexpreoptConfi
 }
 
 func (s *globalSoongConfigSingleton) GenerateBuildActions(ctx android.SingletonContext) {
-	checkBootJarsConfigConsistency(ctx, GetGlobalConfig(ctx), ctx.Config())
+	global := GetGlobalConfig(ctx)
+	checkBootJarsConfigConsistency(ctx, global, ctx.Config())
 
-	if GetGlobalConfig(ctx).DisablePreopt {
+	if global.DisablePreopt {
 		return
 	}
+
+	buildUffdGcFlag(ctx, global)
 
 	config := GetCachedGlobalSoongConfig(ctx)
 	if config == nil {
@@ -655,6 +663,7 @@ func (s *globalSoongConfigSingleton) GenerateBuildActions(ctx android.SingletonC
 		Zip2zip:          config.Zip2zip.String(),
 		ManifestCheck:    config.ManifestCheck.String(),
 		ConstructContext: config.ConstructContext.String(),
+		UffdGcFlag:       config.UffdGcFlag.String(),
 	}
 
 	data, err := json.Marshal(jc)
@@ -685,53 +694,77 @@ func (s *globalSoongConfigSingleton) MakeVars(ctx android.MakeVarsContext) {
 		config.Zip2zip.String(),
 		config.ManifestCheck.String(),
 		config.ConstructContext.String(),
+		config.UffdGcFlag.String(),
 	}, " "))
+}
+
+func buildUffdGcFlag(ctx android.BuilderContext, global *GlobalConfig) {
+	uffdGcFlag := getUffdGcFlagPath(ctx)
+
+	if global.EnableUffdGc == "true" {
+		android.WriteFileRuleVerbatim(ctx, uffdGcFlag, "--runtime-arg -Xgc:CMC")
+	} else if global.EnableUffdGc == "false" {
+		android.WriteFileRuleVerbatim(ctx, uffdGcFlag, "")
+	} else if global.EnableUffdGc == "default" {
+		// Generated by `build/make/core/Makefile`.
+		kernelVersionFile := android.PathForOutput(ctx, "dexpreopt/kernel_version_for_uffd_gc.txt")
+		// Determine the UFFD GC flag by the kernel version file.
+		rule := android.NewRuleBuilder(pctx, ctx)
+		rule.Command().
+			Tool(ctx.Config().HostToolPath(ctx, "construct_uffd_gc_flag")).
+			Input(kernelVersionFile).
+			Output(uffdGcFlag)
+		rule.Restat().Build("dexpreopt_uffd_gc_flag", "dexpreopt_uffd_gc_flag")
+	} else {
+		panic(fmt.Sprintf("Unknown value of PRODUCT_ENABLE_UFFD_GC: %s", global.EnableUffdGc))
+	}
 }
 
 func GlobalConfigForTests(ctx android.PathContext) *GlobalConfig {
 	return &GlobalConfig{
-		DisablePreopt:                      false,
-		DisablePreoptModules:               nil,
-		OnlyPreoptBootImageAndSystemServer: false,
-		HasSystemOther:                     false,
-		PatternsOnSystemOther:              nil,
-		DisableGenerateProfile:             false,
-		ProfileDir:                         "",
-		BootJars:                           android.EmptyConfiguredJarList(),
-		ApexBootJars:                       android.EmptyConfiguredJarList(),
-		ArtApexJars:                        android.EmptyConfiguredJarList(),
-		SystemServerJars:                   android.EmptyConfiguredJarList(),
-		SystemServerApps:                   nil,
-		ApexSystemServerJars:               android.EmptyConfiguredJarList(),
-		StandaloneSystemServerJars:         android.EmptyConfiguredJarList(),
-		ApexStandaloneSystemServerJars:     android.EmptyConfiguredJarList(),
-		SpeedApps:                          nil,
-		PreoptFlags:                        nil,
-		DefaultCompilerFilter:              "",
-		SystemServerCompilerFilter:         "",
-		GenerateDMFiles:                    false,
-		NoDebugInfo:                        false,
-		DontResolveStartupStrings:          false,
-		AlwaysSystemServerDebugInfo:        false,
-		NeverSystemServerDebugInfo:         false,
-		AlwaysOtherDebugInfo:               false,
-		NeverOtherDebugInfo:                false,
-		IsEng:                              false,
-		SanitizeLite:                       false,
-		DefaultAppImages:                   false,
-		Dex2oatXmx:                         "",
-		Dex2oatXms:                         "",
-		EmptyDirectory:                     "empty_dir",
-		CpuVariant:                         nil,
-		InstructionSetFeatures:             nil,
-		BootImageProfiles:                  nil,
-		BootFlags:                          "",
-		Dex2oatImageXmx:                    "",
-		Dex2oatImageXms:                    "",
+		DisablePreopt:                  false,
+		DisablePreoptModules:           nil,
+		OnlyPreoptArtBootImage:         false,
+		HasSystemOther:                 false,
+		PatternsOnSystemOther:          nil,
+		DisableGenerateProfile:         false,
+		ProfileDir:                     "",
+		BootJars:                       android.EmptyConfiguredJarList(),
+		ApexBootJars:                   android.EmptyConfiguredJarList(),
+		ArtApexJars:                    android.EmptyConfiguredJarList(),
+		TestOnlyArtBootImageJars:       android.EmptyConfiguredJarList(),
+		SystemServerJars:               android.EmptyConfiguredJarList(),
+		SystemServerApps:               nil,
+		ApexSystemServerJars:           android.EmptyConfiguredJarList(),
+		StandaloneSystemServerJars:     android.EmptyConfiguredJarList(),
+		ApexStandaloneSystemServerJars: android.EmptyConfiguredJarList(),
+		SpeedApps:                      nil,
+		PreoptFlags:                    nil,
+		DefaultCompilerFilter:          "",
+		SystemServerCompilerFilter:     "",
+		GenerateDMFiles:                false,
+		NoDebugInfo:                    false,
+		DontResolveStartupStrings:      false,
+		AlwaysSystemServerDebugInfo:    false,
+		NeverSystemServerDebugInfo:     false,
+		AlwaysOtherDebugInfo:           false,
+		NeverOtherDebugInfo:            false,
+		IsEng:                          false,
+		SanitizeLite:                   false,
+		DefaultAppImages:               false,
+		Dex2oatXmx:                     "",
+		Dex2oatXms:                     "",
+		EmptyDirectory:                 "empty_dir",
+		CpuVariant:                     nil,
+		InstructionSetFeatures:         nil,
+		BootImageProfiles:              nil,
+		BootFlags:                      "",
+		Dex2oatImageXmx:                "",
+		Dex2oatImageXms:                "",
 	}
 }
 
-func globalSoongConfigForTests() *GlobalSoongConfig {
+func globalSoongConfigForTests(ctx android.BuilderContext) *GlobalSoongConfig {
 	return &GlobalSoongConfig{
 		Profman:          android.PathForTesting("profman"),
 		Dex2oat:          android.PathForTesting("dex2oat"),
@@ -740,5 +773,19 @@ func globalSoongConfigForTests() *GlobalSoongConfig {
 		Zip2zip:          android.PathForTesting("zip2zip"),
 		ManifestCheck:    android.PathForTesting("manifest_check"),
 		ConstructContext: android.PathForTesting("construct_context"),
+		UffdGcFlag:       android.PathForOutput(ctx, "dexpreopt_test", "uffd_gc_flag.txt"),
 	}
+}
+
+func GetDexpreoptDirName(ctx android.PathContext) string {
+	prefix := "dexpreopt_"
+	targets := ctx.Config().Targets[android.Android]
+	if len(targets) > 0 {
+		return prefix + targets[0].Arch.ArchType.String()
+	}
+	return prefix + "unknown_target"
+}
+
+func getUffdGcFlagPath(ctx android.PathContext) android.WritablePath {
+	return android.PathForOutput(ctx, "dexpreopt/uffd_gc_flag.txt")
 }

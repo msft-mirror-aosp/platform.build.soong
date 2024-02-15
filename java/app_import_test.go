@@ -40,8 +40,8 @@ func TestAndroidAppImport(t *testing.T) {
 	variant := ctx.ModuleForTests("foo", "android_common")
 
 	// Check dexpreopt outputs.
-	if variant.MaybeOutput("dexpreopt/oat/arm64/package.vdex").Rule == nil ||
-		variant.MaybeOutput("dexpreopt/oat/arm64/package.odex").Rule == nil {
+	if variant.MaybeOutput("dexpreopt/foo/oat/arm64/package.vdex").Rule == nil ||
+		variant.MaybeOutput("dexpreopt/foo/oat/arm64/package.odex").Rule == nil {
 		t.Errorf("can't find dexpreopt outputs")
 	}
 
@@ -74,8 +74,8 @@ func TestAndroidAppImport_NoDexPreopt(t *testing.T) {
 	variant := ctx.ModuleForTests("foo", "android_common")
 
 	// Check dexpreopt outputs. They shouldn't exist.
-	if variant.MaybeOutput("dexpreopt/oat/arm64/package.vdex").Rule != nil ||
-		variant.MaybeOutput("dexpreopt/oat/arm64/package.odex").Rule != nil {
+	if variant.MaybeOutput("dexpreopt/foo/oat/arm64/package.vdex").Rule != nil ||
+		variant.MaybeOutput("dexpreopt/foo/oat/arm64/package.odex").Rule != nil {
 		t.Errorf("dexpreopt shouldn't have run.")
 	}
 
@@ -101,8 +101,8 @@ func TestAndroidAppImport_Presigned(t *testing.T) {
 	variant := ctx.ModuleForTests("foo", "android_common")
 
 	// Check dexpreopt outputs.
-	if variant.MaybeOutput("dexpreopt/oat/arm64/package.vdex").Rule == nil ||
-		variant.MaybeOutput("dexpreopt/oat/arm64/package.odex").Rule == nil {
+	if variant.MaybeOutput("dexpreopt/foo/oat/arm64/package.vdex").Rule == nil ||
+		variant.MaybeOutput("dexpreopt/foo/oat/arm64/package.odex").Rule == nil {
 		t.Errorf("can't find dexpreopt outputs")
 	}
 	// Make sure signing was skipped and aligning was done.
@@ -210,8 +210,8 @@ func TestAndroidAppImport_DefaultDevCert(t *testing.T) {
 	variant := ctx.ModuleForTests("foo", "android_common")
 
 	// Check dexpreopt outputs.
-	if variant.MaybeOutput("dexpreopt/oat/arm64/package.vdex").Rule == nil ||
-		variant.MaybeOutput("dexpreopt/oat/arm64/package.odex").Rule == nil {
+	if variant.MaybeOutput("dexpreopt/foo/oat/arm64/package.vdex").Rule == nil ||
+		variant.MaybeOutput("dexpreopt/foo/oat/arm64/package.odex").Rule == nil {
 		t.Errorf("can't find dexpreopt outputs")
 	}
 
@@ -411,6 +411,27 @@ func TestAndroidAppImport_ArchVariants(t *testing.T) {
 			installPath:  "/system/app/foo/foo.apk",
 		},
 		{
+			name: "matching arch without default",
+			bp: `
+				android_app_import {
+					name: "foo",
+					apk: "prebuilts/apk/app.apk",
+					arch: {
+						arm64: {
+							apk: "prebuilts/apk/app_arm64.apk",
+						},
+					},
+					presigned: true,
+					dex_preopt: {
+						enabled: true,
+					},
+				}
+			`,
+			expected:     "verify_uses_libraries/apk/app_arm64.apk",
+			artifactPath: "prebuilts/apk/app_arm64.apk",
+			installPath:  "/system/app/foo/foo.apk",
+		},
+		{
 			name: "no matching arch",
 			bp: `
 				android_app_import {
@@ -454,26 +475,105 @@ func TestAndroidAppImport_ArchVariants(t *testing.T) {
 	}
 
 	for _, test := range testCases {
-		ctx, _ := testJava(t, test.bp)
+		t.Run(test.name, func(t *testing.T) {
+			ctx, _ := testJava(t, test.bp)
 
-		variant := ctx.ModuleForTests("foo", "android_common")
-		if test.expected == "" {
-			if variant.Module().Enabled() {
-				t.Error("module should have been disabled, but wasn't")
+			variant := ctx.ModuleForTests("foo", "android_common")
+			if test.expected == "" {
+				if variant.Module().Enabled() {
+					t.Error("module should have been disabled, but wasn't")
+				}
+				rule := variant.MaybeRule("genProvenanceMetaData")
+				android.AssertDeepEquals(t, "Provenance metadata is not empty", android.TestingBuildParams{}, rule)
+				return
 			}
-			rule := variant.MaybeRule("genProvenanceMetaData")
-			android.AssertDeepEquals(t, "Provenance metadata is not empty", android.TestingBuildParams{}, rule)
-			continue
-		}
-		input := variant.Output("jnis-uncompressed/foo.apk").Input.String()
-		if strings.HasSuffix(input, test.expected) {
-			t.Errorf("wrong src apk, expected: %q got: %q", test.expected, input)
-		}
-		rule := variant.Rule("genProvenanceMetaData")
-		android.AssertStringEquals(t, "Invalid input", test.artifactPath, rule.Inputs[0].String())
-		android.AssertStringEquals(t, "Invalid output", "out/soong/.intermediates/provenance_metadata/foo/provenance_metadata.textproto", rule.Output.String())
-		android.AssertStringEquals(t, "Invalid args", "foo", rule.Args["module_name"])
-		android.AssertStringEquals(t, "Invalid args", test.installPath, rule.Args["install_path"])
+			input := variant.Output("jnis-uncompressed/foo.apk").Input.String()
+			if strings.HasSuffix(input, test.expected) {
+				t.Errorf("wrong src apk, expected: %q got: %q", test.expected, input)
+			}
+			rule := variant.Rule("genProvenanceMetaData")
+			android.AssertStringEquals(t, "Invalid input", test.artifactPath, rule.Inputs[0].String())
+			android.AssertStringEquals(t, "Invalid output", "out/soong/.intermediates/provenance_metadata/foo/provenance_metadata.textproto", rule.Output.String())
+			android.AssertStringEquals(t, "Invalid args", "foo", rule.Args["module_name"])
+			android.AssertStringEquals(t, "Invalid args", test.installPath, rule.Args["install_path"])
+		})
+	}
+}
+
+func TestAndroidAppImport_SoongConfigVariables(t *testing.T) {
+	testCases := []struct {
+		name         string
+		bp           string
+		expected     string
+		artifactPath string
+		metaDataPath string
+		installPath  string
+	}{
+		{
+			name: "matching arch",
+			bp: `
+				soong_config_module_type {
+					name: "my_android_app_import",
+					module_type: "android_app_import",
+					config_namespace: "my_namespace",
+					value_variables: ["my_apk_var"],
+					properties: ["apk"],
+				}
+				soong_config_value_variable {
+					name: "my_apk_var",
+				}
+				my_android_app_import {
+					name: "foo",
+					soong_config_variables: {
+						my_apk_var: {
+							apk: "prebuilts/apk/%s.apk",
+						},
+					},
+					presigned: true,
+					dex_preopt: {
+						enabled: true,
+					},
+				}
+			`,
+			expected:     "verify_uses_libraries/apk/name_from_soong_config.apk",
+			artifactPath: "prebuilts/apk/name_from_soong_config.apk",
+			installPath:  "/system/app/foo/foo.apk",
+		},
+	}
+
+	for _, test := range testCases {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := android.GroupFixturePreparers(
+				prepareForJavaTest,
+				android.PrepareForTestWithSoongConfigModuleBuildComponents,
+				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+					variables.VendorVars = map[string]map[string]string{
+						"my_namespace": {
+							"my_apk_var": "name_from_soong_config",
+						},
+					}
+				}),
+			).RunTestWithBp(t, test.bp).TestContext
+
+			variant := ctx.ModuleForTests("foo", "android_common")
+			if test.expected == "" {
+				if variant.Module().Enabled() {
+					t.Error("module should have been disabled, but wasn't")
+				}
+				rule := variant.MaybeRule("genProvenanceMetaData")
+				android.AssertDeepEquals(t, "Provenance metadata is not empty", android.TestingBuildParams{}, rule)
+				return
+			}
+			input := variant.Output("jnis-uncompressed/foo.apk").Input.String()
+			if strings.HasSuffix(input, test.expected) {
+				t.Errorf("wrong src apk, expected: %q got: %q", test.expected, input)
+			}
+			rule := variant.Rule("genProvenanceMetaData")
+			android.AssertStringEquals(t, "Invalid input", test.artifactPath, rule.Inputs[0].String())
+			android.AssertStringEquals(t, "Invalid output", "out/soong/.intermediates/provenance_metadata/foo/provenance_metadata.textproto", rule.Output.String())
+			android.AssertStringEquals(t, "Invalid args", "foo", rule.Args["module_name"])
+			android.AssertStringEquals(t, "Invalid args", test.installPath, rule.Args["install_path"])
+		})
 	}
 }
 
@@ -629,31 +729,49 @@ func TestAndroidTestImport_Preprocessed(t *testing.T) {
 			presigned: true,
 			preprocessed: true,
 		}
+		`)
 
-		android_test_import {
-			name: "foo_cert",
+	apkName := "foo.apk"
+	variant := ctx.ModuleForTests("foo", "android_common")
+	jniRule := variant.Output("jnis-uncompressed/" + apkName).BuildParams.Rule.String()
+	if jniRule != android.Cp.String() {
+		t.Errorf("Unexpected JNI uncompress rule: " + jniRule)
+	}
+
+	// Make sure signing and aligning were skipped.
+	if variant.MaybeOutput("signed/"+apkName).Rule != nil {
+		t.Errorf("signing rule shouldn't be included for preprocessed.")
+	}
+	if variant.MaybeOutput("zip-aligned/"+apkName).Rule != nil {
+		t.Errorf("aligning rule shouldn't be for preprocessed")
+	}
+}
+
+func TestAndroidAppImport_Preprocessed(t *testing.T) {
+	ctx, _ := testJava(t, `
+		android_app_import {
+			name: "foo",
 			apk: "prebuilts/apk/app.apk",
-			certificate: "cert/new_cert",
+			presigned: true,
 			preprocessed: true,
 		}
 		`)
 
-	testModules := []string{"foo", "foo_cert"}
-	for _, m := range testModules {
-		apkName := m + ".apk"
-		variant := ctx.ModuleForTests(m, "android_common")
-		jniRule := variant.Output("jnis-uncompressed/" + apkName).BuildParams.Rule.String()
-		if jniRule != android.Cp.String() {
-			t.Errorf("Unexpected JNI uncompress rule: " + jniRule)
-		}
+	apkName := "foo.apk"
+	variant := ctx.ModuleForTests("foo", "android_common")
+	outputBuildParams := variant.Output(apkName).BuildParams
+	if outputBuildParams.Rule.String() != android.Cp.String() {
+		t.Errorf("Unexpected prebuilt android_app_import rule: " + outputBuildParams.Rule.String())
+	}
 
-		// Make sure signing and aligning were skipped.
-		if variant.MaybeOutput("signed/"+apkName).Rule != nil {
-			t.Errorf("signing rule shouldn't be included for preprocessed.")
-		}
-		if variant.MaybeOutput("zip-aligned/"+apkName).Rule != nil {
-			t.Errorf("aligning rule shouldn't be for preprocessed")
-		}
+	// Make sure compression and aligning were validated.
+	if outputBuildParams.Validation == nil {
+		t.Errorf("Expected validation rule, but was not found")
+	}
+
+	validationBuildParams := variant.Output("validated-prebuilt/check.stamp").BuildParams
+	if validationBuildParams.Rule.String() != checkPresignedApkRule.String() {
+		t.Errorf("Unexpected validation rule: " + validationBuildParams.Rule.String())
 	}
 }
 

@@ -22,16 +22,14 @@ type RecoverySnapshotModuleInterface interface {
 	ExcludeFromRecoverySnapshot() bool
 }
 
-var recoverySnapshotSingleton = SnapshotSingleton{
-	"recovery",                     // name
-	"SOONG_RECOVERY_SNAPSHOT_ZIP",  // makeVar
-	android.OptionalPath{},         // snapshotZipFile
-	RecoverySnapshotImageSingleton, // Image
-	false,                          // Fake
-}
-
 func RecoverySnapshotSingleton() android.Singleton {
-	return &recoverySnapshotSingleton
+	return &SnapshotSingleton{
+		"recovery",                     // name
+		"SOONG_RECOVERY_SNAPSHOT_ZIP",  // makeVar
+		android.OptionalPath{},         // snapshotZipFile
+		RecoverySnapshotImageSingleton, // Image
+		false,                          // Fake
+	}
 }
 
 // Determine if a dir under source tree is an SoC-owned proprietary directory based
@@ -68,7 +66,7 @@ var RecoverySnapshotImageName = "recovery"
 type RecoverySnapshotImage struct{}
 
 func (RecoverySnapshotImage) Init(ctx android.RegistrationContext) {
-	ctx.RegisterSingletonType("recovery-snapshot", RecoverySnapshotSingleton)
+	ctx.RegisterParallelSingletonType("recovery-snapshot", RecoverySnapshotSingleton)
 }
 
 func (RecoverySnapshotImage) RegisterAdditionalModule(ctx android.RegistrationContext, name string, factory android.ModuleFactory) {

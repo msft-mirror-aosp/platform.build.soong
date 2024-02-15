@@ -35,13 +35,14 @@ func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 
 	multitree.RegisterApiImportsModule(ctx)
 
+	ctx.RegisterModuleType("prebuilt_build_tool", android.NewPrebuiltBuildTool)
 	ctx.RegisterModuleType("cc_benchmark", BenchmarkFactory)
 	ctx.RegisterModuleType("cc_object", ObjectFactory)
 	ctx.RegisterModuleType("cc_genrule", GenRuleFactory)
 	ctx.RegisterModuleType("ndk_prebuilt_shared_stl", NdkPrebuiltSharedStlFactory)
 	ctx.RegisterModuleType("ndk_prebuilt_static_stl", NdkPrebuiltStaticStlFactory)
 	ctx.RegisterModuleType("ndk_library", NdkLibraryFactory)
-	ctx.RegisterModuleType("ndk_headers", ndkHeadersFactory)
+	ctx.RegisterModuleType("ndk_headers", NdkHeadersFactory)
 }
 
 func GatherRequiredDepsForTest(oses ...android.OsType) string {
@@ -76,12 +77,17 @@ func commonDefaultModules() string {
 			no_libcrt: true,
 			sdk_version: "minimum",
 			nocrt: true,
+			no_crt_pad_segment: true,
 			system_shared_libs: [],
 			stl: "none",
 			check_elf_files: false,
 			sanitize: {
 				never: true,
 			},
+			apex_available: [
+				"//apex_available:anyapex",
+				"//apex_available:platform",
+			],
 		}
 
 		cc_prebuilt_library_static {
@@ -380,6 +386,11 @@ func commonDefaultModules() string {
 		}
 
 		cc_object {
+			name: "crt_pad_segment",
+			defaults: ["crt_defaults"],
+		}
+
+		cc_object {
 			name: "crtbrand",
 			defaults: ["crt_defaults"],
 			srcs: ["crtbrand.c"],
@@ -417,11 +428,6 @@ func commonDefaultModules() string {
 		ndk_prebuilt_shared_stl {
 			name: "ndk_libc++_shared",
 			export_include_dirs: ["ndk_libc++_shared"],
-		}
-
-		ndk_prebuilt_static_stl {
-			name: "ndk_libandroid_support",
-			export_include_dirs: ["ndk_libandroid_support"],
 		}
 
 		cc_library_static {
@@ -559,7 +565,7 @@ var PrepareForTestWithCcBuildComponents = android.GroupFixturePreparers(
 	// This includes files that are needed by all, or at least most, instances of a cc module type.
 	android.MockFS{
 		// Needed for ndk_prebuilt_(shared|static)_stl.
-		"prebuilts/ndk/current/sources/cxx-stl/llvm-libc++/libs": nil,
+		"defaults/cc/common/current/sources/cxx-stl/llvm-libc++/libs": nil,
 	}.AddToFixture(),
 )
 
@@ -569,16 +575,16 @@ var PrepareForTestWithCcDefaultModules = android.GroupFixturePreparers(
 
 	// Additional files needed in tests that disallow non-existent source.
 	android.MockFS{
-		"defaults/cc/common/libc.map.txt":           nil,
-		"defaults/cc/common/libdl.map.txt":          nil,
-		"defaults/cc/common/libm.map.txt":           nil,
-		"defaults/cc/common/ndk_libandroid_support": nil,
-		"defaults/cc/common/ndk_libc++_shared":      nil,
-		"defaults/cc/common/crtbegin_so.c":          nil,
-		"defaults/cc/common/crtbegin.c":             nil,
-		"defaults/cc/common/crtend_so.c":            nil,
-		"defaults/cc/common/crtend.c":               nil,
-		"defaults/cc/common/crtbrand.c":             nil,
+		"defaults/cc/common/libc.map.txt":      nil,
+		"defaults/cc/common/libdl.map.txt":     nil,
+		"defaults/cc/common/libft2.map.txt":    nil,
+		"defaults/cc/common/libm.map.txt":      nil,
+		"defaults/cc/common/ndk_libc++_shared": nil,
+		"defaults/cc/common/crtbegin_so.c":     nil,
+		"defaults/cc/common/crtbegin.c":        nil,
+		"defaults/cc/common/crtend_so.c":       nil,
+		"defaults/cc/common/crtend.c":          nil,
+		"defaults/cc/common/crtbrand.c":        nil,
 
 		"defaults/cc/common/libclang_rt.ubsan_minimal.android_arm64.a": nil,
 		"defaults/cc/common/libclang_rt.ubsan_minimal.android_arm.a":   nil,
@@ -673,7 +679,7 @@ var PrepareForTestWithHostMusl = android.GroupFixturePreparers(
 // PrepareForTestWithFdoProfile registers module types to test with fdo_profile
 var PrepareForTestWithFdoProfile = android.FixtureRegisterWithContext(func(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("soong_namespace", android.NamespaceFactory)
-	ctx.RegisterModuleType("fdo_profile", fdoProfileFactory)
+	ctx.RegisterModuleType("fdo_profile", FdoProfileFactory)
 })
 
 // TestConfig is the legacy way of creating a test Config for testing cc modules.
@@ -798,7 +804,7 @@ func AssertExcludeFromRecoverySnapshotIs(t *testing.T, ctx *android.TestContext,
 func checkOverrides(t *testing.T, ctx *android.TestContext, singleton android.TestingSingleton, jsonPath string, expected []string) {
 	t.Helper()
 	out := singleton.MaybeOutput(jsonPath)
-	content := android.ContentFromFileRuleForTests(t, out)
+	content := android.ContentFromFileRuleForTests(t, ctx, out)
 
 	var flags snapshotJsonFlags
 	if err := json.Unmarshal([]byte(content), &flags); err != nil {

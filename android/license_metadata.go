@@ -50,12 +50,19 @@ func buildLicenseMetadata(ctx ModuleContext, licenseMetadataFile WritablePath) {
 		outputFiles = PathsIfNonNil(outputFiles...)
 	}
 
-	isContainer := isContainerFromFileExtensions(base.installFiles, outputFiles)
+	// Only pass the last installed file to isContainerFromFileExtensions so a *.zip file in test data
+	// doesn't mark the whole module as a container.
+	var installFiles InstallPaths
+	if len(base.installFiles) > 0 {
+		installFiles = InstallPaths{base.installFiles[len(base.installFiles)-1]}
+	}
+
+	isContainer := isContainerFromFileExtensions(installFiles, outputFiles)
 
 	var allDepMetadataFiles Paths
 	var allDepMetadataArgs []string
 	var allDepOutputFiles Paths
-	var allDepMetadataDepSets []*PathsDepSet
+	var allDepMetadataDepSets []*DepSet[Path]
 
 	ctx.VisitDirectDepsBlueprint(func(bpdep blueprint.Module) {
 		dep, _ := bpdep.(Module)
@@ -71,10 +78,9 @@ func buildLicenseMetadata(ctx ModuleContext, licenseMetadataFile WritablePath) {
 			return
 		}
 
-		if ctx.OtherModuleHasProvider(dep, LicenseMetadataProvider) {
-			info := ctx.OtherModuleProvider(dep, LicenseMetadataProvider).(*LicenseMetadataInfo)
+		if info, ok := OtherModuleProvider(ctx, dep, LicenseMetadataProvider); ok {
 			allDepMetadataFiles = append(allDepMetadataFiles, info.LicenseMetadataPath)
-			if isContainer || IsInstallDepNeeded(ctx.OtherModuleDependencyTag(dep)) {
+			if isContainer || isInstallDepNeeded(dep, ctx.OtherModuleDependencyTag(dep)) {
 				allDepMetadataDepSets = append(allDepMetadataDepSets, info.LicenseMetadataDepSet)
 			}
 
@@ -127,7 +133,7 @@ func buildLicenseMetadata(ctx ModuleContext, licenseMetadataFile WritablePath) {
 		JoinWithPrefix(proptools.NinjaAndShellEscapeListIncludingSpaces(base.commonProperties.Effective_license_text.Strings()), "-n "))
 
 	if isContainer {
-		transitiveDeps := newPathsDepSet(nil, allDepMetadataDepSets).ToList()
+		transitiveDeps := Paths(NewDepSet[Path](TOPOLOGICAL, nil, allDepMetadataDepSets).ToList())
 		args = append(args,
 			JoinWithPrefix(proptools.NinjaAndShellEscapeListIncludingSpaces(transitiveDeps.Strings()), "-d "))
 		orderOnlyDeps = append(orderOnlyDeps, transitiveDeps...)
@@ -168,9 +174,9 @@ func buildLicenseMetadata(ctx ModuleContext, licenseMetadataFile WritablePath) {
 		},
 	})
 
-	ctx.SetProvider(LicenseMetadataProvider, &LicenseMetadataInfo{
+	SetProvider(ctx, LicenseMetadataProvider, &LicenseMetadataInfo{
 		LicenseMetadataPath:   licenseMetadataFile,
-		LicenseMetadataDepSet: newPathsDepSet(Paths{licenseMetadataFile}, allDepMetadataDepSets),
+		LicenseMetadataDepSet: NewDepSet(TOPOLOGICAL, Paths{licenseMetadataFile}, allDepMetadataDepSets),
 	})
 }
 
@@ -193,12 +199,12 @@ func isContainerFromFileExtensions(installPaths InstallPaths, builtPaths Paths) 
 }
 
 // LicenseMetadataProvider is used to propagate license metadata paths between modules.
-var LicenseMetadataProvider = blueprint.NewProvider(&LicenseMetadataInfo{})
+var LicenseMetadataProvider = blueprint.NewProvider[*LicenseMetadataInfo]()
 
 // LicenseMetadataInfo stores the license metadata path for a module.
 type LicenseMetadataInfo struct {
 	LicenseMetadataPath   Path
-	LicenseMetadataDepSet *PathsDepSet
+	LicenseMetadataDepSet *DepSet[Path]
 }
 
 // licenseAnnotationsFromTag returns the LicenseAnnotations for a tag (if any) converted into
