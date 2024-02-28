@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/blueprint/proptools"
 
+	"android/soong/aconfig"
 	"android/soong/android"
 	"android/soong/java/config"
 )
@@ -221,6 +222,8 @@ type Javadoc struct {
 	stubsSrcJar android.WritablePath
 
 	exportableStubsSrcJar android.WritablePath
+
+	runtimeStubsSrcJar android.WritablePath
 }
 
 func (j *Javadoc) OutputFiles(tag string) (android.Paths, error) {
@@ -413,9 +416,12 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 		case aconfigDeclarationTag:
 			if dep, ok := android.OtherModuleProvider(ctx, module, android.AconfigDeclarationsProviderKey); ok {
 				deps.aconfigProtoFiles = append(deps.aconfigProtoFiles, dep.IntermediateCacheOutputPath)
+			} else if dep, ok := android.OtherModuleProvider(ctx, module, aconfig.CodegenInfoProvider); ok {
+				deps.aconfigProtoFiles = append(deps.aconfigProtoFiles, dep.IntermediateCacheOutputPaths...)
 			} else {
-				ctx.ModuleErrorf("Only aconfig_declarations module type is allowed for "+
-					"flags_packages property, but %s is not aconfig_declarations module type",
+				ctx.ModuleErrorf("Only aconfig_declarations and aconfig_declarations_group "+
+					"module type is allowed for flags_packages property, but %s is neither "+
+					"of these supported module types",
 					module.Name(),
 				)
 			}

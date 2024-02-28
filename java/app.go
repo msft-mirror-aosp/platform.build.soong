@@ -472,8 +472,9 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 	// Add TARGET_AAPT_CHARACTERISTICS values to AAPT link flags if they exist and --product flags were not provided.
 	autogenerateRRO := proptools.Bool(a.appProperties.Generate_product_characteristics_rro)
 	hasProduct := android.PrefixInList(a.aaptProperties.Aaptflags, "--product")
-	if !autogenerateRRO && !hasProduct && len(ctx.Config().ProductAAPTCharacteristics()) > 0 {
-		aaptLinkFlags = append(aaptLinkFlags, "--product", ctx.Config().ProductAAPTCharacteristics())
+	characteristics := ctx.Config().ProductAAPTCharacteristics()
+	if !autogenerateRRO && !hasProduct && len(characteristics) > 0 && characteristics != "default" {
+		aaptLinkFlags = append(aaptLinkFlags, "--product", characteristics)
 	}
 
 	if !Bool(a.aaptProperties.Aapt_include_all_resources) {
@@ -777,6 +778,9 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 	a.onDeviceDir = android.InstallPathToOnDevicePath(ctx, a.installDir)
 
 	a.classLoaderContexts = a.usesLibrary.classLoaderContextForUsesLibDeps(ctx)
+	if a.usesLibrary.shouldDisableDexpreopt {
+		a.dexpreopter.disableDexpreopt()
+	}
 
 	var noticeAssetPath android.WritablePath
 	if Bool(a.appProperties.Embed_notices) || ctx.Config().IsEnvTrue("ALWAYS_EMBED_NOTICES") {
@@ -920,15 +924,39 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 	shouldCollectRecursiveNativeDeps bool,
 	checkNativeSdkVersion bool) ([]jniLib, android.Paths, []Certificate) {
 
-	var jniLibs []jniLib
-	var prebuiltJniPackages android.Paths
-	var certificates []Certificate
-	seenModulePaths := make(map[string]bool)
-
 	if checkNativeSdkVersion {
 		checkNativeSdkVersion = app.SdkVersion(ctx).Specified() &&
 			app.SdkVersion(ctx).Kind != android.SdkCorePlatform && !app.RequiresStableAPIs(ctx)
 	}
+	jniLib, prebuiltJniPackages := collectJniDeps(ctx, shouldCollectRecursiveNativeDeps,
+		checkNativeSdkVersion, func(dep cc.LinkableInterface) bool {
+			return !dep.IsNdk(ctx.Config()) && !dep.IsStubs()
+		})
+
+	var certificates []Certificate
+
+	ctx.VisitDirectDeps(func(module android.Module) {
+		otherName := ctx.OtherModuleName(module)
+		tag := ctx.OtherModuleDependencyTag(module)
+
+		if tag == certificateTag {
+			if dep, ok := module.(*AndroidAppCertificate); ok {
+				certificates = append(certificates, dep.Certificate)
+			} else {
+				ctx.ModuleErrorf("certificate dependency %q must be an android_app_certificate module", otherName)
+			}
+		}
+	})
+	return jniLib, prebuiltJniPackages, certificates
+}
+
+func collectJniDeps(ctx android.ModuleContext,
+	shouldCollectRecursiveNativeDeps bool,
+	checkNativeSdkVersion bool,
+	filter func(cc.LinkableInterface) bool) ([]jniLib, android.Paths) {
+	var jniLibs []jniLib
+	var prebuiltJniPackages android.Paths
+	seenModulePaths := make(map[string]bool)
 
 	ctx.WalkDeps(func(module android.Module, parent android.Module) bool {
 		otherName := ctx.OtherModuleName(module)
@@ -936,7 +964,7 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 
 		if IsJniDepTag(tag) || cc.IsSharedDepTag(tag) {
 			if dep, ok := module.(cc.LinkableInterface); ok {
-				if dep.IsNdk(ctx.Config()) || dep.IsStubs() {
+				if filter != nil && !filter(dep) {
 					return false
 				}
 
@@ -977,18 +1005,10 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 			prebuiltJniPackages = append(prebuiltJniPackages, info.JniPackages...)
 		}
 
-		if tag == certificateTag {
-			if dep, ok := module.(*AndroidAppCertificate); ok {
-				certificates = append(certificates, dep.Certificate)
-			} else {
-				ctx.ModuleErrorf("certificate dependency %q must be an android_app_certificate module", otherName)
-			}
-		}
-
 		return false
 	})
 
-	return jniLibs, prebuiltJniPackages, certificates
+	return jniLibs, prebuiltJniPackages
 }
 
 func (a *AndroidApp) WalkPayloadDeps(ctx android.ModuleContext, do android.PayloadDepsCallback) {
@@ -1096,6 +1116,8 @@ func (a *AndroidApp) OutputFiles(tag string) (android.Paths, error) {
 		if a.rJar != nil {
 			return []android.Path{a.rJar}, nil
 		}
+	case ".apk":
+		return []android.Path{a.outputFile}, nil
 	case ".export-package.apk":
 		return []android.Path{a.exportPackage}, nil
 	case ".manifest.xml":
@@ -1190,10 +1212,10 @@ func AndroidAppFactory() android.Module {
 			Cmd   *string
 		}{
 			Name:  proptools.StringPtr(rroManifestName),
-			Tools: []string{"characteristics_rro_generator"},
+			Tools: []string{"characteristics_rro_generator", "aapt2"},
 			Out:   []string{"AndroidManifest.xml"},
-			Srcs:  []string{":" + a.Name() + "{.manifest.xml}"},
-			Cmd:   proptools.StringPtr("$(location characteristics_rro_generator) $(in) $(out)"),
+			Srcs:  []string{":" + a.Name() + "{.apk}"},
+			Cmd:   proptools.StringPtr("$(location characteristics_rro_generator) $$($(location aapt2) dump packagename $(in)) $(out)"),
 		}
 		ctx.CreateModule(genrule.GenRuleFactory, &rroManifestProperties)
 
@@ -1547,6 +1569,9 @@ type usesLibrary struct {
 
 	// Whether to enforce verify_uses_library check.
 	enforce bool
+
+	// Whether dexpreopt should be disabled
+	shouldDisableDexpreopt bool
 }
 
 func (u *usesLibrary) addLib(lib string, optional bool) {
@@ -1624,6 +1649,15 @@ func (u *usesLibrary) classLoaderContextForUsesLibDeps(ctx android.ModuleContext
 		// from implementation libraries by their name, which is different as it has a suffix.
 		if comp, ok := m.(SdkLibraryComponentDependency); ok {
 			if impl := comp.OptionalSdkLibraryImplementation(); impl != nil && *impl != dep {
+				return
+			}
+		}
+
+		// Skip java_sdk_library dependencies that provide stubs, but not an implementation.
+		// This will be restricted to optional_uses_libs
+		if sdklib, ok := m.(SdkLibraryDependency); ok {
+			if tag == usesLibOptTag && sdklib.DexJarBuildPath(ctx).PathOrNil() == nil {
+				u.shouldDisableDexpreopt = true
 				return
 			}
 		}

@@ -210,13 +210,20 @@ func (c Config) ReleaseDefaultModuleBuildFromSource() bool {
 		Bool(c.config.productVariables.ReleaseDefaultModuleBuildFromSource)
 }
 
+// Enables flagged apis annotated with READ_WRITE aconfig flags to be included in the stubs
+// and hiddenapi flags so that they are accessible at runtime
+func (c Config) ReleaseExportRuntimeApis() bool {
+	return Bool(c.config.productVariables.ExportRuntimeApis)
+}
+
 // Enables ABI monitoring of NDK libraries
 func (c Config) ReleaseNdkAbiMonitored() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_NDK_ABI_MONITORED")
 }
 
 func (c Config) ReleaseHiddenApiExportableStubs() bool {
-	return c.config.productVariables.GetBuildFlagBool("RELEASE_HIDDEN_API_EXPORTABLE_STUBS")
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_HIDDEN_API_EXPORTABLE_STUBS") ||
+		Bool(c.config.productVariables.HiddenapiExportableStubs)
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -648,6 +655,7 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		"framework-nfc":                     {},
 		"framework-ondevicepersonalization": {},
 		"framework-pdf":                     {},
+		"framework-pdf-v":                   {},
 		"framework-permission":              {},
 		"framework-permission-s":            {},
 		"framework-scheduling":              {},
@@ -1336,6 +1344,22 @@ func (c *config) VendorApiLevel() string {
 	return String(c.productVariables.VendorApiLevel)
 }
 
+func (c *config) PrevVendorApiLevel() string {
+	vendorApiLevel, err := strconv.Atoi(c.VendorApiLevel())
+	if err != nil {
+		panic(fmt.Errorf("Cannot parse vendor API level %s to an integer: %s",
+			c.VendorApiLevel(), err))
+	}
+	if vendorApiLevel < 202404 || vendorApiLevel%100 != 4 {
+		panic("Unknown vendor API level " + c.VendorApiLevel())
+	}
+	// The version before trunk stable is 34.
+	if vendorApiLevel == 202404 {
+		return "34"
+	}
+	return strconv.Itoa(vendorApiLevel - 100)
+}
+
 func (c *config) VendorApiLevelFrozen() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_BOARD_API_LEVEL_FROZEN")
 }
@@ -1493,18 +1517,18 @@ func (c *deviceConfig) PgoAdditionalProfileDirs() []string {
 }
 
 // AfdoProfile returns fully qualified path associated to the given module name
-func (c *deviceConfig) AfdoProfile(name string) (*string, error) {
+func (c *deviceConfig) AfdoProfile(name string) (string, error) {
 	for _, afdoProfile := range c.config.productVariables.AfdoProfiles {
 		split := strings.Split(afdoProfile, ":")
 		if len(split) != 3 {
-			return nil, fmt.Errorf("AFDO_PROFILES has invalid value: %s. "+
+			return "", fmt.Errorf("AFDO_PROFILES has invalid value: %s. "+
 				"The expected format is <module>:<fully-qualified-path-to-fdo_profile>", afdoProfile)
 		}
 		if split[0] == name {
-			return proptools.StringPtr(strings.Join([]string{split[1], split[2]}, ":")), nil
+			return strings.Join([]string{split[1], split[2]}, ":"), nil
 		}
 	}
-	return nil, nil
+	return "", nil
 }
 
 func (c *deviceConfig) VendorSepolicyDirs() []string {
@@ -1731,10 +1755,6 @@ func (c *deviceConfig) BoardMoveRecoveryResourcesToVendorBoot() bool {
 
 func (c *deviceConfig) PlatformSepolicyVersion() string {
 	return String(c.config.productVariables.PlatformSepolicyVersion)
-}
-
-func (c *deviceConfig) TotSepolicyVersion() string {
-	return String(c.config.productVariables.TotSepolicyVersion)
 }
 
 func (c *deviceConfig) PlatformSepolicyCompatVersions() []string {
@@ -2041,4 +2061,8 @@ func (c *config) AllApexContributions() []string {
 		}
 	}
 	return ret
+}
+
+func (c *config) BuildIgnoreApexContributionContents() []string {
+	return c.productVariables.BuildIgnoreApexContributionContents
 }

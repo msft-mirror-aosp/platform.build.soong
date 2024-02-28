@@ -842,10 +842,12 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 		}
 
 		addDependenciesForNativeModules(ctx, deps, target, imageVariation)
-		ctx.AddFarVariationDependencies([]blueprint.Variation{
-			{Mutator: "os", Variation: target.OsVariation()},
-			{Mutator: "arch", Variation: target.ArchVariation()},
-		}, shBinaryTag, a.properties.Sh_binaries...)
+		if isPrimaryAbi {
+			ctx.AddFarVariationDependencies([]blueprint.Variation{
+				{Mutator: "os", Variation: target.OsVariation()},
+				{Mutator: "arch", Variation: target.ArchVariation()},
+			}, shBinaryTag, a.properties.Sh_binaries...)
+		}
 	}
 
 	// Common-arch dependencies come next
@@ -1165,6 +1167,7 @@ var (
 		"com.android.ondevicepersonalization",
 		"com.android.os.statsd",
 		"com.android.permission",
+		"com.android.profiling",
 		"com.android.rkpd",
 		"com.android.scheduling",
 		"com.android.tethering",
