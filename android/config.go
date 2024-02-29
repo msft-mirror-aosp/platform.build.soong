@@ -213,7 +213,7 @@ func (c Config) ReleaseDefaultModuleBuildFromSource() bool {
 // Enables flagged apis annotated with READ_WRITE aconfig flags to be included in the stubs
 // and hiddenapi flags so that they are accessible at runtime
 func (c Config) ReleaseExportRuntimeApis() bool {
-	return c.config.productVariables.GetBuildFlagBool("RELEASE_EXPORT_RUNTIME_APIS")
+	return Bool(c.config.productVariables.ExportRuntimeApis)
 }
 
 // Enables ABI monitoring of NDK libraries
@@ -222,7 +222,8 @@ func (c Config) ReleaseNdkAbiMonitored() bool {
 }
 
 func (c Config) ReleaseHiddenApiExportableStubs() bool {
-	return c.config.productVariables.GetBuildFlagBool("RELEASE_HIDDEN_API_EXPORTABLE_STUBS")
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_HIDDEN_API_EXPORTABLE_STUBS") ||
+		Bool(c.config.productVariables.HiddenapiExportableStubs)
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -657,6 +658,7 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		"framework-nfc":                     {},
 		"framework-ondevicepersonalization": {},
 		"framework-pdf":                     {},
+		"framework-pdf-v":                   {},
 		"framework-permission":              {},
 		"framework-permission-s":            {},
 		"framework-scheduling":              {},
@@ -2062,4 +2064,8 @@ func (c *config) AllApexContributions() []string {
 		}
 	}
 	return ret
+}
+
+func (c *config) BuildIgnoreApexContributionContents() []string {
+	return c.productVariables.BuildIgnoreApexContributionContents
 }
