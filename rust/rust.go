@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"android/soong/testing"
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
@@ -139,8 +140,9 @@ type Module struct {
 
 	Properties BaseProperties
 
-	hod      android.HostOrDeviceSupported
-	multilib android.Multilib
+	hod        android.HostOrDeviceSupported
+	multilib   android.Multilib
+	testModule bool
 
 	makeLinkType string
 
@@ -956,6 +958,7 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 			sourceLib := sourceMod.(*Module).compiler.(*libraryDecorator)
 			mod.sourceProvider.setOutputFiles(sourceLib.sourceProvider.Srcs())
 		}
+		ctx.SetProvider(blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: mod.sourceProvider.Srcs().Strings()})
 	}
 
 	if mod.compiler != nil && !mod.compiler.Disabled() {
@@ -1006,6 +1009,9 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		}
 
 		ctx.Phony("rust", ctx.RustModule().OutputFile().Path())
+	}
+	if mod.testModule {
+		ctx.SetProvider(testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 	}
 }
 

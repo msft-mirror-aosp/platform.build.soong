@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/blueprint/pathtools"
 	"github.com/google/blueprint/proptools"
+	"github.com/google/blueprint"
 
 	"android/soong/android"
 	"android/soong/dexpreopt"
@@ -1105,6 +1106,7 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 	uniqueSrcFiles = append(uniqueSrcFiles, uniqueJavaFiles...)
 	uniqueSrcFiles = append(uniqueSrcFiles, uniqueKtFiles...)
 	j.uniqueSrcFiles = uniqueSrcFiles
+	ctx.SetProvider(blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: uniqueSrcFiles.Strings()})
 
 	// We don't currently run annotation processors in turbine, which means we can't use turbine
 	// generated header jars when an annotation processor that generates API is enabled.  One
@@ -1446,7 +1448,13 @@ func (j *Module) compile(ctx android.ModuleContext, aaptSrcJar android.Path) {
 
 	j.implementationJarFile = outputFile
 	if j.headerJarFile == nil {
-		j.headerJarFile = j.implementationJarFile
+		// If this module couldn't generate a header jar (for example due to api generating annotation processors)
+		// then use the implementation jar.  Run it through zip2zip first to remove any files in META-INF/services
+		// so that javac on modules that depend on this module don't pick up annotation processors (which may be
+		// missing their implementations) from META-INF/services/javax.annotation.processing.Processor.
+		headerJarFile := android.PathForModuleOut(ctx, "javac-header", jarName)
+		convertImplementationJarToHeaderJar(ctx, j.implementationJarFile, headerJarFile)
+		j.headerJarFile = headerJarFile
 	}
 
 	// enforce syntax check to jacoco filters for any build (http://b/183622051)
