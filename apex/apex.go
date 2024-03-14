@@ -2321,9 +2321,15 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 }
 
 func addAconfigFiles(vctx *visitorContext, ctx android.ModuleContext, module blueprint.Module) {
-	dep, _ := android.OtherModuleProvider(ctx, module, android.AconfigTransitiveDeclarationsInfoProvider)
-	if len(dep.AconfigFiles) > 0 && dep.AconfigFiles[ctx.ModuleName()] != nil {
-		vctx.aconfigFiles = append(vctx.aconfigFiles, dep.AconfigFiles[ctx.ModuleName()]...)
+	if dep, ok := android.OtherModuleProvider(ctx, module, android.AconfigTransitiveDeclarationsInfoProvider); ok {
+		if len(dep.AconfigFiles) > 0 && dep.AconfigFiles[ctx.ModuleName()] != nil {
+			vctx.aconfigFiles = append(vctx.aconfigFiles, dep.AconfigFiles[ctx.ModuleName()]...)
+		}
+	}
+
+	validationFlag := ctx.DeviceConfig().AconfigContainerValidation()
+	if validationFlag == "error" || validationFlag == "warning" {
+		android.VerifyAconfigBuildMode(ctx, ctx.ModuleName(), module, validationFlag == "error")
 	}
 }
 
@@ -2428,29 +2434,14 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.providePrebuiltInfo(ctx)
 }
 
-var prebuiltInfoProvider = blueprint.NewProvider[prebuiltInfo]()
-
-// contents of prebuilt_info.json
-type prebuiltInfo struct {
-	// Name of the apex, without the prebuilt_ prefix
-	Name string
-
-	Is_prebuilt bool
-
-	// This is relative to root of the workspace.
-	// In case of mainline modules, this file contains the build_id that was used
-	// to generate the mainline module prebuilt.
-	Prebuilt_info_file_path string `json:",omitempty"`
-}
-
 // Set prebuiltInfoProvider. This will be used by `apex_prebuiltinfo_singleton` to print out a metadata file
 // with information about whether source or prebuilt of an apex was used during the build.
 func (a *apexBundle) providePrebuiltInfo(ctx android.ModuleContext) {
-	info := prebuiltInfo{
+	info := android.PrebuiltInfo{
 		Name:        a.Name(),
 		Is_prebuilt: false,
 	}
-	android.SetProvider(ctx, prebuiltInfoProvider, info)
+	android.SetProvider(ctx, android.PrebuiltInfoProvider, info)
 }
 
 // Set a provider containing information about the jars and .prof provided by the apex
