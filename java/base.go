@@ -94,6 +94,9 @@ type CommonProperties struct {
 	// if not blank, used as prefix to generate repackage rule
 	Jarjar_prefix *string
 
+	// if set to true, skip the jarjar repackaging
+	Skip_jarjar_repackage *bool
+
 	// If not blank, set the java version passed to javac as -source and -target
 	Java_version *string
 
@@ -205,6 +208,13 @@ type CommonProperties struct {
 	// Note that currently not all actions implemented by android_apps are sandboxed, so you
 	// may only see this being necessary in lint builds.
 	Compile_data []string `android:"path"`
+
+	// Property signifying whether the module compiles stubs or not.
+	// Should be set to true when srcs of this module are stub files.
+	// This property does not need to be set to true when the module depends on
+	// the stubs via libs, but should be set to true when the module depends on
+	// the stubs via static libs.
+	Is_stubs_module *bool
 }
 
 // Properties that are specific to device modules. Host module factories should not add these when
@@ -532,6 +542,8 @@ type Module struct {
 	// Values that will be set in the JarJarProvider data for jarjar repackaging,
 	// and merged with our dependencies' rules.
 	jarjarRenameRules map[string]string
+
+	stubsLinkType StubsLinkType
 }
 
 func (j *Module) CheckStableSdkVersion(ctx android.BaseModuleContext) error {
@@ -1091,11 +1103,13 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	jarjarProviderData := j.collectJarJarRules(ctx)
 	if jarjarProviderData != nil {
 		android.SetProvider(ctx, JarJarProvider, *jarjarProviderData)
-		text := getJarJarRuleText(jarjarProviderData)
-		if text != "" {
-			ruleTextFile := android.PathForModuleOut(ctx, "repackaged-jarjar", "repackaging.txt")
-			android.WriteFileRule(ctx, ruleTextFile, text)
-			j.repackageJarjarRules = ruleTextFile
+		if !proptools.Bool(j.properties.Skip_jarjar_repackage) {
+			text := getJarJarRuleText(jarjarProviderData)
+			if text != "" {
+				ruleTextFile := android.PathForModuleOut(ctx, "repackaged-jarjar", "repackaging.txt")
+				android.WriteFileRule(ctx, ruleTextFile, text)
+				j.repackageJarjarRules = ruleTextFile
+			}
 		}
 	}
 
@@ -1212,6 +1226,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			ExportedPlugins:                j.exportedPluginJars,
 			ExportedPluginClasses:          j.exportedPluginClasses,
 			ExportedPluginDisableTurbine:   j.exportedDisableTurbine,
+			StubsLinkType:                  j.stubsLinkType,
 		})
 
 		j.outputFile = j.headerJarFile
@@ -1296,7 +1311,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		}
 	}
 
-	jars := append(android.Paths(nil), kotlinJars...)
+	jars := slices.Clone(kotlinJars)
 
 	j.compiledSrcJars = srcJars
 
@@ -1311,7 +1326,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			// allow for the use of annotation processors that do function correctly
 			// with sharding enabled. See: b/77284273.
 		}
-		extraJars := append(android.CopyOf(extraCombinedJars), kotlinHeaderJars...)
+		extraJars := append(slices.Clone(kotlinHeaderJars), extraCombinedJars...)
 		headerJarFileWithoutDepsOrJarjar, j.headerJarFile, j.repackagedHeaderJarFile =
 			j.compileJavaHeader(ctx, uniqueJavaFiles, srcJars, deps, flags, jarName, extraJars)
 		if ctx.Failed() {
@@ -1384,6 +1399,8 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			return
 		}
 	}
+
+	jars = append(jars, extraCombinedJars...)
 
 	j.srcJarArgs, j.srcJarDeps = resourcePathsToJarArgs(srcFiles), srcFiles
 
@@ -1470,8 +1487,6 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		})
 		jars = append(jars, servicesJar)
 	}
-
-	jars = append(android.CopyOf(extraCombinedJars), jars...)
 
 	// Combine the classes built from sources, any manifests, and any static libraries into
 	// classes.jar. If there is only one input jar this step will be skipped.
@@ -1729,6 +1744,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		ExportedPluginClasses:          j.exportedPluginClasses,
 		ExportedPluginDisableTurbine:   j.exportedDisableTurbine,
 		JacocoReportClassesFile:        j.jacocoReportClassesFile,
+		StubsLinkType:                  j.stubsLinkType,
 	})
 
 	// Save the output file with no relative path so that it doesn't end up in a subdirectory when used as a resource
@@ -2372,16 +2388,32 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 // classes until a module with jarjar_prefix is reached, and all as yet unrenamed classes will then
 // be renamed from that module.
 // TODO: Add another property to suppress the forwarding of
+type DependencyUse int
+
+const (
+	RenameUseInvalid DependencyUse = iota
+	RenameUseInclude
+	RenameUseExclude
+)
+
+type RenameUseElement struct {
+	DepName   string
+	RenameUse DependencyUse
+	Why       string // token for determining where in the logic the decision was made.
+}
+
 type JarJarProviderData struct {
 	// Mapping of class names: original --> renamed.  If the value is "", the class will be
 	// renamed by the next rdep that has the jarjar_prefix attribute (or this module if it has
 	// attribute). Rdeps of that module will inherit the renaming.
-	Rename map[string]string
+	Rename    map[string]string
+	RenameUse []RenameUseElement
 }
 
 func (this JarJarProviderData) GetDebugString() string {
 	result := ""
-	for k, v := range this.Rename {
+	for _, k := range android.SortedKeys(this.Rename) {
+		v := this.Rename[k]
 		if strings.Contains(k, "android.companion.virtual.flags.FakeFeatureFlagsImpl") {
 			result += k + "--&gt;" + v + ";"
 		}
@@ -2440,14 +2472,114 @@ func (module *Module) addJarJarRenameRule(original string, renamed string) {
 func collectDirectDepsProviders(ctx android.ModuleContext) (result *JarJarProviderData) {
 	// Gather repackage information from deps
 	// If the dep jas a JarJarProvider, it is used.  Otherwise, any BaseJarJarProvider is used.
+
+	module := ctx.Module()
+	moduleName := module.Name()
+
 	ctx.VisitDirectDepsIgnoreBlueprint(func(m android.Module) {
-		merge := func(theirs *JarJarProviderData) {
-			for orig, renamed := range theirs.Rename {
-				if result == nil {
-					result = &JarJarProviderData{
-						Rename: make(map[string]string),
+		tag := ctx.OtherModuleDependencyTag(m)
+		// This logic mirrors that in (*Module).collectDeps above.  There are several places
+		// where we explicitly return RenameUseExclude, even though it is the default, to
+		// indicate that it has been verified to be the case.
+		//
+		// Note well: there are probably cases that are getting to the unconditional return
+		// and are therefore wrong.
+		shouldIncludeRenames := func() (DependencyUse, string) {
+			if moduleName == m.Name() {
+				return RenameUseInclude, "name" // If we have the same module name, include the renames.
+			}
+			if sc, ok := module.(android.SdkContext); ok {
+				if ctx.Device() {
+					sdkDep := decodeSdkDep(ctx, sc)
+					if !sdkDep.invalidVersion && sdkDep.useFiles {
+						return RenameUseExclude, "useFiles"
 					}
 				}
+			}
+			if IsJniDepTag(tag) || tag == certificateTag || tag == proguardRaiseTag {
+				return RenameUseExclude, "tags"
+			}
+			if _, ok := m.(SdkLibraryDependency); ok {
+				switch tag {
+				case sdkLibTag, libTag:
+					return RenameUseExclude, "sdklibdep" // matches collectDeps()
+				}
+				return RenameUseInvalid, "sdklibdep" // dep is not used in collectDeps()
+			} else if ji, ok := android.OtherModuleProvider(ctx, m, JavaInfoProvider); ok {
+				switch ji.StubsLinkType {
+				case Stubs:
+					return RenameUseExclude, "info"
+				case Implementation:
+					return RenameUseInclude, "info"
+				default:
+					//fmt.Printf("LJ: %v -> %v StubsLinkType unknown\n", module, m)
+					// Fall through to the heuristic logic.
+				}
+				switch reflect.TypeOf(m).String() {
+				case "*java.GeneratedJavaLibraryModule":
+					// Probably a java_aconfig_library module.
+					// TODO: make this check better.
+					return RenameUseInclude, "reflect"
+				}
+				switch tag {
+				case bootClasspathTag:
+					return RenameUseExclude, "tagswitch"
+				case sdkLibTag, libTag, instrumentationForTag:
+					return RenameUseInclude, "tagswitch"
+				case java9LibTag:
+					return RenameUseExclude, "tagswitch"
+				case staticLibTag:
+					return RenameUseInclude, "tagswitch"
+				case pluginTag:
+					return RenameUseInclude, "tagswitch"
+				case errorpronePluginTag:
+					return RenameUseInclude, "tagswitch"
+				case exportedPluginTag:
+					return RenameUseInclude, "tagswitch"
+				case kotlinStdlibTag, kotlinAnnotationsTag:
+					return RenameUseExclude, "tagswitch"
+				case kotlinPluginTag:
+					return RenameUseInclude, "tagswitch"
+				default:
+					return RenameUseExclude, "tagswitch"
+				}
+			} else if _, ok := m.(android.SourceFileProducer); ok {
+				switch tag {
+				case sdkLibTag, libTag, staticLibTag:
+					return RenameUseInclude, "srcfile"
+				default:
+					return RenameUseExclude, "srcfile"
+				}
+			} else if _, ok := android.OtherModuleProvider(ctx, m, android.CodegenInfoProvider); ok {
+				return RenameUseInclude, "aconfig_declarations_group"
+			} else {
+				switch tag {
+				case bootClasspathTag:
+					return RenameUseExclude, "else"
+				case systemModulesTag:
+					return RenameUseInclude, "else"
+				}
+			}
+			// If we got here, choose the safer option, which may lead to a build failure, rather
+			// than runtime failures on the device.
+			return RenameUseExclude, "end"
+		}
+
+		if result == nil {
+			result = &JarJarProviderData{
+				Rename:    make(map[string]string),
+				RenameUse: make([]RenameUseElement, 0),
+			}
+		}
+		how, why := shouldIncludeRenames()
+		result.RenameUse = append(result.RenameUse, RenameUseElement{DepName: m.Name(), RenameUse: how, Why: why})
+		if how != RenameUseInclude {
+			// Nothing to merge.
+			return
+		}
+
+		merge := func(theirs *JarJarProviderData) {
+			for orig, renamed := range theirs.Rename {
 				if preexisting, exists := (*result).Rename[orig]; !exists || preexisting == "" {
 					result.Rename[orig] = renamed
 				} else if preexisting != "" && renamed != "" && preexisting != renamed {
@@ -2537,7 +2669,8 @@ func (module *Module) collectJarJarRules(ctx android.ModuleContext) *JarJarProvi
 // to "" won't be in this list because they shouldn't be renamed yet.
 func getJarJarRuleText(provider *JarJarProviderData) string {
 	result := ""
-	for orig, renamed := range provider.Rename {
+	for _, orig := range android.SortedKeys(provider.Rename) {
+		renamed := provider.Rename[orig]
 		if renamed != "" {
 			result += "rule " + orig + " " + renamed + "\n"
 		}

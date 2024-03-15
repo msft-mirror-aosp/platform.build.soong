@@ -18,7 +18,6 @@ package android
 // product variables necessary for soong_build's operation.
 
 import (
-	"android/soong/shared"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -28,6 +27,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
+
+	"android/soong/shared"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/bootstrap"
@@ -89,8 +91,6 @@ type CmdArgs struct {
 	ModuleGraphFile   string
 	ModuleActionsFile string
 	DocFile           string
-
-	MultitreeBuild bool
 
 	BuildFromSourceStub bool
 
@@ -209,13 +209,20 @@ func (c Config) ReleaseDefaultModuleBuildFromSource() bool {
 		Bool(c.config.productVariables.ReleaseDefaultModuleBuildFromSource)
 }
 
+// Enables flagged apis annotated with READ_WRITE aconfig flags to be included in the stubs
+// and hiddenapi flags so that they are accessible at runtime
+func (c Config) ReleaseExportRuntimeApis() bool {
+	return Bool(c.config.productVariables.ExportRuntimeApis)
+}
+
 // Enables ABI monitoring of NDK libraries
 func (c Config) ReleaseNdkAbiMonitored() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_NDK_ABI_MONITORED")
 }
 
 func (c Config) ReleaseHiddenApiExportableStubs() bool {
-	return c.config.productVariables.GetBuildFlagBool("RELEASE_HIDDEN_API_EXPORTABLE_STUBS")
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_HIDDEN_API_EXPORTABLE_STUBS") ||
+		Bool(c.config.productVariables.HiddenapiExportableStubs)
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -280,10 +287,6 @@ type config struct {
 
 	BuildMode SoongBuildMode
 
-	// If MultitreeBuild is true then this is one inner tree of a multitree
-	// build directed by the multitree orchestrator.
-	MultitreeBuild bool
-
 	// If testAllowNonExistentPaths is true then PathForSource and PathForModuleSrc won't error
 	// in tests when a path doesn't exist.
 	TestAllowNonExistentPaths bool
@@ -320,6 +323,18 @@ func loadConfig(config *config) error {
 	return loadFromConfigFile(&config.productVariables, absolutePath(config.ProductVariablesFileName))
 }
 
+// Checks if the string is a valid go identifier. This is equivalent to blueprint's definition
+// of an identifier, so it will match the same identifiers as those that can be used in bp files.
+func isGoIdentifier(ident string) bool {
+	for i, r := range ident {
+		valid := r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) && i > 0
+		if !valid {
+			return false
+		}
+	}
+	return len(ident) > 0
+}
+
 // loadFromConfigFile loads and decodes configuration options from a JSON file
 // in the current working directory.
 func loadFromConfigFile(configurable *ProductVariables, filename string) error {
@@ -354,6 +369,20 @@ func loadFromConfigFile(configurable *ProductVariables, filename string) error {
 	configurable.Native_coverage = proptools.BoolPtr(
 		Bool(configurable.GcovCoverage) ||
 			Bool(configurable.ClangCoverage))
+
+	// The go scanner's definition of identifiers is c-style identifiers, but allowing unicode's
+	// definition of letters and digits. This is the same scanner that blueprint uses, so it
+	// will allow the same identifiers as are valid in bp files.
+	for namespace := range configurable.VendorVars {
+		if !isGoIdentifier(namespace) {
+			return fmt.Errorf("soong config namespaces must be valid identifiers: %q", namespace)
+		}
+		for variable := range configurable.VendorVars[namespace] {
+			if !isGoIdentifier(variable) {
+				return fmt.Errorf("soong config variables must be valid identifiers: %q", variable)
+			}
+		}
+	}
 
 	// when Platform_sdk_final is true (or PLATFORM_VERSION_CODENAME is REL), use Platform_sdk_version;
 	// if false (pre-released version, for example), use Platform_sdk_codename.
@@ -507,8 +536,6 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		moduleListFile: cmdArgs.ModuleListFile,
 		fs:             pathtools.NewOsFs(absSrcDir),
 
-		MultitreeBuild: cmdArgs.MultitreeBuild,
-
 		buildFromSourceStub: cmdArgs.BuildFromSourceStub,
 	}
 
@@ -612,15 +639,19 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		"framework-adservices":              {},
 		"framework-appsearch":               {},
 		"framework-bluetooth":               {},
+		"framework-configinfrastructure":    {},
 		"framework-connectivity":            {},
 		"framework-connectivity-t":          {},
+		"framework-devicelock":              {},
 		"framework-graphics":                {},
+		"framework-healthfitness":           {},
 		"framework-location":                {},
 		"framework-media":                   {},
 		"framework-mediaprovider":           {},
 		"framework-nfc":                     {},
 		"framework-ondevicepersonalization": {},
 		"framework-pdf":                     {},
+		"framework-pdf-v":                   {},
 		"framework-permission":              {},
 		"framework-permission-s":            {},
 		"framework-scheduling":              {},
@@ -1309,6 +1340,25 @@ func (c *config) VendorApiLevel() string {
 	return String(c.productVariables.VendorApiLevel)
 }
 
+func (c *config) PrevVendorApiLevel() string {
+	vendorApiLevel, err := strconv.Atoi(c.VendorApiLevel())
+	if err != nil {
+		panic(fmt.Errorf("Cannot parse vendor API level %s to an integer: %s",
+			c.VendorApiLevel(), err))
+	}
+	// The version before trunk stable is 34.
+	if vendorApiLevel == 202404 {
+		return "34"
+	}
+	if vendorApiLevel >= 1 && vendorApiLevel <= 34 {
+		return strconv.Itoa(vendorApiLevel - 1)
+	}
+	if vendorApiLevel < 202404 || vendorApiLevel%100 != 4 {
+		panic("Unknown vendor API level " + c.VendorApiLevel())
+	}
+	return strconv.Itoa(vendorApiLevel - 100)
+}
+
 func (c *config) VendorApiLevelFrozen() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_BOARD_API_LEVEL_FROZEN")
 }
@@ -1466,18 +1516,18 @@ func (c *deviceConfig) PgoAdditionalProfileDirs() []string {
 }
 
 // AfdoProfile returns fully qualified path associated to the given module name
-func (c *deviceConfig) AfdoProfile(name string) (*string, error) {
+func (c *deviceConfig) AfdoProfile(name string) (string, error) {
 	for _, afdoProfile := range c.config.productVariables.AfdoProfiles {
 		split := strings.Split(afdoProfile, ":")
 		if len(split) != 3 {
-			return nil, fmt.Errorf("AFDO_PROFILES has invalid value: %s. "+
+			return "", fmt.Errorf("AFDO_PROFILES has invalid value: %s. "+
 				"The expected format is <module>:<fully-qualified-path-to-fdo_profile>", afdoProfile)
 		}
 		if split[0] == name {
-			return proptools.StringPtr(strings.Join([]string{split[1], split[2]}, ":")), nil
+			return strings.Join([]string{split[1], split[2]}, ":"), nil
 		}
 	}
-	return nil, nil
+	return "", nil
 }
 
 func (c *deviceConfig) VendorSepolicyDirs() []string {
@@ -1706,10 +1756,6 @@ func (c *deviceConfig) PlatformSepolicyVersion() string {
 	return String(c.config.productVariables.PlatformSepolicyVersion)
 }
 
-func (c *deviceConfig) TotSepolicyVersion() string {
-	return String(c.config.productVariables.TotSepolicyVersion)
-}
-
 func (c *deviceConfig) PlatformSepolicyCompatVersions() []string {
 	return c.config.productVariables.PlatformSepolicyCompatVersions
 }
@@ -1893,6 +1939,10 @@ func (c *deviceConfig) GenerateAidlNdkPlatformBackend() bool {
 	return c.config.productVariables.GenerateAidlNdkPlatformBackend
 }
 
+func (c *deviceConfig) AconfigContainerValidation() string {
+	return c.config.productVariables.AconfigContainerValidation
+}
+
 func (c *config) IgnorePrefer32OnDevice() bool {
 	return c.productVariables.IgnorePrefer32OnDevice
 }
@@ -1980,25 +2030,35 @@ func (c *config) UseResourceProcessorByDefault() bool {
 
 var (
 	mainlineApexContributionBuildFlags = []string{
+		"RELEASE_APEX_CONTRIBUTIONS_ADBD",
 		"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES",
 		"RELEASE_APEX_CONTRIBUTIONS_APPSEARCH",
 		"RELEASE_APEX_CONTRIBUTIONS_ART",
 		"RELEASE_APEX_CONTRIBUTIONS_BLUETOOTH",
+		"RELEASE_APEX_CONTRIBUTIONS_CAPTIVEPORTALLOGIN",
+		"RELEASE_APEX_CONTRIBUTIONS_CELLBROADCAST",
 		"RELEASE_APEX_CONTRIBUTIONS_CONFIGINFRASTRUCTURE",
 		"RELEASE_APEX_CONTRIBUTIONS_CONNECTIVITY",
 		"RELEASE_APEX_CONTRIBUTIONS_CONSCRYPT",
 		"RELEASE_APEX_CONTRIBUTIONS_CRASHRECOVERY",
 		"RELEASE_APEX_CONTRIBUTIONS_DEVICELOCK",
+		"RELEASE_APEX_CONTRIBUTIONS_DOCUMENTSUIGOOGLE",
+		"RELEASE_APEX_CONTRIBUTIONS_EXTSERVICES",
 		"RELEASE_APEX_CONTRIBUTIONS_HEALTHFITNESS",
 		"RELEASE_APEX_CONTRIBUTIONS_IPSEC",
 		"RELEASE_APEX_CONTRIBUTIONS_MEDIA",
 		"RELEASE_APEX_CONTRIBUTIONS_MEDIAPROVIDER",
+		"RELEASE_APEX_CONTRIBUTIONS_NETWORKSTACKGOOGLE",
+		"RELEASE_APEX_CONTRIBUTIONS_NEURALNETWORKS",
 		"RELEASE_APEX_CONTRIBUTIONS_ONDEVICEPERSONALIZATION",
 		"RELEASE_APEX_CONTRIBUTIONS_PERMISSION",
 		"RELEASE_APEX_CONTRIBUTIONS_REMOTEKEYPROVISIONING",
+		"RELEASE_APEX_CONTRIBUTIONS_RESOLV",
 		"RELEASE_APEX_CONTRIBUTIONS_SCHEDULING",
 		"RELEASE_APEX_CONTRIBUTIONS_SDKEXTENSIONS",
+		"RELEASE_APEX_CONTRIBUTIONS_SWCODEC",
 		"RELEASE_APEX_CONTRIBUTIONS_STATSD",
+		"RELEASE_APEX_CONTRIBUTIONS_TZDATA",
 		"RELEASE_APEX_CONTRIBUTIONS_UWB",
 		"RELEASE_APEX_CONTRIBUTIONS_WIFI",
 	}
@@ -2014,4 +2074,8 @@ func (c *config) AllApexContributions() []string {
 		}
 	}
 	return ret
+}
+
+func (c *config) BuildIgnoreApexContributionContents() []string {
+	return c.productVariables.BuildIgnoreApexContributionContents
 }

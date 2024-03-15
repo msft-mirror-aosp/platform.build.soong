@@ -92,6 +92,12 @@ func (callbacks *JavaAconfigDeclarationsLibraryCallbacks) GenerateSourceJarBuild
 		ctx.PropertyErrorf("mode", "%q is not a supported mode", mode)
 	}
 
+	if mode == "exported" && !declarations.Exportable {
+		// if mode is exported, the corresponding aconfig_declaration must mark its
+		// exportable property true
+		ctx.PropertyErrorf("mode", "exported mode requires its aconfig_declaration has exportable prop true")
+	}
+
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        javaRule,
 		Input:       declarations.IntermediateCacheOutputPath,
@@ -102,12 +108,26 @@ func (callbacks *JavaAconfigDeclarationsLibraryCallbacks) GenerateSourceJarBuild
 		},
 	})
 
-	// Mark our generated code as possibly needing jarjar repackaging
-	// TODO: Maybe control this with a property?
-	module.AddJarJarRenameRule(declarations.Package+".Flags", "")
-	module.AddJarJarRenameRule(declarations.Package+".FeatureFlags", "")
-	module.AddJarJarRenameRule(declarations.Package+".FeatureFlagsImpl", "")
-	module.AddJarJarRenameRule(declarations.Package+".FakeFeatureFlagsImpl", "")
+	if declarations.Exportable {
+		// Mark our generated code as possibly needing jarjar repackaging
+		// The repackaging only happens when the corresponding aconfig_declaration
+		// has property exportable true
+		module.AddJarJarRenameRule(declarations.Package+".Flags", "")
+		module.AddJarJarRenameRule(declarations.Package+".FeatureFlags", "")
+		module.AddJarJarRenameRule(declarations.Package+".FeatureFlagsImpl", "")
+		module.AddJarJarRenameRule(declarations.Package+".FakeFeatureFlagsImpl", "")
+	}
+
+	android.SetProvider(ctx, android.CodegenInfoProvider, android.CodegenInfo{
+		AconfigDeclarations:          []string{declarationsModules[0].Name()},
+		IntermediateCacheOutputPaths: android.Paths{declarations.IntermediateCacheOutputPath},
+		Srcjars:                      android.Paths{srcJarPath},
+		ModeInfos: map[string]android.ModeInfo{
+			ctx.ModuleName(): {
+				Container: declarations.Container,
+				Mode:      mode,
+			}},
+	})
 
 	return srcJarPath
 }

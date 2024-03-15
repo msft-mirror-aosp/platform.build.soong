@@ -50,8 +50,8 @@ type filesystem struct {
 	// Function that builds extra files under the root directory and returns the files
 	buildExtraFiles func(ctx android.ModuleContext, root android.OutputPath) android.OutputPaths
 
-	// Function that filters PackagingSpecs returned by PackagingBase.GatherPackagingSpecs()
-	filterPackagingSpecs func(specs map[string]android.PackagingSpec)
+	// Function that filters PackagingSpec in PackagingBase.GatherPackagingSpecs()
+	filterPackagingSpec func(spec android.PackagingSpec) bool
 
 	output     android.OutputPath
 	installDir android.InstallPath
@@ -311,18 +311,16 @@ func (f *filesystem) salt() string {
 }
 
 func (f *filesystem) buildPropFile(ctx android.ModuleContext) (propFile android.OutputPath, toolDeps android.Paths) {
-	type prop struct {
-		name  string
-		value string
-	}
-
-	var props []prop
 	var deps android.Paths
+	var propFileString strings.Builder
 	addStr := func(name string, value string) {
-		props = append(props, prop{name, value})
+		propFileString.WriteString(name)
+		propFileString.WriteRune('=')
+		propFileString.WriteString(value)
+		propFileString.WriteRune('\n')
 	}
 	addPath := func(name string, path android.Path) {
-		props = append(props, prop{name, path.String()})
+		addStr(name, path.String())
 		deps = append(deps, path)
 	}
 
@@ -376,15 +374,7 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (propFile android.
 		addStr("hash_seed", uuid)
 	}
 	propFile = android.PathForModuleOut(ctx, "prop").OutputPath
-	builder := android.NewRuleBuilder(pctx, ctx)
-	builder.Command().Text("rm").Flag("-rf").Output(propFile)
-	for _, p := range props {
-		builder.Command().
-			Text("echo").
-			Flag(`"` + p.name + "=" + p.value + `"`).
-			Text(">>").Output(propFile)
-	}
-	builder.Build("build_filesystem_prop", fmt.Sprintf("Creating filesystem props for %s", f.BaseModuleName()))
+	android.WriteFileRuleVerbatim(ctx, propFile, propFileString.String())
 	return propFile, deps
 }
 
@@ -493,10 +483,7 @@ func (f *filesystem) SignedOutputPath() android.Path {
 // Note that "apex" module installs its contents to "apex"(fake partition) as well
 // for symbol lookup by imitating "activated" paths.
 func (f *filesystem) gatherFilteredPackagingSpecs(ctx android.ModuleContext) map[string]android.PackagingSpec {
-	specs := f.PackagingBase.GatherPackagingSpecs(ctx)
-	if f.filterPackagingSpecs != nil {
-		f.filterPackagingSpecs(specs)
-	}
+	specs := f.PackagingBase.GatherPackagingSpecsWithFilter(ctx, f.filterPackagingSpec)
 	return specs
 }
 

@@ -55,7 +55,6 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 		ctx.BottomUp("test_per_src", TestPerSrcMutator).Parallel()
 		ctx.BottomUp("version", versionMutator).Parallel()
 		ctx.BottomUp("begin", BeginMutator).Parallel()
-		ctx.BottomUp("fdo_profile", fdoProfileMutator)
 	})
 
 	ctx.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
@@ -70,8 +69,7 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 
 		ctx.Transition("coverage", &coverageTransitionMutator{})
 
-		ctx.TopDown("afdo_deps", afdoDepsMutator)
-		ctx.BottomUp("afdo", afdoMutator).Parallel()
+		ctx.Transition("afdo", &afdoTransitionMutator{})
 
 		ctx.Transition("orderfile", &orderfileTransitionMutator{})
 
@@ -527,7 +525,7 @@ type ModuleContextIntf interface {
 	selectedStl() string
 	baseModuleName() string
 	getVndkExtendsModuleName() string
-	isAfdoCompile() bool
+	isAfdoCompile(ctx ModuleContext) bool
 	isOrderfileCompile() bool
 	isCfi() bool
 	isFuzzer() bool
@@ -767,6 +765,12 @@ func (d libraryDependencyTag) InstallDepNeeded() bool {
 }
 
 var _ android.InstallNeededDependencyTag = libraryDependencyTag{}
+
+func (d libraryDependencyTag) PropagateAconfigValidation() bool {
+	return d.static()
+}
+
+var _ android.PropagateAconfigValidationDependencyTag = libraryDependencyTag{}
 
 // dependencyTag is used for tagging miscellaneous dependency types that don't fit into
 // libraryDependencyTag.  Each tag object is created globally and reused for multiple
@@ -1381,9 +1385,9 @@ func (c *Module) IsVndk() bool {
 	return false
 }
 
-func (c *Module) isAfdoCompile() bool {
+func (c *Module) isAfdoCompile(ctx ModuleContext) bool {
 	if afdo := c.afdo; afdo != nil {
-		return afdo.Properties.FdoProfilePath != nil
+		return afdo.isAfdoCompile(ctx)
 	}
 	return false
 }
@@ -1706,8 +1710,8 @@ func (ctx *moduleContextImpl) isVndk() bool {
 	return ctx.mod.IsVndk()
 }
 
-func (ctx *moduleContextImpl) isAfdoCompile() bool {
-	return ctx.mod.isAfdoCompile()
+func (ctx *moduleContextImpl) isAfdoCompile(mctx ModuleContext) bool {
+	return ctx.mod.isAfdoCompile(mctx)
 }
 
 func (ctx *moduleContextImpl) isOrderfileCompile() bool {
@@ -2350,10 +2354,6 @@ func (c *Module) beginMutator(actx android.BottomUpMutatorContext) {
 		},
 	}
 	ctx.ctx = ctx
-
-	if !actx.Host() || !ctx.static() || ctx.staticBinary() {
-		c.afdo.addDep(ctx, actx)
-	}
 
 	c.begin(ctx)
 }
@@ -3367,7 +3367,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					c.sabi.Properties.ReexportedIncludes, depExporterInfo.IncludeDirs.Strings()...)
 			}
 
-			makeLibName := MakeLibName(ctx, c, ccDep, depName) + libDepTag.makeSuffix
+			makeLibName := MakeLibName(ctx, c, ccDep, ccDep.BaseModuleName()) + libDepTag.makeSuffix
 			switch {
 			case libDepTag.header():
 				c.Properties.AndroidMkHeaderLibs = append(
@@ -3408,7 +3408,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			switch depTag {
 			case runtimeDepTag:
 				c.Properties.AndroidMkRuntimeLibs = append(
-					c.Properties.AndroidMkRuntimeLibs, MakeLibName(ctx, c, ccDep, depName)+libDepTag.makeSuffix)
+					c.Properties.AndroidMkRuntimeLibs, MakeLibName(ctx, c, ccDep, ccDep.BaseModuleName())+libDepTag.makeSuffix)
 				// Record BaseLibName for snapshots.
 				c.Properties.SnapshotRuntimeLibs = append(c.Properties.SnapshotRuntimeLibs, BaseLibName(depName))
 			case objDepTag:

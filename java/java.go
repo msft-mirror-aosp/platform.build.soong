@@ -87,6 +87,14 @@ func RegisterJavaSdkMemberTypes() {
 	android.RegisterSdkMemberType(javaTestSdkMemberType)
 }
 
+type StubsLinkType int
+
+const (
+	Unknown StubsLinkType = iota
+	Stubs
+	Implementation
+)
+
 var (
 	// Supports adding java header libraries to module_exports and sdk.
 	javaHeaderLibsSdkMemberType = &librarySdkMemberType{
@@ -296,6 +304,11 @@ type JavaInfo struct {
 	// JacocoReportClassesFile is the path to a jar containing uninstrumented classes that will be
 	// instrumented by jacoco.
 	JacocoReportClassesFile android.Path
+
+	// StubsLinkType provides information about whether the provided jars are stub jars or
+	// implementation jars. If the provider is set by java_sdk_library, the link type is "unknown"
+	// and selection between the stub jar vs implementation jar is deferred to SdkLibrary.sdkJars(...)
+	StubsLinkType StubsLinkType
 }
 
 var JavaInfoProvider = blueprint.NewProvider[JavaInfo]()
@@ -332,6 +345,12 @@ func (j *Module) XrefJavaFiles() android.Paths {
 	return j.kytheFiles
 }
 
+func (d dependencyTag) PropagateAconfigValidation() bool {
+	return d.static
+}
+
+var _ android.PropagateAconfigValidationDependencyTag = dependencyTag{}
+
 type dependencyTag struct {
 	blueprint.BaseDependencyTag
 	name string
@@ -341,6 +360,8 @@ type dependencyTag struct {
 
 	// True if the dependency is a toolchain, for example an annotation processor.
 	toolchain bool
+
+	static bool
 }
 
 // installDependencyTag is a dependency tag that is annotated to cause the installed files of the
@@ -386,7 +407,7 @@ func IsJniDepTag(depTag blueprint.DependencyTag) bool {
 var (
 	dataNativeBinsTag       = dependencyTag{name: "dataNativeBins"}
 	dataDeviceBinsTag       = dependencyTag{name: "dataDeviceBins"}
-	staticLibTag            = dependencyTag{name: "staticlib"}
+	staticLibTag            = dependencyTag{name: "staticlib", static: true}
 	libTag                  = dependencyTag{name: "javalib", runtimeLinked: true}
 	sdkLibTag               = dependencyTag{name: "sdklib", runtimeLinked: true}
 	java9LibTag             = dependencyTag{name: "java9lib", runtimeLinked: true}
@@ -666,10 +687,11 @@ func shouldUncompressDex(ctx android.ModuleContext, libName string, dexpreopter 
 		return true
 	}
 
-	// Store uncompressed dex files that are preopted on /system.
-	if !dexpreopter.dexpreoptDisabled(ctx, libName) && (ctx.Host() || !dexpreopter.odexOnSystemOther(ctx, libName, dexpreopter.installPath)) {
+	// Store uncompressed dex files that are preopted on /system or /system_other.
+	if !dexpreopter.dexpreoptDisabled(ctx, libName) {
 		return true
 	}
+
 	if ctx.Config().UncompressPrivAppDex() &&
 		inList(ctx.ModuleName(), ctx.Config().ModulesLoadedByPrivilegedModules()) {
 		return true
@@ -686,13 +708,194 @@ func setUncompressDex(ctx android.ModuleContext, dexpreopter *dexpreopter, dexer
 	}
 }
 
-func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+// list of java_library modules that set platform_apis: true
+// this property is a no-op for java_library
+// TODO (b/215379393): Remove this allowlist
+var (
+	aospPlatformApiAllowlist = map[string]bool{
+		"adservices-test-scenarios":                         true,
+		"aidl-cpp-java-test-interface-java":                 true,
+		"aidl-test-extras-java":                             true,
+		"aidl-test-interface-java":                          true,
+		"aidl-test-interface-permission-java":               true,
+		"aidl_test_java_client_permission":                  true,
+		"aidl_test_java_client_sdk1":                        true,
+		"aidl_test_java_client_sdk29":                       true,
+		"aidl_test_java_client":                             true,
+		"aidl_test_java_service_permission":                 true,
+		"aidl_test_java_service_sdk1":                       true,
+		"aidl_test_java_service_sdk29":                      true,
+		"aidl_test_java_service":                            true,
+		"aidl_test_loggable_interface-java":                 true,
+		"aidl_test_nonvintf_parcelable-V1-java":             true,
+		"aidl_test_nonvintf_parcelable-V2-java":             true,
+		"aidl_test_unstable_parcelable-java":                true,
+		"aidl_test_vintf_parcelable-V1-java":                true,
+		"aidl_test_vintf_parcelable-V2-java":                true,
+		"android.aidl.test.trunk-V1-java":                   true,
+		"android.aidl.test.trunk-V2-java":                   true,
+		"android.frameworks.location.altitude-V1-java":      true,
+		"android.frameworks.location.altitude-V2-java":      true,
+		"android.frameworks.stats-V1-java":                  true,
+		"android.frameworks.stats-V2-java":                  true,
+		"android.frameworks.stats-V3-java":                  true,
+		"android.hardware.authsecret-V1-java":               true,
+		"android.hardware.authsecret-V2-java":               true,
+		"android.hardware.biometrics.common-V1-java":        true,
+		"android.hardware.biometrics.common-V2-java":        true,
+		"android.hardware.biometrics.common-V3-java":        true,
+		"android.hardware.biometrics.common-V4-java":        true,
+		"android.hardware.biometrics.face-V1-java":          true,
+		"android.hardware.biometrics.face-V2-java":          true,
+		"android.hardware.biometrics.face-V3-java":          true,
+		"android.hardware.biometrics.face-V4-java":          true,
+		"android.hardware.biometrics.fingerprint-V1-java":   true,
+		"android.hardware.biometrics.fingerprint-V2-java":   true,
+		"android.hardware.biometrics.fingerprint-V3-java":   true,
+		"android.hardware.biometrics.fingerprint-V4-java":   true,
+		"android.hardware.bluetooth.lmp_event-V1-java":      true,
+		"android.hardware.confirmationui-V1-java":           true,
+		"android.hardware.confirmationui-V2-java":           true,
+		"android.hardware.gatekeeper-V1-java":               true,
+		"android.hardware.gatekeeper-V2-java":               true,
+		"android.hardware.gnss-V1-java":                     true,
+		"android.hardware.gnss-V2-java":                     true,
+		"android.hardware.gnss-V3-java":                     true,
+		"android.hardware.gnss-V4-java":                     true,
+		"android.hardware.graphics.common-V1-java":          true,
+		"android.hardware.graphics.common-V2-java":          true,
+		"android.hardware.graphics.common-V3-java":          true,
+		"android.hardware.graphics.common-V4-java":          true,
+		"android.hardware.graphics.common-V5-java":          true,
+		"android.hardware.identity-V1-java":                 true,
+		"android.hardware.identity-V2-java":                 true,
+		"android.hardware.identity-V3-java":                 true,
+		"android.hardware.identity-V4-java":                 true,
+		"android.hardware.identity-V5-java":                 true,
+		"android.hardware.identity-V6-java":                 true,
+		"android.hardware.keymaster-V1-java":                true,
+		"android.hardware.keymaster-V2-java":                true,
+		"android.hardware.keymaster-V3-java":                true,
+		"android.hardware.keymaster-V4-java":                true,
+		"android.hardware.keymaster-V5-java":                true,
+		"android.hardware.oemlock-V1-java":                  true,
+		"android.hardware.oemlock-V2-java":                  true,
+		"android.hardware.power.stats-V1-java":              true,
+		"android.hardware.power.stats-V2-java":              true,
+		"android.hardware.power.stats-V3-java":              true,
+		"android.hardware.power-V1-java":                    true,
+		"android.hardware.power-V2-java":                    true,
+		"android.hardware.power-V3-java":                    true,
+		"android.hardware.power-V4-java":                    true,
+		"android.hardware.power-V5-java":                    true,
+		"android.hardware.rebootescrow-V1-java":             true,
+		"android.hardware.rebootescrow-V2-java":             true,
+		"android.hardware.security.authgraph-V1-java":       true,
+		"android.hardware.security.keymint-V1-java":         true,
+		"android.hardware.security.keymint-V2-java":         true,
+		"android.hardware.security.keymint-V3-java":         true,
+		"android.hardware.security.keymint-V4-java":         true,
+		"android.hardware.security.secureclock-V1-java":     true,
+		"android.hardware.security.secureclock-V2-java":     true,
+		"android.hardware.thermal-V1-java":                  true,
+		"android.hardware.thermal-V2-java":                  true,
+		"android.hardware.threadnetwork-V1-java":            true,
+		"android.hardware.weaver-V1-java":                   true,
+		"android.hardware.weaver-V2-java":                   true,
+		"android.hardware.weaver-V3-java":                   true,
+		"android.security.attestationmanager-java":          true,
+		"android.security.authorization-java":               true,
+		"android.security.compat-java":                      true,
+		"android.security.legacykeystore-java":              true,
+		"android.security.maintenance-java":                 true,
+		"android.security.metrics-java":                     true,
+		"android.system.keystore2-V1-java":                  true,
+		"android.system.keystore2-V2-java":                  true,
+		"android.system.keystore2-V3-java":                  true,
+		"android.system.keystore2-V4-java":                  true,
+		"binderReadParcelIface-java":                        true,
+		"binderRecordReplayTestIface-java":                  true,
+		"car-experimental-api-static-lib":                   true,
+		"collector-device-lib-platform":                     true,
+		"com.android.car.oem":                               true,
+		"com.google.hardware.pixel.display-V10-java":        true,
+		"com.google.hardware.pixel.display-V1-java":         true,
+		"com.google.hardware.pixel.display-V2-java":         true,
+		"com.google.hardware.pixel.display-V3-java":         true,
+		"com.google.hardware.pixel.display-V4-java":         true,
+		"com.google.hardware.pixel.display-V5-java":         true,
+		"com.google.hardware.pixel.display-V6-java":         true,
+		"com.google.hardware.pixel.display-V7-java":         true,
+		"com.google.hardware.pixel.display-V8-java":         true,
+		"com.google.hardware.pixel.display-V9-java":         true,
+		"conscrypt-support":                                 true,
+		"cts-keystore-test-util":                            true,
+		"cts-keystore-user-auth-helper-library":             true,
+		"ctsmediautil":                                      true,
+		"CtsNetTestsNonUpdatableLib":                        true,
+		"DpmWrapper":                                        true,
+		"flickerlib-apphelpers":                             true,
+		"flickerlib-helpers":                                true,
+		"flickerlib-parsers":                                true,
+		"flickerlib":                                        true,
+		"hardware.google.bluetooth.ccc-V1-java":             true,
+		"hardware.google.bluetooth.sar-V1-java":             true,
+		"monet":                                             true,
+		"pixel-power-ext-V1-java":                           true,
+		"pixel-power-ext-V2-java":                           true,
+		"pixel_stateresidency_provider_aidl_interface-java": true,
+		"pixel-thermal-ext-V1-java":                         true,
+		"protolog-lib":                                      true,
+		"RkpRegistrationCheck":                              true,
+		"rotary-service-javastream-protos":                  true,
+		"service_based_camera_extensions":                   true,
+		"statsd-helper-test":                                true,
+		"statsd-helper":                                     true,
+		"test-piece-2-V1-java":                              true,
+		"test-piece-2-V2-java":                              true,
+		"test-piece-3-V1-java":                              true,
+		"test-piece-3-V2-java":                              true,
+		"test-piece-3-V3-java":                              true,
+		"test-piece-4-V1-java":                              true,
+		"test-piece-4-V2-java":                              true,
+		"test-root-package-V1-java":                         true,
+		"test-root-package-V2-java":                         true,
+		"test-root-package-V3-java":                         true,
+		"test-root-package-V4-java":                         true,
+		"testServiceIface-java":                             true,
+		"wm-flicker-common-app-helpers":                     true,
+		"wm-flicker-common-assertions":                      true,
+		"wm-shell-flicker-utils":                            true,
+		"wycheproof-keystore":                               true,
+	}
 
+	// Union of aosp and internal allowlists
+	PlatformApiAllowlist = map[string]bool{}
+)
+
+func init() {
+	for k, v := range aospPlatformApiAllowlist {
+		PlatformApiAllowlist[k] = v
+	}
+}
+
+func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	j.provideHiddenAPIPropertyInfo(ctx)
 
 	j.sdkVersion = j.SdkVersion(ctx)
 	j.minSdkVersion = j.MinSdkVersion(ctx)
 	j.maxSdkVersion = j.MaxSdkVersion(ctx)
+
+	// SdkLibrary.GenerateAndroidBuildActions(ctx) sets the stubsLinkType to Unknown.
+	// If the stubsLinkType has already been set to Unknown, the stubsLinkType should
+	// not be overridden.
+	if j.stubsLinkType != Unknown {
+		if proptools.Bool(j.properties.Is_stubs_module) {
+			j.stubsLinkType = Stubs
+		} else {
+			j.stubsLinkType = Implementation
+		}
+	}
 
 	j.stem = proptools.StringDefault(j.overridableDeviceProperties.Stem, ctx.ModuleName())
 
@@ -719,6 +922,9 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		setUncompressDex(ctx, &j.dexpreopter, &j.dexer)
 		j.dexpreopter.uncompressedDex = *j.dexProperties.Uncompress_dex
 		j.classLoaderContexts = j.usesLibrary.classLoaderContextForUsesLibDeps(ctx)
+		if j.usesLibrary.shouldDisableDexpreopt {
+			j.dexpreopter.disableDexpreopt()
+		}
 	}
 	j.compile(ctx, nil, nil, nil)
 
@@ -1666,6 +1872,10 @@ type ApiLibrary struct {
 	dexJarFile OptionalDexJarPath
 
 	validationPaths android.Paths
+
+	stubsType StubsType
+
+	aconfigProtoFiles android.Paths
 }
 
 type JavaApiLibraryProperties struct {
@@ -1707,6 +1917,20 @@ type JavaApiLibraryProperties struct {
 	// in sync with the source Java files. However, the environment variable
 	// DISABLE_STUB_VALIDATION has precedence over this property.
 	Enable_validation *bool
+
+	// Type of stubs the module should generate. Must be one of "everything", "runtime" or
+	// "exportable". Defaults to "everything".
+	// - "everything" stubs include all non-flagged apis and flagged apis, regardless of the state
+	// of the flag.
+	// - "runtime" stubs include all non-flagged apis and flagged apis that are ENABLED or
+	// READ_WRITE, and all other flagged apis are stripped.
+	// - "exportable" stubs include all non-flagged apis and flagged apis that are ENABLED and
+	// READ_ONLY, and all other flagged apis are stripped.
+	Stubs_type *string
+
+	// List of aconfig_declarations module names that the stubs generated in this module
+	// depend on.
+	Aconfig_declarations []string
 }
 
 func ApiLibraryFactory() android.Module {
@@ -1870,6 +2094,9 @@ func (al *ApiLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 	if al.properties.System_modules != nil {
 		ctx.AddVariationDependencies(nil, systemModulesTag, String(al.properties.System_modules))
 	}
+	for _, aconfigDeclarationsName := range al.properties.Aconfig_declarations {
+		ctx.AddDependency(ctx.Module(), aconfigDeclarationTag, aconfigDeclarationsName)
+	}
 }
 
 // Map where key is the api scope name and value is the int value
@@ -1890,7 +2117,23 @@ func (al *ApiLibrary) sortApiFilesByApiScope(ctx android.ModuleContext, srcFiles
 	return srcFilesInfo
 }
 
+var validstubsType = []StubsType{Everything, Runtime, Exportable}
+
+func (al *ApiLibrary) validateProperties(ctx android.ModuleContext) {
+	if al.properties.Stubs_type == nil {
+		ctx.ModuleErrorf("java_api_library module type must specify stubs_type property.")
+	} else {
+		al.stubsType = StringToStubsType(proptools.String(al.properties.Stubs_type))
+	}
+
+	if !android.InList(al.stubsType, validstubsType) {
+		ctx.PropertyErrorf("stubs_type", "%s is not a valid stubs_type property value. "+
+			"Must be one of %s.", proptools.String(al.properties.Stubs_type), validstubsType)
+	}
+}
+
 func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	al.validateProperties(ctx)
 
 	rule := android.NewRuleBuilder(pctx, ctx)
 
@@ -1934,6 +2177,18 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			if currentApiTimestampProvider, ok := dep.(currentApiTimestampProvider); ok {
 				al.validationPaths = append(al.validationPaths, currentApiTimestampProvider.CurrentApiTimestamp())
 			}
+		case aconfigDeclarationTag:
+			if provider, ok := android.OtherModuleProvider(ctx, dep, android.AconfigDeclarationsProviderKey); ok {
+				al.aconfigProtoFiles = append(al.aconfigProtoFiles, provider.IntermediateCacheOutputPath)
+			} else if provider, ok := android.OtherModuleProvider(ctx, dep, android.CodegenInfoProvider); ok {
+				al.aconfigProtoFiles = append(al.aconfigProtoFiles, provider.IntermediateCacheOutputPaths...)
+			} else {
+				ctx.ModuleErrorf("Only aconfig_declarations and aconfig_declarations_group "+
+					"module type is allowed for flags_packages property, but %s is neither "+
+					"of these supported module types",
+					dep.Name(),
+				)
+			}
 		}
 	})
 
@@ -1958,6 +2213,8 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	al.addValidation(ctx, cmd, al.validationPaths)
+
+	generateRevertAnnotationArgs(ctx, cmd, al.stubsType, al.aconfigProtoFiles)
 
 	al.stubsSrcJar = android.PathForModuleOut(ctx, "metalava", ctx.ModuleName()+"-"+"stubs.srcjar")
 	al.stubsJarWithoutStaticLibs = android.PathForModuleOut(ctx, "metalava", "stubs.jar")
@@ -2018,6 +2275,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		ImplementationAndResourcesJars: android.PathsIfNonNil(al.stubsJar),
 		ImplementationJars:             android.PathsIfNonNil(al.stubsJar),
 		AidlIncludeDirs:                android.Paths{},
+		StubsLinkType:                  Stubs,
 		// No aconfig libraries on api libraries
 	})
 }
@@ -2102,6 +2360,9 @@ type ImportProperties struct {
 	// The name is the undecorated name of the java_sdk_library as it appears in the blueprint file
 	// (without any prebuilt_ prefix)
 	Created_by_java_sdk_library_name *string `blueprint:"mutated"`
+
+	// Property signifying whether the module provides stubs jar or not.
+	Is_stubs_module *bool
 }
 
 type Import struct {
@@ -2132,6 +2393,8 @@ type Import struct {
 
 	sdkVersion    android.SdkSpec
 	minSdkVersion android.ApiLevel
+
+	stubsLinkType StubsLinkType
 }
 
 var _ PermittedPackagesForUpdatableBootJars = (*Import)(nil)
@@ -2225,6 +2488,12 @@ func (j *Import) commonBuildActions(ctx android.ModuleContext) {
 
 	if ctx.Windows() {
 		j.HideFromMake()
+	}
+
+	if proptools.Bool(j.properties.Is_stubs_module) {
+		j.stubsLinkType = Stubs
+	} else {
+		j.stubsLinkType = Implementation
 	}
 }
 
@@ -2359,6 +2628,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		ImplementationAndResourcesJars: android.PathsIfNonNil(j.combinedClasspathFile),
 		ImplementationJars:             android.PathsIfNonNil(j.combinedClasspathFile),
 		AidlIncludeDirs:                j.exportAidlIncludeDirs,
+		StubsLinkType:                  j.stubsLinkType,
 		// TODO(b/289117800): LOCAL_ACONFIG_FILES for prebuilts
 	})
 }
