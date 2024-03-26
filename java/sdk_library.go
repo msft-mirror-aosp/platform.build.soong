@@ -30,6 +30,7 @@ import (
 
 	"android/soong/android"
 	"android/soong/dexpreopt"
+	"android/soong/etc"
 )
 
 const (
@@ -1672,12 +1673,16 @@ func latestPrebuiltApiModuleName(name string, apiScope *apiScope) string {
 	return PrebuiltApiModuleName(name, apiScope.name, "latest")
 }
 
+func latestPrebuiltApiCombinedModuleName(name string, apiScope *apiScope) string {
+	return PrebuiltApiCombinedModuleName(name, apiScope.name, "latest")
+}
+
 func (module *SdkLibrary) latestApiFilegroupName(apiScope *apiScope) string {
 	return ":" + module.latestApiModuleName(apiScope)
 }
 
 func (module *SdkLibrary) latestApiModuleName(apiScope *apiScope) string {
-	return latestPrebuiltApiModuleName(module.distStem(), apiScope)
+	return latestPrebuiltApiCombinedModuleName(module.distStem(), apiScope)
 }
 
 func (module *SdkLibrary) latestRemovedApiFilegroupName(apiScope *apiScope) string {
@@ -1685,7 +1690,7 @@ func (module *SdkLibrary) latestRemovedApiFilegroupName(apiScope *apiScope) stri
 }
 
 func (module *SdkLibrary) latestRemovedApiModuleName(apiScope *apiScope) string {
-	return latestPrebuiltApiModuleName(module.distStem()+"-removed", apiScope)
+	return latestPrebuiltApiCombinedModuleName(module.distStem()+"-removed", apiScope)
 }
 
 func (module *SdkLibrary) latestIncompatibilitiesFilegroupName(apiScope *apiScope) string {
@@ -3170,9 +3175,11 @@ func (module *sdkLibraryXml) SubDir() string {
 }
 
 // from android.PrebuiltEtcModule
-func (module *sdkLibraryXml) OutputFile() android.OutputPath {
-	return module.outputFilePath
+func (module *sdkLibraryXml) OutputFiles(tag string) (android.Paths, error) {
+	return android.OutputPaths{module.outputFilePath}.Paths(), nil
 }
+
+var _ etc.PrebuiltEtcModule = (*sdkLibraryXml)(nil)
 
 // from android.ApexModule
 func (module *sdkLibraryXml) AvailableFor(what string) bool {
