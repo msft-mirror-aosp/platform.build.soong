@@ -1645,10 +1645,9 @@ func apexFileForShBinary(ctx android.BaseModuleContext, sh *sh.ShBinary) apexFil
 	return af
 }
 
-func apexFileForPrebuiltEtc(ctx android.BaseModuleContext, prebuilt prebuilt_etc.PrebuiltEtcModule, depName string) apexFile {
+func apexFileForPrebuiltEtc(ctx android.BaseModuleContext, prebuilt prebuilt_etc.PrebuiltEtcModule, outputFile android.Path) apexFile {
 	dirInApex := filepath.Join(prebuilt.BaseDir(), prebuilt.SubDir())
-	fileToCopy := prebuilt.OutputFile()
-	return newApexFile(ctx, fileToCopy, depName, dirInApex, etc, prebuilt)
+	return newApexFile(ctx, outputFile, outputFile.Base(), dirInApex, etc, prebuilt)
 }
 
 func apexFileForCompatConfig(ctx android.BaseModuleContext, config java.PlatformCompatConfigIntf, depName string) apexFile {
@@ -1816,6 +1815,9 @@ func (a *apexBundle) WalkPayloadDeps(ctx android.ModuleContext, do android.Paylo
 			return false
 		}
 		if dt, ok := depTag.(*dependencyTag); ok && !dt.payload {
+			return false
+		}
+		if depTag == android.RequiredDepTag {
 			return false
 		}
 
@@ -2117,7 +2119,10 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			}
 		case prebuiltTag:
 			if prebuilt, ok := child.(prebuilt_etc.PrebuiltEtcModule); ok {
-				vctx.filesInfo = append(vctx.filesInfo, apexFileForPrebuiltEtc(ctx, prebuilt, depName))
+				filesToCopy, _ := prebuilt.OutputFiles("")
+				for _, etcFile := range filesToCopy {
+					vctx.filesInfo = append(vctx.filesInfo, apexFileForPrebuiltEtc(ctx, prebuilt, etcFile))
+				}
 				addAconfigFiles(vctx, ctx, child)
 			} else {
 				ctx.PropertyErrorf("prebuilts", "%q is not a prebuilt_etc module", depName)
@@ -2256,7 +2261,10 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 		// Because APK-in-APEX embeds jni_libs transitively, we don't need to track transitive deps
 	} else if java.IsXmlPermissionsFileDepTag(depTag) {
 		if prebuilt, ok := child.(prebuilt_etc.PrebuiltEtcModule); ok {
-			vctx.filesInfo = append(vctx.filesInfo, apexFileForPrebuiltEtc(ctx, prebuilt, depName))
+			filesToCopy, _ := prebuilt.OutputFiles("")
+			for _, etcFile := range filesToCopy {
+				vctx.filesInfo = append(vctx.filesInfo, apexFileForPrebuiltEtc(ctx, prebuilt, etcFile))
+			}
 		}
 	} else if rust.IsDylibDepTag(depTag) {
 		if rustm, ok := child.(*rust.Module); ok && rustm.IsInstallableToApex() {
@@ -2306,6 +2314,8 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 	} else if _, ok := depTag.(android.CopyDirectlyInAnyApexTag); ok {
 		// nothing
 	} else if depTag == android.DarwinUniversalVariantTag {
+		// nothing
+	} else if depTag == android.RequiredDepTag {
 		// nothing
 	} else if am.CanHaveApexVariants() && am.IsInstallableToApex() {
 		ctx.ModuleErrorf("unexpected tag %s for indirect dependency %q", android.PrettyPrintTag(depTag), depName)
