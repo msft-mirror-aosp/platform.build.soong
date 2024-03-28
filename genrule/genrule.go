@@ -317,7 +317,17 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 						// required relative locations of the tool and its dependencies, use those
 						// instead.  They will be copied to those relative locations in the sbox
 						// sandbox.
-						packagedTools = append(packagedTools, specs...)
+						// Care must be taken since TransitivePackagingSpec may return device-side
+						// paths via the required property. Filter them out.
+						for i, ps := range specs {
+							if ps.Partition() != "" {
+								if i == 0 {
+									panic("first PackagingSpec is assumed to be the host-side tool")
+								}
+								continue
+							}
+							packagedTools = append(packagedTools, ps)
+						}
 						// Assume that the first PackagingSpec of the module is the tool.
 						addLocationLabel(tag.label, packagedToolLocation{specs[0]})
 					} else {
@@ -808,7 +818,7 @@ func GenRuleFactory() android.Module {
 
 type genRuleProperties struct {
 	// names of the output files that will be generated
-	Out []string
+	Out []string `android:"arch_variant"`
 }
 
 var Bool = proptools.Bool
@@ -842,19 +852,15 @@ var sandboxingAllowlistKey = android.NewOnceKey("genruleSandboxingAllowlistKey")
 
 type sandboxingAllowlistSets struct {
 	sandboxingDenyModuleSet map[string]bool
-	sandboxingDenyPathSet   map[string]bool
 }
 
 func getSandboxingAllowlistSets(ctx android.PathContext) *sandboxingAllowlistSets {
 	return ctx.Config().Once(sandboxingAllowlistKey, func() interface{} {
 		sandboxingDenyModuleSet := map[string]bool{}
-		sandboxingDenyPathSet := map[string]bool{}
 
 		android.AddToStringSet(sandboxingDenyModuleSet, SandboxingDenyModuleList)
-		android.AddToStringSet(sandboxingDenyPathSet, SandboxingDenyPathList)
 		return &sandboxingAllowlistSets{
 			sandboxingDenyModuleSet: sandboxingDenyModuleSet,
-			sandboxingDenyPathSet:   sandboxingDenyPathSet,
 		}
 	}).(*sandboxingAllowlistSets)
 }
@@ -864,8 +870,7 @@ func getSandboxedRuleBuilder(ctx android.ModuleContext, r *android.RuleBuilder) 
 		return r.SandboxTools()
 	}
 	sandboxingAllowlistSets := getSandboxingAllowlistSets(ctx)
-	if sandboxingAllowlistSets.sandboxingDenyPathSet[ctx.ModuleDir()] ||
-		sandboxingAllowlistSets.sandboxingDenyModuleSet[ctx.ModuleName()] {
+	if sandboxingAllowlistSets.sandboxingDenyModuleSet[ctx.ModuleName()] {
 		return r.SandboxTools()
 	}
 	return r.SandboxInputs()
