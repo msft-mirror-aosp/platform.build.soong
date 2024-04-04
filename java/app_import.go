@@ -17,6 +17,7 @@ package java
 // This file contains the module implementations for android_app_import and android_test_import.
 
 import (
+	"fmt"
 	"reflect"
 
 	"github.com/google/blueprint"
@@ -318,7 +319,16 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 	// Sign or align the package if package has not been preprocessed
 
 	if a.preprocessed {
-		a.outputFile = srcApk
+		var output android.WritablePath
+		// If using the input APK unmodified, still make a copy of it so that the output filename has the
+		// right basename.
+		output = android.PathForModuleOut(ctx, apkFilename)
+		ctx.Build(pctx, android.BuildParams{
+			Rule:   android.Cp,
+			Input:  srcApk,
+			Output: output,
+		})
+		a.outputFile = output
 		a.certificate = PresignedCertificate
 	} else if !Bool(a.properties.Presigned) {
 		// If the certificate property is empty at this point, default_dev_cert must be set to true.
@@ -362,6 +372,15 @@ func (a *AndroidAppImport) Name() string {
 
 func (a *AndroidAppImport) OutputFile() android.Path {
 	return a.outputFile
+}
+
+func (a *AndroidAppImport) OutputFiles(tag string) (android.Paths, error) {
+	switch tag {
+	case "":
+		return []android.Path{a.outputFile}, nil
+	default:
+		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
+	}
 }
 
 func (a *AndroidAppImport) JacocoReportClassesFile() android.Path {
