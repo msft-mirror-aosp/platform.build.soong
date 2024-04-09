@@ -1436,10 +1436,6 @@ func (c *deviceConfig) VendorPath() string {
 	return "vendor"
 }
 
-func (c *deviceConfig) VndkVersion() string {
-	return String(c.config.productVariables.DeviceVndkVersion)
-}
-
 func (c *deviceConfig) RecoverySnapshotVersion() string {
 	return String(c.config.productVariables.RecoverySnapshotVersion)
 }
@@ -2122,7 +2118,7 @@ func (c *config) AllApexContributions() []string {
 	return ret
 }
 
-func (c *config) BuildIgnoreApexContributionContents() []string {
+func (c *config) BuildIgnoreApexContributionContents() *bool {
 	return c.productVariables.BuildIgnoreApexContributionContents
 }
 

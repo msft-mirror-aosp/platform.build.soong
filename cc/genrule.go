@@ -19,7 +19,6 @@ import (
 
 	"android/soong/android"
 	"android/soong/genrule"
-	"android/soong/snapshot"
 )
 
 func init() {
@@ -97,32 +96,19 @@ func (g *GenruleExtraProperties) DebugRamdiskVariantNeeded(ctx android.BaseModul
 func (g *GenruleExtraProperties) RecoveryVariantNeeded(ctx android.BaseModuleContext) bool {
 	// If the build is using a snapshot, the recovery variant under AOSP directories
 	// is not needed.
-	recoverySnapshotVersion := ctx.DeviceConfig().RecoverySnapshotVersion()
-	if recoverySnapshotVersion != "current" && recoverySnapshotVersion != "" &&
-		!snapshot.IsRecoveryProprietaryModule(ctx) {
-		return false
-	} else {
-		return Bool(g.Recovery_available)
-	}
+	return Bool(g.Recovery_available)
 }
 
 func (g *GenruleExtraProperties) ExtraImageVariations(ctx android.BaseModuleContext) []string {
 	var variants []string
-	vndkVersion := ctx.DeviceConfig().VndkVersion()
 	vendorVariantRequired := Bool(g.Vendor_available) || Bool(g.Odm_available) || ctx.SocSpecific() || ctx.DeviceSpecific()
 	productVariantRequired := Bool(g.Product_available) || ctx.ProductSpecific()
 
-	if vndkVersion == "" {
-		if vendorVariantRequired {
-			variants = append(variants, VendorVariation)
-		}
-		if productVariantRequired {
-			variants = append(variants, ProductVariation)
-		}
-	} else {
-		if vendorVariantRequired {
-			variants = append(variants, VendorVariationPrefix+vndkVersion)
-		}
+	if vendorVariantRequired {
+		variants = append(variants, VendorVariation)
+	}
+	if productVariantRequired {
+		variants = append(variants, ProductVariation)
 	}
 
 	return variants
