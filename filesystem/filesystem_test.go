@@ -23,6 +23,7 @@ import (
 	"android/soong/bpf"
 	"android/soong/cc"
 	"android/soong/etc"
+	"android/soong/java"
 	"android/soong/phony"
 
 	"github.com/google/blueprint/proptools"
@@ -34,9 +35,12 @@ func TestMain(m *testing.M) {
 
 var fixture = android.GroupFixturePreparers(
 	android.PrepareForIntegrationTestWithAndroid,
+	android.PrepareForTestWithAndroidBuildComponents,
 	bpf.PrepareForTestWithBpf,
-	etc.PrepareForTestWithPrebuiltEtc,
 	cc.PrepareForIntegrationTestWithCc,
+	etc.PrepareForTestWithPrebuiltEtc,
+	java.PrepareForTestWithJavaBuildComponents,
+	java.PrepareForTestWithJavaDefaultModules,
 	phony.PrepareForTestWithPhony,
 	PrepareForTestWithFilesystemBuildComponents,
 )
@@ -80,19 +84,37 @@ func TestFileSystemDeps(t *testing.T) {
 		cc_library {
 			name: "libbar",
 			required: ["libbaz"],
+			target: {
+				platform: {
+					required: ["lib_platform_only"],
+				},
+			},
 		}
 
 		cc_library {
 			name: "libbaz",
 		}
 
+		cc_library {
+			name: "lib_platform_only",
+		}
+
 		phony {
 			name: "phony",
-			required: ["libquz"],
+			required: [
+				"libquz",
+				"myapp",
+			],
 		}
 
 		cc_library {
 			name: "libquz",
+		}
+
+		android_app {
+			name: "myapp",
+			platform_apis: true,
+			installable: true,
 		}
 	`)
 
@@ -101,11 +123,13 @@ func TestFileSystemDeps(t *testing.T) {
 
 	fs := result.ModuleForTests("myfilesystem", "android_common").Module().(*filesystem)
 	expected := []string{
+		"app/myapp/myapp.apk",
 		"bin/foo",
 		"lib/libbar.so",
 		"lib64/libbar.so",
 		"lib64/libbaz.so",
 		"lib64/libquz.so",
+		"lib64/lib_platform_only.so",
 		"etc/bpf/bpf.o",
 	}
 	for _, e := range expected {
@@ -367,7 +391,7 @@ func TestFileSystemWithCoverageVariants(t *testing.T) {
 
 func TestSystemImageDefaults(t *testing.T) {
 	result := fixture.RunTestWithBp(t, `
-		android_system_image_defaults {
+		android_filesystem_defaults {
 			name: "defaults",
 			multilib: {
 				common: {
@@ -432,4 +456,26 @@ func TestSystemImageDefaults(t *testing.T) {
 	for _, e := range expected {
 		android.AssertStringListContains(t, "missing entry", fs.entries, e)
 	}
+}
+
+func TestInconsistentPartitionTypesInDefaults(t *testing.T) {
+	fixture.ExtendWithErrorHandler(android.FixtureExpectsOneErrorPattern(
+		"doesn't match with the partition type")).
+		RunTestWithBp(t, `
+		android_filesystem_defaults {
+			name: "system_ext_def",
+			partition_type: "system_ext",
+		}
+
+		android_filesystem_defaults {
+			name: "system_def",
+			partition_type: "system",
+			defaults: ["system_ext_def"],
+		}
+
+		android_system_image {
+			name: "system",
+			defaults: ["system_def"],
+		}
+	`)
 }

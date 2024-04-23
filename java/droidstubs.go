@@ -532,8 +532,8 @@ func (d *Droidstubs) annotationsFlags(ctx android.ModuleContext, cmd *android.Ru
 		cmd.Flag(config.MetalavaAnnotationsFlags)
 
 		if params.migratingNullability {
-			previousApi := android.PathForModuleSrc(ctx, String(d.properties.Previous_api))
-			cmd.FlagWithInput("--migrate-nullness ", previousApi)
+			previousApiFiles := android.PathsForModuleSrc(ctx, []string{String(d.properties.Previous_api)})
+			cmd.FlagForEachInput("--migrate-nullness ", previousApiFiles)
 		}
 
 		if s := String(d.properties.Validate_nullability_from_list); s != "" {
@@ -687,6 +687,23 @@ func (d *Droidstubs) apiLevelsGenerationFlags(ctx android.ModuleContext, cmd *an
 	}
 }
 
+func (d *Droidstubs) apiCompatibilityFlags(ctx android.ModuleContext, cmd *android.RuleBuilderCommand, stubsType StubsType) {
+	if len(d.Javadoc.properties.Out) > 0 {
+		ctx.PropertyErrorf("out", "out property may not be combined with check_api")
+	}
+
+	apiFiles := android.PathsForModuleSrc(ctx, []string{String(d.properties.Check_api.Last_released.Api_file)})
+	removedApiFiles := android.PathsForModuleSrc(ctx, []string{String(d.properties.Check_api.Last_released.Removed_api_file)})
+
+	cmd.FlagForEachInput("--check-compatibility:api:released ", apiFiles)
+	cmd.FlagForEachInput("--check-compatibility:removed:released ", removedApiFiles)
+
+	baselineFile := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Last_released.Baseline_file)
+	if baselineFile.Valid() {
+		cmd.FlagWithInput("--baseline:compatibility:released ", baselineFile.Path())
+	}
+}
+
 func metalavaUseRbe(ctx android.ModuleContext) bool {
 	return ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_METALAVA")
 }
@@ -831,6 +848,10 @@ func (d *Droidstubs) commonMetalavaStubCmd(ctx android.ModuleContext, rule *andr
 	d.inclusionAnnotationsFlags(ctx, cmd)
 	d.apiLevelsAnnotationsFlags(ctx, cmd, params.stubConfig.stubsType, params.apiVersionsXml)
 
+	if params.stubConfig.doCheckReleased {
+		d.apiCompatibilityFlags(ctx, cmd, params.stubConfig.stubsType)
+	}
+
 	d.expandArgs(ctx, cmd)
 
 	for _, o := range d.Javadoc.properties.Out {
@@ -929,9 +950,12 @@ func (d *Droidstubs) everythingOptionalCmd(ctx android.ModuleContext, cmd *andro
 
 	// Add API lint options.
 	if doApiLint {
-		newSince := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Api_lint.New_since)
-		if newSince.Valid() {
-			cmd.FlagWithInput("--api-lint ", newSince.Path())
+		var newSince android.Paths
+		if d.properties.Check_api.Api_lint.New_since != nil {
+			newSince = android.PathsForModuleSrc(ctx, []string{proptools.String(d.properties.Check_api.Api_lint.New_since)})
+		}
+		if len(newSince) > 0 {
+			cmd.FlagForEachInput("--api-lint ", newSince)
 		} else {
 			cmd.Flag("--api-lint")
 		}
@@ -989,25 +1013,12 @@ func (d *Droidstubs) everythingOptionalCmd(ctx android.ModuleContext, cmd *andro
 
 	// Add "check released" options. (Detect incompatible API changes from the last public release)
 	if doCheckReleased {
-		if len(d.Javadoc.properties.Out) > 0 {
-			ctx.PropertyErrorf("out", "out property may not be combined with check_api")
-		}
-
-		apiFile := android.PathForModuleSrc(ctx, String(d.properties.Check_api.Last_released.Api_file))
-		removedApiFile := android.PathForModuleSrc(ctx, String(d.properties.Check_api.Last_released.Removed_api_file))
 		baselineFile := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Last_released.Baseline_file)
-		updatedBaselineOutput := android.PathForModuleOut(ctx, Everything.String(), "last_released_baseline.txt")
-
 		d.checkLastReleasedApiTimestamp = android.PathForModuleOut(ctx, Everything.String(), "check_last_released_api.timestamp")
-
-		cmd.FlagWithInput("--check-compatibility:api:released ", apiFile)
-		cmd.FlagWithInput("--check-compatibility:removed:released ", removedApiFile)
-
 		if baselineFile.Valid() {
-			cmd.FlagWithInput("--baseline:compatibility:released ", baselineFile.Path())
+			updatedBaselineOutput := android.PathForModuleOut(ctx, Everything.String(), "last_released_baseline.txt")
 			cmd.FlagWithOutput("--update-baseline:compatibility:released ", updatedBaselineOutput)
 		}
-
 		// Note this string includes quote ($' ... '), which decodes the "\n"s.
 		msg := `$'\n******************************\n` +
 			`You have tried to change the API from what has been previously released in\n` +

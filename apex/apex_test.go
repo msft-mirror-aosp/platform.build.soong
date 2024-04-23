@@ -3905,174 +3905,6 @@ func TestVndkApexWithBinder32(t *testing.T) {
 	})
 }
 
-func TestVendorApexWithVndkPrebuilts(t *testing.T) {
-	ctx := testApex(t, "",
-		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.DeviceVndkVersion = proptools.StringPtr("27")
-		}),
-		android.FixtureRegisterWithContext(func(ctx android.RegistrationContext) {
-			cc.RegisterVendorSnapshotModules(ctx)
-		}),
-		withFiles(map[string][]byte{
-			"vendor/foo/Android.bp": []byte(`
-				apex {
-					name: "myapex",
-					binaries: ["foo"],
-					key: "myapex.key",
-					min_sdk_version: "27",
-					vendor: true,
-				}
-
-				cc_binary {
-					name: "foo",
-					vendor: true,
-					srcs: ["abc.cpp"],
-					shared_libs: [
-						"libllndk",
-						"libvndk",
-					],
-					nocrt: true,
-					system_shared_libs: [],
-					min_sdk_version: "27",
-				}
-
-				apex_key {
-					name: "myapex.key",
-					public_key: "testkey.avbpubkey",
-					private_key: "testkey.pem",
-				}
-			`),
-			// Simulate VNDK prebuilts with vendor_snapshot
-			"prebuilts/vndk/Android.bp": []byte(`
-				vndk_prebuilt_shared {
-					name: "libllndk",
-					version: "27",
-					vendor_available: true,
-					product_available: true,
-					target_arch: "arm64",
-					arch: {
-						arm64: {
-							srcs: ["libllndk.so"],
-						},
-					},
-				}
-
-				vndk_prebuilt_shared {
-					name: "libvndk",
-					version: "27",
-					vendor_available: true,
-					product_available: true,
-					target_arch: "arm64",
-					arch: {
-						arm64: {
-							srcs: ["libvndk.so"],
-						},
-					},
-					vndk: {
-						enabled: true,
-					},
-					min_sdk_version: "27",
-				}
-
-				vndk_prebuilt_shared {
-					name: "libc++",
-					version: "27",
-					target_arch: "arm64",
-					vendor_available: true,
-					product_available: true,
-					vndk: {
-						enabled: true,
-						support_system_process: true,
-					},
-					arch: {
-						arm64: {
-							srcs: ["libc++.so"],
-						},
-					},
-					min_sdk_version: "apex_inherit",
-				}
-
-				vendor_snapshot {
-					name: "vendor_snapshot",
-					version: "27",
-					arch: {
-						arm64: {
-							vndk_libs: [
-								"libc++",
-								"libllndk",
-								"libvndk",
-							],
-							static_libs: [
-								"libc++demangle",
-								"libclang_rt.builtins",
-								"libunwind",
-							],
-						},
-					}
-				}
-
-				vendor_snapshot_static {
-					name: "libclang_rt.builtins",
-					version: "27",
-					target_arch: "arm64",
-					vendor: true,
-					arch: {
-						arm64: {
-							src: "libclang_rt.builtins-aarch64-android.a",
-						},
-					},
-				}
-
-				vendor_snapshot_static {
-					name: "libc++demangle",
-					version: "27",
-					target_arch: "arm64",
-					compile_multilib: "64",
-					vendor: true,
-					arch: {
-						arm64: {
-							src: "libc++demangle.a",
-						},
-					},
-					min_sdk_version: "apex_inherit",
-				}
-
-				vendor_snapshot_static {
-					name: "libunwind",
-					version: "27",
-					target_arch: "arm64",
-					compile_multilib: "64",
-					vendor: true,
-					arch: {
-						arm64: {
-							src: "libunwind.a",
-						},
-					},
-					min_sdk_version: "apex_inherit",
-				}
-			`),
-		}))
-
-	// Should embed the prebuilt VNDK libraries in the apex
-	ensureExactContents(t, ctx, "myapex", "android_common_myapex", []string{
-		"bin/foo",
-		"prebuilts/vndk/libc++.so:lib64/libc++.so",
-		"prebuilts/vndk/libvndk.so:lib64/libvndk.so",
-	})
-
-	// Should link foo with prebuilt libraries (shared/static)
-	ldRule := ctx.ModuleForTests("foo", "android_vendor.27_arm64_armv8-a_myapex").Rule("ld")
-	android.AssertStringDoesContain(t, "should link to prebuilt llndk", ldRule.Args["libFlags"], "prebuilts/vndk/libllndk.so")
-	android.AssertStringDoesContain(t, "should link to prebuilt vndk", ldRule.Args["libFlags"], "prebuilts/vndk/libvndk.so")
-	android.AssertStringDoesContain(t, "should link to prebuilt libc++demangle", ldRule.Args["libFlags"], "prebuilts/vndk/libc++demangle.a")
-	android.AssertStringDoesContain(t, "should link to prebuilt libunwind", ldRule.Args["libFlags"], "prebuilts/vndk/libunwind.a")
-
-	// Should declare the LLNDK library as a "required" external dependency
-	manifestRule := ctx.ModuleForTests("myapex", "android_common_myapex").Rule("apexManifestRule")
-	requireNativeLibs := names(manifestRule.Args["requireNativeLibs"])
-	ensureListContains(t, requireNativeLibs, "libllndk.so")
-}
-
 func TestDependenciesInApexManifest(t *testing.T) {
 	ctx := testApex(t, `
 		apex {
@@ -7282,8 +7114,9 @@ func TestJavaSDKLibrary(t *testing.T) {
 		"etc/permissions/foo.xml",
 	})
 	// Permission XML should point to the activated path of impl jar of java_sdk_library
-	sdkLibrary := ctx.ModuleForTests("foo.xml", "android_common_myapex").Rule("java_sdk_xml")
-	ensureMatches(t, sdkLibrary.RuleParams.Command, `<library\\n\s+name=\\\"foo\\\"\\n\s+file=\\\"/apex/myapex/javalib/foo.jar\\\"`)
+	sdkLibrary := ctx.ModuleForTests("foo.xml", "android_common_myapex").Output("foo.xml")
+	contents := android.ContentFromFileRuleForTests(t, ctx, sdkLibrary)
+	ensureMatches(t, contents, "<library\\n\\s+name=\\\"foo\\\"\\n\\s+file=\\\"/apex/myapex/javalib/foo.jar\\\"")
 }
 
 func TestJavaSDKLibrary_WithinApex(t *testing.T) {
@@ -7334,7 +7167,7 @@ func TestJavaSDKLibrary_WithinApex(t *testing.T) {
 
 	// The bar library should depend on the implementation jar.
 	barLibrary := ctx.ModuleForTests("bar", "android_common_myapex").Rule("javac")
-	if expected, actual := `^-classpath [^:]*/turbine-combined/foo\.jar$`, barLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
+	if expected, actual := `^-classpath [^:]*/turbine-combined/foo\.impl\.jar$`, barLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
 		t.Errorf("expected %q, found %#q", expected, actual)
 	}
 }
@@ -11579,4 +11412,122 @@ func TestInstallationRulesForMultipleApexPrebuilts(t *testing.T) {
 		// 2. The rest of the apexes in the mainline module family (source or other prebuilt) is hidden from make
 		checkHideFromMake(t, ctx, tc.expectedVisibleModuleName, tc.expectedHiddenModuleNames)
 	}
+}
+
+func TestAconfifDeclarationsValidation(t *testing.T) {
+	aconfigDeclarationLibraryString := func(moduleNames []string) (ret string) {
+		for _, moduleName := range moduleNames {
+			ret += fmt.Sprintf(`
+			aconfig_declarations {
+				name: "%[1]s",
+				package: "com.example.package",
+				srcs: [
+					"%[1]s.aconfig",
+				],
+			}
+			java_aconfig_library {
+				name: "%[1]s-lib",
+				aconfig_declarations: "%[1]s",
+			}
+			`, moduleName)
+		}
+		return ret
+	}
+
+	result := android.GroupFixturePreparers(
+		prepareForApexTest,
+		java.PrepareForTestWithJavaSdkLibraryFiles,
+		java.FixtureWithLastReleaseApis("foo"),
+		android.FixtureModifyConfig(func(config android.Config) {
+			config.SetApiLibraries([]string{"foo"})
+		}),
+	).RunTestWithBp(t, `
+		java_library {
+			name: "baz-java-lib",
+			static_libs: [
+				"baz-lib",
+			],
+		}
+		filegroup {
+			name: "qux-filegroup",
+			srcs: [
+				":qux-lib{.generated_srcjars}",
+			],
+		}
+		filegroup {
+			name: "qux-another-filegroup",
+			srcs: [
+				":qux-filegroup",
+			],
+		}
+		java_library {
+			name: "quux-java-lib",
+			srcs: [
+				"a.java",
+			],
+			libs: [
+				"quux-lib",
+			],
+		}
+		java_sdk_library {
+			name: "foo",
+			srcs: [
+				":qux-another-filegroup",
+			],
+			api_packages: ["foo"],
+			system: {
+				enabled: true,
+			},
+			module_lib: {
+				enabled: true,
+			},
+			test: {
+				enabled: true,
+			},
+			static_libs: [
+				"bar-lib",
+			],
+			libs: [
+				"baz-java-lib",
+				"quux-java-lib",
+			],
+			aconfig_declarations: [
+				"bar",
+			],
+		}
+	`+aconfigDeclarationLibraryString([]string{"bar", "baz", "qux", "quux"}))
+
+	m := result.ModuleForTests("foo.stubs.source", "android_common")
+	outDir := "out/soong/.intermediates"
+
+	// Arguments passed to aconfig to retrieve the state of the flags defined in the
+	// textproto files
+	aconfigFlagArgs := m.Output("released-flagged-apis-exportable.txt").Args["flags_path"]
+
+	// "bar-lib" is a static_lib of "foo" and is passed to metalava as classpath. Thus the
+	// cache file provided by the associated aconfig_declarations module "bar" should be passed
+	// to aconfig.
+	android.AssertStringDoesContain(t, "cache file of a java_aconfig_library static_lib "+
+		"passed as an input",
+		aconfigFlagArgs, fmt.Sprintf("%s/%s/intermediate.pb", outDir, "bar"))
+
+	// "baz-java-lib", which statically depends on "baz-lib", is a lib of "foo" and is passed
+	// to metalava as classpath. Thus the cache file provided by the associated
+	// aconfig_declarations module "baz" should be passed to aconfig.
+	android.AssertStringDoesContain(t, "cache file of a lib that statically depends on "+
+		"java_aconfig_library passed as an input",
+		aconfigFlagArgs, fmt.Sprintf("%s/%s/intermediate.pb", outDir, "baz"))
+
+	// "qux-lib" is passed to metalava as src via the filegroup, thus the cache file provided by
+	// the associated aconfig_declarations module "qux" should be passed to aconfig.
+	android.AssertStringDoesContain(t, "cache file of srcs java_aconfig_library passed as an "+
+		"input",
+		aconfigFlagArgs, fmt.Sprintf("%s/%s/intermediate.pb", outDir, "qux"))
+
+	// "quux-java-lib" is a lib of "foo" and is passed to metalava as classpath, but does not
+	// statically depend on "quux-lib". Therefore, the cache file provided by the associated
+	// aconfig_declarations module "quux" should not be passed to aconfig.
+	android.AssertStringDoesNotContain(t, "cache file of a lib that does not statically "+
+		"depend on java_aconfig_library not passed as an input",
+		aconfigFlagArgs, fmt.Sprintf("%s/%s/intermediate.pb", outDir, "quux"))
 }

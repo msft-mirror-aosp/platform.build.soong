@@ -43,10 +43,6 @@ var PrepareForTestWithRustDefaultModules = android.GroupFixturePreparers(
 // Preparer that will allow use of all rust modules fully.
 var PrepareForIntegrationTestWithRust = android.GroupFixturePreparers(
 	PrepareForTestWithRustDefaultModules,
-)
-
-var PrepareForTestWithRustIncludeVndk = android.GroupFixturePreparers(
-	PrepareForIntegrationTestWithRust,
 	cc.PrepareForIntegrationTestWithCc,
 )
 
@@ -201,5 +197,4 @@ func registerRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 	ctx.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.BottomUp("rust_sanitizers", rustSanitizerRuntimeMutator).Parallel()
 	})
-	registerRustSnapshotModules(ctx)
 }

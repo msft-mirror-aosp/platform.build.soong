@@ -71,6 +71,9 @@ type UserSuppliedPrebuiltProperties struct {
 	//
 	// If specified then the prefer property is ignored in favor of the value of the Soong config
 	// variable.
+	//
+	// DEPRECATED: This property is being deprecated b/308188211.
+	// Use RELEASE_APEX_CONTRIBUTIONS build flags to select prebuilts of mainline modules.
 	Use_source_config_var *ConfigVarProperties
 }
 
@@ -701,11 +704,6 @@ func (p *Prebuilt) usePrebuilt(ctx BaseMutatorContext, source Module, prebuilt M
 	// If source is not available or is disabled then always use the prebuilt.
 	if source == nil || !source.Enabled() {
 		return true
-	}
-
-	// If the use_source_config_var property is set then it overrides the prefer property setting.
-	if configVar := p.properties.Use_source_config_var; configVar != nil {
-		return !ctx.Config().VendorConfig(proptools.String(configVar.Config_namespace)).Bool(proptools.String(configVar.Var_name))
 	}
 
 	// TODO: use p.Properties.Name and ctx.ModuleDir to override preference

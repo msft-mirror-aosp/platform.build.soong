@@ -234,6 +234,11 @@ func (c Config) ReleaseHiddenApiExportableStubs() bool {
 		Bool(c.config.productVariables.HiddenapiExportableStubs)
 }
 
+// Enable read flag from new storage
+func (c Config) ReleaseReadFromNewStorage() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_READ_FROM_NEW_STORAGE")
+}
+
 // A DeviceConfig object represents the configuration for a particular device
 // being built. For now there will only be one of these, but in the future there
 // may be multiple devices being built.
@@ -949,7 +954,11 @@ func (c *config) PlatformPreviewSdkVersion() string {
 }
 
 func (c *config) PlatformMinSupportedTargetSdkVersion() string {
-	return String(c.productVariables.Platform_min_supported_target_sdk_version)
+	var val, ok = c.productVariables.BuildFlags["RELEASE_PLATFORM_MIN_SUPPORTED_TARGET_SDK_VERSION"]
+	if !ok {
+		return ""
+	}
+	return val
 }
 
 func (c *config) PlatformBaseOS() string {
@@ -1409,6 +1418,11 @@ func (c *config) PrevVendorApiLevel() string {
 	return strconv.Itoa(vendorApiLevel - 100)
 }
 
+func IsTrunkStableVendorApiLevel(level string) bool {
+	levelInt, err := strconv.Atoi(level)
+	return err == nil && levelInt >= 202404
+}
+
 func (c *config) VendorApiLevelFrozen() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_BOARD_API_LEVEL_FROZEN")
 }
@@ -1436,20 +1450,12 @@ func (c *deviceConfig) VendorPath() string {
 	return "vendor"
 }
 
-func (c *deviceConfig) VndkVersion() string {
-	return String(c.config.productVariables.DeviceVndkVersion)
-}
-
 func (c *deviceConfig) RecoverySnapshotVersion() string {
 	return String(c.config.productVariables.RecoverySnapshotVersion)
 }
 
 func (c *deviceConfig) CurrentApiLevelForVendorModules() string {
 	return StringDefault(c.config.productVariables.DeviceCurrentApiLevelForVendorModules, "current")
-}
-
-func (c *deviceConfig) PlatformVndkVersion() string {
-	return String(c.config.productVariables.Platform_vndk_version)
 }
 
 func (c *deviceConfig) ExtraVndkVersions() []string {

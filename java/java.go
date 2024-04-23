@@ -587,6 +587,7 @@ const (
 	JAVA_VERSION_9           = 9
 	JAVA_VERSION_11          = 11
 	JAVA_VERSION_17          = 17
+	JAVA_VERSION_21          = 21
 )
 
 func (v javaVersion) String() string {
@@ -605,6 +606,8 @@ func (v javaVersion) String() string {
 		return "11"
 	case JAVA_VERSION_17:
 		return "17"
+	case JAVA_VERSION_21:
+		return "21"
 	default:
 		return "unsupported"
 	}
@@ -647,6 +650,8 @@ func normalizeJavaVersion(ctx android.BaseModuleContext, javaVersion string) jav
 		return JAVA_VERSION_11
 	case "17":
 		return JAVA_VERSION_17
+	case "21":
+		return JAVA_VERSION_21
 	case "10", "12", "13", "14", "15", "16":
 		ctx.PropertyErrorf("java_version", "Java language level %s is not supported", javaVersion)
 		return JAVA_VERSION_UNSUPPORTED
@@ -800,6 +805,7 @@ var (
 		"android.hardware.security.keymint-V2-java":         true,
 		"android.hardware.security.keymint-V3-java":         true,
 		"android.hardware.security.keymint-V4-java":         true,
+		"android.hardware.security.secretkeeper-V1-java":    true,
 		"android.hardware.security.secureclock-V1-java":     true,
 		"android.hardware.security.secureclock-V2-java":     true,
 		"android.hardware.thermal-V1-java":                  true,
@@ -885,6 +891,12 @@ func init() {
 }
 
 func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	if disableSourceApexVariant(ctx) {
+		// Prebuilts are active, do not create the installation rules for the source javalib.
+		// Even though the source javalib is not used, we need to hide it to prevent duplicate installation rules.
+		// TODO (b/331665856): Implement a principled solution for this.
+		j.HideFromMake()
+	}
 	j.provideHiddenAPIPropertyInfo(ctx)
 
 	j.sdkVersion = j.SdkVersion(ctx)
@@ -957,11 +969,16 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 		j.installFile = ctx.InstallFile(installDir, j.Stem()+".jar", j.outputFile, extraInstallDeps...)
 	}
+
+	android.SetProvider(ctx, android.TestOnlyProviderKey, android.TestModuleInformation{
+		TestOnly:       Bool(j.sourceProperties.Test_only),
+		TopLevelTarget: j.sourceProperties.Top_level_test_target,
+	})
 }
 
 func (j *Library) DepsMutator(ctx android.BottomUpMutatorContext) {
-	j.deps(ctx)
 	j.usesLibrary.deps(ctx, false)
+	j.deps(ctx)
 }
 
 const (
@@ -1122,6 +1139,7 @@ func LibraryFactory() android.Module {
 	module := &Library{}
 
 	module.addHostAndDeviceProperties()
+	module.AddProperties(&module.sourceProperties)
 
 	module.initModuleAndImport(module)
 
@@ -1603,6 +1621,8 @@ func TestFactory() android.Module {
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 	module.Module.dexpreopter.isTest = true
 	module.Module.linter.properties.Lint.Test = proptools.BoolPtr(true)
+	module.Module.sourceProperties.Test_only = proptools.BoolPtr(true)
+	module.Module.sourceProperties.Top_level_test_target = true
 
 	InitJavaModule(module, android.HostAndDeviceSupported)
 	return module
@@ -1618,6 +1638,7 @@ func TestHelperLibraryFactory() android.Module {
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 	module.Module.dexpreopter.isTest = true
 	module.Module.linter.properties.Lint.Test = proptools.BoolPtr(true)
+	module.Module.sourceProperties.Test_only = proptools.BoolPtr(true)
 
 	InitJavaModule(module, android.HostAndDeviceSupported)
 	return module
@@ -1673,6 +1694,8 @@ func InitTestHost(th *TestHost, installable *bool, testSuites []string, autoGenC
 	th.properties.Installable = installable
 	th.testProperties.Auto_gen_config = autoGenConfig
 	th.testProperties.Test_suites = testSuites
+	th.sourceProperties.Test_only = proptools.BoolPtr(true)
+	th.sourceProperties.Top_level_test_target = true
 }
 
 //
@@ -1798,7 +1821,7 @@ func BinaryFactory() android.Module {
 	module := &Binary{}
 
 	module.addHostAndDeviceProperties()
-	module.AddProperties(&module.binaryProperties)
+	module.AddProperties(&module.binaryProperties, &module.sourceProperties)
 
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 
@@ -2563,7 +2586,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// header jar for this module.
 	reuseImplementationJarAsHeaderJar := slices.Equal(staticJars, staticHeaderJars)
 
-	var headerOutputFile android.WritablePath
+	var headerOutputFile android.ModuleOutPath
 	if reuseImplementationJarAsHeaderJar {
 		headerOutputFile = outputFile
 	} else {
@@ -2586,8 +2609,12 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			headerOutputFile = outputFile
 		}
 	}
-	j.combinedHeaderFile = headerOutputFile
-	j.combinedImplementationFile = outputFile
+
+	// Save the output file with no relative path so that it doesn't end up in a subdirectory when used as a resource.
+	// Also strip the relative path from the header output file so that the reuseImplementationJarAsHeaderJar check
+	// in a module that depends on this module considers them equal.
+	j.combinedHeaderFile = headerOutputFile.WithoutRel()
+	j.combinedImplementationFile = outputFile.WithoutRel()
 
 	j.maybeInstall(ctx, jarName, outputFile)
 
@@ -3146,10 +3173,32 @@ func addCLCFromDep(ctx android.ModuleContext, depModule android.Module,
 	// <uses_library> and should not be added to CLC, but the transitive <uses-library> dependencies
 	// from its CLC should be added to the current CLC.
 	if sdkLib != nil {
-		clcMap.AddContext(ctx, dexpreopt.AnySdkVersion, *sdkLib, false,
+		optional := false
+		if module, ok := ctx.Module().(ModuleWithUsesLibrary); ok {
+			if android.InList(*sdkLib, module.UsesLibrary().usesLibraryProperties.Optional_uses_libs) {
+				optional = true
+			}
+		}
+		clcMap.AddContext(ctx, dexpreopt.AnySdkVersion, *sdkLib, optional,
 			dep.DexJarBuildPath(ctx).PathOrNil(), dep.DexJarInstallPath(), dep.ClassLoaderContexts())
 	} else {
 		clcMap.AddContextMap(dep.ClassLoaderContexts(), depName)
+	}
+}
+
+func addMissingOptionalUsesLibsFromDep(ctx android.ModuleContext, depModule android.Module,
+	usesLibrary *usesLibrary) {
+
+	dep, ok := depModule.(ModuleWithUsesLibrary)
+	if !ok {
+		return
+	}
+
+	for _, lib := range dep.UsesLibrary().usesLibraryProperties.Missing_optional_uses_libs {
+		if !android.InList(lib, usesLibrary.usesLibraryProperties.Missing_optional_uses_libs) {
+			usesLibrary.usesLibraryProperties.Missing_optional_uses_libs =
+				append(usesLibrary.usesLibraryProperties.Missing_optional_uses_libs, lib)
+		}
 	}
 }
 
