@@ -17,6 +17,8 @@ package rust
 import (
 	"strings"
 	"testing"
+
+	"android/soong/android"
 )
 
 func TestRustBindgen(t *testing.T) {
@@ -31,7 +33,21 @@ func TestRustBindgen(t *testing.T) {
 			bindgen_flags: ["--bindgen-flag.*"],
 			cflags: ["--clang-flag()"],
 			shared_libs: ["libfoo_shared"],
+		}
+		rust_bindgen {
+			name: "libbindgen_staticlib",
+			wrapper_src: "src/any.h",
+			crate_name: "bindgen_staticlib",
+			stem: "libbindgen_staticlib",
+			source_stem: "bindings",
 			static_libs: ["libfoo_static"],
+		}
+		rust_bindgen {
+			name: "libbindgen_headerlib",
+			wrapper_src: "src/any.h",
+			crate_name: "bindgen_headerlib",
+			stem: "libbindgen_headerlib",
+			source_stem: "bindings",
 			header_libs: ["libfoo_header"],
 		}
 		cc_library_shared {
@@ -52,6 +68,9 @@ func TestRustBindgen(t *testing.T) {
 		}
 	`)
 	libbindgen := ctx.ModuleForTests("libbindgen", "android_arm64_armv8-a_source").Output("bindings.rs")
+	libbindgenStatic := ctx.ModuleForTests("libbindgen_staticlib", "android_arm64_armv8-a_source").Output("bindings.rs")
+	libbindgenHeader := ctx.ModuleForTests("libbindgen_headerlib", "android_arm64_armv8-a_source").Output("bindings.rs")
+	libbindgenHeaderModule := ctx.ModuleForTests("libbindgen_headerlib", "android_arm64_armv8-a_source").Module().(*Module)
 	// Ensure that the flags are present and escaped
 	if !strings.Contains(libbindgen.Args["flags"], "'--bindgen-flag.*'") {
 		t.Errorf("missing bindgen flags in rust_bindgen rule: flags %#v", libbindgen.Args["flags"])
@@ -62,12 +81,17 @@ func TestRustBindgen(t *testing.T) {
 	if !strings.Contains(libbindgen.Args["cflags"], "-Ishared_include") {
 		t.Errorf("missing shared_libs exported includes in rust_bindgen rule: cflags %#v", libbindgen.Args["cflags"])
 	}
-	if !strings.Contains(libbindgen.Args["cflags"], "-Istatic_include") {
-		t.Errorf("missing static_libs exported includes in rust_bindgen rule: cflags %#v", libbindgen.Args["cflags"])
+	if !strings.Contains(libbindgenStatic.Args["cflags"], "-Istatic_include") {
+		t.Errorf("missing static_libs exported includes in rust_bindgen rule: cflags %#v", libbindgenStatic.Args["cflags"])
 	}
-	if !strings.Contains(libbindgen.Args["cflags"], "-Iheader_include") {
-		t.Errorf("missing static_libs exported includes in rust_bindgen rule: cflags %#v", libbindgen.Args["cflags"])
+	if !strings.Contains(libbindgenHeader.Args["cflags"], "-Iheader_include") {
+		t.Errorf("missing header_libs exported includes in rust_bindgen rule: cflags %#v", libbindgenHeader.Args["cflags"])
 	}
+
+	if android.InList("libfoo_static", libbindgenHeaderModule.Properties.AndroidMkHeaderLibs) {
+		t.Errorf("Static library dependency should not be in HeaderLibs list")
+	}
+
 	if !strings.Contains(libbindgen.Args["cflags"], "--default-flag") {
 		t.Errorf("rust_bindgen missing cflags defined in cc_defaults: cflags %#v", libbindgen.Args["cflags"])
 	}
@@ -202,4 +226,23 @@ func TestBindgenFlagFile(t *testing.T) {
 	}
 	// TODO: The best we can do right now is check $flagfiles. Once bindgen.go switches to RuleBuilder,
 	// we may be able to check libbinder.RuleParams.Command to see if it contains $(cat /dev/null flag_file.txt)
+}
+
+
+func TestBindgenHandleStaticInlining(t *testing.T) {
+	ctx := testRust(t, `
+		rust_bindgen {
+			name: "libbindgen",
+			wrapper_src: "src/any.h",
+			crate_name: "bindgen",
+			stem: "libbindgen",
+			source_stem: "bindings",
+			handle_static_inline: true
+		}
+	`)
+	libbindgen := ctx.ModuleForTests("libbindgen", "android_arm64_armv8-a_source").Output("bindings.rs")
+	// Make sure the flag to support `static inline` functions is present
+	if !strings.Contains(libbindgen.Args["flags"], "--wrap-static-fns") {
+		t.Errorf("missing flag to handle static inlining in rust_bindgen rule: flags %#v", libbindgen.Args["flags"])
+	}
 }

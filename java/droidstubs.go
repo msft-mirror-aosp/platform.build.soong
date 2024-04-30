@@ -532,8 +532,8 @@ func (d *Droidstubs) annotationsFlags(ctx android.ModuleContext, cmd *android.Ru
 		cmd.Flag(config.MetalavaAnnotationsFlags)
 
 		if params.migratingNullability {
-			previousApi := android.PathForModuleSrc(ctx, String(d.properties.Previous_api))
-			cmd.FlagWithInput("--migrate-nullness ", previousApi)
+			previousApiFiles := android.PathsForModuleSrc(ctx, []string{String(d.properties.Previous_api)})
+			cmd.FlagForEachInput("--migrate-nullness ", previousApiFiles)
 		}
 
 		if s := String(d.properties.Validate_nullability_from_list); s != "" {
@@ -614,11 +614,36 @@ func (d *Droidstubs) apiLevelsGenerationFlags(ctx android.ModuleContext, cmd *an
 
 	filename := proptools.StringDefault(d.properties.Api_levels_jar_filename, "android.jar")
 
+	// TODO: Avoid the duplication of API surfaces, reuse apiScope.
+	// Add all relevant --android-jar-pattern patterns for Metalava.
+	// When parsing a stub jar for a specific version, Metalava picks the first pattern that defines
+	// an actual file present on disk (in the order the patterns were passed). For system APIs for
+	// privileged apps that are only defined since API level 21 (Lollipop), fallback to public stubs
+	// for older releases. Similarly, module-lib falls back to system API.
+	var sdkDirs []string
+	switch proptools.StringDefault(d.properties.Api_levels_sdk_type, "public") {
+	case "system-server":
+		sdkDirs = []string{"system-server", "module-lib", "system", "public"}
+	case "module-lib":
+		sdkDirs = []string{"module-lib", "system", "public"}
+	case "system":
+		sdkDirs = []string{"system", "public"}
+	case "public":
+		sdkDirs = []string{"public"}
+	default:
+		ctx.PropertyErrorf("api_levels_sdk_type", "needs to be one of %v", allowedApiLevelSdkTypes)
+		return
+	}
+
+	// Use the first item in the sdkDirs array as that is the sdk type for the target API levels
+	// being generated but has the advantage over `Api_levels_sdk_type` as it has been validated.
+	extensionsPattern := fmt.Sprintf(`/extensions/[0-9]+/%s/.*\.jar`, sdkDirs[0])
+
 	var dirs []string
 	var extensions_dir string
 	ctx.VisitDirectDepsWithTag(metalavaAPILevelsAnnotationsDirTag, func(m android.Module) {
 		if t, ok := m.(*ExportedDroiddocDir); ok {
-			extRegex := regexp.MustCompile(t.dir.String() + `/extensions/[0-9]+/public/.*\.jar`)
+			extRegex := regexp.MustCompile(t.dir.String() + extensionsPattern)
 
 			// Grab the first extensions_dir and we find while scanning ExportedDroiddocDir.deps;
 			// ideally this should be read from prebuiltApis.properties.Extensions_*
@@ -650,26 +675,6 @@ func (d *Droidstubs) apiLevelsGenerationFlags(ctx android.ModuleContext, cmd *an
 		}
 	})
 
-	// Add all relevant --android-jar-pattern patterns for Metalava.
-	// When parsing a stub jar for a specific version, Metalava picks the first pattern that defines
-	// an actual file present on disk (in the order the patterns were passed). For system APIs for
-	// privileged apps that are only defined since API level 21 (Lollipop), fallback to public stubs
-	// for older releases. Similarly, module-lib falls back to system API.
-	var sdkDirs []string
-	switch proptools.StringDefault(d.properties.Api_levels_sdk_type, "public") {
-	case "system-server":
-		sdkDirs = []string{"system-server", "module-lib", "system", "public"}
-	case "module-lib":
-		sdkDirs = []string{"module-lib", "system", "public"}
-	case "system":
-		sdkDirs = []string{"system", "public"}
-	case "public":
-		sdkDirs = []string{"public"}
-	default:
-		ctx.PropertyErrorf("api_levels_sdk_type", "needs to be one of %v", allowedApiLevelSdkTypes)
-		return
-	}
-
 	for _, sdkDir := range sdkDirs {
 		for _, dir := range dirs {
 			cmd.FlagWithArg("--android-jar-pattern ", fmt.Sprintf("%s/%%/%s/%s", dir, sdkDir, filename))
@@ -687,12 +692,29 @@ func (d *Droidstubs) apiLevelsGenerationFlags(ctx android.ModuleContext, cmd *an
 	}
 }
 
+func (d *Droidstubs) apiCompatibilityFlags(ctx android.ModuleContext, cmd *android.RuleBuilderCommand, stubsType StubsType) {
+	if len(d.Javadoc.properties.Out) > 0 {
+		ctx.PropertyErrorf("out", "out property may not be combined with check_api")
+	}
+
+	apiFiles := android.PathsForModuleSrc(ctx, []string{String(d.properties.Check_api.Last_released.Api_file)})
+	removedApiFiles := android.PathsForModuleSrc(ctx, []string{String(d.properties.Check_api.Last_released.Removed_api_file)})
+
+	cmd.FlagForEachInput("--check-compatibility:api:released ", apiFiles)
+	cmd.FlagForEachInput("--check-compatibility:removed:released ", removedApiFiles)
+
+	baselineFile := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Last_released.Baseline_file)
+	if baselineFile.Valid() {
+		cmd.FlagWithInput("--baseline:compatibility:released ", baselineFile.Path())
+	}
+}
+
 func metalavaUseRbe(ctx android.ModuleContext) bool {
 	return ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_METALAVA")
 }
 
-func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersion javaVersion, srcs android.Paths,
-	srcJarList android.Path, bootclasspath, classpath classpath, homeDir android.WritablePath) *android.RuleBuilderCommand {
+func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, srcs android.Paths,
+	srcJarList android.Path, homeDir android.WritablePath, params stubsCommandConfigParams) *android.RuleBuilderCommand {
 	rule.Command().Text("rm -rf").Flag(homeDir.String())
 	rule.Command().Text("mkdir -p").Flag(homeDir.String())
 
@@ -722,14 +744,14 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, javaVersi
 	cmd.BuiltTool("metalava").ImplicitTool(ctx.Config().HostJavaToolPath(ctx, "metalava.jar")).
 		Flag(config.JavacVmFlags).
 		Flag(config.MetalavaAddOpens).
-		FlagWithArg("--java-source ", javaVersion.String()).
-		FlagWithRspFileInputList("@", android.PathForModuleOut(ctx, "metalava.rsp"), srcs).
+		FlagWithArg("--java-source ", params.javaVersion.String()).
+		FlagWithRspFileInputList("@", android.PathForModuleOut(ctx, fmt.Sprintf("%s.metalava.rsp", params.stubsType.String())), srcs).
 		FlagWithInput("@", srcJarList)
 
 	// Metalava does not differentiate between bootclasspath and classpath and has not done so for
 	// years, so it is unlikely to change any time soon.
-	combinedPaths := append(([]android.Path)(nil), bootclasspath.Paths()...)
-	combinedPaths = append(combinedPaths, classpath.Paths()...)
+	combinedPaths := append(([]android.Path)(nil), params.deps.bootClasspath.Paths()...)
+	combinedPaths = append(combinedPaths, params.deps.classpath.Paths()...)
 	if len(combinedPaths) > 0 {
 		cmd.FlagWithInputList("--classpath ", combinedPaths, ":")
 	}
@@ -810,8 +832,7 @@ func (d *Droidstubs) commonMetalavaStubCmd(ctx android.ModuleContext, rule *andr
 	srcJarList := zipSyncCmd(ctx, rule, params.srcJarDir, d.Javadoc.srcJars)
 
 	homeDir := android.PathForModuleOut(ctx, params.stubConfig.stubsType.String(), "home")
-	cmd := metalavaCmd(ctx, rule, params.stubConfig.javaVersion, d.Javadoc.srcFiles, srcJarList,
-		params.stubConfig.deps.bootClasspath, params.stubConfig.deps.classpath, homeDir)
+	cmd := metalavaCmd(ctx, rule, d.Javadoc.srcFiles, srcJarList, homeDir, params.stubConfig)
 	cmd.Implicits(d.Javadoc.implicits)
 
 	d.stubsFlags(ctx, cmd, params.stubsDir, params.stubConfig.stubsType, params.stubConfig.checkApi)
@@ -830,6 +851,10 @@ func (d *Droidstubs) commonMetalavaStubCmd(ctx android.ModuleContext, rule *andr
 	d.annotationsFlags(ctx, cmd, annotationParams)
 	d.inclusionAnnotationsFlags(ctx, cmd)
 	d.apiLevelsAnnotationsFlags(ctx, cmd, params.stubConfig.stubsType, params.apiVersionsXml)
+
+	if params.stubConfig.doCheckReleased {
+		d.apiCompatibilityFlags(ctx, cmd, params.stubConfig.stubsType)
+	}
 
 	d.expandArgs(ctx, cmd)
 
@@ -929,12 +954,12 @@ func (d *Droidstubs) everythingOptionalCmd(ctx android.ModuleContext, cmd *andro
 
 	// Add API lint options.
 	if doApiLint {
-		newSince := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Api_lint.New_since)
-		if newSince.Valid() {
-			cmd.FlagWithInput("--api-lint ", newSince.Path())
-		} else {
-			cmd.Flag("--api-lint")
+		var newSince android.Paths
+		if d.properties.Check_api.Api_lint.New_since != nil {
+			newSince = android.PathsForModuleSrc(ctx, []string{proptools.String(d.properties.Check_api.Api_lint.New_since)})
 		}
+		cmd.Flag("--api-lint")
+		cmd.FlagForEachInput("--api-lint-previous-api ", newSince)
 		d.apiLintReport = android.PathForModuleOut(ctx, Everything.String(), "api_lint_report.txt")
 		cmd.FlagWithOutput("--report-even-if-suppressed ", d.apiLintReport) // TODO:  Change to ":api-lint"
 
@@ -989,25 +1014,12 @@ func (d *Droidstubs) everythingOptionalCmd(ctx android.ModuleContext, cmd *andro
 
 	// Add "check released" options. (Detect incompatible API changes from the last public release)
 	if doCheckReleased {
-		if len(d.Javadoc.properties.Out) > 0 {
-			ctx.PropertyErrorf("out", "out property may not be combined with check_api")
-		}
-
-		apiFile := android.PathForModuleSrc(ctx, String(d.properties.Check_api.Last_released.Api_file))
-		removedApiFile := android.PathForModuleSrc(ctx, String(d.properties.Check_api.Last_released.Removed_api_file))
 		baselineFile := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Last_released.Baseline_file)
-		updatedBaselineOutput := android.PathForModuleOut(ctx, Everything.String(), "last_released_baseline.txt")
-
 		d.checkLastReleasedApiTimestamp = android.PathForModuleOut(ctx, Everything.String(), "check_last_released_api.timestamp")
-
-		cmd.FlagWithInput("--check-compatibility:api:released ", apiFile)
-		cmd.FlagWithInput("--check-compatibility:removed:released ", removedApiFile)
-
 		if baselineFile.Valid() {
-			cmd.FlagWithInput("--baseline:compatibility:released ", baselineFile.Path())
+			updatedBaselineOutput := android.PathForModuleOut(ctx, Everything.String(), "last_released_baseline.txt")
 			cmd.FlagWithOutput("--update-baseline:compatibility:released ", updatedBaselineOutput)
 		}
-
 		// Note this string includes quote ($' ... '), which decodes the "\n"s.
 		msg := `$'\n******************************\n` +
 			`You have tried to change the API from what has been previously released in\n` +

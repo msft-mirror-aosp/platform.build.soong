@@ -73,7 +73,7 @@ func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
 	// Run mark_platform_availability before the apexMutator as the apexMutator needs to know whether
 	// it should create a platform variant.
 	ctx.BottomUp("mark_platform_availability", markPlatformAvailability).Parallel()
-	ctx.BottomUp("apex", apexMutator).Parallel()
+	ctx.Transition("apex", &apexTransitionMutator{})
 	ctx.BottomUp("apex_directly_in_any", apexDirectlyInAnyMutator).Parallel()
 	ctx.BottomUp("apex_dcla_deps", apexDCLADepsMutator).Parallel()
 	// Register after apex_info mutator so that it can use ApexVariationName
@@ -357,6 +357,8 @@ type overridableProperties struct {
 	// both binaries would be installed by default (in PRODUCT_PACKAGES) the other binary will
 	// be removed from PRODUCT_PACKAGES.
 	Overrides []string
+
+	Multilib apexMultilibProperties
 
 	// Logging parent value.
 	Logging_parent string
@@ -735,39 +737,25 @@ func (a *apexBundle) combineProperties(ctx android.BottomUpMutatorContext) {
 // suffix indicates the vndk version for vendor/product if vndk is enabled.
 // getImageVariation can simply join the result of this function to get the
 // image variation name.
-func (a *apexBundle) getImageVariationPair(deviceConfig android.DeviceConfig) (string, string) {
+func (a *apexBundle) getImageVariationPair() (string, string) {
 	if a.vndkApex {
-		return cc.VendorVariationPrefix, a.vndkVersion(deviceConfig)
+		return cc.VendorVariationPrefix, a.vndkVersion()
 	}
 
 	prefix := android.CoreVariation
-	vndkVersion := ""
-	if deviceConfig.VndkVersion() != "" {
-		if a.SocSpecific() || a.DeviceSpecific() {
-			prefix = cc.VendorVariationPrefix
-			vndkVersion = deviceConfig.VndkVersion()
-		} else if a.ProductSpecific() {
-			prefix = cc.ProductVariationPrefix
-			vndkVersion = deviceConfig.PlatformVndkVersion()
-		}
-	} else {
-		if a.SocSpecific() || a.DeviceSpecific() {
-			prefix = cc.VendorVariation
-		} else if a.ProductSpecific() {
-			prefix = cc.ProductVariation
-		}
-	}
-	if vndkVersion == "current" {
-		vndkVersion = deviceConfig.PlatformVndkVersion()
+	if a.SocSpecific() || a.DeviceSpecific() {
+		prefix = cc.VendorVariation
+	} else if a.ProductSpecific() {
+		prefix = cc.ProductVariation
 	}
 
-	return prefix, vndkVersion
+	return prefix, ""
 }
 
 // getImageVariation returns the image variant name for this apexBundle. In most cases, it's simply
 // android.CoreVariation, but gets complicated for the vendor APEXes and the VNDK APEX.
-func (a *apexBundle) getImageVariation(ctx android.BottomUpMutatorContext) string {
-	prefix, vndkVersion := a.getImageVariationPair(ctx.DeviceConfig())
+func (a *apexBundle) getImageVariation() string {
+	prefix, vndkVersion := a.getImageVariationPair()
 	return prefix + vndkVersion
 }
 
@@ -777,7 +765,7 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 	// each target os/architectures, appropriate dependencies are selected by their
 	// target.<os>.multilib.<type> groups and are added as (direct) dependencies.
 	targets := ctx.MultiTargets()
-	imageVariation := a.getImageVariation(ctx)
+	imageVariation := a.getImageVariation()
 
 	a.combineProperties(ctx)
 
@@ -1096,6 +1084,10 @@ func apexInfoMutator(mctx android.TopDownMutatorContext) {
 	if a, ok := mctx.Module().(ApexInfoMutator); ok {
 		a.ApexInfoMutator(mctx)
 	}
+
+	if am, ok := mctx.Module().(android.ApexModule); ok {
+		android.ApexInfoMutator(mctx, am)
+	}
 	enforceAppUpdatability(mctx)
 }
 
@@ -1296,44 +1288,41 @@ func markPlatformAvailability(mctx android.BottomUpMutatorContext) {
 	}
 }
 
-// apexMutator visits each module and creates apex variations if the module was marked in the
-// previous run of apexInfoMutator.
-func apexMutator(mctx android.BottomUpMutatorContext) {
-	if !mctx.Module().Enabled() {
-		return
-	}
+type apexTransitionMutator struct{}
 
-	// This is the usual path.
-	if am, ok := mctx.Module().(android.ApexModule); ok && am.CanHaveApexVariants() {
-		android.CreateApexVariations(mctx, am)
-		return
-	}
-
+func (a *apexTransitionMutator) Split(ctx android.BaseModuleContext) []string {
 	// apexBundle itself is mutated so that it and its dependencies have the same apex variant.
-	if ai, ok := mctx.Module().(ApexInfoMutator); ok && apexModuleTypeRequiresVariant(ai) {
-		apexBundleName := ai.ApexVariationName()
-		mctx.CreateVariations(apexBundleName)
-		if strings.HasPrefix(apexBundleName, "com.android.art") {
-			// Create an alias from the platform variant. This is done to make
-			// test_for dependencies work for modules that are split by the APEX
-			// mutator, since test_for dependencies always go to the platform variant.
-			// This doesn't happen for normal APEXes that are disjunct, so only do
-			// this for the overlapping ART APEXes.
-			// TODO(b/183882457): Remove this if the test_for functionality is
-			// refactored to depend on the proper APEX variants instead of platform.
-			mctx.CreateAliasVariation("", apexBundleName)
-		}
-	} else if o, ok := mctx.Module().(*OverrideApex); ok {
+	if ai, ok := ctx.Module().(ApexInfoMutator); ok && apexModuleTypeRequiresVariant(ai) {
+		return []string{ai.ApexVariationName()}
+	} else if o, ok := ctx.Module().(*OverrideApex); ok {
 		apexBundleName := o.GetOverriddenModuleName()
 		if apexBundleName == "" {
-			mctx.ModuleErrorf("base property is not set")
-			return
+			ctx.ModuleErrorf("base property is not set")
 		}
-		mctx.CreateVariations(apexBundleName)
-		if strings.HasPrefix(apexBundleName, "com.android.art") {
-			// TODO(b/183882457): See note for CreateAliasVariation above.
-			mctx.CreateAliasVariation("", apexBundleName)
-		}
+		return []string{apexBundleName}
+	}
+	return []string{""}
+}
+
+func (a *apexTransitionMutator) OutgoingTransition(ctx android.OutgoingTransitionContext, sourceVariation string) string {
+	return sourceVariation
+}
+
+func (a *apexTransitionMutator) IncomingTransition(ctx android.IncomingTransitionContext, incomingVariation string) string {
+	if am, ok := ctx.Module().(android.ApexModule); ok && am.CanHaveApexVariants() {
+		return android.IncomingApexTransition(ctx, incomingVariation)
+	} else if ai, ok := ctx.Module().(ApexInfoMutator); ok {
+		return ai.ApexVariationName()
+	} else if o, ok := ctx.Module().(*OverrideApex); ok {
+		return o.GetOverriddenModuleName()
+	}
+
+	return ""
+}
+
+func (a *apexTransitionMutator) Mutate(ctx android.BottomUpMutatorContext, variation string) {
+	if am, ok := ctx.Module().(android.ApexModule); ok && am.CanHaveApexVariants() {
+		android.MutateApexTransition(ctx, variation)
 	}
 }
 
@@ -1538,7 +1527,7 @@ func (a *apexBundle) AddSanitizerDependencies(ctx android.BottomUpMutatorContext
 	// TODO(jiyong): move this info (the sanitizer name, the lib name, etc.) to cc/sanitize.go
 	// Keep only the mechanism here.
 	if sanitizerName == "hwaddress" && strings.HasPrefix(a.Name(), "com.android.runtime") {
-		imageVariation := a.getImageVariation(ctx)
+		imageVariation := a.getImageVariation()
 		for _, target := range ctx.MultiTargets() {
 			if target.Arch.ArchType.Multilib == "lib64" {
 				addDependenciesForNativeModules(ctx, ApexNativeDependencies{

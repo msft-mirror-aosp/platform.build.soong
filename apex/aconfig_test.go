@@ -162,6 +162,21 @@ func TestValidationAcrossContainersExportedPass(t *testing.T) {
 					name: "server_configurable_flags",
 					srcs: ["server_configurable_flags.cc"],
 				}
+				cc_library {
+					name: "libbase",
+					srcs: ["libbase.cc"],
+			                apex_available: [
+				            "myapex",
+			                ],
+				}
+				cc_library {
+					name: "libaconfig_storage_read_api_cc",
+					srcs: ["libaconfig_storage_read_api_cc.cc"],
+				}
+				cc_library {
+					name: "libaconfig_storage_protos_cc",
+					srcs: ["libaconfig_storage_protos_cc.cc"],
+				}
 				aconfig_declarations {
 					name: "my_aconfig_declarations_bar",
 					package: "com.example.package",
@@ -217,6 +232,24 @@ func TestValidationAcrossContainersExportedPass(t *testing.T) {
 				srcs: ["src/lib.rs"],
 				apex_available: ["myapex"],
 			}
+			rust_library {
+				name: "libaconfig_storage_read_api", // test mock
+				crate_name: "aconfig_storage_read_api",
+				srcs: ["src/lib.rs"],
+				apex_available: ["myapex"],
+			}
+			rust_library {
+				name: "liblogger", // test mock
+				crate_name: "logger",
+				srcs: ["src/lib.rs"],
+				apex_available: ["myapex"],
+			}
+			rust_library {
+				name: "liblog_rust", // test mock
+				crate_name: "log_rust",
+				srcs: ["src/lib.rs"],
+				apex_available: ["myapex"],
+                        }
 			rust_ffi_shared {
 				name: "libmy_rust_library",
 				srcs: ["src/lib.rs"],
@@ -392,6 +425,21 @@ func TestValidationAcrossContainersNotExportedFail(t *testing.T) {
 					name: "server_configurable_flags",
 					srcs: ["server_configurable_flags.cc"],
 				}
+				cc_library {
+					name: "libbase",
+					srcs: ["libbase.cc"],
+			                apex_available: [
+				            "myapex",
+			                ],
+				}
+				cc_library {
+					name: "libaconfig_storage_read_api_cc",
+					srcs: ["libaconfig_storage_read_api_cc.cc"],
+				}
+				cc_library {
+					name: "libaconfig_storage_protos_cc",
+					srcs: ["libaconfig_storage_protos_cc.cc"],
+				}
 				aconfig_declarations {
 					name: "my_aconfig_declarations_foo",
 					package: "com.example.package",
@@ -442,6 +490,21 @@ func TestValidationAcrossContainersNotExportedFail(t *testing.T) {
 					name: "server_configurable_flags",
 					srcs: ["server_configurable_flags.cc"],
 				}
+				cc_library {
+					name: "libbase",
+					srcs: ["libbase.cc"],
+			                apex_available: [
+				            "myapex",
+			                ],
+				}
+				cc_library {
+					name: "libaconfig_storage_read_api_cc",
+					srcs: ["libaconfig_storage_read_api_cc.cc"],
+				}
+				cc_library {
+					name: "libaconfig_storage_protos_cc",
+					srcs: ["libaconfig_storage_protos_cc.cc"],
+				}
 				aconfig_declarations {
 					name: "my_aconfig_declarations_foo",
 					package: "com.example.package",
@@ -477,6 +540,24 @@ func TestValidationAcrossContainersNotExportedFail(t *testing.T) {
 			rust_library {
 				name: "liblazy_static", // test mock
 				crate_name: "lazy_static",
+				srcs: ["src/lib.rs"],
+				apex_available: ["myapex"],
+			}
+			rust_library {
+				name: "libaconfig_storage_read_api", // test mock
+				crate_name: "aconfig_storage_read_api",
+				srcs: ["src/lib.rs"],
+				apex_available: ["myapex"],
+			}
+			rust_library {
+				name: "liblogger", // test mock
+				crate_name: "logger",
+				srcs: ["src/lib.rs"],
+				apex_available: ["myapex"],
+			}
+			rust_library {
+				name: "liblog_rust", // test mock
+				crate_name: "log_rust",
 				srcs: ["src/lib.rs"],
 				apex_available: ["myapex"],
 			}
@@ -521,6 +602,24 @@ func TestValidationAcrossContainersNotExportedFail(t *testing.T) {
 			rust_library {
 				name: "liblazy_static", // test mock
 				crate_name: "lazy_static",
+				srcs: ["src/lib.rs"],
+				apex_available: ["myapex"],
+			}
+			rust_library {
+				name: "libaconfig_storage_read_api", // test mock
+				crate_name: "aconfig_storage_read_api",
+				srcs: ["src/lib.rs"],
+				apex_available: ["myapex"],
+			}
+			rust_library {
+				name: "liblogger", // test mock
+				crate_name: "logger",
+				srcs: ["src/lib.rs"],
+				apex_available: ["myapex"],
+			}
+			rust_library {
+				name: "liblog_rust", // test mock
+				crate_name: "log_rust",
 				srcs: ["src/lib.rs"],
 				apex_available: ["myapex"],
 			}
