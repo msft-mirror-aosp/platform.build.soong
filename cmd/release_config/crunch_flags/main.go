@@ -102,10 +102,13 @@ func ProcessBuildFlags(dir string, namespaceMap map[string]string) error {
 			description = ""
 			continue
 		}
-		declValue := matches[declRegexp.SubexpIndex("value")]
 		declName := matches[declRegexp.SubexpIndex("name")]
-		container := rc_proto.Container(rc_proto.Container_value[matches[declRegexp.SubexpIndex("container")]])
+		declValue := matches[declRegexp.SubexpIndex("value")]
 		description = strings.TrimSpace(description)
+		containers := []string{strings.ToLower(matches[declRegexp.SubexpIndex("container")])}
+		if containers[0] == "all" {
+			containers = []string{"product", "system", "system_ext", "vendor"}
+		}
 		var namespace string
 		var ok bool
 		if namespace, ok = namespaceMap[declName]; !ok {
@@ -115,7 +118,7 @@ func ProcessBuildFlags(dir string, namespaceMap map[string]string) error {
 			Name:        proto.String(declName),
 			Namespace:   proto.String(namespace),
 			Description: proto.String(description),
-			Container:   &container,
+			Containers:  containers,
 		}
 		description = ""
 		// Most build flags are `workflow: PREBUILT`.
@@ -163,7 +166,7 @@ func ProcessBuildFlags(dir string, namespaceMap map[string]string) error {
 }
 
 func ProcessBuildConfigs(dir, name string, paths []string, releaseProto *rc_proto.ReleaseConfig) error {
-	valRegexp, err := regexp.Compile("[[:space:]]+value.\"(?<name>[A-Z_0-9]+)\",[[:space:]]*(?<value>[^,)]*)")
+	valRegexp, err := regexp.Compile("[[:space:]]+value.\"(?<name>[A-Z_0-9]+)\",[[:space:]]*(?<value>(\"[^\"]*\"|[^\",)]*))")
 	if err != nil {
 		return err
 	}
@@ -213,6 +216,12 @@ func ProcessBuildConfigs(dir, name string, paths []string, releaseProto *rc_prot
 	return err
 }
 
+var (
+	allContainers = func() []string {
+		return []string{"product", "system", "system_ext", "vendor"}
+	}()
+)
+
 func ProcessReleaseConfigMap(dir string, descriptionMap map[string]string) error {
 	path := filepath.Join(dir, "release_config_map.mk")
 	if _, err := os.Stat(path); err != nil {
@@ -235,16 +244,16 @@ func ProcessReleaseConfigMap(dir string, descriptionMap map[string]string) error
 		return err
 	}
 	cleanDir := strings.TrimLeft(dir, "../")
-	var defaultContainer rc_proto.Container
+	var defaultContainers []string
 	switch {
 	case strings.HasPrefix(cleanDir, "build/") || cleanDir == "vendor/google_shared/build":
-		defaultContainer = rc_proto.Container(rc_proto.Container_ALL)
+		defaultContainers = allContainers
 	case cleanDir == "vendor/google/release":
-		defaultContainer = rc_proto.Container(rc_proto.Container_ALL)
+		defaultContainers = allContainers
 	default:
-		defaultContainer = rc_proto.Container(rc_proto.Container_VENDOR)
+		defaultContainers = []string{"vendor"}
 	}
-	releaseConfigMap := &rc_proto.ReleaseConfigMap{DefaultContainer: &defaultContainer}
+	releaseConfigMap := &rc_proto.ReleaseConfigMap{DefaultContainers: defaultContainers}
 	// If we find a description for the directory, include it.
 	if description, ok := descriptionMap[cleanDir]; ok {
 		releaseConfigMap.Description = proto.String(description)
@@ -302,8 +311,9 @@ func main() {
 	var dirs rc_lib.StringList
 	var namespacesFile string
 	var descriptionsFile string
+	defaultTopDir, err := rc_lib.GetTopDir()
 
-	flag.StringVar(&top, "top", ".", "path to top of workspace")
+	flag.StringVar(&top, "top", defaultTopDir, "path to top of workspace")
 	flag.Var(&dirs, "dir", "directory to process, relative to the top of the workspace")
 	flag.StringVar(&namespacesFile, "namespaces", "", "location of file with 'flag_name namespace' information")
 	flag.StringVar(&descriptionsFile, "descriptions", "", "location of file with 'directory description' information")
