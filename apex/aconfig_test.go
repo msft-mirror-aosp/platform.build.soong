@@ -162,6 +162,21 @@ func TestValidationAcrossContainersExportedPass(t *testing.T) {
 					name: "server_configurable_flags",
 					srcs: ["server_configurable_flags.cc"],
 				}
+				cc_library {
+					name: "libbase",
+					srcs: ["libbase.cc"],
+			                apex_available: [
+				            "myapex",
+			                ],
+				}
+				cc_library {
+					name: "libaconfig_storage_read_api_cc",
+					srcs: ["libaconfig_storage_read_api_cc.cc"],
+				}
+				cc_library {
+					name: "libaconfig_storage_protos_cc",
+					srcs: ["libaconfig_storage_protos_cc.cc"],
+				}
 				aconfig_declarations {
 					name: "my_aconfig_declarations_bar",
 					package: "com.example.package",
@@ -410,6 +425,21 @@ func TestValidationAcrossContainersNotExportedFail(t *testing.T) {
 					name: "server_configurable_flags",
 					srcs: ["server_configurable_flags.cc"],
 				}
+				cc_library {
+					name: "libbase",
+					srcs: ["libbase.cc"],
+			                apex_available: [
+				            "myapex",
+			                ],
+				}
+				cc_library {
+					name: "libaconfig_storage_read_api_cc",
+					srcs: ["libaconfig_storage_read_api_cc.cc"],
+				}
+				cc_library {
+					name: "libaconfig_storage_protos_cc",
+					srcs: ["libaconfig_storage_protos_cc.cc"],
+				}
 				aconfig_declarations {
 					name: "my_aconfig_declarations_foo",
 					package: "com.example.package",
@@ -459,6 +489,21 @@ func TestValidationAcrossContainersNotExportedFail(t *testing.T) {
 				cc_library {
 					name: "server_configurable_flags",
 					srcs: ["server_configurable_flags.cc"],
+				}
+				cc_library {
+					name: "libbase",
+					srcs: ["libbase.cc"],
+			                apex_available: [
+				            "myapex",
+			                ],
+				}
+				cc_library {
+					name: "libaconfig_storage_read_api_cc",
+					srcs: ["libaconfig_storage_read_api_cc.cc"],
+				}
+				cc_library {
+					name: "libaconfig_storage_protos_cc",
+					srcs: ["libaconfig_storage_protos_cc.cc"],
 				}
 				aconfig_declarations {
 					name: "my_aconfig_declarations_foo",

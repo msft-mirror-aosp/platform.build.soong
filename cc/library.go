@@ -1249,16 +1249,29 @@ func (library *libraryDecorator) llndkIncludeDirsForAbiCheck(ctx ModuleContext, 
 
 func (library *libraryDecorator) linkLlndkSAbiDumpFiles(ctx ModuleContext,
 	deps PathDeps, sAbiDumpFiles android.Paths, soFile android.Path, libFileName string,
-	excludeSymbolVersions, excludeSymbolTags []string) android.Path {
+	excludeSymbolVersions, excludeSymbolTags []string,
+	vendorApiLevel string) android.Path {
 	// NDK symbols in version 34 are LLNDK symbols. Those in version 35 are not.
-	// TODO(b/314010764): Add parameters to read LLNDK symbols from the symbol file.
 	return transformDumpToLinkedDump(ctx,
 		sAbiDumpFiles, soFile, libFileName+".llndk",
 		library.llndkIncludeDirsForAbiCheck(ctx, deps),
 		android.OptionalPathForModuleSrc(ctx, library.Properties.Llndk.Symbol_file),
 		append([]string{"*_PLATFORM", "*_PRIVATE"}, excludeSymbolVersions...),
 		append([]string{"platform-only"}, excludeSymbolTags...),
-		"34")
+		[]string{"llndk=" + vendorApiLevel}, "34", true /* isLlndk */)
+}
+
+func (library *libraryDecorator) linkApexSAbiDumpFiles(ctx ModuleContext,
+	deps PathDeps, sAbiDumpFiles android.Paths, soFile android.Path, libFileName string,
+	excludeSymbolVersions, excludeSymbolTags []string,
+	sdkVersion string) android.Path {
+	return transformDumpToLinkedDump(ctx,
+		sAbiDumpFiles, soFile, libFileName+".apex",
+		library.exportedIncludeDirsForAbiCheck(ctx),
+		android.OptionalPathForModuleSrc(ctx, library.Properties.Stubs.Symbol_file),
+		append([]string{"*_PLATFORM", "*_PRIVATE"}, excludeSymbolVersions...),
+		append([]string{"platform-only"}, excludeSymbolTags...),
+		[]string{"apex", "systemapi"}, sdkVersion, false /* isLlndk */)
 }
 
 func getRefAbiDumpFile(ctx android.ModuleInstallPathContext,
@@ -1276,21 +1289,21 @@ func getRefAbiDumpFile(ctx android.ModuleInstallPathContext,
 }
 
 // Return the previous and current SDK versions for cross-version ABI diff.
-func crossVersionAbiDiffSdkVersions(ctx ModuleContext, dumpDir string) (string, string) {
+func crossVersionAbiDiffSdkVersions(ctx ModuleContext, dumpDir string) (int, int) {
 	sdkVersionInt := ctx.Config().PlatformSdkVersion().FinalInt()
-	sdkVersionStr := ctx.Config().PlatformSdkVersion().String()
 
 	if ctx.Config().PlatformSdkFinal() {
-		return strconv.Itoa(sdkVersionInt - 1), sdkVersionStr
+		return sdkVersionInt - 1, sdkVersionInt
 	} else {
 		// The platform SDK version can be upgraded before finalization while the corresponding abi dumps hasn't
 		// been generated. Thus the Cross-Version Check chooses PLATFORM_SDK_VERION - 1 as previous version.
 		// This situation could be identified by checking the existence of the PLATFORM_SDK_VERION dump directory.
-		versionedDumpDir := android.ExistentPathForSource(ctx, dumpDir, sdkVersionStr)
+		versionedDumpDir := android.ExistentPathForSource(ctx,
+			dumpDir, ctx.Config().PlatformSdkVersion().String())
 		if versionedDumpDir.Valid() {
-			return sdkVersionStr, strconv.Itoa(sdkVersionInt + 1)
+			return sdkVersionInt, sdkVersionInt + 1
 		} else {
-			return strconv.Itoa(sdkVersionInt - 1), sdkVersionStr
+			return sdkVersionInt - 1, sdkVersionInt
 		}
 	}
 }
@@ -1385,20 +1398,30 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, deps PathD
 			android.OptionalPathForModuleSrc(ctx, library.symbolFileForAbiCheck(ctx)),
 			headerAbiChecker.Exclude_symbol_versions,
 			headerAbiChecker.Exclude_symbol_tags,
-			currSdkVersion)
+			[]string{} /* includeSymbolTags */, currSdkVersion, false /* isLlndk */)
 
-		var llndkDump android.Path
+		var llndkDump, apexVariantDump android.Path
 		tags := classifySourceAbiDump(ctx)
 		for _, tag := range tags {
-			if tag == llndkLsdumpTag {
+			if tag == llndkLsdumpTag && currVendorVersion != "" {
 				if llndkDump == nil {
 					// TODO(b/323447559): Evaluate if replacing sAbiDumpFiles with implDump is faster
 					llndkDump = library.linkLlndkSAbiDumpFiles(ctx,
 						deps, objs.sAbiDumpFiles, soFile, fileName,
 						headerAbiChecker.Exclude_symbol_versions,
-						headerAbiChecker.Exclude_symbol_tags)
+						headerAbiChecker.Exclude_symbol_tags,
+						currVendorVersion)
 				}
 				addLsdumpPath(string(tag) + ":" + llndkDump.String())
+			} else if tag == apexLsdumpTag {
+				if apexVariantDump == nil {
+					apexVariantDump = library.linkApexSAbiDumpFiles(ctx,
+						deps, objs.sAbiDumpFiles, soFile, fileName,
+						headerAbiChecker.Exclude_symbol_versions,
+						headerAbiChecker.Exclude_symbol_tags,
+						currSdkVersion)
+				}
+				addLsdumpPath(string(tag) + ":" + apexVariantDump.String())
 			} else {
 				addLsdumpPath(string(tag) + ":" + implDump.String())
 			}
@@ -1412,11 +1435,14 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, deps PathD
 			}
 			dumpDir := filepath.Join("prebuilts", "abi-dumps", dumpDirName)
 			isLlndk := (tag == llndkLsdumpTag)
+			isApex := (tag == apexLsdumpTag)
 			isNdk := (tag == ndkLsdumpTag)
 			binderBitness := ctx.DeviceConfig().BinderBitness()
 			nameExt := ""
 			if isLlndk {
 				nameExt = "llndk"
+			} else if isApex {
+				nameExt = "apex"
 			}
 			// Check against the previous version.
 			var prevVersion, currVersion string
@@ -1430,7 +1456,13 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, deps PathD
 					sourceDump = llndkDump
 				}
 			} else {
-				prevVersion, currVersion = crossVersionAbiDiffSdkVersions(ctx, dumpDir)
+				prevVersionInt, currVersionInt := crossVersionAbiDiffSdkVersions(ctx, dumpDir)
+				prevVersion = strconv.Itoa(prevVersionInt)
+				currVersion = strconv.Itoa(currVersionInt)
+				// APEX dumps are generated by different rules after trunk stable.
+				if isApex && prevVersionInt > 34 {
+					sourceDump = apexVariantDump
+				}
 			}
 			prevDumpDir := filepath.Join(dumpDir, prevVersion, binderBitness)
 			prevDumpFile := getRefAbiDumpFile(ctx, prevDumpDir, fileName)
@@ -1447,6 +1479,10 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, deps PathD
 				}
 			} else {
 				currVersion = currSdkVersion
+				if isApex && (!ctx.Config().PlatformSdkFinal() ||
+					ctx.Config().PlatformSdkVersion().FinalInt() > 34) {
+					sourceDump = apexVariantDump
+				}
 			}
 			currDumpDir := filepath.Join(dumpDir, currVersion, binderBitness)
 			currDumpFile := getRefAbiDumpFile(ctx, currDumpDir, fileName)
