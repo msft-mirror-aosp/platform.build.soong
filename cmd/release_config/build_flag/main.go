@@ -266,7 +266,7 @@ func SetCommand(configs *rc_lib.ReleaseConfigs, commonFlags Flags, cmd string, a
 		return fmt.Errorf("Unknown build flag %s", name)
 	}
 	if valueDir == "" {
-		mapDir, err := GetMapDir(*flagArtifact.Traces[len(flagArtifact.Traces)-1].Source)
+		mapDir, err := configs.GetFlagValueDirectory(release, flagArtifact)
 		if err != nil {
 			return err
 		}
@@ -325,7 +325,12 @@ func main() {
 	}
 
 	if len(commonFlags.targetReleases) == 0 {
-		commonFlags.targetReleases = rc_lib.StringList{"trunk_staging"}
+		release, ok := os.LookupEnv("TARGET_RELEASE")
+		if ok {
+			commonFlags.targetReleases = rc_lib.StringList{release}
+		} else {
+			commonFlags.targetReleases = rc_lib.StringList{"trunk_staging"}
+		}
 	}
 
 	if err = os.Chdir(commonFlags.top); err != nil {
