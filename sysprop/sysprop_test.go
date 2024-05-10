@@ -22,6 +22,7 @@ import (
 	"android/soong/android"
 	"android/soong/cc"
 	"android/soong/java"
+	"android/soong/rust"
 
 	"github.com/google/blueprint/proptools"
 )
@@ -42,19 +43,8 @@ func test(t *testing.T, bp string) *android.TestResult {
 		cc_library_headers {
 			name: "libbase_headers",
 			vendor_available: true,
+			product_available: true,
 			recovery_available: true,
-		}
-
-		cc_library {
-			name: "liblog",
-			no_libcrt: true,
-			nocrt: true,
-			system_shared_libs: [],
-			recovery_available: true,
-			host_supported: true,
-			llndk: {
-				symbol_file: "liblog.map.txt",
-			}
 		}
 
 		java_library {
@@ -72,6 +62,24 @@ func test(t *testing.T, bp string) *android.TestResult {
 			name: "sysprop-library-stub-product",
 			product_specific: true,
 			sdk_version: "core_current",
+		}
+
+		rust_library {
+			name: "librustutils",
+			crate_name: "rustutils",
+			srcs: ["librustutils/lib.rs"],
+			product_available: true,
+			vendor_available: true,
+			min_sdk_version: "29",
+		}
+
+		rust_library {
+			name: "liblog_rust",
+			crate_name: "log",
+			srcs: ["log/src/lib.rs"],
+			product_available: true,
+			vendor_available: true,
+			min_sdk_version: "29",
 		}
 	`
 
@@ -114,16 +122,24 @@ func test(t *testing.T, bp string) *android.TestResult {
 		"android/sysprop/PlatformProperties.sysprop": nil,
 		"com/android/VendorProperties.sysprop":       nil,
 		"com/android2/OdmProperties.sysprop":         nil,
+
+		"librustutils/lib.rs": nil,
+		"log/src/lib.rs":      nil,
 	}
 
 	result := android.GroupFixturePreparers(
 		cc.PrepareForTestWithCcDefaultModules,
 		java.PrepareForTestWithJavaDefaultModules,
+		rust.PrepareForTestWithRustDefaultModules,
 		PrepareForTestWithSyspropBuildComponents,
 		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
 			variables.DeviceSystemSdkVersions = []string{"28"}
-			variables.DeviceVndkVersion = proptools.StringPtr("current")
-			variables.Platform_vndk_version = proptools.StringPtr("29")
+			variables.DeviceCurrentApiLevelForVendorModules = proptools.StringPtr("28")
+		}),
+		java.FixtureWithPrebuiltApis(map[string][]string{
+			"28": {},
+			"29": {},
+			"30": {},
 		}),
 		mockFS.AddToFixture(),
 		android.FixtureWithRootAndroidBp(bp),
@@ -240,14 +256,24 @@ func TestSyspropLibrary(t *testing.T) {
 
 	// Check for generated cc_library
 	for _, variant := range []string{
-		"android_vendor.29_arm_armv7-a-neon_shared",
-		"android_vendor.29_arm_armv7-a-neon_static",
-		"android_vendor.29_arm64_armv8-a_shared",
-		"android_vendor.29_arm64_armv8-a_static",
+		"android_vendor_arm_armv7-a-neon_shared",
+		"android_vendor_arm_armv7-a-neon_static",
+		"android_vendor_arm64_armv8-a_shared",
+		"android_vendor_arm64_armv8-a_static",
 	} {
 		result.ModuleForTests("libsysprop-platform", variant)
 		result.ModuleForTests("libsysprop-vendor", variant)
 		result.ModuleForTests("libsysprop-odm", variant)
+	}
+
+	// product variant of vendor-owned sysprop_library
+	for _, variant := range []string{
+		"android_product_arm_armv7-a-neon_shared",
+		"android_product_arm_armv7-a-neon_static",
+		"android_product_arm64_armv8-a_shared",
+		"android_product_arm64_armv8-a_static",
+	} {
+		result.ModuleForTests("libsysprop-vendor-on-product", variant)
 	}
 
 	for _, variant := range []string{
@@ -259,9 +285,6 @@ func TestSyspropLibrary(t *testing.T) {
 		library := result.ModuleForTests("libsysprop-platform", variant).Module().(*cc.Module)
 		expectedApexAvailableOnLibrary := []string{"//apex_available:platform"}
 		android.AssertDeepEquals(t, "apex available property on libsysprop-platform", expectedApexAvailableOnLibrary, library.ApexProperties.Apex_available)
-
-		// product variant of vendor-owned sysprop_library
-		result.ModuleForTests("libsysprop-vendor-on-product", variant)
 	}
 
 	result.ModuleForTests("sysprop-platform", "android_common")
@@ -271,16 +294,16 @@ func TestSyspropLibrary(t *testing.T) {
 
 	// Check for exported includes
 	coreVariant := "android_arm64_armv8-a_static"
-	vendorVariant := "android_vendor.29_arm64_armv8-a_static"
+	vendorVariant := "android_vendor_arm64_armv8-a_static"
+	productVariant := "android_product_arm64_armv8-a_static"
 
 	platformInternalPath := "libsysprop-platform/android_arm64_armv8-a_static/gen/sysprop/include"
-	platformPublicCorePath := "libsysprop-platform/android_arm64_armv8-a_static/gen/sysprop/public/include"
-	platformPublicVendorPath := "libsysprop-platform/android_vendor.29_arm64_armv8-a_static/gen/sysprop/public/include"
+	platformPublicVendorPath := "libsysprop-platform/android_vendor_arm64_armv8-a_static/gen/sysprop/public/include"
 
-	platformOnProductPath := "libsysprop-platform-on-product/android_arm64_armv8-a_static/gen/sysprop/public/include"
+	platformOnProductPath := "libsysprop-platform-on-product/android_product_arm64_armv8-a_static/gen/sysprop/public/include"
 
-	vendorInternalPath := "libsysprop-vendor/android_vendor.29_arm64_armv8-a_static/gen/sysprop/include"
-	vendorPublicPath := "libsysprop-vendor-on-product/android_arm64_armv8-a_static/gen/sysprop/public/include"
+	vendorInternalPath := "libsysprop-vendor/android_vendor_arm64_armv8-a_static/gen/sysprop/include"
+	vendorOnProductPath := "libsysprop-vendor-on-product/android_product_arm64_armv8-a_static/gen/sysprop/public/include"
 
 	platformClient := result.ModuleForTests("cc-client-platform", coreVariant)
 	platformFlags := platformClient.Rule("cc").Args["cFlags"]
@@ -294,14 +317,14 @@ func TestSyspropLibrary(t *testing.T) {
 	// platform-static should use platform's internal header
 	android.AssertStringDoesContain(t, "flags for platform-static", platformStaticFlags, platformInternalPath)
 
-	productClient := result.ModuleForTests("cc-client-product", coreVariant)
+	productClient := result.ModuleForTests("cc-client-product", productVariant)
 	productFlags := productClient.Rule("cc").Args["cFlags"]
 
 	// Product should use platform's and vendor's public headers
 	if !strings.Contains(productFlags, platformOnProductPath) ||
-		!strings.Contains(productFlags, vendorPublicPath) {
+		!strings.Contains(productFlags, vendorOnProductPath) {
 		t.Errorf("flags for product must contain %#v and %#v, but was %#v.",
-			platformPublicCorePath, vendorPublicPath, productFlags)
+			platformOnProductPath, vendorOnProductPath, productFlags)
 	}
 
 	vendorClient := result.ModuleForTests("cc-client-vendor", vendorVariant)
@@ -342,6 +365,10 @@ func TestApexAvailabilityIsForwarded(t *testing.T) {
 	javaModule := result.ModuleForTests("sysprop-platform", "android_common").Module().(*java.Library)
 	propFromJava := javaModule.ApexProperties.Apex_available
 	android.AssertDeepEquals(t, "apex_available forwarding to java module", expected, propFromJava)
+
+	rustModule := result.ModuleForTests("libsysprop_platform_rust", "android_arm64_armv8-a_rlib_rlib-std").Module().(*rust.Module)
+	propFromRust := rustModule.ApexProperties.Apex_available
+	android.AssertDeepEquals(t, "apex_available forwarding to rust module", expected, propFromRust)
 }
 
 func TestMinSdkVersionIsForwarded(t *testing.T) {
@@ -357,6 +384,9 @@ func TestMinSdkVersionIsForwarded(t *testing.T) {
 			java: {
 				min_sdk_version: "30",
 			},
+			rust: {
+				min_sdk_version: "29",
+			}
 		}
 	`)
 
@@ -367,4 +397,8 @@ func TestMinSdkVersionIsForwarded(t *testing.T) {
 	javaModule := result.ModuleForTests("sysprop-platform", "android_common").Module().(*java.Library)
 	propFromJava := javaModule.MinSdkVersionString()
 	android.AssertStringEquals(t, "min_sdk_version forwarding to java module", "30", propFromJava)
+
+	rustModule := result.ModuleForTests("libsysprop_platform_rust", "android_arm64_armv8-a_rlib_rlib-std").Module().(*rust.Module)
+	propFromRust := proptools.String(rustModule.Properties.Min_sdk_version)
+	android.AssertStringEquals(t, "min_sdk_version forwarding to rust module", "29", propFromRust)
 }

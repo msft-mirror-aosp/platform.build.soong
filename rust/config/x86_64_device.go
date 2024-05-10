@@ -21,20 +21,23 @@ import (
 )
 
 var (
-	x86_64RustFlags            = []string{}
+	x86_64RustFlags = []string{
+		"-C force-frame-pointers=y",
+	}
 	x86_64ArchFeatureRustFlags = map[string][]string{}
 	x86_64LinkFlags            = []string{}
 
 	x86_64ArchVariantRustFlags = map[string][]string{
-		"":              []string{},
-		"broadwell":     []string{"-C target-cpu=broadwell"},
-		"goldmont":      []string{"-C target-cpu=goldmont"},
-		"goldmont-plus": []string{"-C target-cpu=goldmont-plus"},
-		"haswell":       []string{"-C target-cpu=haswell"},
-		"ivybridge":     []string{"-C target-cpu=ivybridge"},
-		"sandybridge":   []string{"-C target-cpu=sandybridge"},
-		"silvermont":    []string{"-C target-cpu=silvermont"},
-		"skylake":       []string{"-C target-cpu=skylake"},
+		"":                            []string{},
+		"broadwell":                   []string{"-C target-cpu=broadwell"},
+		"goldmont":                    []string{"-C target-cpu=goldmont"},
+		"goldmont-plus":               []string{"-C target-cpu=goldmont-plus"},
+		"goldmont-without-sha-xsaves": []string{"-C target-cpu=goldmont", "-C target-feature=-sha,-xsaves"},
+		"haswell":                     []string{"-C target-cpu=haswell"},
+		"ivybridge":                   []string{"-C target-cpu=ivybridge"},
+		"sandybridge":                 []string{"-C target-cpu=sandybridge"},
+		"silvermont":                  []string{"-C target-cpu=silvermont"},
+		"skylake":                     []string{"-C target-cpu=skylake"},
 		//TODO: Add target-cpu=stoneyridge when rustc supports it.
 		"stoneyridge": []string{""},
 		"tremont":     []string{"-C target-cpu=tremont"},
@@ -51,7 +54,7 @@ func init() {
 		pctx.StaticVariable("X86_64"+variant+"VariantRustFlags",
 			strings.Join(rustFlags, " "))
 	}
-
+	pctx.StaticVariable("DEVICE_X86_64_RUSTC_FLAGS", strings.Join(x86_64RustFlags, " "))
 }
 
 type toolchainX86_64 struct {

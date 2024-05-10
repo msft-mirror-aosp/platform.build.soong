@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 
 	"android/soong/android"
-	"android/soong/cc"
 )
 
 type AndroidMkContext interface {
@@ -43,6 +42,10 @@ func (mod *Module) SubAndroidMk(data *android.AndroidMkEntries, obj interface{})
 	}
 }
 
+func (mod *Module) AndroidMkSuffix() string {
+	return mod.Properties.RustSubName + mod.Properties.SubName
+}
+
 func (mod *Module) AndroidMkEntries() []android.AndroidMkEntries {
 	if mod.Properties.HideFromMake || mod.hideApexVariantFromMake {
 
@@ -57,13 +60,16 @@ func (mod *Module) AndroidMkEntries() []android.AndroidMkEntries {
 				entries.AddStrings("LOCAL_RLIB_LIBRARIES", mod.Properties.AndroidMkRlibs...)
 				entries.AddStrings("LOCAL_DYLIB_LIBRARIES", mod.Properties.AndroidMkDylibs...)
 				entries.AddStrings("LOCAL_PROC_MACRO_LIBRARIES", mod.Properties.AndroidMkProcMacroLibs...)
-				entries.AddStrings("LOCAL_SHARED_LIBRARIES", mod.Properties.AndroidMkSharedLibs...)
+				entries.AddStrings("LOCAL_SHARED_LIBRARIES", mod.transitiveAndroidMkSharedLibs.ToList()...)
 				entries.AddStrings("LOCAL_STATIC_LIBRARIES", mod.Properties.AndroidMkStaticLibs...)
+				entries.AddStrings("LOCAL_HEADER_LIBRARIES", mod.Properties.AndroidMkHeaderLibs...)
 				entries.AddStrings("LOCAL_SOONG_LINK_TYPE", mod.makeLinkType)
-				if mod.UseVndk() {
-					entries.SetBool("LOCAL_USE_VNDK", true)
+				if mod.InVendor() {
+					entries.SetBool("LOCAL_IN_VENDOR", true)
+				} else if mod.InProduct() {
+					entries.SetBool("LOCAL_IN_PRODUCT", true)
 				}
-
+				android.SetAconfigFileMkEntries(mod.AndroidModuleBase(), entries, mod.mergedAconfigFiles)
 			},
 		},
 	}
@@ -79,8 +85,7 @@ func (mod *Module) AndroidMkEntries() []android.AndroidMkEntries {
 		mod.SubAndroidMk(&ret, mod.sanitize)
 	}
 
-	ret.SubName += mod.Properties.RustSubName
-	ret.SubName += mod.Properties.SubName
+	ret.SubName += mod.AndroidMkSuffix()
 
 	return []android.AndroidMkEntries{ret}
 }
@@ -111,8 +116,6 @@ func (test *testDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidM
 
 			test.Properties.Test_options.SetAndroidMkEntries(entries)
 		})
-
-	cc.AndroidMkWriteTestData(test.data, ret)
 }
 
 func (benchmark *benchmarkDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkEntries) {
@@ -208,33 +211,9 @@ func (compiler *baseCompiler) AndroidMk(ctx AndroidMkContext, ret *android.Andro
 func (fuzz *fuzzDecorator) AndroidMk(ctx AndroidMkContext, ret *android.AndroidMkEntries) {
 	ctx.SubAndroidMk(ret, fuzz.binaryDecorator)
 
-	var fuzzFiles []string
-	for _, d := range fuzz.fuzzPackagedModule.Corpus {
-		fuzzFiles = append(fuzzFiles,
-			filepath.Dir(fuzz.fuzzPackagedModule.CorpusIntermediateDir.String())+":corpus/"+d.Base())
-	}
-
-	for _, d := range fuzz.fuzzPackagedModule.Data {
-		fuzzFiles = append(fuzzFiles,
-			filepath.Dir(fuzz.fuzzPackagedModule.DataIntermediateDir.String())+":data/"+d.Rel())
-	}
-
-	if fuzz.fuzzPackagedModule.Dictionary != nil {
-		fuzzFiles = append(fuzzFiles,
-			filepath.Dir(fuzz.fuzzPackagedModule.Dictionary.String())+":"+fuzz.fuzzPackagedModule.Dictionary.Base())
-	}
-
-	if fuzz.fuzzPackagedModule.Config != nil {
-		fuzzFiles = append(fuzzFiles,
-			filepath.Dir(fuzz.fuzzPackagedModule.Config.String())+":config.json")
-	}
-
 	ret.ExtraEntries = append(ret.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext,
 		entries *android.AndroidMkEntries) {
 		entries.SetBool("LOCAL_IS_FUZZ_TARGET", true)
-		if len(fuzzFiles) > 0 {
-			entries.AddStrings("LOCAL_TEST_DATA", fuzzFiles...)
-		}
 		if fuzz.installedSharedDeps != nil {
 			entries.AddStrings("LOCAL_FUZZ_INSTALLED_SHARED_DEPS", fuzz.installedSharedDeps...)
 		}

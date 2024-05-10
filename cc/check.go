@@ -45,6 +45,8 @@ func CheckBadCompilerFlags(ctx BaseModuleContext, prop string, flags []string) {
 				ctx.PropertyErrorf(prop, "-Weverything is not allowed in Android.bp files.  "+
 					"Build with `m ANDROID_TEMPORARILY_ALLOW_WEVERYTHING=true` to experiment locally with -Weverything.")
 			}
+		} else if strings.HasPrefix(flag, "-target") || strings.HasPrefix(flag, "--target") {
+			ctx.PropertyErrorf(prop, "Bad flag: `%s`, use the correct target soong rule.", flag)
 		} else if strings.Contains(flag, " ") {
 			args := strings.Split(flag, " ")
 			if args[0] == "-include" {
@@ -56,6 +58,10 @@ func CheckBadCompilerFlags(ctx BaseModuleContext, prop string, flags []string) {
 					ctx.PropertyErrorf(prop, "Path must not be an absolute path: %s", flag)
 				} else if strings.HasPrefix("../", path) {
 					ctx.PropertyErrorf(prop, "Path must not start with `../`: `%s`. Use include_dirs to -include from a different directory", flag)
+				}
+			} else if args[0] == "-mllvm" {
+				if len(args) > 2 {
+					ctx.PropertyErrorf(prop, "`-mllvm` only takes one argument: `%s`", flag)
 				}
 			} else if strings.HasPrefix(flag, "-D") && strings.Contains(flag, "=") {
 				// Do nothing in this case.

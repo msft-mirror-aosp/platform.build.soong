@@ -36,18 +36,24 @@ type BazelAttributes struct {
 	Attrs map[string]string
 }
 
-type BazelTarget struct {
-	name            string
-	packageName     string
-	content         string
-	ruleClass       string
-	bzlLoadLocation string
+type BazelLoadSymbol struct {
+	// The name of the symbol in the file being loaded
+	symbol string
+	// The name the symbol wil have in this file. Can be left blank to use the same name as symbol.
+	alias string
 }
 
-// IsLoadedFromStarlark determines if the BazelTarget's rule class is loaded from a .bzl file,
-// as opposed to a native rule built into Bazel.
-func (t BazelTarget) IsLoadedFromStarlark() bool {
-	return t.bzlLoadLocation != ""
+type BazelLoad struct {
+	file    string
+	symbols []BazelLoadSymbol
+}
+
+type BazelTarget struct {
+	name        string
+	packageName string
+	content     string
+	ruleClass   string
+	loads       []BazelLoad
 }
 
 // Label is the fully qualified Bazel label constructed from the BazelTarget's
@@ -58,6 +64,15 @@ func (t BazelTarget) Label() string {
 	} else {
 		return "//" + t.packageName + ":" + t.name
 	}
+}
+
+// PackageName returns the package of the Bazel target.
+// Defaults to root of tree.
+func (t BazelTarget) PackageName() string {
+	if t.packageName == "" {
+		return "."
+	}
+	return t.packageName
 }
 
 // BazelTargets is a typedef for a slice of BazelTarget objects.
@@ -83,45 +98,77 @@ func (targets BazelTargets) sort() {
 // statements (use LoadStatements for that), since the targets are usually not
 // adjacent to the load statements at the top of the BUILD file.
 func (targets BazelTargets) String() string {
-	var res string
+	var res strings.Builder
 	for i, target := range targets {
 		if target.ruleClass != "package" {
-			res += target.content
+			res.WriteString(target.content)
 		}
 		if i != len(targets)-1 {
-			res += "\n\n"
+			res.WriteString("\n\n")
 		}
 	}
-	return res
+	return res.String()
 }
 
 // LoadStatements return the string representation of the sorted and deduplicated
 // Starlark rule load statements needed by a group of BazelTargets.
 func (targets BazelTargets) LoadStatements() string {
-	bzlToLoadedSymbols := map[string][]string{}
+	// First, merge all the load statements from all the targets onto one list
+	bzlToLoadedSymbols := map[string][]BazelLoadSymbol{}
 	for _, target := range targets {
-		if target.IsLoadedFromStarlark() {
-			bzlToLoadedSymbols[target.bzlLoadLocation] =
-				append(bzlToLoadedSymbols[target.bzlLoadLocation], target.ruleClass)
+		for _, load := range target.loads {
+		outer:
+			for _, symbol := range load.symbols {
+				alias := symbol.alias
+				if alias == "" {
+					alias = symbol.symbol
+				}
+				for _, otherSymbol := range bzlToLoadedSymbols[load.file] {
+					otherAlias := otherSymbol.alias
+					if otherAlias == "" {
+						otherAlias = otherSymbol.symbol
+					}
+					if symbol.symbol == otherSymbol.symbol && alias == otherAlias {
+						continue outer
+					} else if alias == otherAlias {
+						panic(fmt.Sprintf("Conflicting destination (%s) for loads of %s and %s", alias, symbol.symbol, otherSymbol.symbol))
+					}
+				}
+				bzlToLoadedSymbols[load.file] = append(bzlToLoadedSymbols[load.file], symbol)
+			}
 		}
 	}
 
-	var loadStatements []string
-	for bzl, ruleClasses := range bzlToLoadedSymbols {
-		loadStatement := "load(\""
-		loadStatement += bzl
-		loadStatement += "\", "
-		ruleClasses = android.SortedUniqueStrings(ruleClasses)
-		for i, ruleClass := range ruleClasses {
-			loadStatement += "\"" + ruleClass + "\""
-			if i != len(ruleClasses)-1 {
-				loadStatement += ", "
+	var loadStatements strings.Builder
+	for i, bzl := range android.SortedKeys(bzlToLoadedSymbols) {
+		symbols := bzlToLoadedSymbols[bzl]
+		loadStatements.WriteString("load(\"")
+		loadStatements.WriteString(bzl)
+		loadStatements.WriteString("\", ")
+		sort.Slice(symbols, func(i, j int) bool {
+			if symbols[i].symbol < symbols[j].symbol {
+				return true
+			}
+			return symbols[i].alias < symbols[j].alias
+		})
+		for j, symbol := range symbols {
+			if symbol.alias != "" && symbol.alias != symbol.symbol {
+				loadStatements.WriteString(symbol.alias)
+				loadStatements.WriteString(" = ")
+			}
+			loadStatements.WriteString("\"")
+			loadStatements.WriteString(symbol.symbol)
+			loadStatements.WriteString("\"")
+			if j != len(symbols)-1 {
+				loadStatements.WriteString(", ")
 			}
 		}
-		loadStatement += ")"
-		loadStatements = append(loadStatements, loadStatement)
+		loadStatements.WriteString(")")
+		if i != len(bzlToLoadedSymbols)-1 {
+			loadStatements.WriteString("\n")
+		}
 	}
-	return strings.Join(android.SortedUniqueStrings(loadStatements), "\n")
+	return loadStatements.String()
 }
 
 type bpToBuildContext interface {
@@ -151,21 +198,13 @@ func (ctx *CodegenContext) Mode() CodegenMode {
 type CodegenMode int
 
 const (
-	// Bp2Build - generate BUILD files with targets buildable by Bazel directly.
-	//
-	// This mode is used for the Soong->Bazel build definition conversion.
-	Bp2Build CodegenMode = iota
-
 	// QueryView - generate BUILD files with targets representing fully mutated
 	// Soong modules, representing the fully configured Soong module graph with
 	// variants and dependency edges.
 	//
 	// This mode is used for discovering and introspecting the existing Soong
 	// module graph.
-	QueryView
-
-	// ApiBp2build - generate BUILD files for API contribution targets
-	ApiBp2build
+	QueryView CodegenMode = iota
 )
 
 type unconvertedDepsMode int
@@ -180,12 +219,8 @@ const (
 
 func (mode CodegenMode) String() string {
 	switch mode {
-	case Bp2Build:
-		return "Bp2Build"
 	case QueryView:
 		return "QueryView"
-	case ApiBp2build:
-		return "ApiBp2build"
 	default:
 		return fmt.Sprintf("%d", mode)
 	}
@@ -211,9 +246,6 @@ func (ctx *CodegenContext) Context() *android.Context { return ctx.context }
 // writing BUILD files in the output directory.
 func NewCodegenContext(config android.Config, context *android.Context, mode CodegenMode, topDir string) *CodegenContext {
 	var unconvertedDeps unconvertedDepsMode
-	if config.IsEnvTrue("BP2BUILD_ERROR_UNCONVERTED") {
-		unconvertedDeps = errorModulesUnconvertedDeps
-	}
 	return &CodegenContext{
 		context:            context,
 		config:             config,
@@ -234,8 +266,8 @@ func propsToAttributes(props map[string]string) string {
 }
 
 type conversionResults struct {
-	buildFileToTargets map[string]BazelTargets
-	metrics            CodegenMetrics
+	buildFileToTargets    map[string]BazelTargets
+	moduleNameToPartition map[string]string
 }
 
 func (r conversionResults) BuildDirToTargets() map[string]BazelTargets {
@@ -243,79 +275,23 @@ func (r conversionResults) BuildDirToTargets() map[string]BazelTargets {
 }
 
 func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (conversionResults, []error) {
+	ctx.Context().BeginEvent("GenerateBazelTargets")
+	defer ctx.Context().EndEvent("GenerateBazelTargets")
 	buildFileToTargets := make(map[string]BazelTargets)
 
-	// Simple metrics tracking for bp2build
-	metrics := CreateCodegenMetrics()
-
 	dirs := make(map[string]bool)
+	moduleNameToPartition := make(map[string]string)
 
 	var errs []error
 
 	bpCtx := ctx.Context()
 	bpCtx.VisitAllModules(func(m blueprint.Module) {
 		dir := bpCtx.ModuleDir(m)
-		moduleType := bpCtx.ModuleType(m)
 		dirs[dir] = true
 
 		var targets []BazelTarget
 
 		switch ctx.Mode() {
-		case Bp2Build:
-			// There are two main ways of converting a Soong module to Bazel:
-			// 1) Manually handcrafting a Bazel target and associating the module with its label
-			// 2) Automatically generating with bp2build converters
-			//
-			// bp2build converters are used for the majority of modules.
-			if b, ok := m.(android.Bazelable); ok && b.HasHandcraftedLabel() {
-				// Handle modules converted to handcrafted targets.
-				//
-				// Since these modules are associated with some handcrafted
-				// target in a BUILD file, we don't autoconvert them.
-
-				// Log the module.
-				metrics.AddConvertedModule(m, moduleType, dir, Handcrafted)
-			} else if aModule, ok := m.(android.Module); ok && aModule.IsConvertedByBp2build() {
-				// Handle modules converted to generated targets.
-
-				// Log the module.
-				metrics.AddConvertedModule(aModule, moduleType, dir, Generated)
-
-				// Handle modules with unconverted deps. By default, emit a warning.
-				if unconvertedDeps := aModule.GetUnconvertedBp2buildDeps(); len(unconvertedDeps) > 0 {
-					msg := fmt.Sprintf("%s %s:%s depends on unconverted modules: %s",
-						moduleType, bpCtx.ModuleDir(m), m.Name(), strings.Join(unconvertedDeps, ", "))
-					switch ctx.unconvertedDepMode {
-					case warnUnconvertedDeps:
-						metrics.moduleWithUnconvertedDepsMsgs = append(metrics.moduleWithUnconvertedDepsMsgs, msg)
-					case errorModulesUnconvertedDeps:
-						errs = append(errs, fmt.Errorf(msg))
-						return
-					}
-				}
-				if unconvertedDeps := aModule.GetMissingBp2buildDeps(); len(unconvertedDeps) > 0 {
-					msg := fmt.Sprintf("%s %s:%s depends on missing modules: %s",
-						moduleType, bpCtx.ModuleDir(m), m.Name(), strings.Join(unconvertedDeps, ", "))
-					switch ctx.unconvertedDepMode {
-					case warnUnconvertedDeps:
-						metrics.moduleWithMissingDepsMsgs = append(metrics.moduleWithMissingDepsMsgs, msg)
-					case errorModulesUnconvertedDeps:
-						errs = append(errs, fmt.Errorf(msg))
-						return
-					}
-				}
-				var targetErrs []error
-				targets, targetErrs = generateBazelTargets(bpCtx, aModule)
-				errs = append(errs, targetErrs...)
-				for _, t := range targets {
-					// A module can potentially generate more than 1 Bazel
-					// target, each of a different rule class.
-					metrics.IncrementRuleClassCount(t.ruleClass)
-				}
-			} else {
-				metrics.AddUnconvertedModule(moduleType)
-				return
-			}
 		case QueryView:
 			// Blocklist certain module types from being generated.
 			if canonicalizeModuleType(bpCtx.ModuleType(m)) == "package" {
@@ -328,16 +304,15 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 				errs = append(errs, err)
 			}
 			targets = append(targets, t)
-		case ApiBp2build:
-			if aModule, ok := m.(android.Module); ok && aModule.IsConvertedByBp2build() {
-				targets, errs = generateBazelTargets(bpCtx, aModule)
-			}
 		default:
 			errs = append(errs, fmt.Errorf("Unknown code-generation mode: %s", ctx.Mode()))
 			return
 		}
 
-		buildFileToTargets[dir] = append(buildFileToTargets[dir], targets...)
+		for _, target := range targets {
+			targetDir := target.PackageName()
+			buildFileToTargets[targetDir] = append(buildFileToTargets[targetDir], target)
+		}
 	})
 
 	if len(errs) > 0 {
@@ -359,71 +334,16 @@ func GenerateBazelTargets(ctx *CodegenContext, generateFilegroups bool) (convers
 		for dir := range dirs {
 			buildFileToTargets[dir] = append(buildFileToTargets[dir], BazelTarget{
 				name:      "bp2build_all_srcs",
-				content:   `filegroup(name = "bp2build_all_srcs", srcs = glob(["**/*"]))`,
+				content:   `filegroup(name = "bp2build_all_srcs", srcs = glob(["**/*"]), tags = ["manual"])`,
 				ruleClass: "filegroup",
 			})
 		}
 	}
 
 	return conversionResults{
-		buildFileToTargets: buildFileToTargets,
-		metrics:            metrics,
+		buildFileToTargets:    buildFileToTargets,
+		moduleNameToPartition: moduleNameToPartition,
 	}, errs
-}
-
-func generateBazelTargets(ctx bpToBuildContext, m android.Module) ([]BazelTarget, []error) {
-	var targets []BazelTarget
-	var errs []error
-	for _, m := range m.Bp2buildTargets() {
-		target, err := generateBazelTarget(ctx, m)
-		if err != nil {
-			errs = append(errs, err)
-			return targets, errs
-		}
-		targets = append(targets, target)
-	}
-	return targets, errs
-}
-
-type bp2buildModule interface {
-	TargetName() string
-	TargetPackage() string
-	BazelRuleClass() string
-	BazelRuleLoadLocation() string
-	BazelAttributes() []interface{}
-}
-
-func generateBazelTarget(ctx bpToBuildContext, m bp2buildModule) (BazelTarget, error) {
-	ruleClass := m.BazelRuleClass()
-	bzlLoadLocation := m.BazelRuleLoadLocation()
-
-	// extract the bazel attributes from the module.
-	attrs := m.BazelAttributes()
-	props, err := extractModuleProperties(attrs, true)
-	if err != nil {
-		return BazelTarget{}, err
-	}
-
-	// name is handled in a special manner
-	delete(props.Attrs, "name")
-
-	// Return the Bazel target with rule class and attributes, ready to be
-	// code-generated.
-	attributes := propsToAttributes(props.Attrs)
-	var content string
-	targetName := m.TargetName()
-	if targetName != "" {
-		content = fmt.Sprintf(ruleTargetTemplate, ruleClass, targetName, attributes)
-	} else {
-		content = fmt.Sprintf(unnamedRuleTargetTemplate, ruleClass, attributes)
-	}
-	return BazelTarget{
-		name:            targetName,
-		packageName:     m.TargetPackage(),
-		ruleClass:       ruleClass,
-		bzlLoadLocation: bzlLoadLocation,
-		content:         content,
-	}, nil
 }
 
 // Convert a module and its deps and props into a Bazel macro/rule
@@ -454,7 +374,8 @@ func generateSoongModuleTarget(ctx bpToBuildContext, m blueprint.Module) (BazelT
 
 	targetName := targetNameWithVariant(ctx, m)
 	return BazelTarget{
-		name: targetName,
+		name:        targetName,
+		packageName: ctx.ModuleDir(m),
 		content: fmt.Sprintf(
 			soongModuleTargetTemplate,
 			targetName,
@@ -525,7 +446,7 @@ func prettyPrint(propertyValue reflect.Value, indent int, emitZeroValues bool) (
 	if !emitZeroValues && isZero(propertyValue) {
 		// A property value being set or unset actually matters -- Soong does set default
 		// values for unset properties, like system_shared_libs = ["libc", "libm", "libdl"] at
-		// https://cs.android.com/android/platform/superproject/+/master:build/soong/cc/linker.go;l=281-287;drc=f70926eef0b9b57faf04c17a1062ce50d209e480
+		// https://cs.android.com/android/platform/superproject/+/main:build/soong/cc/linker.go;l=281-287;drc=f70926eef0b9b57faf04c17a1062ce50d209e480
 		//
 		// In Bazel-parlance, we would use "attr.<type>(default = <default
 		// value>)" to set the default value of unset attributes. In the cases
@@ -584,6 +505,11 @@ func prettyPrint(propertyValue reflect.Value, indent int, emitZeroValues bool) (
 		// TODO(b/164227191): implement pretty print for interfaces.
 		// Interfaces are used for for arch, multilib and target properties.
 		return "", nil
+	case reflect.Map:
+		if v, ok := propertyValue.Interface().(bazel.StringMapAttribute); ok {
+			return starlark_fmt.PrintStringStringDict(v, indent), nil
+		}
+		return "", fmt.Errorf("bp2build expects map of type map[string]string for field: %s", propertyValue)
 	default:
 		return "", fmt.Errorf(
 			"unexpected kind for property struct field: %s", propertyValue.Kind())

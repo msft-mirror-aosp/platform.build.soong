@@ -27,7 +27,6 @@ import (
 
 func init() {
 	pctx.SourcePathVariable("logtagsCmd", "build/make/tools/java-event-log-tags.py")
-	pctx.SourcePathVariable("mergeLogtagsCmd", "build/make/tools/merge-event-log-tags.py")
 	pctx.SourcePathVariable("logtagsLib", "build/make/tools/event_log_tags.py")
 }
 
@@ -36,12 +35,6 @@ var (
 		blueprint.RuleParams{
 			Command:     "$logtagsCmd -o $out $in",
 			CommandDeps: []string{"$logtagsCmd", "$logtagsLib"},
-		})
-
-	mergeLogtags = pctx.AndroidStaticRule("mergeLogtags",
-		blueprint.RuleParams{
-			Command:     "$mergeLogtagsCmd -o $out $in",
-			CommandDeps: []string{"$mergeLogtagsCmd", "$logtagsLib"},
 		})
 )
 
@@ -129,19 +122,7 @@ func genAidlIncludeFlags(ctx android.PathContext, srcFiles android.Paths, exclud
 			baseDir = filepath.Clean(baseDir)
 			baseDirSeen := android.InList(baseDir, baseDirs) || android.InList(baseDir, excludeDirsStrings)
 
-			// For go/bp2build mixed builds, a file may be listed under a
-			// directory in the Bazel output tree that is symlinked to a
-			// directory under the android source tree. We should only
-			// include one copy of this directory so that the AIDL tool
-			// doesn't find multiple definitions of the same AIDL class.
-			// This code comes into effect when filegroups are used in mixed builds.
-			bazelPathPrefix := android.PathForBazelOut(ctx, "").String()
-			bazelBaseDir, err := filepath.Rel(bazelPathPrefix, baseDir)
-			bazelBaseDirSeen := err == nil &&
-				android.InList(bazelBaseDir, baseDirs) ||
-				android.InList(bazelBaseDir, excludeDirsStrings)
-
-			if baseDir != "" && !baseDirSeen && !bazelBaseDirSeen {
+			if baseDir != "" && !baseDirSeen {
 				baseDirs = append(baseDirs, baseDir)
 			}
 		}
@@ -190,37 +171,9 @@ func (j *Module) genSources(ctx android.ModuleContext, srcFiles android.Paths,
 		outSrcFiles = append(outSrcFiles, srcJarFiles...)
 	}
 
+	android.SetProvider(ctx, android.LogtagsProviderKey, &android.LogtagsInfo{
+		Logtags: j.logtagsSrcs,
+	})
+
 	return outSrcFiles
-}
-
-func LogtagsSingleton() android.Singleton {
-	return &logtagsSingleton{}
-}
-
-type logtagsProducer interface {
-	logtags() android.Paths
-}
-
-func (j *Module) logtags() android.Paths {
-	return j.logtagsSrcs
-}
-
-var _ logtagsProducer = (*Module)(nil)
-
-type logtagsSingleton struct{}
-
-func (l *logtagsSingleton) GenerateBuildActions(ctx android.SingletonContext) {
-	var allLogtags android.Paths
-	ctx.VisitAllModules(func(module android.Module) {
-		if logtags, ok := module.(logtagsProducer); ok {
-			allLogtags = append(allLogtags, logtags.logtags()...)
-		}
-	})
-
-	ctx.Build(pctx, android.BuildParams{
-		Rule:        mergeLogtags,
-		Description: "merge logtags",
-		Output:      android.PathForIntermediates(ctx, "all-event-log-tags.txt"),
-		Inputs:      allLogtags,
-	})
 }

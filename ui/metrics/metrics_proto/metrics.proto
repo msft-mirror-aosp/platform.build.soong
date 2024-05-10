@@ -121,9 +121,33 @@ message MetricsBase {
   // The error message due to a non-zero exit _only_ if it did not occur in a
   // recorded phase of the build.
   optional string error_message = 30;
+
+  // The Git Manifest for the user's branch.
+  optional string manifest_url = 31;
+
+  // The branch on which the build occurred.
+  // Example: refs/heads/master
+  optional string branch = 32;
+
+  // The metric of critical path in build
+  optional CriticalPathInfo critical_path_info = 33;
+
+  // Environment variables that have changed value since the previous build,
+  // which were responsible for retriggering build analysis.
+  // Note that not all changed environment variables result in analysis retriggering.
+  // If there was no previous build, this list will be empty.
+  repeated string changed_environment_variable = 34;
 }
 
 message BuildConfig {
+  enum NinjaWeightListSource {
+    NOT_USED = 0;
+    NINJA_LOG = 1;
+    EVENLY_DISTRIBUTED = 2;
+    EXTERNAL_FILE = 3;
+    HINT_FROM_SOONG = 4;
+  }
+
   optional bool use_goma = 1;
 
   optional bool use_rbe = 2;
@@ -143,6 +167,13 @@ message BuildConfig {
 
   // Whether the user explicitly disabled bazel mixed builds for this build.
   optional bool force_disable_bazel_mixed_build = 7;
+
+  // NOT_USED - ninja doesn't use weight list.
+  // NINJA_LOG - ninja uses weight list based on previous builds by ninja log
+  // EVENLY_DISTRIBUTED - ninja thinks every task has the same weight.
+  // EXTERNAL_FILE - ninja uses an external custom weight list
+  // HINT_FROM_SOONG - ninja uses a prioritized module list from Soong
+  optional NinjaWeightListSource ninja_weight_list_source = 8 [default = NOT_USED];
 }
 
 message SystemResourceInfo {
@@ -180,6 +211,30 @@ message PerfInfo {
 
   // The error message, if any, due to a non-zero exit.
   optional string error_message = 8;
+}
+
+message PerfCounters {
+  // The timestamp of these counters in nanoseconds.
+  optional uint64 time = 1;
+
+  // A list of counter names and values.
+  repeated PerfCounterGroup groups = 2;
+}
+
+message PerfCounterGroup {
+  // The name of this counter group (e.g. "cpu" or "memory")
+  optional string name = 1;
+
+  // The counters in this group
+  repeated PerfCounter counters = 2;
+}
+
+message PerfCounter {
+  // The name of this counter.
+  optional string name = 1;
+
+  // The value of this counter.
+  optional int64 value = 2;
 }
 
 message ProcessResourceInfo {
@@ -264,6 +319,9 @@ message SoongBuildMetrics {
 
   // Mixed Builds information
   optional MixedBuildsInfo mixed_builds_info = 7;
+
+  // Performance during for soong_build execution.
+  repeated PerfCounters perf_counters = 8;
 }
 
 message ExpConfigFetcher {
@@ -306,4 +364,24 @@ message MixedBuildsInfo{
 
   // Modules that are not enabled for MixedBuilds
   repeated string mixed_build_disabled_modules = 2;
+}
+
+// CriticalPathInfo contains critical path nodes's information.
+// A critical path is a path determining the minimum time needed for the whole build given perfect parallelism.
+message CriticalPathInfo {
+  // Real time which the build system spent in microseconds
+  optional uint64 elapsed_time_micros = 1;
+  // The sum of execution time of the longest path from leave to the root in microseconds
+  optional uint64 critical_path_time_micros = 2;
+  // Detailed job information in a critical path.
+  repeated JobInfo critical_path = 4;
+  // Detailed job information for long running jobs (>30 seconds). These may or may not also be on a critical path.
+  repeated JobInfo long_running_jobs = 5;
+}
+
+message JobInfo {
+  // Real time which a job spent in microseconds
+  optional uint64 elapsed_time_micros = 1;
+  // Description of a job
+  optional string job_description = 2;
 }

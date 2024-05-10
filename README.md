@@ -26,8 +26,6 @@ review request is enough. For more substantial changes, file a bug in our
 [bug tracker](https://issuetracker.google.com/issues/new?component=381517) or
 or write us at android-building@googlegroups.com .
 
-For Googlers, see our [internal documentation](http://go/soong).
-
 ## Android.bp file format
 
 By design, Android.bp files are very simple.  There are no conditionals or
@@ -105,31 +103,35 @@ Android.bp files can contain C-style multiline `/* */` and C++ style single-line
 
 ### Types
 
-Variables and properties are strongly typed, variables dynamically based on the
-first assignment, and properties statically by the module type.  The supported
-types are:
+Variables and properties are strongly typed. Variables are dynamically typed
+based on the first assignment, and properties are statically typed by the
+module type.  The supported types are:
 * Bool (`true` or `false`)
 * Integers (`int`)
 * Strings (`"string"`)
 * Lists of strings (`["string1", "string2"]`)
 * Maps (`{key1: "value1", key2: ["value2"]}`)
 
-Maps may values of any type, including nested maps.  Lists and maps may have
-trailing commas after the last value.
+Maps may contain values of any type, including nested maps. Lists and maps may
+have trailing commas after the last value.
 
 Strings can contain double quotes using `\"`, for example `"cat \"a b\""`.
 
 ### Operators
 
-Strings, lists of strings, and maps can be appended using the `+` operator.
-Integers can be summed up using the `+` operator. Appending a map produces the
-union of keys in both maps, appending the values of any keys that are present
-in both maps.
+The `+` operator:
+* Sums integers.
+* Concatenates strings and lists.
+* Produces the union of maps.
+
+Concatenating maps produces a map whose keys are the union of the given maps'
+keys, and whose mapped values are the union of the given maps' corresponding
+mapped values.
 
 ### Defaults modules
 
-A defaults module can be used to repeat the same properties in multiple modules.
-For example:
+A `defaults` module can be used to repeat the same properties in multiple
+modules. For example:
 
 ```
 cc_defaults {
@@ -184,7 +186,7 @@ the same `.bp` file as the `package` module) to be visible to all the subpackage
 
 ```
 package {
-    default_visibility: [":__subpackages"]
+    default_visibility: [":__subpackages__"]
 }
 ```
 
@@ -312,6 +314,9 @@ subpackages) can use this module.
 * `["//visibility:override"]`: Discards any rules inherited from defaults or a
 creating module. Can only be used at the beginning of a list of visibility
 rules.
+* `["//visibility:any_partition"]`: Any modules of type android_filesystem
+or android_system_image can use this module. Intended for modules that no one
+should link against, but should still be included in soong-built partitions.
 * `["//some/package:__pkg__", "//other/package:__pkg__"]`: Only modules in
 `some/package` and `other/package` (defined in `some/package/*.bp` and
 `other/package/*.bp`) have access to this module. Note that sub-packages do not
@@ -444,6 +449,7 @@ soong_config_module_type {
     config_namespace: "acme",
     variables: ["board"],
     bool_variables: ["feature"],
+    list_variables: ["impl"],
     value_variables: ["width"],
     properties: ["cflags", "srcs"],
 }
@@ -455,24 +461,40 @@ soong_config_string_variable {
 ```
 
 This example describes a new `acme_cc_defaults` module type that extends the
-`cc_defaults` module type, with three additional conditionals based on
-variables `board`, `feature` and `width`, which can affect properties `cflags`
-and `srcs`. Additionally, each conditional will contain a `conditions_default`
-property can affect `cflags` and `srcs` in the following conditions:
+`cc_defaults` module type, with four additional conditionals based on variables
+`board`, `feature`, `impl` and `width` which can affect properties `cflags` and
+`srcs`. The four types of soong variables control properties in the following
+ways.
 
-* bool variable (e.g. `feature`): the variable is unspecified or not set to a true value
+* bool variable (e.g. `feature`): Properties are applied if set to `true`.
+* list variable (e.g. `impl`): (lists of strings properties only) Properties are
+  applied for each value in the list, using `%s` substitution. For example, if
+  the property is `["%s.cpp", "%s.h"]` and the list value is `foo bar`,
+  the result is `["foo.cpp", "foo.h", "bar.cpp", "bar.h"]`.
+* value variable (e.g. `width`): (strings or lists of strings) The value are
+  directly substituted into properties using `%s`.
+* string variable (e.g. `board`): Properties are applied only if they match the
+  variable's value.
+
+Additionally, each conditional containing a `conditions_default` property can
+affect `cflags` and `srcs` in the following conditions:
+
+* bool variable (e.g. `feature`): the variable is unspecified or not set to
+  `true`
+* list variable (e.g. `impl`): the variable is unspecified
 * value variable (e.g. `width`): the variable is unspecified
-* string variable (e.g. `board`): the variable is unspecified or the variable is set to a string unused in the
-given module. For example, with `board`, if the `board`
-conditional contains the properties `soc_a` and `conditions_default`, when
-board=soc_b, the `cflags` and `srcs` values under `conditions_default` will be
-used. To specify that no properties should be amended for `soc_b`, you can set
-`soc_b: {},`.
+* string variable (e.g. `board`): the variable is unspecified or the variable is
+  set to a string unused in the given module. For example, with `board`, if the
+  `board` conditional contains the properties `soc_a` and `conditions_default`,
+  when `board` is `soc_b`, the `cflags` and `srcs` values under
+  `conditions_default` is used. To specify that no properties should be amended
+  for `soc_b`, you can set `soc_b: {},`.
 
 The values of the variables can be set from a product's `BoardConfig.mk` file:
 ```
 $(call soong_config_set,acme,board,soc_a)
 $(call soong_config_set,acme,feature,true)
+$(call soong_config_set,acme,impl,foo.cpp bar.cpp)
 $(call soong_config_set,acme,width,200)
 ```
 
@@ -514,6 +536,12 @@ acme_cc_defaults {
                 cflags: ["-DWIDTH=DEFAULT"],
             },
         },
+        impl: {
+            srcs: ["impl/%s"],
+            conditions_default: {
+                srcs: ["impl/default.cpp"],
+            },
+        },
     },
 }
 
@@ -525,7 +553,8 @@ cc_library {
 ```
 
 With the `BoardConfig.mk` snippet above, `libacme_foo` would build with
-`cflags: "-DGENERIC -DSOC_A -DFEATURE -DWIDTH=200"`.
+`cflags: "-DGENERIC -DSOC_A -DFEATURE -DWIDTH=200"` and
+`srcs: ["*.cpp", "impl/foo.cpp", "impl/bar.cpp"]`.
 
 Alternatively, with `DefaultBoardConfig.mk`:
 
@@ -534,12 +563,14 @@ SOONG_CONFIG_NAMESPACES += acme
 SOONG_CONFIG_acme += \
     board \
     feature \
+    impl \
     width \
 
 SOONG_CONFIG_acme_feature := false
 ```
 
-then `libacme_foo` would build with `cflags: "-DGENERIC -DSOC_DEFAULT -DFEATURE_DEFAULT -DSIZE=DEFAULT"`.
+then `libacme_foo` would build with `cflags: "-DGENERIC -DSOC_DEFAULT -DFEATURE_DEFAULT -DSIZE=DEFAULT"`
+and `srcs: ["*.cpp", "impl/default.cpp"]`.
 
 Alternatively, with `DefaultBoardConfig.mk`:
 
@@ -548,18 +579,26 @@ SOONG_CONFIG_NAMESPACES += acme
 SOONG_CONFIG_acme += \
     board \
     feature \
+    impl \
     width \
 
 SOONG_CONFIG_acme_board := soc_c
+SOONG_CONFIG_acme_impl := baz
 ```
 
 then `libacme_foo` would build with `cflags: "-DGENERIC -DSOC_DEFAULT
--DFEATURE_DEFAULT -DSIZE=DEFAULT"`.
+-DFEATURE_DEFAULT -DSIZE=DEFAULT"` and `srcs: ["*.cpp", "impl/baz.cpp"]`.
 
 `soong_config_module_type` modules will work best when used to wrap defaults
 modules (`cc_defaults`, `java_defaults`, etc.), which can then be referenced
 by all of the vendor's other modules using the normal namespace and visibility
 rules.
+
+`soongConfigTraceMutator` enables modules affected by soong config variables to
+write outputs into a hashed directory path. It does this by recording accesses
+to soong config variables on each module, and then accumulating records of each
+module's all dependencies. `m soong_config_trace` builds information about
+hashes to `$OUT_DIR/soong/soong_config_trace.json`.
 
 ## Build logic
 
@@ -595,7 +634,7 @@ ANDROID_BUILD_ENVIRONMENT_CONFIG_DIR=build/soong \
 * [Build Performance](docs/perf.md)
 * [Generating CLion Projects](docs/clion.md)
 * [Generating YouCompleteMe/VSCode compile\_commands.json file](docs/compdb.md)
-* Make-specific documentation: [build/make/README.md](https://android.googlesource.com/platform/build/+/master/README.md)
+* Make-specific documentation: [build/make/README.md](https://android.googlesource.com/platform/build/+/main/README.md)
 
 ## Developing for Soong
 
@@ -640,8 +679,8 @@ invocations are run in the debugger, e.g., running
 SOONG_DELVE=2345 SOONG_DELVE_STEPS='build,modulegraph' m
 ```
 results in only `build` (main build step) and `modulegraph` being run in the debugger.
-The allowed step names are `api_bp2build`, `bp2build_files`, `bp2build_workspace`,
-`build`, `modulegraph`, `queryview`, `soong_docs`.
+The allowed step names are `bp2build_files`, `bp2build_workspace`, `build`,
+`modulegraph`, `queryview`, `soong_docs`.
 
 Note setting or unsetting `SOONG_DELVE` causes a recompilation of `soong_build`. This
 is because in order to debug the binary, it needs to be built with debug

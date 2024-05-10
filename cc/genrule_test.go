@@ -16,6 +16,7 @@ package cc
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 
 	"android/soong/android"
@@ -178,11 +179,78 @@ func TestCmdPrefix(t *testing.T) {
 				android.OptionalFixturePreparer(tt.preparer),
 			).RunTestWithBp(t, bp)
 			gen := result.ModuleForTests("gen", tt.variant)
-			sboxProto := android.RuleBuilderSboxProtoForTests(t, gen.Output("genrule.sbox.textproto"))
+			sboxProto := android.RuleBuilderSboxProtoForTests(t, result.TestContext, gen.Output("genrule.sbox.textproto"))
 			cmd := *sboxProto.Commands[0].Command
 			android.AssertStringDoesContain(t, "incorrect CC_ARCH", cmd, "CC_ARCH="+tt.arch+" ")
 			android.AssertStringDoesContain(t, "incorrect CC_NATIVE_BRIDGE", cmd, "CC_NATIVE_BRIDGE="+tt.nativeBridge+" ")
 			android.AssertStringDoesContain(t, "incorrect CC_MULTILIB", cmd, "CC_MULTILIB="+tt.multilib+" ")
 		})
 	}
+}
+
+func TestVendorProductVariantGenrule(t *testing.T) {
+	bp := `
+	cc_genrule {
+		name: "gen",
+		tool_files: ["tool"],
+		cmd: "$(location tool) $(in) $(out)",
+		out: ["out"],
+		vendor_available: true,
+		product_available: true,
+	}
+	`
+	t.Helper()
+	ctx := PrepareForIntegrationTestWithCc.RunTestWithBp(t, bp)
+
+	variants := ctx.ModuleVariantsForTests("gen")
+	if !slices.Contains(variants, "android_vendor_arm64_armv8-a") {
+		t.Errorf(`expected vendor variant, but does not exist in %v`, variants)
+	}
+	if !slices.Contains(variants, "android_product_arm64_armv8-a") {
+		t.Errorf(`expected product variant, but does not exist in %v`, variants)
+	}
+}
+
+// cc_genrule is initialized to android.InitAndroidArchModule
+// that is an architecture-specific Android module.
+// So testing properties tagged with `android:"arch_variant"`
+// for cc_genrule.
+func TestMultilibGenruleOut(t *testing.T) {
+	bp := `
+	cc_genrule {
+		name: "gen",
+		cmd: "cp $(in) $(out)",
+		srcs: ["foo"],
+		multilib: {
+			lib32: {
+				out: [
+					"subdir32/external-module32",
+				],
+			},
+			lib64: {
+				out: [
+					"subdir64/external-module64",
+				],
+			},
+		},
+	}
+	`
+	result := PrepareForIntegrationTestWithCc.RunTestWithBp(t, bp)
+	gen_32bit := result.ModuleForTests("gen", "android_arm_armv7-a-neon").OutputFiles(t, "")
+	android.AssertPathsEndWith(t,
+		"genrule_out",
+		[]string{
+			"subdir32/external-module32",
+		},
+		gen_32bit,
+	)
+
+	gen_64bit := result.ModuleForTests("gen", "android_arm64_armv8-a").OutputFiles(t, "")
+	android.AssertPathsEndWith(t,
+		"genrule_out",
+		[]string{
+			"subdir64/external-module64",
+		},
+		gen_64bit,
+	)
 }

@@ -16,9 +16,16 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"android/soong/android"
 )
+
+func init() {
+	pctx.StaticVariable("DarwinAvailableLibraries", strings.Join(darwinAvailableLibraries, " "))
+	pctx.StaticVariable("LinuxAvailableLibraries", strings.Join(linuxAvailableLibraries, " "))
+	pctx.StaticVariable("WindowsAvailableLibraries", strings.Join(windowsAvailableLibraries, " "))
+}
 
 type toolchainFactory func(arch android.Arch) Toolchain
 
@@ -94,6 +101,7 @@ type Toolchain interface {
 	CrtEndStaticBinary() []string
 	CrtEndSharedBinary() []string
 	CrtEndSharedLibrary() []string
+	CrtPadSegmentSharedLibrary() []string
 
 	// DefaultSharedLibraries returns the list of shared libraries that will be added to all
 	// targets unless they explicitly specify system_shared_libs.
@@ -149,12 +157,13 @@ func (toolchainBase) LibclangRuntimeLibraryArch() string {
 
 type toolchainNoCrt struct{}
 
-func (toolchainNoCrt) CrtBeginStaticBinary() []string  { return nil }
-func (toolchainNoCrt) CrtBeginSharedBinary() []string  { return nil }
-func (toolchainNoCrt) CrtBeginSharedLibrary() []string { return nil }
-func (toolchainNoCrt) CrtEndStaticBinary() []string    { return nil }
-func (toolchainNoCrt) CrtEndSharedBinary() []string    { return nil }
-func (toolchainNoCrt) CrtEndSharedLibrary() []string   { return nil }
+func (toolchainNoCrt) CrtBeginStaticBinary() []string       { return nil }
+func (toolchainNoCrt) CrtBeginSharedBinary() []string       { return nil }
+func (toolchainNoCrt) CrtBeginSharedLibrary() []string      { return nil }
+func (toolchainNoCrt) CrtEndStaticBinary() []string         { return nil }
+func (toolchainNoCrt) CrtEndSharedBinary() []string         { return nil }
+func (toolchainNoCrt) CrtEndSharedLibrary() []string        { return nil }
+func (toolchainNoCrt) CrtPadSegmentSharedLibrary() []string { return nil }
 
 func (toolchainBase) DefaultSharedLibraries() []string {
 	return nil
@@ -212,6 +221,14 @@ func AddressSanitizerRuntimeLibrary(t Toolchain) string {
 	return LibclangRuntimeLibrary(t, "asan")
 }
 
+func AddressSanitizerStaticRuntimeLibrary(t Toolchain) string {
+	return LibclangRuntimeLibrary(t, "asan.static")
+}
+
+func AddressSanitizerCXXStaticRuntimeLibrary(t Toolchain) string {
+	return LibclangRuntimeLibrary(t, "asan_cxx.static")
+}
+
 func HWAddressSanitizerRuntimeLibrary(t Toolchain) string {
 	return LibclangRuntimeLibrary(t, "hwasan")
 }
@@ -247,5 +264,3 @@ func LibFuzzerRuntimeLibrary(t Toolchain) string {
 func LibFuzzerRuntimeInterceptors(t Toolchain) string {
 	return LibclangRuntimeLibrary(t, "fuzzer_interceptors")
 }
-
-var inList = android.InList

@@ -1904,6 +1904,124 @@ var visibilityTests = []struct {
 				}`),
 		},
 	},
+	{
+		name: "any_system_partition visibility works",
+		fs: MockFS{
+			"top/Android.bp": []byte(`
+				android_filesystem {
+					name: "foo",
+					deps: ["bar"],
+				}`),
+			"top/nested/Android.bp": []byte(`
+				package(default_visibility=["//visibility:private"])
+				mock_library {
+					name: "bar",
+					visibility: ["//visibility:any_system_partition"],
+				}`),
+		},
+	},
+	{
+		name: "any_system_partition visibility works with the other visibility",
+		fs: MockFS{
+			"top/Android.bp": []byte(`
+				android_filesystem {
+					name: "foo",
+					deps: ["bar"],
+				}`),
+			"top2/Android.bp": []byte(``),
+			"top/nested/Android.bp": []byte(`
+				package(default_visibility=["//visibility:private"])
+				mock_library {
+					name: "bar",
+					visibility: [
+						"//top2",
+						"//visibility:any_system_partition"
+					],
+				}`),
+		},
+	},
+	{
+		name: "any_system_partition visibility doesn't work for non-partitions",
+		fs: MockFS{
+			"top/Android.bp": []byte(`
+				mock_library {
+					name: "foo",
+					deps: ["bar"],
+				}`),
+			"top/nested/Android.bp": []byte(`
+				mock_library {
+					name: "bar",
+					visibility: ["//visibility:any_system_partition"],
+				}`),
+		},
+		expectedErrors: []string{`module "foo" variant "android_common": depends on //top/nested:bar which is not visible to this module`},
+	},
+	{
+		name: "any_system_partition visibility doesn't work for vendor partitions",
+		fs: MockFS{
+			"top/Android.bp": []byte(`
+				android_filesystem {
+					name: "foo",
+					partition_type: "vendor",
+					deps: ["bar"],
+				}`),
+			"top/nested/Android.bp": []byte(`
+				package(default_visibility=["//visibility:private"])
+				mock_library {
+					name: "bar",
+					visibility: ["//visibility:any_system_partition"],
+				}`),
+		},
+		expectedErrors: []string{`module "foo" variant "android_common": depends on //top/nested:bar which is not visible to this module`},
+	},
+	{
+		name: "Vendor modules are visible to any vendor partition by default",
+		fs: MockFS{
+			"top/Android.bp": []byte(`
+				android_filesystem {
+					name: "foo",
+					partition_type: "vendor",
+					deps: ["bar"],
+				}`),
+			"top/nested/Android.bp": []byte(`
+				package(default_visibility=["//visibility:private"])
+				mock_library {
+					name: "bar",
+					vendor: true,
+				}`),
+		},
+	},
+	{
+		name: "Not visible to vendor partitions when using any_system_partiton, even if vendor: true",
+		fs: MockFS{
+			"top/Android.bp": []byte(`
+				android_filesystem {
+					name: "foo",
+					partition_type: "vendor",
+					deps: ["bar"],
+				}`),
+			"top/nested/Android.bp": []byte(`
+				package(default_visibility=["//visibility:private"])
+				mock_library {
+					name: "bar",
+					vendor: true,
+					visibility: ["//visibility:any_system_partition"],
+				}`),
+		},
+		expectedErrors: []string{`module "foo" variant "android_common": depends on //top/nested:bar which is not visible to this module`},
+	},
+	{
+		name: "unknown any_partition specs throw errors",
+		fs: MockFS{
+			"top/nested/Android.bp": []byte(`
+				package(default_visibility=["//visibility:private"])
+				mock_library {
+					name: "bar",
+					visibility: ["//visibility:any_unknown_partition"],
+				}`),
+		},
+		expectedErrors: []string{`unrecognized visibility rule "//visibility:any_unknown_partition"`},
+	},
 }
 
 func TestVisibility(t *testing.T) {
@@ -1925,6 +2043,7 @@ func TestVisibility(t *testing.T) {
 					ctx.RegisterModuleType("mock_library", newMockLibraryModule)
 					ctx.RegisterModuleType("mock_parent", newMockParentFactory)
 					ctx.RegisterModuleType("mock_defaults", defaultsFactory)
+					ctx.RegisterModuleType("android_filesystem", newMockFilesystemModule)
 				}),
 				prepareForTestWithFakePrebuiltModules,
 				// Add additional files to the mock filesystem
@@ -1976,6 +2095,37 @@ func (j *mockLibraryModule) DepsMutator(ctx BottomUpMutatorContext) {
 }
 
 func (p *mockLibraryModule) GenerateAndroidBuildActions(ModuleContext) {
+}
+
+type mockFilesystemModuleProperties struct {
+	Partition_type *string
+	Deps           []string
+}
+
+type mockFilesystemModule struct {
+	ModuleBase
+	properties mockFilesystemModuleProperties
+}
+
+func (j *mockFilesystemModule) DepsMutator(ctx BottomUpMutatorContext) {
+	ctx.AddVariationDependencies(nil, dependencyTag{name: "mockdeps"}, j.properties.Deps...)
+}
+
+func (p *mockFilesystemModule) GenerateAndroidBuildActions(ModuleContext) {
+}
+
+func (p *mockFilesystemModule) PartitionType() string {
+	if p.properties.Partition_type == nil {
+		return "system"
+	}
+	return *p.properties.Partition_type
+}
+
+func newMockFilesystemModule() Module {
+	m := &mockFilesystemModule{}
+	m.AddProperties(&m.properties)
+	InitAndroidArchModule(m, DeviceSupported, MultilibCommon)
+	return m
 }
 
 type mockDefaults struct {

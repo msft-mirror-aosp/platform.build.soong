@@ -37,12 +37,7 @@ var prepareForRustTest = android.GroupFixturePreparers(
 
 	genrule.PrepareForTestWithGenRuleBuildComponents,
 
-	PrepareForTestWithRustIncludeVndk,
-	android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-		variables.DeviceVndkVersion = StringPtr("current")
-		variables.ProductVndkVersion = StringPtr("current")
-		variables.Platform_vndk_version = StringPtr("29")
-	}),
+	PrepareForIntegrationTestWithRust,
 )
 
 var rustMockedFiles = android.MockFS{
@@ -74,56 +69,20 @@ func testRust(t *testing.T, bp string) *android.TestContext {
 	return result.TestContext
 }
 
-func testRustVndk(t *testing.T, bp string) *android.TestContext {
-	return testRustVndkFs(t, bp, rustMockedFiles)
-}
-
 const (
-	sharedVendorVariant   = "android_vendor.29_arm64_armv8-a_shared"
-	rlibVendorVariant     = "android_vendor.29_arm64_armv8-a_rlib_rlib-std"
-	sharedRecoveryVariant = "android_recovery_arm64_armv8-a_shared"
-	rlibRecoveryVariant   = "android_recovery_arm64_armv8-a_rlib_rlib-std"
-	binaryCoreVariant     = "android_arm64_armv8-a"
-	binaryVendorVariant   = "android_vendor.29_arm64_armv8-a"
-	binaryProductVariant  = "android_product.29_arm64_armv8-a"
-	binaryRecoveryVariant = "android_recovery_arm64_armv8-a"
+	sharedVendorVariant        = "android_vendor_arm64_armv8-a_shared"
+	rlibVendorVariant          = "android_vendor_arm64_armv8-a_rlib_rlib-std"
+	rlibDylibStdVendorVariant  = "android_vendor_arm64_armv8-a_rlib_rlib-std"
+	dylibVendorVariant         = "android_vendor_arm64_armv8-a_dylib"
+	sharedRecoveryVariant      = "android_recovery_arm64_armv8-a_shared"
+	rlibRecoveryVariant        = "android_recovery_arm64_armv8-a_rlib_dylib-std"
+	rlibRlibStdRecoveryVariant = "android_recovery_arm64_armv8-a_rlib_rlib-std"
+	dylibRecoveryVariant       = "android_recovery_arm64_armv8-a_dylib"
+	binaryCoreVariant          = "android_arm64_armv8-a"
+	binaryVendorVariant        = "android_vendor_arm64_armv8-a"
+	binaryProductVariant       = "android_product_arm64_armv8-a"
+	binaryRecoveryVariant      = "android_recovery_arm64_armv8-a"
 )
-
-func testRustVndkFs(t *testing.T, bp string, fs android.MockFS) *android.TestContext {
-	return testRustVndkFsVersions(t, bp, fs, "current", "current", "29")
-}
-
-func testRustVndkFsVersions(t *testing.T, bp string, fs android.MockFS, device_version, product_version, vndk_version string) *android.TestContext {
-	skipTestIfOsNotSupported(t)
-	result := android.GroupFixturePreparers(
-		prepareForRustTest,
-		fs.AddToFixture(),
-		android.FixtureModifyProductVariables(
-			func(variables android.FixtureProductVariables) {
-				variables.DeviceVndkVersion = StringPtr(device_version)
-				variables.ProductVndkVersion = StringPtr(product_version)
-				variables.Platform_vndk_version = StringPtr(vndk_version)
-			},
-		),
-	).RunTestWithBp(t, bp)
-	return result.TestContext
-}
-
-func testRustRecoveryFsVersions(t *testing.T, bp string, fs android.MockFS, device_version, vndk_version, recovery_version string) *android.TestContext {
-	skipTestIfOsNotSupported(t)
-	result := android.GroupFixturePreparers(
-		prepareForRustTest,
-		fs.AddToFixture(),
-		android.FixtureModifyProductVariables(
-			func(variables android.FixtureProductVariables) {
-				variables.DeviceVndkVersion = StringPtr(device_version)
-				variables.RecoverySnapshotVersion = StringPtr(recovery_version)
-				variables.Platform_vndk_version = StringPtr(vndk_version)
-			},
-		),
-	).RunTestWithBp(t, bp)
-	return result.TestContext
-}
 
 // testRustCov returns a TestContext in which a basic environment has been
 // setup. This environment explicitly enables coverage.
@@ -151,28 +110,6 @@ func testRustError(t *testing.T, pattern string, bp string) {
 	android.GroupFixturePreparers(
 		prepareForRustTest,
 		rustMockedFiles.AddToFixture(),
-	).
-		ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(pattern)).
-		RunTestWithBp(t, bp)
-}
-
-// testRustVndkError is similar to testRustError, but can be used to test VNDK-related errors.
-func testRustVndkError(t *testing.T, pattern string, bp string) {
-	testRustVndkFsError(t, pattern, bp, rustMockedFiles)
-}
-
-func testRustVndkFsError(t *testing.T, pattern string, bp string, fs android.MockFS) {
-	skipTestIfOsNotSupported(t)
-	android.GroupFixturePreparers(
-		prepareForRustTest,
-		fs.AddToFixture(),
-		android.FixtureModifyProductVariables(
-			func(variables android.FixtureProductVariables) {
-				variables.DeviceVndkVersion = StringPtr("current")
-				variables.ProductVndkVersion = StringPtr("current")
-				variables.Platform_vndk_version = StringPtr("VER")
-			},
-		),
 	).
 		ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(pattern)).
 		RunTestWithBp(t, bp)
@@ -209,6 +146,10 @@ func TestLinkPathFromFilePath(t *testing.T) {
 // Test to make sure dependencies are being picked up correctly.
 func TestDepsTracking(t *testing.T) {
 	ctx := testRust(t, `
+		cc_library {
+			host_supported: true,
+			name: "cc_stubs_dep",
+		}
 		rust_ffi_host_static {
 			name: "libstatic",
 			srcs: ["foo.rs"],
@@ -224,17 +165,13 @@ func TestDepsTracking(t *testing.T) {
 			srcs: ["foo.rs"],
 			crate_name: "shared",
 		}
-		rust_library_host_dylib {
-			name: "libdylib",
-			srcs: ["foo.rs"],
-			crate_name: "dylib",
-		}
 		rust_library_host_rlib {
 			name: "librlib",
 			srcs: ["foo.rs"],
 			crate_name: "rlib",
 			static_libs: ["libstatic"],
 			whole_static_libs: ["libwholestatic"],
+			shared_libs: ["cc_stubs_dep"],
 		}
 		rust_proc_macro {
 			name: "libpm",
@@ -243,7 +180,6 @@ func TestDepsTracking(t *testing.T) {
 		}
 		rust_binary_host {
 			name: "fizz-buzz",
-			dylibs: ["libdylib"],
 			rlibs: ["librlib"],
 			proc_macros: ["libpm"],
 			static_libs: ["libstatic"],
@@ -255,10 +191,6 @@ func TestDepsTracking(t *testing.T) {
 	rustc := ctx.ModuleForTests("librlib", "linux_glibc_x86_64_rlib_rlib-std").Rule("rustc")
 
 	// Since dependencies are added to AndroidMk* properties, we can check these to see if they've been picked up.
-	if !android.InList("libdylib", module.Properties.AndroidMkDylibs) {
-		t.Errorf("Dylib dependency not detected (dependency missing from AndroidMkDylibs)")
-	}
-
 	if !android.InList("librlib.rlib-std", module.Properties.AndroidMkRlibs) {
 		t.Errorf("Rlib dependency not detected (dependency missing from AndroidMkRlibs)")
 	}
@@ -267,7 +199,7 @@ func TestDepsTracking(t *testing.T) {
 		t.Errorf("Proc_macro dependency not detected (dependency missing from AndroidMkProcMacroLibs)")
 	}
 
-	if !android.InList("libshared", module.Properties.AndroidMkSharedLibs) {
+	if !android.InList("libshared", module.transitiveAndroidMkSharedLibs.ToList()) {
 		t.Errorf("Shared library dependency not detected (dependency missing from AndroidMkSharedLibs)")
 	}
 
@@ -279,6 +211,17 @@ func TestDepsTracking(t *testing.T) {
 		t.Errorf("-lstatic flag not being passed to rustc for static library %#v", rustc.Args["rustcFlags"])
 	}
 
+	if !strings.Contains(rustc.Args["linkFlags"], "cc_stubs_dep.so") {
+		t.Errorf("shared cc_library not being passed to rustc linkFlags %#v", rustc.Args["linkFlags"])
+	}
+
+	if !android.SuffixInList(rustc.OrderOnly.Strings(), "cc_stubs_dep.so") {
+		t.Errorf("shared cc dep not being passed as order-only to rustc %#v", rustc.OrderOnly.Strings())
+	}
+
+	if !android.SuffixInList(rustc.Implicits.Strings(), "cc_stubs_dep.so.toc") {
+		t.Errorf("shared cc dep TOC not being passed as implicit to rustc %#v", rustc.Implicits.Strings())
+	}
 }
 
 func TestSourceProviderDeps(t *testing.T) {
@@ -331,7 +274,7 @@ func TestSourceProviderDeps(t *testing.T) {
 			source_stem: "bindings",
 			host_supported: true,
 			wrapper_src: "src/any.h",
-        }
+		}
 	`)
 
 	libfoo := ctx.ModuleForTests("libfoo", "android_arm64_armv8-a_rlib_dylib-std").Rule("rustc")
@@ -360,18 +303,17 @@ func TestSourceProviderDeps(t *testing.T) {
 
 	// Check that our bindings are picked up as crate dependencies as well
 	libfooMod := ctx.ModuleForTests("libfoo", "android_arm64_armv8-a_dylib").Module().(*Module)
-	if !android.InList("libbindings.dylib-std", libfooMod.Properties.AndroidMkRlibs) {
+	if !android.InList("libbindings", libfooMod.Properties.AndroidMkRlibs) {
 		t.Errorf("bindgen dependency not detected as a rlib dependency (dependency missing from AndroidMkRlibs)")
 	}
 	fizzBuzzMod := ctx.ModuleForTests("fizz-buzz-dep", "android_arm64_armv8-a").Module().(*Module)
-	if !android.InList("libbindings.dylib-std", fizzBuzzMod.Properties.AndroidMkRlibs) {
+	if !android.InList("libbindings", fizzBuzzMod.Properties.AndroidMkRlibs) {
 		t.Errorf("bindgen dependency not detected as a rlib dependency (dependency missing from AndroidMkRlibs)")
 	}
 	libprocmacroMod := ctx.ModuleForTests("libprocmacro", "linux_glibc_x86_64").Module().(*Module)
 	if !android.InList("libbindings.rlib-std", libprocmacroMod.Properties.AndroidMkRlibs) {
 		t.Errorf("bindgen dependency not detected as a rlib dependency (dependency missing from AndroidMkRlibs)")
 	}
-
 }
 
 func TestSourceProviderTargetMismatch(t *testing.T) {
@@ -462,6 +404,35 @@ func TestLibrarySizes(t *testing.T) {
 	m := ctx.SingletonForTests("file_metrics")
 	m.Output("unstripped/libwaldo.dylib.so.bloaty.csv")
 	m.Output("libwaldo.dylib.so.bloaty.csv")
+}
+
+// Test that aliases are respected.
+func TestRustAliases(t *testing.T) {
+	ctx := testRust(t, `
+		rust_library {
+			name: "libbar",
+			crate_name: "bar",
+			srcs: ["src/lib.rs"],
+		}
+		rust_library {
+			name: "libbaz",
+			crate_name: "baz",
+			srcs: ["src/lib.rs"],
+		}
+		rust_binary {
+			name: "foo",
+			srcs: ["src/main.rs"],
+			rustlibs: ["libbar", "libbaz"],
+			aliases: ["bar:bar_renamed"],
+		}`)
+
+	fooRustc := ctx.ModuleForTests("foo", "android_arm64_armv8-a").Rule("rustc")
+	if !strings.Contains(fooRustc.Args["libFlags"], "--extern bar_renamed=out/soong/.intermediates/libbar/android_arm64_armv8-a_dylib/unstripped/libbar.dylib.so") {
+		t.Errorf("--extern bar_renamed=out/soong/.intermediates/libbar/android_arm64_armv8-a_dylib/unstripped/libbar.dylib.so flag not being passed to rustc for rust_binary with aliases. libFlags: %#v", fooRustc.Args["libFlags"])
+	}
+	if !strings.Contains(fooRustc.Args["libFlags"], "--extern baz=out/soong/.intermediates/libbaz/android_arm64_armv8-a_dylib/unstripped/libbaz.dylib.so") {
+		t.Errorf("--extern baz=out/soong/.intermediates/libbaz/android_arm64_armv8-a_dylib/unstripped/libbaz.dylib.so flag not being passed to rustc for rust_binary with aliases. libFlags: %#v", fooRustc.Args["libFlags"])
+	}
 }
 
 func assertString(t *testing.T, got, expected string) {

@@ -17,6 +17,7 @@ package android
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/blueprint"
 )
@@ -42,6 +43,30 @@ type PackagingSpec struct {
 	effectiveLicenseFiles *Paths
 
 	partition string
+
+	// Whether this packaging spec represents an installation of the srcPath (i.e. this struct
+	// is created via InstallFile or InstallSymlink) or a simple packaging (i.e. created via
+	// PackageFile).
+	skipInstall bool
+}
+
+func (p *PackagingSpec) Equals(other *PackagingSpec) bool {
+	if other == nil {
+		return false
+	}
+	if p.relPathInPackage != other.relPathInPackage {
+		return false
+	}
+	if p.srcPath != other.srcPath || p.symlinkTarget != other.symlinkTarget {
+		return false
+	}
+	if p.executable != other.executable {
+		return false
+	}
+	if p.partition != other.partition {
+		return false
+	}
+	return true
 }
 
 // Get file name of installed package
@@ -73,6 +98,10 @@ func (p *PackagingSpec) Partition() string {
 	return p.partition
 }
 
+func (p *PackagingSpec) SkipInstall() bool {
+	return p.skipInstall
+}
+
 type PackageModule interface {
 	Module
 	packagingBase() *PackagingBase
@@ -84,6 +113,7 @@ type PackageModule interface {
 
 	// GatherPackagingSpecs gathers PackagingSpecs of transitive dependencies.
 	GatherPackagingSpecs(ctx ModuleContext) map[string]PackagingSpec
+	GatherPackagingSpecsWithFilter(ctx ModuleContext, filter func(PackagingSpec) bool) map[string]PackagingSpec
 
 	// CopyDepsToZip zips the built artifacts of the dependencies into the given zip file and
 	// returns zip entries in it. This is expected to be called in GenerateAndroidBuildActions,
@@ -220,44 +250,69 @@ func (p *PackagingBase) AddDeps(ctx BottomUpMutatorContext, depTag blueprint.Dep
 	}
 }
 
-// See PackageModule.GatherPackagingSpecs
-func (p *PackagingBase) GatherPackagingSpecs(ctx ModuleContext) map[string]PackagingSpec {
+func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter func(PackagingSpec) bool) map[string]PackagingSpec {
 	m := make(map[string]PackagingSpec)
 	ctx.VisitDirectDeps(func(child Module) {
 		if pi, ok := ctx.OtherModuleDependencyTag(child).(PackagingItem); !ok || !pi.IsPackagingItem() {
 			return
 		}
 		for _, ps := range child.TransitivePackagingSpecs() {
-			if _, ok := m[ps.relPathInPackage]; !ok {
-				m[ps.relPathInPackage] = ps
+			if filter != nil {
+				if !filter(ps) {
+					continue
+				}
 			}
+			dstPath := ps.relPathInPackage
+			if existingPs, ok := m[dstPath]; ok {
+				if !existingPs.Equals(&ps) {
+					ctx.ModuleErrorf("packaging conflict at %v:\n%v\n%v", dstPath, existingPs, ps)
+				}
+				continue
+			}
+
+			m[dstPath] = ps
 		}
 	})
 	return m
 }
 
+// See PackageModule.GatherPackagingSpecs
+func (p *PackagingBase) GatherPackagingSpecs(ctx ModuleContext) map[string]PackagingSpec {
+	return p.GatherPackagingSpecsWithFilter(ctx, nil)
+}
+
 // CopySpecsToDir is a helper that will add commands to the rule builder to copy the PackagingSpec
 // entries into the specified directory.
-func (p *PackagingBase) CopySpecsToDir(ctx ModuleContext, builder *RuleBuilder, specs map[string]PackagingSpec, dir ModuleOutPath) (entries []string) {
+func (p *PackagingBase) CopySpecsToDir(ctx ModuleContext, builder *RuleBuilder, specs map[string]PackagingSpec, dir WritablePath) (entries []string) {
+	if len(specs) == 0 {
+		return entries
+	}
 	seenDir := make(map[string]bool)
+	preparerPath := PathForModuleOut(ctx, "preparer.sh")
+	cmd := builder.Command().Tool(preparerPath)
+	var sb strings.Builder
+	sb.WriteString("set -e\n")
 	for _, k := range SortedKeys(specs) {
 		ps := specs[k]
-		destPath := dir.Join(ctx, ps.relPathInPackage).String()
+		destPath := filepath.Join(dir.String(), ps.relPathInPackage)
 		destDir := filepath.Dir(destPath)
 		entries = append(entries, ps.relPathInPackage)
 		if _, ok := seenDir[destDir]; !ok {
 			seenDir[destDir] = true
-			builder.Command().Text("mkdir").Flag("-p").Text(destDir)
+			sb.WriteString(fmt.Sprintf("mkdir -p %s\n", destDir))
 		}
 		if ps.symlinkTarget == "" {
-			builder.Command().Text("cp").Input(ps.srcPath).Text(destPath)
+			cmd.Implicit(ps.srcPath)
+			sb.WriteString(fmt.Sprintf("cp %s %s\n", ps.srcPath, destPath))
 		} else {
-			builder.Command().Text("ln").Flag("-sf").Text(ps.symlinkTarget).Text(destPath)
+			sb.WriteString(fmt.Sprintf("ln -sf %s %s\n", ps.symlinkTarget, destPath))
 		}
 		if ps.executable {
-			builder.Command().Text("chmod").Flag("a+x").Text(destPath)
+			sb.WriteString(fmt.Sprintf("chmod a+x %s\n", destPath))
 		}
 	}
+
+	WriteExecutableFileRuleVerbatim(ctx, preparerPath, sb.String())
 
 	return entries
 }
@@ -281,24 +336,4 @@ func (p *PackagingBase) CopyDepsToZip(ctx ModuleContext, specs map[string]Packag
 
 	builder.Build("zip_deps", fmt.Sprintf("Zipping deps for %s", ctx.ModuleName()))
 	return entries
-}
-
-// packagingSpecsDepSet is a thin type-safe wrapper around the generic depSet.  It always uses
-// topological order.
-type packagingSpecsDepSet struct {
-	depSet
-}
-
-// newPackagingSpecsDepSet returns an immutable packagingSpecsDepSet with the given direct and
-// transitive contents.
-func newPackagingSpecsDepSet(direct []PackagingSpec, transitive []*packagingSpecsDepSet) *packagingSpecsDepSet {
-	return &packagingSpecsDepSet{*newDepSet(TOPOLOGICAL, direct, transitive)}
-}
-
-// ToList returns the packagingSpecsDepSet flattened to a list in topological order.
-func (d *packagingSpecsDepSet) ToList() []PackagingSpec {
-	if d == nil {
-		return nil
-	}
-	return d.depSet.ToList().([]PackagingSpec)
 }

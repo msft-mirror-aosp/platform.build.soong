@@ -143,6 +143,39 @@ python_test_host {
 }
 
 python_library_host {
+    name: "uffd_gc_utils",
+    srcs: [
+        "uffd_gc_utils.py",
+    ],
+    visibility: [
+        "//build/make/tools:__subpackages__",
+    ],
+}
+
+python_test_host {
+    name: "uffd_gc_utils_test",
+    main: "uffd_gc_utils_test.py",
+    srcs: [
+        "uffd_gc_utils_test.py",
+    ],
+    libs: [
+        "uffd_gc_utils",
+    ],
+    test_suites: ["general-tests"],
+}
+
+python_binary_host {
+    name: "construct_uffd_gc_flag",
+    main: "construct_uffd_gc_flag.py",
+    srcs: [
+        "construct_uffd_gc_flag.py",
+    ],
+    libs: [
+        "uffd_gc_utils",
+    ],
+}
+
+python_library_host {
     name: "ninja_rsp",
     srcs: ["ninja_rsp.py"],
 }
@@ -189,6 +222,18 @@ python_binary_host {
     libs: [
         "linker_config_proto",
     ],
+    visibility: ["//system/linkerconfig"],
+}
+
+python_test_host {
+    name: "conv_linker_config_test",
+    main: "conv_linker_config_test.py",
+    srcs: [
+        "conv_linker_config_test.py",
+        "conv_linker_config.py",
+    ],
+    libs: ["linker_config_proto"],
+    test_suites: ["general-tests"],
 }
 
 python_binary_host {
@@ -219,4 +264,55 @@ filegroup {
     name: "rustfmt.toml",
     srcs: ["rustfmt.toml"],
     visibility: ["//visibility:public"],
+}
+
+sh_binary_host {
+    name: "jars-to-module-info-java",
+    src: "jars-to-module-info-java.sh",
+}
+
+python_binary_host {
+    name: "modify_permissions_allowlist",
+    main: "modify_permissions_allowlist.py",
+    srcs: [
+        "modify_permissions_allowlist.py",
+    ],
+}
+
+python_test_host {
+    name: "modify_permissions_allowlist_test",
+    main: "modify_permissions_allowlist_test.py",
+    srcs: [
+        "modify_permissions_allowlist_test.py",
+        "modify_permissions_allowlist.py",
+    ],
+}
+
+sh_binary_host {
+    name: "keep-flagged-apis",
+    src: "keep-flagged-apis.sh",
+}
+
+python_binary_host {
+    name: "merge_directories",
+    main: "merge_directories.py",
+    srcs: [
+        "merge_directories.py",
+    ],
+    version: {
+        py3: {
+            embedded_launcher: true,
+        },
+    },
+}
+
+python_binary_host {
+    name: "buildinfo",
+    main: "buildinfo.py",
+    srcs: ["buildinfo.py"],
+    version: {
+        py3: {
+            embedded_launcher: true,
+        },
+    },
 }

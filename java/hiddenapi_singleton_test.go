@@ -39,7 +39,9 @@ var prepareForTestWithDefaultPlatformBootclasspath = android.FixtureAddTextFile(
 `)
 
 var hiddenApiFixtureFactory = android.GroupFixturePreparers(
-	prepareForJavaTest, PrepareForTestWithHiddenApiBuildComponents)
+	PrepareForTestWithJavaDefaultModules,
+	PrepareForTestWithHiddenApiBuildComponents,
+)
 
 func TestHiddenAPISingleton(t *testing.T) {
 	result := android.GroupFixturePreparers(
@@ -175,10 +177,10 @@ func TestHiddenAPISingletonSdks(t *testing.T) {
 		{
 			name:             "testBundled",
 			unbundledBuild:   false,
-			publicStub:       "android_stubs_current",
-			systemStub:       "android_system_stubs_current",
-			testStub:         "android_test_stubs_current",
-			corePlatformStub: "legacy.core.platform.api.stubs",
+			publicStub:       "android_stubs_current_exportable",
+			systemStub:       "android_system_stubs_current_exportable",
+			testStub:         "android_test_stubs_current_exportable",
+			corePlatformStub: "legacy.core.platform.api.stubs.exportable",
 			preparer:         android.GroupFixturePreparers(),
 		}, {
 			name:             "testUnbundled",
@@ -186,7 +188,7 @@ func TestHiddenAPISingletonSdks(t *testing.T) {
 			publicStub:       "sdk_public_current_android",
 			systemStub:       "sdk_system_current_android",
 			testStub:         "sdk_test_current_android",
-			corePlatformStub: "legacy.core.platform.api.stubs",
+			corePlatformStub: "legacy.core.platform.api.stubs.exportable",
 			preparer:         PrepareForTestWithPrebuiltsOfCurrentApi,
 		},
 	}
@@ -198,6 +200,9 @@ func TestHiddenAPISingletonSdks(t *testing.T) {
 				prepareForTestWithDefaultPlatformBootclasspath,
 				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
 					variables.Always_use_prebuilt_sdks = proptools.BoolPtr(tc.unbundledBuild)
+					variables.BuildFlags = map[string]string{
+						"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+					}
 				}),
 			).RunTest(t)
 
@@ -298,7 +303,7 @@ func TestHiddenAPIEncoding_JavaSdkLibrary(t *testing.T) {
 	`)
 
 	checkDexEncoded := func(t *testing.T, name, unencodedDexJar, encodedDexJar string) {
-		moduleForTests := result.ModuleForTests(name, "android_common")
+		moduleForTests := result.ModuleForTests(name+".impl", "android_common")
 
 		encodeDexRule := moduleForTests.Rule("hiddenAPIEncodeDex")
 		actualUnencodedDexJar := encodeDexRule.Input
@@ -307,24 +312,15 @@ func TestHiddenAPIEncoding_JavaSdkLibrary(t *testing.T) {
 		android.AssertStringEquals(t, "encode embedded java_library", unencodedDexJar, actualUnencodedDexJar.String())
 
 		// Make sure that the encoded dex jar is the exported one.
-		exportedDexJar := moduleForTests.Module().(UsesLibraryDependency).DexJarBuildPath().Path()
+		errCtx := moduleErrorfTestCtx{}
+		exportedDexJar := moduleForTests.Module().(UsesLibraryDependency).DexJarBuildPath(errCtx).Path()
 		android.AssertPathRelativeToTopEquals(t, "encode embedded java_library", encodedDexJar, exportedDexJar)
 	}
 
 	// The java_library embedded with the java_sdk_library must be dex encoded.
 	t.Run("foo", func(t *testing.T) {
-		expectedUnencodedDexJar := "out/soong/.intermediates/foo/android_common/aligned/foo.jar"
-		expectedEncodedDexJar := "out/soong/.intermediates/foo/android_common/hiddenapi/foo.jar"
+		expectedUnencodedDexJar := "out/soong/.intermediates/foo.impl/android_common/aligned/foo.jar"
+		expectedEncodedDexJar := "out/soong/.intermediates/foo.impl/android_common/hiddenapi/foo.jar"
 		checkDexEncoded(t, "foo", expectedUnencodedDexJar, expectedEncodedDexJar)
-	})
-
-	// The dex jar of the child implementation java_library of the java_sdk_library is not currently
-	// dex encoded.
-	t.Run("foo.impl", func(t *testing.T) {
-		fooImpl := result.ModuleForTests("foo.impl", "android_common")
-		encodeDexRule := fooImpl.MaybeRule("hiddenAPIEncodeDex")
-		if encodeDexRule.Rule != nil {
-			t.Errorf("foo.impl is not expected to be encoded")
-		}
 	})
 }

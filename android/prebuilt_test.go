@@ -295,86 +295,6 @@ func TestPrebuilts(t *testing.T) {
 				}`,
 			prebuilt: []OsType{Android, buildOS},
 		},
-		{
-			name: "prebuilt use_source_config_var={acme, use_source} - no var specified",
-			modules: `
-				source {
-					name: "bar",
-				}
-
-				prebuilt {
-					name: "bar",
-					use_source_config_var: {config_namespace: "acme", var_name: "use_source"},
-					srcs: ["prebuilt_file"],
-				}`,
-			// When use_source_env is specified then it will use the prebuilt by default if the environment
-			// variable is not set.
-			prebuilt: []OsType{Android, buildOS},
-		},
-		{
-			name: "prebuilt use_source_config_var={acme, use_source} - acme_use_source=false",
-			modules: `
-				source {
-					name: "bar",
-				}
-
-				prebuilt {
-					name: "bar",
-					use_source_config_var: {config_namespace: "acme", var_name: "use_source"},
-					srcs: ["prebuilt_file"],
-				}`,
-			preparer: FixtureModifyProductVariables(func(variables FixtureProductVariables) {
-				variables.VendorVars = map[string]map[string]string{
-					"acme": {
-						"use_source": "false",
-					},
-				}
-			}),
-			// Setting the environment variable named in use_source_env to false will cause the prebuilt to
-			// be used.
-			prebuilt: []OsType{Android, buildOS},
-		},
-		{
-			name: "prebuilt use_source_config_var={acme, use_source} - acme_use_source=true",
-			modules: `
-				source {
-					name: "bar",
-				}
-
-				prebuilt {
-					name: "bar",
-					use_source_config_var: {config_namespace: "acme", var_name: "use_source"},
-					srcs: ["prebuilt_file"],
-				}`,
-			preparer: FixtureModifyProductVariables(func(variables FixtureProductVariables) {
-				variables.VendorVars = map[string]map[string]string{
-					"acme": {
-						"use_source": "true",
-					},
-				}
-			}),
-			// Setting the environment variable named in use_source_env to true will cause the source to be
-			// used.
-			prebuilt: nil,
-		},
-		{
-			name: "prebuilt use_source_config_var={acme, use_source} - acme_use_source=true, no source",
-			modules: `
-				prebuilt {
-					name: "bar",
-					use_source_config_var: {config_namespace: "acme", var_name: "use_source"},
-					srcs: ["prebuilt_file"],
-				}`,
-			preparer: FixtureModifyProductVariables(func(variables FixtureProductVariables) {
-				variables.VendorVars = map[string]map[string]string{
-					"acme": {
-						"use_source": "true",
-					},
-				}
-			}),
-			// Although the environment variable says to use source there is no source available.
-			prebuilt: []OsType{Android, buildOS},
-		},
 	}
 
 	fs := MockFS{
@@ -431,7 +351,7 @@ func TestPrebuilts(t *testing.T) {
 						}
 					})
 
-					moduleIsDisabled := !foo.Module().Enabled()
+					moduleIsDisabled := !foo.Module().Enabled(PanickingConfigAndErrorContext(result.TestContext))
 					deps := foo.Module().(*sourceModule).deps
 					if moduleIsDisabled {
 						if len(deps) > 0 {
@@ -497,6 +417,58 @@ func TestPrebuilts(t *testing.T) {
 	}
 }
 
+func testPrebuiltErrorWithFixture(t *testing.T, expectedError, bp string, fixture FixturePreparer) {
+	t.Helper()
+	fs := MockFS{
+		"prebuilt_file": nil,
+	}
+	GroupFixturePreparers(
+		PrepareForTestWithArchMutator,
+		PrepareForTestWithPrebuilts,
+		PrepareForTestWithOverrides,
+		fs.AddToFixture(),
+		FixtureRegisterWithContext(registerTestPrebuiltModules),
+		OptionalFixturePreparer(fixture),
+	).
+		ExtendWithErrorHandler(FixtureExpectsAtLeastOneErrorMatchingPattern(expectedError)).
+		RunTestWithBp(t, bp)
+
+}
+
+func testPrebuiltError(t *testing.T, expectedError, bp string) {
+	testPrebuiltErrorWithFixture(t, expectedError, bp, nil)
+}
+
+func TestPrebuiltShouldNotChangePartition(t *testing.T) {
+	testPrebuiltError(t, `partition is different`, `
+		source {
+			name: "foo",
+			vendor: true,
+		}
+		prebuilt {
+			name: "foo",
+			prefer: true,
+			srcs: ["prebuilt_file"],
+		}`)
+}
+
+func TestPrebuiltShouldNotChangePartition_WithOverride(t *testing.T) {
+	testPrebuiltError(t, `partition is different`, `
+		source {
+			name: "foo",
+			vendor: true,
+		}
+		override_source {
+			name: "bar",
+			base: "foo",
+		}
+		prebuilt {
+			name: "bar",
+			prefer: true,
+			srcs: ["prebuilt_file"],
+		}`)
+}
+
 func registerTestPrebuiltBuildComponents(ctx RegistrationContext) {
 	registerTestPrebuiltModules(ctx)
 
@@ -513,6 +485,7 @@ func registerTestPrebuiltModules(ctx RegistrationContext) {
 	ctx.RegisterModuleType("soong_config_module_type", SoongConfigModuleTypeFactory)
 	ctx.RegisterModuleType("soong_config_string_variable", SoongConfigStringVariableDummyFactory)
 	ctx.RegisterModuleType("soong_config_bool_variable", SoongConfigBoolVariableDummyFactory)
+	RegisterApexContributionsBuildComponents(ctx)
 }
 
 type prebuiltModule struct {
@@ -606,4 +579,34 @@ func newOverrideSourceModule() Module {
 	InitAndroidArchModule(m, HostAndDeviceDefault, MultilibCommon)
 	InitOverrideModule(m)
 	return m
+}
+
+func TestPrebuiltErrorCannotListBothSourceAndPrebuiltInContributions(t *testing.T) {
+	selectMainlineModuleContritbutions := GroupFixturePreparers(
+		FixtureModifyProductVariables(func(variables FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": "my_apex_contributions",
+			}
+		}),
+	)
+	testPrebuiltErrorWithFixture(t, `Found duplicate variations of the same module in apex_contributions: foo and prebuilt_foo. Please remove one of these`, `
+		source {
+			name: "foo",
+		}
+		prebuilt {
+			name: "foo",
+			srcs: ["prebuilt_file"],
+		}
+		apex_contributions {
+			name: "my_apex_contributions",
+			api_domain: "my_mainline_module",
+			contents: [
+			  "foo",
+			  "prebuilt_foo",
+			],
+		}
+		all_apex_contributions {
+			name: "all_apex_contributions",
+		}
+		`, selectMainlineModuleContritbutions)
 }

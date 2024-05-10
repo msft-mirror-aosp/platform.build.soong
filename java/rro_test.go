@@ -62,7 +62,6 @@ func TestRuntimeResourceOverlay(t *testing.T) {
 
 	result := android.GroupFixturePreparers(
 		PrepareForTestWithJavaDefaultModules,
-		PrepareForTestWithOverlayBuildComponents,
 		android.FixtureModifyConfig(android.SetKatiEnabledForTests),
 		fs.AddToFixture(),
 	).RunTestWithBp(t, bp)
@@ -330,7 +329,6 @@ func TestEnforceRRO_propagatesToDependencies(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			result := android.GroupFixturePreparers(
 				PrepareForTestWithJavaDefaultModules,
-				PrepareForTestWithOverlayBuildComponents,
 				fs.AddToFixture(),
 				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
 					variables.ProductResourceOverlays = productResourceOverlays
@@ -406,4 +404,52 @@ func TestRuntimeResourceOverlayPartition(t *testing.T) {
 		mod := ctx.ModuleForTests(testCase.name, "android_common").Module().(*RuntimeResourceOverlay)
 		android.AssertPathRelativeToTopEquals(t, "Install dir is not correct for "+testCase.name, testCase.expectedPath, mod.installDir)
 	}
+}
+
+func TestRuntimeResourceOverlayFlagsPackages(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForJavaTest,
+	).RunTestWithBp(t, `
+		runtime_resource_overlay {
+			name: "foo",
+			sdk_version: "current",
+			flags_packages: [
+				"bar",
+				"baz",
+			],
+		}
+		aconfig_declarations {
+			name: "bar",
+			package: "com.example.package.bar",
+			container: "com.android.foo",
+			srcs: [
+				"bar.aconfig",
+			],
+		}
+		aconfig_declarations {
+			name: "baz",
+			package: "com.example.package.baz",
+			container: "com.android.foo",
+			srcs: [
+				"baz.aconfig",
+			],
+		}
+	`)
+
+	foo := result.ModuleForTests("foo", "android_common")
+
+	// runtime_resource_overlay module depends on aconfig_declarations listed in flags_packages
+	android.AssertBoolEquals(t, "foo expected to depend on bar", true,
+		CheckModuleHasDependency(t, result.TestContext, "foo", "android_common", "bar"))
+
+	android.AssertBoolEquals(t, "foo expected to depend on baz", true,
+		CheckModuleHasDependency(t, result.TestContext, "foo", "android_common", "baz"))
+
+	aapt2LinkRule := foo.Rule("android/soong/java.aapt2Link")
+	linkInFlags := aapt2LinkRule.Args["inFlags"]
+	android.AssertStringDoesContain(t,
+		"aapt2 link command expected to pass feature flags arguments",
+		linkInFlags,
+		"--feature-flags @out/soong/.intermediates/bar/intermediate.txt --feature-flags @out/soong/.intermediates/baz/intermediate.txt",
+	)
 }

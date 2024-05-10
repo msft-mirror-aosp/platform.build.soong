@@ -19,7 +19,9 @@ import (
 	"path/filepath"
 
 	"android/soong/android"
+
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/proptools"
 )
 
 func init() {
@@ -36,7 +38,7 @@ var CompatConfigSdkMemberType = &compatConfigMemberType{
 }
 
 func registerPlatformCompatConfigBuildComponents(ctx android.RegistrationContext) {
-	ctx.RegisterSingletonType("platform_compat_config_singleton", platformCompatConfigSingletonFactory)
+	ctx.RegisterParallelSingletonType("platform_compat_config_singleton", platformCompatConfigSingletonFactory)
 	ctx.RegisterModuleType("platform_compat_config", PlatformCompatConfigFactory)
 	ctx.RegisterModuleType("prebuilt_platform_compat_config", prebuiltCompatConfigFactory)
 	ctx.RegisterModuleType("global_compat_config", globalCompatConfigFactory)
@@ -184,6 +186,11 @@ type prebuiltCompatConfigModule struct {
 
 type prebuiltCompatConfigProperties struct {
 	Metadata *string `android:"path"`
+
+	// Name of the source soong module that gets shadowed by this prebuilt
+	// If unspecified, follows the naming convention that the source module of
+	// the prebuilt is Name() without "prebuilt_" prefix
+	Source_module_name *string
 }
 
 func (module *prebuiltCompatConfigModule) Prebuilt() *android.Prebuilt {
@@ -196,6 +203,10 @@ func (module *prebuiltCompatConfigModule) Name() string {
 
 func (module *prebuiltCompatConfigModule) compatConfigMetadata() android.Path {
 	return module.metadataFile
+}
+
+func (module *prebuiltCompatConfigModule) BaseModuleName() string {
+	return proptools.StringDefault(module.properties.Source_module_name, module.ModuleBase.Name())
 }
 
 var _ platformCompatConfigMetadataProvider = (*prebuiltCompatConfigModule)(nil)
@@ -223,7 +234,7 @@ func (p *platformCompatConfigSingleton) GenerateBuildActions(ctx android.Singlet
 	var compatConfigMetadata android.Paths
 
 	ctx.VisitAllModules(func(module android.Module) {
-		if !module.Enabled() {
+		if !module.Enabled(ctx) {
 			return
 		}
 		if c, ok := module.(platformCompatConfigMetadataProvider); ok {

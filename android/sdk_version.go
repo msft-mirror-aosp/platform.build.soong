@@ -16,6 +16,7 @@ package android
 
 import (
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -25,33 +26,39 @@ type SdkContext interface {
 	SdkVersion(ctx EarlyModuleContext) SdkSpec
 	// SystemModules returns the system_modules property of the current module, or an empty string if it is not set.
 	SystemModules() string
-	// MinSdkVersion returns SdkSpec that corresponds to the min_sdk_version property of the current module,
+	// MinSdkVersion returns ApiLevel that corresponds to the min_sdk_version property of the current module,
 	// or from sdk_version if it is not set.
-	MinSdkVersion(ctx EarlyModuleContext) SdkSpec
-	// ReplaceMaxSdkVersionPlaceholder returns SdkSpec to replace the maxSdkVersion property of permission and
+	MinSdkVersion(ctx EarlyModuleContext) ApiLevel
+	// ReplaceMaxSdkVersionPlaceholder returns Apilevel to replace the maxSdkVersion property of permission and
 	// uses-permission tags if it is set.
-	ReplaceMaxSdkVersionPlaceholder(ctx EarlyModuleContext) SdkSpec
-	// TargetSdkVersion returns the SdkSpec that corresponds to the target_sdk_version property of the current module,
+	ReplaceMaxSdkVersionPlaceholder(ctx EarlyModuleContext) ApiLevel
+	// TargetSdkVersion returns the ApiLevel that corresponds to the target_sdk_version property of the current module,
 	// or from sdk_version if it is not set.
-	TargetSdkVersion(ctx EarlyModuleContext) SdkSpec
+	TargetSdkVersion(ctx EarlyModuleContext) ApiLevel
 }
 
 // SdkKind represents a particular category of an SDK spec like public, system, test, etc.
 type SdkKind int
 
+// These are generally ordered from the narrower sdk version to the wider sdk version,
+// but not all entries have a strict subset/superset relationship.
+// For example, SdkTest and SdkModule do not have a strict subset/superset relationship but both
+// are supersets of SdkSystem.
+// The general trend should be kept when an additional sdk kind is added.
 const (
 	SdkInvalid SdkKind = iota
 	SdkNone
+	SdkToolchain // API surface provided by ART to compile other API domains
 	SdkCore
 	SdkCorePlatform
 	SdkIntraCore // API surface provided by one core module to another
 	SdkPublic
 	SdkSystem
 	SdkTest
+	SdkTestFrameworksCore
 	SdkModule
 	SdkSystemServer
 	SdkPrivate
-	SdkToolchain // API surface provided by ART to compile other API domains
 )
 
 // String returns the string representation of this SdkKind
@@ -67,6 +74,8 @@ func (k SdkKind) String() string {
 		return "system"
 	case SdkTest:
 		return "test"
+	case SdkTestFrameworksCore:
+		return "test_frameworks_core"
 	case SdkCore:
 		return "core"
 	case SdkCorePlatform:
@@ -81,6 +90,38 @@ func (k SdkKind) String() string {
 		return "toolchain"
 	default:
 		return "invalid"
+	}
+}
+
+func (k SdkKind) DefaultJavaLibraryName() string {
+	switch k {
+	case SdkPublic:
+		return "android_stubs_current"
+	case SdkSystem:
+		return "android_system_stubs_current"
+	case SdkTest:
+		return "android_test_stubs_current"
+	case SdkTestFrameworksCore:
+		return "android_test_frameworks_core_stubs_current"
+	case SdkCore:
+		return "core.current.stubs"
+	case SdkModule:
+		return "android_module_lib_stubs_current"
+	case SdkSystemServer:
+		return "android_system_server_stubs_current"
+	default:
+		panic(fmt.Errorf("APIs of API surface %v cannot be provided by a single Soong module\n", k))
+	}
+}
+
+func (k SdkKind) DefaultExportableJavaLibraryName() string {
+	switch k {
+	case SdkPublic, SdkSystem, SdkTest, SdkModule, SdkSystemServer:
+		return k.DefaultJavaLibraryName() + "_exportable"
+	case SdkCore:
+		return k.DefaultJavaLibraryName() + ".exportable"
+	default:
+		panic(fmt.Errorf("API surface %v does not provide exportable stubs", k))
 	}
 }
 
@@ -118,7 +159,7 @@ func (s SdkSpec) Stable() bool {
 		return true
 	case SdkCore, SdkPublic, SdkSystem, SdkModule, SdkSystemServer:
 		return true
-	case SdkCorePlatform, SdkTest, SdkPrivate:
+	case SdkCorePlatform, SdkTest, SdkTestFrameworksCore, SdkPrivate:
 		return false
 	default:
 		panic(fmt.Errorf("unknown SdkKind=%v", s.Kind))
@@ -138,6 +179,17 @@ func (s SdkSpec) ForVendorPartition(ctx EarlyModuleContext) SdkSpec {
 	// If BOARD_CURRENT_API_LEVEL_FOR_VENDOR_MODULES has a numeric value,
 	// use it instead of "current" for the vendor partition.
 	currentSdkVersion := ctx.DeviceConfig().CurrentApiLevelForVendorModules()
+	// b/314011075: special case for Java modules in vendor partition. They can no longer use
+	// SDK 35 or later. Their maximum API level is limited to 34 (Android U). This is to
+	// discourage the use of Java APIs in the vendor partition which hasn't been officially
+	// supported since the Project Treble back in Android 10. We would like to eventually
+	// evacuate all Java modules from the partition, but that shall be done progressively.
+	// Note that the check for the availability of SDK 34 is to not break existing tests where
+	// any of the frozen SDK version is unavailable.
+	if isJava(ctx.Module()) && isSdkVersion34AvailableIn(ctx.Config()) {
+		currentSdkVersion = "34"
+	}
+
 	if currentSdkVersion == "current" {
 		return s
 	}
@@ -166,7 +218,8 @@ func (s SdkSpec) UsePrebuilt(ctx EarlyModuleContext) bool {
 		return ctx.Config().AlwaysUsePrebuiltSdks()
 	} else if !s.ApiLevel.IsPreview() {
 		// validation check
-		if s.Kind != SdkPublic && s.Kind != SdkSystem && s.Kind != SdkTest && s.Kind != SdkModule && s.Kind != SdkSystemServer {
+		if s.Kind != SdkPublic && s.Kind != SdkSystem && s.Kind != SdkTest &&
+			s.Kind != SdkTestFrameworksCore && s.Kind != SdkModule && s.Kind != SdkSystemServer {
 			panic(fmt.Errorf("prebuilt SDK is not not available for SdkKind=%q", s.Kind))
 			return false
 		}
@@ -187,14 +240,7 @@ func (s SdkSpec) EffectiveVersion(ctx EarlyModuleContext) (ApiLevel, error) {
 	if ctx.DeviceSpecific() || ctx.SocSpecific() {
 		s = s.ForVendorPartition(ctx)
 	}
-	if !s.ApiLevel.IsPreview() {
-		return s.ApiLevel, nil
-	}
-	ret := ctx.Config().DefaultAppTargetSdk(ctx)
-	if ret.IsPreview() {
-		return FutureApiLevel, nil
-	}
-	return ret, nil
+	return s.ApiLevel.EffectiveVersion(ctx)
 }
 
 // EffectiveVersionString converts an SdkSpec into the concrete version string that the module
@@ -208,37 +254,12 @@ func (s SdkSpec) EffectiveVersionString(ctx EarlyModuleContext) (string, error) 
 	if ctx.DeviceSpecific() || ctx.SocSpecific() {
 		s = s.ForVendorPartition(ctx)
 	}
-	if !s.ApiLevel.IsPreview() {
-		return s.ApiLevel.String(), nil
-	}
-	// Determine the default sdk
-	ret := ctx.Config().DefaultAppTargetSdk(ctx)
-	if !ret.IsPreview() {
-		// If the default sdk has been finalized, return that
-		return ret.String(), nil
-	}
-	// There can be more than one active in-development sdks
-	// If an app is targeting an active sdk, but not the default one, return the requested active sdk.
-	// e.g.
-	// SETUP
-	// In-development: UpsideDownCake, VanillaIceCream
-	// Default: VanillaIceCream
-	// Android.bp
-	// min_sdk_version: `UpsideDownCake`
-	// RETURN
-	// UpsideDownCake and not VanillaIceCream
-	for _, preview := range ctx.Config().PreviewApiLevels() {
-		if s.ApiLevel.String() == preview.String() {
-			return preview.String(), nil
-		}
-	}
-	// Otherwise return the default one
-	return ret.String(), nil
+	return s.ApiLevel.EffectiveVersionString(ctx)
 }
 
 var (
 	SdkSpecNone         = SdkSpec{SdkNone, NoneApiLevel, "(no version)"}
-	SdkSpecPrivate      = SdkSpec{SdkPrivate, FutureApiLevel, ""}
+	SdkSpecPrivate      = SdkSpec{SdkPrivate, PrivateApiLevel, ""}
 	SdkSpecCorePlatform = SdkSpec{SdkCorePlatform, FutureApiLevel, "core_platform"}
 )
 
@@ -261,7 +282,7 @@ func SdkSpecFromWithConfig(config Config, str string) SdkSpec {
 
 		var kindString string
 		if sep == 0 {
-			return SdkSpec{SdkInvalid, NoneApiLevel, str}
+			return SdkSpec{SdkInvalid, NewInvalidApiLevel(str), str}
 		} else if sep == -1 {
 			kindString = ""
 		} else {
@@ -279,6 +300,8 @@ func SdkSpecFromWithConfig(config Config, str string) SdkSpec {
 			kind = SdkSystem
 		case "test":
 			kind = SdkTest
+		case "test_frameworks_core":
+			kind = SdkTestFrameworksCore
 		case "module":
 			kind = SdkModule
 		case "system_server":
@@ -289,30 +312,96 @@ func SdkSpecFromWithConfig(config Config, str string) SdkSpec {
 
 		apiLevel, err := ApiLevelFromUserWithConfig(config, versionString)
 		if err != nil {
-			return SdkSpec{SdkInvalid, apiLevel, str}
+			return SdkSpec{SdkInvalid, NewInvalidApiLevel(versionString), str}
 		}
 		return SdkSpec{kind, apiLevel, str}
 	}
 }
 
+// Checks if the use of this SDK `s` is valid for the given module context `ctx`.
 func (s SdkSpec) ValidateSystemSdk(ctx EarlyModuleContext) bool {
-	// Ensures that the specified system SDK version is one of BOARD_SYSTEMSDK_VERSIONS (for vendor/product Java module)
-	// Assuming that BOARD_SYSTEMSDK_VERSIONS := 28 29,
-	// sdk_version of the modules in vendor/product that use system sdk must be either system_28, system_29 or system_current
-	if s.Kind != SdkSystem || s.ApiLevel.IsPreview() {
+	// Do some early checks. This check is currently only for Java modules. And our only concern
+	// is the use of "system" SDKs.
+	if !isJava(ctx.Module()) || s.Kind != SdkSystem || ctx.DeviceConfig().BuildBrokenDontCheckSystemSdk() {
 		return true
 	}
-	allowedVersions := ctx.DeviceConfig().PlatformSystemSdkVersions()
-	if ctx.DeviceSpecific() || ctx.SocSpecific() || (ctx.ProductSpecific() && ctx.Config().EnforceProductPartitionInterface()) {
-		systemSdkVersions := ctx.DeviceConfig().SystemSdkVersions()
-		if len(systemSdkVersions) > 0 {
-			allowedVersions = systemSdkVersions
+
+	inVendor := ctx.DeviceSpecific() || ctx.SocSpecific()
+	inProduct := ctx.ProductSpecific()
+	isProductUnbundled := ctx.Config().EnforceProductPartitionInterface()
+	inApex := false
+	if am, ok := ctx.Module().(ApexModule); ok {
+		inApex = am.InAnyApex()
+	}
+	isUnbundled := inVendor || (inProduct && isProductUnbundled) || inApex
+
+	// Bundled modules can use any SDK
+	if !isUnbundled {
+		return true
+	}
+
+	// Unbundled modules are allowed to use BOARD_SYSTEMSDK_VERSIONS
+	supportedVersions := ctx.DeviceConfig().SystemSdkVersions()
+
+	// b/314011075: special case for vendor modules. Java modules in the vendor partition can
+	// not use SDK 35 or later. This is to discourage the use of Java APIs in the vendor
+	// partition which hasn't been officially supported since the Project Treble back in Android
+	// 10. We would like to eventually evacuate all Java modules from the partition, but that
+	// shall be done progressively.
+	if inVendor {
+		// 28 was the API when BOARD_SYSTEMSDK_VERSIONS was introduced, so that's the oldest
+		// we should allow.
+		supportedVersions = []string{}
+		for v := 28; v <= 34; v++ {
+			supportedVersions = append(supportedVersions, strconv.Itoa(v))
 		}
 	}
-	if len(allowedVersions) > 0 && !InList(s.ApiLevel.String(), allowedVersions) {
+
+	// APEXes in the system partition are still considered as part of the platform, thus can use
+	// more SDKs from PLATFORM_SYSTEMSDK_VERSIONS
+	if inApex && !inVendor {
+		supportedVersions = ctx.DeviceConfig().PlatformSystemSdkVersions()
+	}
+
+	thisVer, err := s.EffectiveVersion(ctx)
+	if err != nil {
+		ctx.PropertyErrorf("sdk_version", "invalid sdk version %q", s.Raw)
+		return false
+	}
+
+	thisVerString := strconv.Itoa(thisVer.FinalOrPreviewInt())
+	if thisVer.IsPreview() {
+		thisVerString = *ctx.Config().productVariables.Platform_sdk_version_or_codename
+	}
+
+	if !InList(thisVerString, supportedVersions) {
 		ctx.PropertyErrorf("sdk_version", "incompatible sdk version %q. System SDK version should be one of %q",
-			s.Raw, allowedVersions)
+			s.Raw, supportedVersions)
 		return false
 	}
 	return true
+}
+
+func isJava(m Module) bool {
+	moduleType := reflect.TypeOf(m).String()
+	return strings.HasPrefix(moduleType, "*java.")
+}
+
+func isSdkVersion34AvailableIn(c Config) bool {
+	return c.PlatformSdkVersion().FinalInt() >= 34
+}
+
+func init() {
+	RegisterMakeVarsProvider(pctx, javaSdkMakeVars)
+}
+
+// Export the name of the soong modules representing the various Java API surfaces.
+func javaSdkMakeVars(ctx MakeVarsContext) {
+	ctx.Strict("ANDROID_PUBLIC_STUBS", SdkPublic.DefaultJavaLibraryName())
+	ctx.Strict("ANDROID_PUBLIC_EXPORTABLE_STUBS", SdkPublic.DefaultExportableJavaLibraryName())
+	ctx.Strict("ANDROID_SYSTEM_STUBS", SdkSystem.DefaultJavaLibraryName())
+	ctx.Strict("ANDROID_TEST_STUBS", SdkTest.DefaultJavaLibraryName())
+	ctx.Strict("ANDROID_MODULE_LIB_STUBS", SdkModule.DefaultJavaLibraryName())
+	ctx.Strict("ANDROID_SYSTEM_SERVER_STUBS", SdkSystemServer.DefaultJavaLibraryName())
+	ctx.Strict("ANDROID_CORE_STUBS", SdkCore.DefaultJavaLibraryName())
 }

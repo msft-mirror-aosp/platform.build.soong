@@ -860,23 +860,24 @@ func TestGetConfigArgsBuildModules(t *testing.T) {
 }
 
 func TestGetConfigArgsBuildModulesInDirectory(t *testing.T) {
-	tests := []buildActionTestCase{{
-		description:  "normal execution in a directory",
-		dirsInTrees:  []string{"0/1/2"},
-		buildFiles:   []string{"0/1/2/Android.mk"},
-		args:         []string{"fake-module"},
-		curDir:       "0/1/2",
-		tidyOnly:     "",
-		expectedArgs: []string{"fake-module", "MODULES-IN-0-1-2"},
-	}, {
-		description:  "build file in parent directory",
-		dirsInTrees:  []string{"0/1/2"},
-		buildFiles:   []string{"0/1/Android.mk"},
-		args:         []string{},
-		curDir:       "0/1/2",
-		tidyOnly:     "",
-		expectedArgs: []string{"MODULES-IN-0-1"},
-	},
+	tests := []buildActionTestCase{
+		{
+			description:  "normal execution in a directory",
+			dirsInTrees:  []string{"0/1/2"},
+			buildFiles:   []string{"0/1/2/Android.mk"},
+			args:         []string{"fake-module"},
+			curDir:       "0/1/2",
+			tidyOnly:     "",
+			expectedArgs: []string{"fake-module", "MODULES-IN-0-1-2"},
+		}, {
+			description:  "build file in parent directory",
+			dirsInTrees:  []string{"0/1/2"},
+			buildFiles:   []string{"0/1/Android.mk"},
+			args:         []string{},
+			curDir:       "0/1/2",
+			tidyOnly:     "",
+			expectedArgs: []string{"MODULES-IN-0-1"},
+		},
 		{
 			description:  "build file in parent directory, multiple module names passed in",
 			dirsInTrees:  []string{"0/1/2"},
@@ -944,7 +945,8 @@ func TestGetConfigArgsBuildModulesInDirectory(t *testing.T) {
 			curDir:       "",
 			tidyOnly:     "",
 			expectedArgs: []string{"-j", "-k", "fake_module"},
-		}}
+		},
+	}
 	for _, tt := range tests {
 		t.Run("build action BUILD_MODULES_IN_DIR, "+tt.description, func(t *testing.T) {
 			testGetConfigArgs(t, tt, BUILD_MODULES_IN_A_DIRECTORY)
@@ -1008,161 +1010,57 @@ func TestBuildConfig(t *testing.T) {
 		name                string
 		environ             Environment
 		arguments           []string
-		useBazel            bool
-		bazelDevMode        bool
-		bazelProdMode       bool
-		bazelStagingMode    bool
 		expectedBuildConfig *smpb.BuildConfig
 	}{
 		{
 			name:    "none set",
 			environ: Environment{},
 			expectedBuildConfig: &smpb.BuildConfig{
-				ForceUseGoma:                proto.Bool(false),
-				UseGoma:                     proto.Bool(false),
-				UseRbe:                      proto.Bool(false),
-				BazelMixedBuild:             proto.Bool(false),
-				ForceDisableBazelMixedBuild: proto.Bool(false),
+				ForceUseGoma:          proto.Bool(false),
+				UseGoma:               proto.Bool(false),
+				UseRbe:                proto.Bool(false),
+				NinjaWeightListSource: smpb.BuildConfig_NOT_USED.Enum(),
 			},
 		},
 		{
 			name:    "force use goma",
 			environ: Environment{"FORCE_USE_GOMA=1"},
 			expectedBuildConfig: &smpb.BuildConfig{
-				ForceUseGoma:                proto.Bool(true),
-				UseGoma:                     proto.Bool(false),
-				UseRbe:                      proto.Bool(false),
-				BazelMixedBuild:             proto.Bool(false),
-				ForceDisableBazelMixedBuild: proto.Bool(false),
+				ForceUseGoma:          proto.Bool(true),
+				UseGoma:               proto.Bool(false),
+				UseRbe:                proto.Bool(false),
+				NinjaWeightListSource: smpb.BuildConfig_NOT_USED.Enum(),
 			},
 		},
 		{
 			name:    "use goma",
 			environ: Environment{"USE_GOMA=1"},
 			expectedBuildConfig: &smpb.BuildConfig{
-				ForceUseGoma:                proto.Bool(false),
-				UseGoma:                     proto.Bool(true),
-				UseRbe:                      proto.Bool(false),
-				BazelMixedBuild:             proto.Bool(false),
-				ForceDisableBazelMixedBuild: proto.Bool(false),
+				ForceUseGoma:          proto.Bool(false),
+				UseGoma:               proto.Bool(true),
+				UseRbe:                proto.Bool(false),
+				NinjaWeightListSource: smpb.BuildConfig_NOT_USED.Enum(),
 			},
 		},
 		{
 			name:    "use rbe",
 			environ: Environment{"USE_RBE=1"},
 			expectedBuildConfig: &smpb.BuildConfig{
-				ForceUseGoma:                proto.Bool(false),
-				UseGoma:                     proto.Bool(false),
-				UseRbe:                      proto.Bool(true),
-				BazelMixedBuild:             proto.Bool(false),
-				ForceDisableBazelMixedBuild: proto.Bool(false),
-			},
-		},
-		{
-			name:    "disable mixed builds",
-			environ: Environment{"BUILD_BROKEN_DISABLE_BAZEL=1"},
-			expectedBuildConfig: &smpb.BuildConfig{
-				ForceUseGoma:                proto.Bool(false),
-				UseGoma:                     proto.Bool(false),
-				UseRbe:                      proto.Bool(false),
-				BazelMixedBuild:             proto.Bool(false),
-				ForceDisableBazelMixedBuild: proto.Bool(true),
-			},
-		},
-		{
-			name:     "use bazel as ninja",
-			environ:  Environment{},
-			useBazel: true,
-			expectedBuildConfig: &smpb.BuildConfig{
-				ForceUseGoma:                proto.Bool(false),
-				UseGoma:                     proto.Bool(false),
-				UseRbe:                      proto.Bool(false),
-				BazelMixedBuild:             proto.Bool(false),
-				ForceDisableBazelMixedBuild: proto.Bool(false),
-			},
-		},
-		{
-			name:         "bazel mixed build from dev mode",
-			environ:      Environment{},
-			bazelDevMode: true,
-			expectedBuildConfig: &smpb.BuildConfig{
-				ForceUseGoma:                proto.Bool(false),
-				UseGoma:                     proto.Bool(false),
-				UseRbe:                      proto.Bool(false),
-				BazelMixedBuild:             proto.Bool(true),
-				ForceDisableBazelMixedBuild: proto.Bool(false),
-			},
-		},
-		{
-			name:          "bazel mixed build from prod mode",
-			environ:       Environment{},
-			bazelProdMode: true,
-			expectedBuildConfig: &smpb.BuildConfig{
-				ForceUseGoma:                proto.Bool(false),
-				UseGoma:                     proto.Bool(false),
-				UseRbe:                      proto.Bool(false),
-				BazelMixedBuild:             proto.Bool(true),
-				ForceDisableBazelMixedBuild: proto.Bool(false),
-			},
-		},
-		{
-			name:             "bazel mixed build from staging mode",
-			environ:          Environment{},
-			bazelStagingMode: true,
-			expectedBuildConfig: &smpb.BuildConfig{
-				ForceUseGoma:                proto.Bool(false),
-				UseGoma:                     proto.Bool(false),
-				UseRbe:                      proto.Bool(false),
-				BazelMixedBuild:             proto.Bool(true),
-				ForceDisableBazelMixedBuild: proto.Bool(false),
-			},
-		},
-		{
-			name:      "specified targets",
-			environ:   Environment{},
-			useBazel:  true,
-			arguments: []string{"droid", "dist"},
-			expectedBuildConfig: &smpb.BuildConfig{
-				ForceUseGoma:                proto.Bool(false),
-				UseGoma:                     proto.Bool(false),
-				UseRbe:                      proto.Bool(false),
-				BazelMixedBuild:             proto.Bool(false),
-				Targets:                     []string{"droid", "dist"},
-				ForceDisableBazelMixedBuild: proto.Bool(false),
-			},
-		},
-		{
-			name: "all set",
-			environ: Environment{
-				"FORCE_USE_GOMA=1",
-				"USE_GOMA=1",
-				"USE_RBE=1",
-				"BUILD_BROKEN_DISABLE_BAZEL=1",
-			},
-			useBazel:     true,
-			bazelDevMode: true,
-			expectedBuildConfig: &smpb.BuildConfig{
-				ForceUseGoma:                proto.Bool(true),
-				UseGoma:                     proto.Bool(true),
-				UseRbe:                      proto.Bool(true),
-				BazelMixedBuild:             proto.Bool(true),
-				ForceDisableBazelMixedBuild: proto.Bool(true),
+				ForceUseGoma:          proto.Bool(false),
+				UseGoma:               proto.Bool(false),
+				UseRbe:                proto.Bool(true),
+				NinjaWeightListSource: smpb.BuildConfig_NOT_USED.Enum(),
 			},
 		},
 	}
 
-	ctx := testContext()
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &configImpl{
-				environ:          &tc.environ,
-				bazelDevMode:     tc.bazelDevMode,
-				bazelProdMode:    tc.bazelProdMode,
-				bazelStagingMode: tc.bazelStagingMode,
-				arguments:        tc.arguments,
+				environ:   &tc.environ,
+				arguments: tc.arguments,
 			}
 			config := Config{c}
-			checkBazelMode(ctx, config)
 			actualBuildConfig := buildConfig(config)
 			if expected := tc.expectedBuildConfig; !proto.Equal(expected, actualBuildConfig) {
 				t.Errorf("Build config mismatch.\n"+

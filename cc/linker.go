@@ -15,10 +15,11 @@
 package cc
 
 import (
-	"android/soong/android"
-	"android/soong/cc/config"
 	"fmt"
 	"path/filepath"
+
+	"android/soong/android"
+	"android/soong/cc/config"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -89,6 +90,10 @@ type BaseLinkerProperties struct {
 	// don't link in crt_begin and crt_end.  This flag should only be necessary for
 	// compiling crt or libc.
 	Nocrt *bool `android:"arch_variant"`
+
+	// don't link in crt_pad_segment. This flag is currently only used internal to
+	// soong for testing and for vndk prebuilt shared libraries.
+	No_crt_pad_segment *bool `android:"arch_variant"`
 
 	// deprecated and ignored because lld makes it unnecessary. See b/189475744.
 	Group_static_libs *bool `android:"arch_variant"`
@@ -213,6 +218,11 @@ type BaseLinkerProperties struct {
 			// variant of the C/C++ module.
 			Exclude_static_libs []string
 		}
+		Non_apex struct {
+			// list of shared libs that should not be used to build the non-apex
+			// variant of the C/C++ module.
+			Exclude_shared_libs []string
+		}
 	} `android:"arch_variant"`
 
 	// make android::build:GetBuildNumber() available containing the build ID.
@@ -245,6 +255,10 @@ func (blp *BaseLinkerProperties) crt() bool {
 
 func (blp *BaseLinkerProperties) libCrt() bool {
 	return blp.No_libcrt == nil || !*blp.No_libcrt
+}
+
+func (blp *BaseLinkerProperties) crtPadSegment() bool {
+	return blp.No_crt_pad_segment == nil || !*blp.No_crt_pad_segment
 }
 
 func NewBaseLinker(sanitize *sanitize) *baseLinker {
@@ -299,6 +313,10 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	// variants.
 	deps.ExcludeLibsForApex = append(deps.ExcludeLibsForApex, linker.Properties.Target.Apex.Exclude_shared_libs...)
 	deps.ExcludeLibsForApex = append(deps.ExcludeLibsForApex, linker.Properties.Target.Apex.Exclude_static_libs...)
+	// Record the libraries that need to be excluded when building for non-APEX variants
+	// for the same reason above. This is used for marking deps and marked deps are
+	// ignored for non-apex variants.
+	deps.ExcludeLibsForNonApex = append(deps.ExcludeLibsForNonApex, linker.Properties.Target.Non_apex.Exclude_shared_libs...)
 
 	if Bool(linker.Properties.Use_version_lib) {
 		deps.WholeStaticLibs = append(deps.WholeStaticLibs, "libbuildversion")
@@ -312,6 +330,7 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 		deps.StaticLibs = removeListFromList(deps.StaticLibs, linker.Properties.Target.Vendor.Exclude_static_libs)
 		deps.HeaderLibs = append(deps.HeaderLibs, linker.Properties.Target.Vendor.Header_libs...)
 		deps.HeaderLibs = removeListFromList(deps.HeaderLibs, linker.Properties.Target.Vendor.Exclude_header_libs)
+		deps.ReexportHeaderLibHeaders = removeListFromList(deps.ReexportHeaderLibHeaders, linker.Properties.Target.Vendor.Exclude_header_libs)
 		deps.ReexportStaticLibHeaders = removeListFromList(deps.ReexportStaticLibHeaders, linker.Properties.Target.Vendor.Exclude_static_libs)
 		deps.WholeStaticLibs = removeListFromList(deps.WholeStaticLibs, linker.Properties.Target.Vendor.Exclude_static_libs)
 		deps.RuntimeLibs = removeListFromList(deps.RuntimeLibs, linker.Properties.Target.Vendor.Exclude_runtime_libs)
@@ -324,6 +343,7 @@ func (linker *baseLinker) linkerDeps(ctx DepsContext, deps Deps) Deps {
 		deps.StaticLibs = append(deps.StaticLibs, linker.Properties.Target.Product.Static_libs...)
 		deps.StaticLibs = removeListFromList(deps.StaticLibs, linker.Properties.Target.Product.Exclude_static_libs)
 		deps.HeaderLibs = removeListFromList(deps.HeaderLibs, linker.Properties.Target.Product.Exclude_header_libs)
+		deps.ReexportHeaderLibHeaders = removeListFromList(deps.ReexportHeaderLibHeaders, linker.Properties.Target.Product.Exclude_header_libs)
 		deps.ReexportStaticLibHeaders = removeListFromList(deps.ReexportStaticLibHeaders, linker.Properties.Target.Product.Exclude_static_libs)
 		deps.WholeStaticLibs = removeListFromList(deps.WholeStaticLibs, linker.Properties.Target.Product.Exclude_static_libs)
 		deps.RuntimeLibs = removeListFromList(deps.RuntimeLibs, linker.Properties.Target.Product.Exclude_runtime_libs)
@@ -512,13 +532,6 @@ func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 		flags.Global.LdFlags = append(flags.Global.LdFlags, RpathFlags(ctx)...)
 	}
 
-	if ctx.useSdk() {
-		// The bionic linker now has support gnu style hashes (which are much faster!), but shipping
-		// to older devices requires the old style hash. Fortunately, we can build with both and
-		// it'll work anywhere.
-		flags.Global.LdFlags = append(flags.Global.LdFlags, "-Wl,--hash-style=both")
-	}
-
 	flags.Global.LdFlags = append(flags.Global.LdFlags, toolchain.ToolchainLdflags())
 
 	// Version_script is not needed when linking stubs lib where the version
@@ -542,13 +555,13 @@ func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 				ctx.PropertyErrorf("version_script", "Not supported on Darwin")
 			} else {
 				flags.Local.LdFlags = append(flags.Local.LdFlags,
-					"-Wl,--version-script,"+versionScript.String())
+					config.VersionScriptFlagPrefix+versionScript.String())
 				flags.LdFlagsDeps = append(flags.LdFlagsDeps, versionScript.Path())
 
 				if linker.sanitize.isSanitizerEnabled(cfi) {
-					cfiExportsMap := android.PathForSource(ctx, cfiExportsMapPath)
+					cfiExportsMap := android.PathForSource(ctx, cfiExportsMapPath+"/"+cfiExportsMapFilename)
 					flags.Local.LdFlags = append(flags.Local.LdFlags,
-						"-Wl,--version-script,"+cfiExportsMap.String())
+						config.VersionScriptFlagPrefix+cfiExportsMap.String())
 					flags.LdFlagsDeps = append(flags.LdFlagsDeps, cfiExportsMap)
 				}
 			}
@@ -636,6 +649,9 @@ func (linker *baseLinker) linkerSpecifiedDeps(specifiedDeps specifiedDeps) speci
 	}
 
 	return specifiedDeps
+}
+
+func (linker *baseLinker) moduleInfoJSON(ctx ModuleContext, moduleInfoJSON *android.ModuleInfoJSON) {
 }
 
 // Injecting version symbols

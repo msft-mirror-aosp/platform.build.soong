@@ -16,10 +16,17 @@ package filesystem
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"android/soong/android"
+	"android/soong/bpf"
 	"android/soong/cc"
+	"android/soong/etc"
+	"android/soong/java"
+	"android/soong/phony"
+
+	"github.com/google/blueprint/proptools"
 )
 
 func TestMain(m *testing.M) {
@@ -28,7 +35,13 @@ func TestMain(m *testing.M) {
 
 var fixture = android.GroupFixturePreparers(
 	android.PrepareForIntegrationTestWithAndroid,
+	android.PrepareForTestWithAndroidBuildComponents,
+	bpf.PrepareForTestWithBpf,
 	cc.PrepareForIntegrationTestWithCc,
+	etc.PrepareForTestWithPrebuiltEtc,
+	java.PrepareForTestWithJavaBuildComponents,
+	java.PrepareForTestWithJavaDefaultModules,
+	phony.PrepareForTestWithPhony,
 	PrepareForTestWithFilesystemBuildComponents,
 )
 
@@ -36,11 +49,108 @@ func TestFileSystemDeps(t *testing.T) {
 	result := fixture.RunTestWithBp(t, `
 		android_filesystem {
 			name: "myfilesystem",
+			multilib: {
+				common: {
+					deps: [
+						"bpf.o",
+						"phony",
+					],
+				},
+				lib32: {
+					deps: [
+						"foo",
+						"libbar",
+					],
+				},
+				lib64: {
+					deps: [
+						"libbar",
+					],
+				},
+			},
+			compile_multilib: "both",
+		}
+
+		bpf {
+			name: "bpf.o",
+			srcs: ["bpf.c"],
+		}
+
+		cc_binary {
+			name: "foo",
+			compile_multilib: "prefer32",
+		}
+
+		cc_library {
+			name: "libbar",
+			required: ["libbaz"],
+			target: {
+				platform: {
+					required: ["lib_platform_only"],
+				},
+			},
+		}
+
+		cc_library {
+			name: "libbaz",
+		}
+
+		cc_library {
+			name: "lib_platform_only",
+		}
+
+		phony {
+			name: "phony",
+			required: [
+				"libquz",
+				"myapp",
+			],
+		}
+
+		cc_library {
+			name: "libquz",
+		}
+
+		android_app {
+			name: "myapp",
+			platform_apis: true,
+			installable: true,
 		}
 	`)
 
 	// produces "myfilesystem.img"
 	result.ModuleForTests("myfilesystem", "android_common").Output("myfilesystem.img")
+
+	fs := result.ModuleForTests("myfilesystem", "android_common").Module().(*filesystem)
+	expected := []string{
+		"app/myapp/myapp.apk",
+		"bin/foo",
+		"lib/libbar.so",
+		"lib64/libbar.so",
+		"lib64/libbaz.so",
+		"lib64/libquz.so",
+		"lib64/lib_platform_only.so",
+		"etc/bpf/bpf.o",
+	}
+	for _, e := range expected {
+		android.AssertStringListContains(t, "missing entry", fs.entries, e)
+	}
+}
+
+func TestIncludeMakeBuiltFiles(t *testing.T) {
+	result := fixture.RunTestWithBp(t, `
+		android_filesystem {
+			name: "myfilesystem",
+			include_make_built_files: "system",
+		}
+	`)
+
+	output := result.ModuleForTests("myfilesystem", "android_common").Output("myfilesystem.img")
+
+	stampFile := filepath.Join(result.Config.OutDir(), "target/product/test_device/obj/PACKAGING/system_intermediates/staging_dir.stamp")
+	fileListFile := filepath.Join(result.Config.OutDir(), "target/product/test_device/obj/PACKAGING/system_intermediates/file_list.txt")
+	android.AssertStringListContains(t, "deps of filesystem must include the staging dir stamp file", output.Implicits.Strings(), stampFile)
+	android.AssertStringListContains(t, "deps of filesystem must include the staging dir file list", output.Implicits.Strings(), fileListFile)
 }
 
 func TestFileSystemFillsLinkerConfigWithStubLibs(t *testing.T) {
@@ -189,14 +299,21 @@ func TestAvbAddHashFooter(t *testing.T) {
 		cmd, "--include_descriptors_from_image ")
 }
 
-func TestFileSystemShouldInstallCoreVariantIfTargetBuildAppsIsSet(t *testing.T) {
+func TestFileSystemWithCoverageVariants(t *testing.T) {
 	context := android.GroupFixturePreparers(
 		fixture,
 		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.Unbundled_build_apps = []string{"bar"}
+			variables.GcovCoverage = proptools.BoolPtr(true)
+			variables.Native_coverage = proptools.BoolPtr(true)
 		}),
 	)
+
 	result := context.RunTestWithBp(t, `
+		prebuilt_etc {
+			name: "prebuilt",
+			src: ":myfilesystem",
+		}
+
 		android_system_image {
 			name: "myfilesystem",
 			deps: [
@@ -215,13 +332,136 @@ func TestFileSystemShouldInstallCoreVariantIfTargetBuildAppsIsSet(t *testing.T) 
 
 		cc_library {
 			name: "libbar",
-			sdk_version: "9",
 			stl: "none",
 		}
 	`)
 
-	inputs := result.ModuleForTests("myfilesystem", "android_common").Output("deps.zip").Implicits
-	android.AssertStringListContains(t, "filesystem should have libbar even for unbundled build",
+	filesystem := result.ModuleForTests("myfilesystem", "android_common_cov")
+	inputs := filesystem.Output("myfilesystem.img").Implicits
+	android.AssertStringListContains(t, "filesystem should have libfoo(cov)",
 		inputs.Strings(),
-		"out/soong/.intermediates/libbar/android_arm64_armv8-a_shared/libbar.so")
+		"out/soong/.intermediates/libfoo/android_arm64_armv8-a_shared_cov/libfoo.so")
+	android.AssertStringListContains(t, "filesystem should have libbar(cov)",
+		inputs.Strings(),
+		"out/soong/.intermediates/libbar/android_arm64_armv8-a_shared_cov/libbar.so")
+
+	filesystemOutput := filesystem.Output("myfilesystem.img").Output
+	prebuiltInput := result.ModuleForTests("prebuilt", "android_arm64_armv8-a").Rule("Cp").Input
+	if filesystemOutput != prebuiltInput {
+		t.Error("prebuilt should use cov variant of filesystem")
+	}
+}
+
+func TestSystemImageDefaults(t *testing.T) {
+	result := fixture.RunTestWithBp(t, `
+		android_filesystem_defaults {
+			name: "defaults",
+			multilib: {
+				common: {
+					deps: [
+						"phony",
+					],
+				},
+				lib64: {
+					deps: [
+						"libbar",
+					],
+				},
+			},
+			compile_multilib: "both",
+		}
+
+		android_system_image {
+			name: "system",
+			defaults: ["defaults"],
+			multilib: {
+				lib32: {
+					deps: [
+						"foo",
+						"libbar",
+					],
+				},
+			},
+		}
+
+		cc_binary {
+			name: "foo",
+			compile_multilib: "prefer32",
+		}
+
+		cc_library {
+			name: "libbar",
+			required: ["libbaz"],
+		}
+
+		cc_library {
+			name: "libbaz",
+		}
+
+		phony {
+			name: "phony",
+			required: ["libquz"],
+		}
+
+		cc_library {
+			name: "libquz",
+		}
+	`)
+
+	fs := result.ModuleForTests("system", "android_common").Module().(*systemImage)
+	expected := []string{
+		"bin/foo",
+		"lib/libbar.so",
+		"lib64/libbar.so",
+		"lib64/libbaz.so",
+		"lib64/libquz.so",
+	}
+	for _, e := range expected {
+		android.AssertStringListContains(t, "missing entry", fs.entries, e)
+	}
+}
+
+func TestInconsistentPartitionTypesInDefaults(t *testing.T) {
+	fixture.ExtendWithErrorHandler(android.FixtureExpectsOneErrorPattern(
+		"doesn't match with the partition type")).
+		RunTestWithBp(t, `
+		android_filesystem_defaults {
+			name: "system_ext_def",
+			partition_type: "system_ext",
+		}
+
+		android_filesystem_defaults {
+			name: "system_def",
+			partition_type: "system",
+			defaults: ["system_ext_def"],
+		}
+
+		android_system_image {
+			name: "system",
+			defaults: ["system_def"],
+		}
+	`)
+}
+
+func TestPreventDuplicatedEntries(t *testing.T) {
+	fixture.ExtendWithErrorHandler(android.FixtureExpectsOneErrorPattern(
+		"packaging conflict at")).
+		RunTestWithBp(t, `
+		android_filesystem {
+			name: "fs",
+			deps: [
+				"foo",
+				"foo_dup",
+			],
+		}
+
+		cc_binary {
+			name: "foo",
+		}
+
+		cc_binary {
+			name: "foo_dup",
+			stem: "foo",
+		}
+	`)
 }

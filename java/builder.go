@@ -42,7 +42,8 @@ var (
 	// TODO(b/143658984): goma can't handle the --system argument to javac.
 	javac, javacRE = pctx.MultiCommandRemoteStaticRules("javac",
 		blueprint.RuleParams{
-			Command: `rm -rf "$outDir" "$annoDir" "$srcJarDir" "$out" && mkdir -p "$outDir" "$annoDir" "$srcJarDir" && ` +
+			Command: `rm -rf "$outDir" "$annoDir" "$annoSrcJar.tmp" "$srcJarDir" "$out.tmp" && ` +
+				`mkdir -p "$outDir" "$annoDir" "$srcJarDir" && ` +
 				`${config.ZipSyncCmd} -d $srcJarDir -l $srcJarDir/list -f "*.java" $srcJars && ` +
 				`(if [ -s $srcJarDir/list ] || [ -s $out.rsp ] ; then ` +
 				`${config.SoongJavacWrapper} $javaTemplate${config.JavacCmd} ` +
@@ -50,14 +51,18 @@ var (
 				`$processorpath $processor $javacFlags $bootClasspath $classpath ` +
 				`-source $javaVersion -target $javaVersion ` +
 				`-d $outDir -s $annoDir @$out.rsp @$srcJarDir/list ; fi ) && ` +
-				`$zipTemplate${config.SoongZipCmd} -jar -o $out -C $outDir -D $outDir && ` +
-				`rm -rf "$srcJarDir"`,
+				`$annoSrcJarTemplate${config.SoongZipCmd} -jar -o $annoSrcJar.tmp -C $annoDir -D $annoDir && ` +
+				`$zipTemplate${config.SoongZipCmd} -jar -o $out.tmp -C $outDir -D $outDir && ` +
+				`if ! cmp -s "$out.tmp" "$out"; then mv "$out.tmp" "$out"; fi && ` +
+				`if ! cmp -s "$annoSrcJar.tmp" "$annoSrcJar"; then mv "$annoSrcJar.tmp" "$annoSrcJar"; fi && ` +
+				`rm -rf "$srcJarDir" "$outDir"`,
 			CommandDeps: []string{
 				"${config.JavacCmd}",
 				"${config.SoongZipCmd}",
 				"${config.ZipSyncCmd}",
 			},
 			CommandOrderOnly: []string{"${config.SoongJavacWrapper}"},
+			Restat:           true,
 			Rspfile:          "$out.rsp",
 			RspfileContent:   "$in",
 		}, map[string]*remoteexec.REParams{
@@ -69,12 +74,19 @@ var (
 			"$zipTemplate": &remoteexec.REParams{
 				Labels:       map[string]string{"type": "tool", "name": "soong_zip"},
 				Inputs:       []string{"${config.SoongZipCmd}", "$outDir"},
-				OutputFiles:  []string{"$out"},
+				OutputFiles:  []string{"$out.tmp"},
+				ExecStrategy: "${config.REJavacExecStrategy}",
+				Platform:     map[string]string{remoteexec.PoolKey: "${config.REJavaPool}"},
+			},
+			"$annoSrcJarTemplate": &remoteexec.REParams{
+				Labels:       map[string]string{"type": "tool", "name": "soong_zip"},
+				Inputs:       []string{"${config.SoongZipCmd}", "$annoDir"},
+				OutputFiles:  []string{"$annoSrcJar.tmp"},
 				ExecStrategy: "${config.REJavacExecStrategy}",
 				Platform:     map[string]string{remoteexec.PoolKey: "${config.REJavaPool}"},
 			},
 		}, []string{"javacFlags", "bootClasspath", "classpath", "processorpath", "processor", "srcJars", "srcJarDir",
-			"outDir", "annoDir", "javaVersion"}, nil)
+			"outDir", "annoDir", "annoSrcJar", "javaVersion"}, nil)
 
 	_ = pctx.VariableFunc("kytheCorpus",
 		func(ctx android.PackageVarContext) string { return ctx.Config().XrefCorpusName() })
@@ -108,6 +120,8 @@ var (
 				`--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED ` +
 				`--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED ` +
 				`--add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED ` +
+				`--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED ` +
+				`--add-exports=jdk.internal.opt/jdk.internal.opt=ALL-UNNAMED ` +
 				`-jar ${config.JavaKytheExtractorJar} ` +
 				`${config.JavacHeapFlags} ${config.CommonJdkFlags} ` +
 				`$processorpath $processor $javacFlags $bootClasspath $classpath ` +
@@ -131,13 +145,13 @@ var (
 		blueprint.RuleParams{
 			Command: `rm -rf "$out" && ` +
 				`${config.ExtractApksCmd} -o "${out}" -zip "${zip}" -allow-prereleased=${allow-prereleased} ` +
-				`-sdk-version=${sdk-version} -abis=${abis} ` +
+				`-sdk-version=${sdk-version} -skip-sdk-check=${skip-sdk-check} -abis=${abis} ` +
 				`--screen-densities=${screen-densities} --stem=${stem} ` +
 				`-apkcerts=${apkcerts} -partition=${partition} ` +
 				`${in}`,
 			CommandDeps: []string{"${config.ExtractApksCmd}"},
 		},
-		"abis", "allow-prereleased", "screen-densities", "sdk-version", "stem", "apkcerts", "partition", "zip")
+		"abis", "allow-prereleased", "screen-densities", "sdk-version", "skip-sdk-check", "stem", "apkcerts", "partition", "zip")
 
 	turbine, turbineRE = pctx.RemoteStaticRules("turbine",
 		blueprint.RuleParams{
@@ -200,6 +214,14 @@ var (
 			CommandDeps: []string{"${config.MergeZipsCmd}"},
 		},
 		"jarArgs")
+	combineJarRsp = pctx.AndroidStaticRule("combineJarRsp",
+		blueprint.RuleParams{
+			Command:        `${config.MergeZipsCmd} --ignore-duplicates -j $jarArgs $out @$out.rsp`,
+			CommandDeps:    []string{"${config.MergeZipsCmd}"},
+			Rspfile:        "$out.rsp",
+			RspfileContent: "$in",
+		},
+		"jarArgs")
 
 	jarjar = pctx.AndroidStaticRule("jarjar",
 		blueprint.RuleParams{
@@ -246,11 +268,46 @@ var (
 			CommandDeps: []string{"${config.ZipAlign}"},
 		},
 	)
+
+	convertImplementationJarToHeaderJarRule = pctx.AndroidStaticRule("convertImplementationJarToHeaderJar",
+		blueprint.RuleParams{
+			Command:     `${config.Zip2ZipCmd} -i ${in} -o ${out} -x 'META-INF/services/**/*'`,
+			CommandDeps: []string{"${config.Zip2ZipCmd}"},
+		})
+
+	writeCombinedProguardFlagsFileRule = pctx.AndroidStaticRule("writeCombinedProguardFlagsFileRule",
+		blueprint.RuleParams{
+			Command: `rm -f $out && ` +
+				`for f in $in; do ` +
+				` echo  && ` +
+				` echo "# including $$f" && ` +
+				` cat $$f; ` +
+				`done > $out`,
+		})
+
+	gatherReleasedFlaggedApisRule = pctx.AndroidStaticRule("gatherReleasedFlaggedApisRule",
+		blueprint.RuleParams{
+			Command: `${aconfig} dump-cache --dedup --format='{fully_qualified_name}={state:bool}' ` +
+				`--out ${out} ` +
+				`${flags_path} ` +
+				`${filter_args} `,
+			CommandDeps: []string{"${aconfig}"},
+			Description: "aconfig_bool",
+		}, "flags_path", "filter_args")
+
+	generateMetalavaRevertAnnotationsRule = pctx.AndroidStaticRule("generateMetalavaRevertAnnotationsRule",
+		blueprint.RuleParams{
+			Command:     `${keep-flagged-apis} ${in} > ${out}`,
+			CommandDeps: []string{"${keep-flagged-apis}"},
+		})
 )
 
 func init() {
 	pctx.Import("android/soong/android")
 	pctx.Import("android/soong/java/config")
+
+	pctx.HostBinToolVariable("aconfig", "aconfig")
+	pctx.HostBinToolVariable("keep-flagged-apis", "keep-flagged-apis")
 }
 
 type javaBuilderFlags struct {
@@ -292,8 +349,14 @@ type javaBuilderFlags struct {
 	proto android.ProtoFlags
 }
 
+func DefaultJavaBuilderFlags() javaBuilderFlags {
+	return javaBuilderFlags{
+		javaVersion: JAVA_VERSION_8,
+	}
+}
+
 func TransformJavaToClasses(ctx android.ModuleContext, outputFile android.WritablePath, shardIdx int,
-	srcFiles, srcJars android.Paths, flags javaBuilderFlags, deps android.Paths) {
+	srcFiles, srcJars android.Paths, annoSrcJar android.WritablePath, flags javaBuilderFlags, deps android.Paths) {
 
 	// Compile java sources into .class files
 	desc := "javac"
@@ -301,7 +364,7 @@ func TransformJavaToClasses(ctx android.ModuleContext, outputFile android.Writab
 		desc += strconv.Itoa(shardIdx)
 	}
 
-	transformJavaToClasses(ctx, outputFile, shardIdx, srcFiles, srcJars, flags, deps, "javac", desc)
+	transformJavaToClasses(ctx, outputFile, shardIdx, srcFiles, srcJars, annoSrcJar, flags, deps, "javac", desc)
 }
 
 // Emits the rule to generate Xref input file (.kzip file) for the given set of source files and source jars
@@ -365,7 +428,7 @@ func emitXrefRule(ctx android.ModuleContext, xrefFile android.WritablePath, idx 
 		})
 }
 
-func turbineFlags(ctx android.ModuleContext, flags javaBuilderFlags) (string, android.Paths) {
+func turbineFlags(ctx android.ModuleContext, flags javaBuilderFlags, dir string) (string, android.Paths) {
 	var deps android.Paths
 
 	classpath := flags.classpath
@@ -390,13 +453,21 @@ func turbineFlags(ctx android.ModuleContext, flags javaBuilderFlags) (string, an
 	deps = append(deps, classpath...)
 	turbineFlags := bootClasspath + " " + classpath.FormTurbineClassPath("--classpath ")
 
+	const flagsLimit = 32 * 1024
+	if len(turbineFlags) > flagsLimit {
+		flagsRspFile := android.PathForModuleOut(ctx, dir, "turbine-flags.rsp")
+		android.WriteFileRule(ctx, flagsRspFile, turbineFlags)
+		turbineFlags = "@" + flagsRspFile.String()
+		deps = append(deps, flagsRspFile)
+	}
+
 	return turbineFlags, deps
 }
 
 func TransformJavaToHeaderClasses(ctx android.ModuleContext, outputFile android.WritablePath,
 	srcFiles, srcJars android.Paths, flags javaBuilderFlags) {
 
-	turbineFlags, deps := turbineFlags(ctx, flags)
+	turbineFlags, deps := turbineFlags(ctx, flags, "turbine")
 
 	deps = append(deps, srcJars...)
 
@@ -428,7 +499,7 @@ func TransformJavaToHeaderClasses(ctx android.ModuleContext, outputFile android.
 func TurbineApt(ctx android.ModuleContext, outputSrcJar, outputResJar android.WritablePath,
 	srcFiles, srcJars android.Paths, flags javaBuilderFlags) {
 
-	turbineFlags, deps := turbineFlags(ctx, flags)
+	turbineFlags, deps := turbineFlags(ctx, flags, "kapt")
 
 	deps = append(deps, srcJars...)
 
@@ -475,20 +546,20 @@ func TurbineApt(ctx android.ModuleContext, outputSrcJar, outputResJar android.Wr
 // suffix will be appended to various intermediate files and directories to avoid collisions when
 // this function is called twice in the same module directory.
 func transformJavaToClasses(ctx android.ModuleContext, outputFile android.WritablePath,
-	shardIdx int, srcFiles, srcJars android.Paths,
+	shardIdx int, srcFiles, srcJars android.Paths, annoSrcJar android.WritablePath,
 	flags javaBuilderFlags, deps android.Paths,
 	intermediatesDir, desc string) {
 
 	deps = append(deps, srcJars...)
 
-	classpath := flags.classpath
+	javacClasspath := flags.classpath
 
 	var bootClasspath string
 	if flags.javaVersion.usesJavaModules() {
 		var systemModuleDeps android.Paths
 		bootClasspath, systemModuleDeps = flags.systemModules.FormJavaSystemModulesPath(ctx.Device())
 		deps = append(deps, systemModuleDeps...)
-		classpath = append(flags.java9Classpath, classpath...)
+		javacClasspath = append(flags.java9Classpath, javacClasspath...)
 	} else {
 		deps = append(deps, flags.bootClasspath...)
 		if len(flags.bootClasspath) == 0 && ctx.Device() {
@@ -500,7 +571,19 @@ func transformJavaToClasses(ctx android.ModuleContext, outputFile android.Writab
 		}
 	}
 
-	deps = append(deps, classpath...)
+	classpathArg := javacClasspath.FormJavaClassPath("-classpath")
+
+	// Keep the command line under the MAX_ARG_STRLEN limit by putting the classpath argument into an rsp file
+	// if it is too long.
+	const classpathLimit = 64 * 1024
+	if len(classpathArg) > classpathLimit {
+		classpathRspFile := outputFile.ReplaceExtension(ctx, "classpath")
+		android.WriteFileRule(ctx, classpathRspFile, classpathArg)
+		deps = append(deps, classpathRspFile)
+		classpathArg = "@" + classpathRspFile.String()
+	}
+
+	deps = append(deps, javacClasspath...)
 	deps = append(deps, flags.processorPath...)
 
 	processor := "-proc:none"
@@ -522,21 +605,23 @@ func transformJavaToClasses(ctx android.ModuleContext, outputFile android.Writab
 		rule = javacRE
 	}
 	ctx.Build(pctx, android.BuildParams{
-		Rule:        rule,
-		Description: desc,
-		Output:      outputFile,
-		Inputs:      srcFiles,
-		Implicits:   deps,
+		Rule:           rule,
+		Description:    desc,
+		Output:         outputFile,
+		ImplicitOutput: annoSrcJar,
+		Inputs:         srcFiles,
+		Implicits:      deps,
 		Args: map[string]string{
 			"javacFlags":    flags.javacFlags,
 			"bootClasspath": bootClasspath,
-			"classpath":     classpath.FormJavaClassPath("-classpath"),
+			"classpath":     classpathArg,
 			"processorpath": flags.processorPath.FormJavaClassPath("-processorpath"),
 			"processor":     processor,
 			"srcJars":       strings.Join(srcJars.Strings(), " "),
 			"srcJarDir":     android.PathForModuleOut(ctx, intermediatesDir, srcJarDir).String(),
 			"outDir":        android.PathForModuleOut(ctx, intermediatesDir, outDir).String(),
 			"annoDir":       android.PathForModuleOut(ctx, intermediatesDir, annoDir).String(),
+			"annoSrcJar":    annoSrcJar.String(),
 			"javaVersion":   flags.javaVersion.String(),
 		},
 	})
@@ -588,8 +673,23 @@ func TransformJarsToJar(ctx android.ModuleContext, outputFile android.WritablePa
 		jarArgs = append(jarArgs, "-D")
 	}
 
+	rule := combineJar
+	// Keep the command line under the MAX_ARG_STRLEN limit by putting the list of jars into an rsp file
+	// if it is too long.
+	const jarsLengthLimit = 64 * 1024
+	jarsLength := 0
+	for i, jar := range jars {
+		if i != 0 {
+			jarsLength += 1
+		}
+		jarsLength += len(jar.String())
+	}
+	if jarsLength > jarsLengthLimit {
+		rule = combineJarRsp
+	}
+
 	ctx.Build(pctx, android.BuildParams{
-		Rule:        combineJar,
+		Rule:        rule,
 		Description: desc,
 		Output:      outputFile,
 		Inputs:      jars,
@@ -597,6 +697,15 @@ func TransformJarsToJar(ctx android.ModuleContext, outputFile android.WritablePa
 		Args: map[string]string{
 			"jarArgs": strings.Join(jarArgs, " "),
 		},
+	})
+}
+
+func convertImplementationJarToHeaderJar(ctx android.ModuleContext, implementationJarFile android.Path,
+	headerJarFile android.WritablePath) {
+	ctx.Build(pctx, android.BuildParams{
+		Rule:   convertImplementationJarToHeaderJarRule,
+		Input:  implementationJarFile,
+		Output: headerJarFile,
 	})
 }
 
@@ -641,11 +750,21 @@ func GenerateMainClassManifest(ctx android.ModuleContext, outputFile android.Wri
 	android.WriteFileRule(ctx, outputFile, "Main-Class: "+mainClass+"\n")
 }
 
-func TransformZipAlign(ctx android.ModuleContext, outputFile android.WritablePath, inputFile android.Path) {
+func TransformZipAlign(ctx android.ModuleContext, outputFile android.WritablePath, inputFile android.Path, validations android.Paths) {
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        zipalign,
 		Description: "align",
 		Input:       inputFile,
+		Output:      outputFile,
+		Validations: validations,
+	})
+}
+
+func writeCombinedProguardFlagsFile(ctx android.ModuleContext, outputFile android.WritablePath, files android.Paths) {
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        writeCombinedProguardFlagsFileRule,
+		Description: "write combined proguard flags file",
+		Inputs:      files,
 		Output:      outputFile,
 	})
 }

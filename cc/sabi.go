@@ -26,6 +26,30 @@ var (
 	lsdumpPathsLock sync.Mutex
 )
 
+type lsdumpTag string
+
+const (
+	apexLsdumpTag     lsdumpTag = "APEX"
+	llndkLsdumpTag    lsdumpTag = "LLNDK"
+	platformLsdumpTag lsdumpTag = "PLATFORM"
+	productLsdumpTag  lsdumpTag = "PRODUCT"
+	vendorLsdumpTag   lsdumpTag = "VENDOR"
+)
+
+// Return the prebuilt ABI dump directory for a tag; an empty string for an opt-in dump.
+func (tag *lsdumpTag) dirName() string {
+	switch *tag {
+	case apexLsdumpTag:
+		return "platform"
+	case llndkLsdumpTag:
+		return "vndk"
+	case platformLsdumpTag:
+		return "platform"
+	default:
+		return ""
+	}
+}
+
 // Properties for ABI compatibility checker in Android.bp.
 type headerAbiCheckerProperties struct {
 	// Enable ABI checks (even if this is not an LLNDK/VNDK lib)
@@ -68,7 +92,8 @@ type SAbiProperties struct {
 
 	// Include directories that may contain ABI information exported by a library.
 	// These directories are passed to the header-abi-dumper.
-	ReexportedIncludes []string `blueprint:"mutated"`
+	ReexportedIncludes       []string `blueprint:"mutated"`
+	ReexportedSystemIncludes []string `blueprint:"mutated"`
 }
 
 type sabi struct {
@@ -97,49 +122,33 @@ func (sabi *sabi) shouldCreateSourceAbiDump() bool {
 	return sabi != nil && sabi.Properties.ShouldCreateSourceAbiDump
 }
 
-// Returns a string that represents the class of the ABI dump.
-// Returns an empty string if ABI check is disabled for this library.
-func classifySourceAbiDump(ctx android.BaseModuleContext) string {
+// Returns a slice of strings that represent the ABI dumps generated for this module.
+func classifySourceAbiDump(ctx android.BaseModuleContext) []lsdumpTag {
+	result := []lsdumpTag{}
 	m := ctx.Module().(*Module)
 	headerAbiChecker := m.library.getHeaderAbiCheckerProperties(ctx)
 	if headerAbiChecker.explicitlyDisabled() {
-		return ""
+		return result
 	}
-	// Return NDK if the library is both NDK and LLNDK.
-	if m.IsNdk(ctx.Config()) {
-		return "NDK"
-	}
-	if m.isImplementationForLLNDKPublic() {
-		return "LLNDK"
-	}
-	if m.UseVndk() && m.IsVndk() && !m.IsVndkPrivate() {
-		if m.IsVndkSp() {
-			if m.IsVndkExt() {
-				return "VNDK-SP-ext"
-			} else {
-				return "VNDK-SP"
-			}
-		} else {
-			if m.IsVndkExt() {
-				return "VNDK-ext"
-			} else {
-				return "VNDK-core"
-			}
+	if !m.InProduct() && !m.InVendor() {
+		if m.isImplementationForLLNDKPublic() {
+			result = append(result, llndkLsdumpTag)
 		}
-	}
-	if m.library.hasStubsVariants() && !m.InProduct() && !m.InVendor() {
-		return "PLATFORM"
-	}
-	if headerAbiChecker.enabled() {
+		// APEX and opt-in platform dumps are placed in the same directory.
+		if m.library.hasStubsVariants() {
+			result = append(result, apexLsdumpTag)
+		} else if headerAbiChecker.enabled() {
+			result = append(result, platformLsdumpTag)
+		}
+	} else if headerAbiChecker.enabled() {
 		if m.InProduct() {
-			return "PRODUCT"
+			result = append(result, productLsdumpTag)
 		}
 		if m.InVendor() {
-			return "VENDOR"
+			result = append(result, vendorLsdumpTag)
 		}
-		return "PLATFORM"
 	}
-	return ""
+	return result
 }
 
 // Called from sabiDepsMutator to check whether ABI dumps should be created for this module.
@@ -194,8 +203,8 @@ func shouldCreateSourceAbiDumpForLibrary(ctx android.BaseModuleContext) bool {
 		return false
 	}
 
-	isPlatformVariant := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo).IsForPlatform()
-	if isPlatformVariant {
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
+	if apexInfo.IsForPlatform() {
 		// Bionic libraries that are installed to the bootstrap directory are not ABI checked.
 		// Only the runtime APEX variants, which are the implementation libraries of bionic NDK stubs,
 		// are checked.
@@ -208,7 +217,7 @@ func shouldCreateSourceAbiDumpForLibrary(ctx android.BaseModuleContext) bool {
 			return false
 		}
 	}
-	return classifySourceAbiDump(ctx) != ""
+	return len(classifySourceAbiDump(ctx)) > 0
 }
 
 // Mark the direct and transitive dependencies of libraries that need ABI check, so that ABI dumps

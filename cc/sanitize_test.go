@@ -16,29 +16,38 @@ package cc
 
 import (
 	"fmt"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 
 	"android/soong/android"
-
-	"github.com/google/blueprint"
 )
 
 var prepareForAsanTest = android.FixtureAddFile("asan/Android.bp", []byte(`
 	cc_library_shared {
 		name: "libclang_rt.asan",
+		host_supported: true,
+	}
+	cc_library_static {
+		name: "libclang_rt.asan.static",
+		host_supported: true,
+	}
+	cc_library_static {
+		name: "libclang_rt.asan_cxx.static",
+		host_supported: true,
 	}
 `))
 
 var prepareForTsanTest = android.FixtureAddFile("tsan/Android.bp", []byte(`
 	cc_library_shared {
 		name: "libclang_rt.tsan",
+		host_supported: true,
 	}
 `))
 
 type providerInterface interface {
-	ModuleProvider(blueprint.Module, blueprint.ProviderKey) interface{}
+	android.SingletonModuleProviderContext
 }
 
 // expectSharedLinkDep verifies that the from module links against the to module as a
@@ -46,10 +55,23 @@ type providerInterface interface {
 func expectSharedLinkDep(t *testing.T, ctx providerInterface, from, to android.TestingModule) {
 	t.Helper()
 	fromLink := from.Description("link")
-	toInfo := ctx.ModuleProvider(to.Module(), SharedLibraryInfoProvider).(SharedLibraryInfo)
+	toInfo, _ := android.SingletonModuleProvider(ctx, to.Module(), SharedLibraryInfoProvider)
 
 	if g, w := fromLink.OrderOnly.Strings(), toInfo.SharedLibrary.RelativeToTop().String(); !android.InList(w, g) {
 		t.Errorf("%s should link against %s, expected %q, got %q",
+			from.Module(), to.Module(), w, g)
+	}
+}
+
+// expectNoSharedLinkDep verifies that the from module links against the to module as a
+// shared library.
+func expectNoSharedLinkDep(t *testing.T, ctx providerInterface, from, to android.TestingModule) {
+	t.Helper()
+	fromLink := from.Description("link")
+	toInfo, _ := android.SingletonModuleProvider(ctx, to.Module(), SharedLibraryInfoProvider)
+
+	if g, w := fromLink.OrderOnly.Strings(), toInfo.SharedLibrary.RelativeToTop().String(); android.InList(w, g) {
+		t.Errorf("%s should not link against %s, expected %q, got %q",
 			from.Module(), to.Module(), w, g)
 	}
 }
@@ -59,10 +81,24 @@ func expectSharedLinkDep(t *testing.T, ctx providerInterface, from, to android.T
 func expectStaticLinkDep(t *testing.T, ctx providerInterface, from, to android.TestingModule) {
 	t.Helper()
 	fromLink := from.Description("link")
-	toInfo := ctx.ModuleProvider(to.Module(), StaticLibraryInfoProvider).(StaticLibraryInfo)
+	toInfo, _ := android.SingletonModuleProvider(ctx, to.Module(), StaticLibraryInfoProvider)
 
 	if g, w := fromLink.Implicits.Strings(), toInfo.StaticLibrary.RelativeToTop().String(); !android.InList(w, g) {
 		t.Errorf("%s should link against %s, expected %q, got %q",
+			from.Module(), to.Module(), w, g)
+	}
+
+}
+
+// expectNoStaticLinkDep verifies that the from module links against the to module as a
+// static library.
+func expectNoStaticLinkDep(t *testing.T, ctx providerInterface, from, to android.TestingModule) {
+	t.Helper()
+	fromLink := from.Description("link")
+	toInfo, _ := android.SingletonModuleProvider(ctx, to.Module(), StaticLibraryInfoProvider)
+
+	if g, w := fromLink.Implicits.Strings(), toInfo.StaticLibrary.RelativeToTop().String(); android.InList(w, g) {
+		t.Errorf("%s should not link against %s, expected %q, got %q",
 			from.Module(), to.Module(), w, g)
 	}
 
@@ -84,6 +120,14 @@ func expectInstallDep(t *testing.T, from, to android.TestingModule) {
 			from.Module(), to.Module(), want, got)
 	}
 }
+
+type expectedRuntimeLinkage int
+
+const (
+	RUNTIME_LINKAGE_NONE   = expectedRuntimeLinkage(0)
+	RUNTIME_LINKAGE_SHARED = iota
+	RUNTIME_LINKAGE_STATIC
+)
 
 func TestAsan(t *testing.T) {
 	t.Parallel()
@@ -162,12 +206,14 @@ func TestAsan(t *testing.T) {
 
 	`
 
-	result := android.GroupFixturePreparers(
+	preparer := android.GroupFixturePreparers(
 		prepareForCcTest,
 		prepareForAsanTest,
-	).RunTestWithBp(t, bp)
+	)
+	buildOS := preparer.RunTestWithBp(t, bp).Config.BuildOSTarget.String()
 
-	check := func(t *testing.T, result *android.TestResult, variant string) {
+	check := func(t *testing.T, variant string, runtimeLinkage expectedRuntimeLinkage, preparer android.FixturePreparer) {
+		result := preparer.RunTestWithBp(t, bp)
 		ctx := result.TestContext
 		asanVariant := variant + "_asan"
 		sharedVariant := variant + "_shared"
@@ -198,6 +244,10 @@ func TestAsan(t *testing.T) {
 		libStaticAsan := result.ModuleForTests("libstatic_asan", staticAsanVariant)
 		libStaticAsanNoAsanVariant := result.ModuleForTests("libstatic_asan", staticVariant)
 
+		libAsanSharedRuntime := result.ModuleForTests("libclang_rt.asan", sharedVariant)
+		libAsanStaticRuntime := result.ModuleForTests("libclang_rt.asan.static", staticVariant)
+		libAsanStaticCxxRuntime := result.ModuleForTests("libclang_rt.asan_cxx.static", staticVariant)
+
 		expectSharedLinkDep(t, ctx, binWithAsan, libShared)
 		expectSharedLinkDep(t, ctx, binWithAsan, libAsan)
 		expectSharedLinkDep(t, ctx, libShared, libTransitive)
@@ -227,10 +277,54 @@ func TestAsan(t *testing.T) {
 		expectInstallDep(t, binNoAsan, libTransitive)
 		expectInstallDep(t, libShared, libTransitive)
 		expectInstallDep(t, libAsan, libTransitive)
+
+		if runtimeLinkage == RUNTIME_LINKAGE_SHARED {
+			expectSharedLinkDep(t, ctx, binWithAsan, libAsanSharedRuntime)
+			expectNoSharedLinkDep(t, ctx, binNoAsan, libAsanSharedRuntime)
+			expectSharedLinkDep(t, ctx, libAsan, libAsanSharedRuntime)
+			expectNoSharedLinkDep(t, ctx, libShared, libAsanSharedRuntime)
+			expectNoSharedLinkDep(t, ctx, libTransitive, libAsanSharedRuntime)
+		} else {
+			expectNoSharedLinkDep(t, ctx, binWithAsan, libAsanSharedRuntime)
+			expectNoSharedLinkDep(t, ctx, binNoAsan, libAsanSharedRuntime)
+			expectNoSharedLinkDep(t, ctx, libAsan, libAsanSharedRuntime)
+			expectNoSharedLinkDep(t, ctx, libShared, libAsanSharedRuntime)
+			expectNoSharedLinkDep(t, ctx, libTransitive, libAsanSharedRuntime)
+		}
+
+		if runtimeLinkage == RUNTIME_LINKAGE_STATIC {
+			expectStaticLinkDep(t, ctx, binWithAsan, libAsanStaticRuntime)
+			expectNoStaticLinkDep(t, ctx, binNoAsan, libAsanStaticRuntime)
+			expectStaticLinkDep(t, ctx, libAsan, libAsanStaticRuntime)
+			expectNoStaticLinkDep(t, ctx, libShared, libAsanStaticRuntime)
+			expectNoStaticLinkDep(t, ctx, libTransitive, libAsanStaticRuntime)
+
+			expectStaticLinkDep(t, ctx, binWithAsan, libAsanStaticCxxRuntime)
+			expectNoStaticLinkDep(t, ctx, binNoAsan, libAsanStaticCxxRuntime)
+			expectStaticLinkDep(t, ctx, libAsan, libAsanStaticCxxRuntime)
+			expectNoStaticLinkDep(t, ctx, libShared, libAsanStaticCxxRuntime)
+			expectNoStaticLinkDep(t, ctx, libTransitive, libAsanStaticCxxRuntime)
+		} else {
+			expectNoStaticLinkDep(t, ctx, binWithAsan, libAsanStaticRuntime)
+			expectNoStaticLinkDep(t, ctx, binNoAsan, libAsanStaticRuntime)
+			expectNoStaticLinkDep(t, ctx, libAsan, libAsanStaticRuntime)
+			expectNoStaticLinkDep(t, ctx, libShared, libAsanStaticRuntime)
+			expectNoStaticLinkDep(t, ctx, libTransitive, libAsanStaticRuntime)
+
+			expectNoStaticLinkDep(t, ctx, binWithAsan, libAsanStaticCxxRuntime)
+			expectNoStaticLinkDep(t, ctx, binNoAsan, libAsanStaticCxxRuntime)
+			expectNoStaticLinkDep(t, ctx, libAsan, libAsanStaticCxxRuntime)
+			expectNoStaticLinkDep(t, ctx, libShared, libAsanStaticCxxRuntime)
+			expectNoStaticLinkDep(t, ctx, libTransitive, libAsanStaticCxxRuntime)
+		}
 	}
 
-	t.Run("host", func(t *testing.T) { check(t, result, result.Config.BuildOSTarget.String()) })
-	t.Run("device", func(t *testing.T) { check(t, result, "android_arm64_armv8-a") })
+	t.Run("host", func(t *testing.T) { check(t, buildOS, RUNTIME_LINKAGE_NONE, preparer) })
+	t.Run("device", func(t *testing.T) { check(t, "android_arm64_armv8-a", RUNTIME_LINKAGE_SHARED, preparer) })
+	t.Run("host musl", func(t *testing.T) {
+		check(t, "linux_musl_x86_64", RUNTIME_LINKAGE_STATIC,
+			android.GroupFixturePreparers(preparer, PrepareForTestWithHostMusl))
+	})
 }
 
 func TestTsan(t *testing.T) {
@@ -278,12 +372,14 @@ func TestTsan(t *testing.T) {
 	}
 `
 
-	result := android.GroupFixturePreparers(
+	preparer := android.GroupFixturePreparers(
 		prepareForCcTest,
 		prepareForTsanTest,
-	).RunTestWithBp(t, bp)
+	)
+	buildOS := preparer.RunTestWithBp(t, bp).Config.BuildOSTarget.String()
 
-	check := func(t *testing.T, result *android.TestResult, variant string) {
+	check := func(t *testing.T, variant string, preparer android.FixturePreparer) {
+		result := preparer.RunTestWithBp(t, bp)
 		ctx := result.TestContext
 		tsanVariant := variant + "_tsan"
 		sharedVariant := variant + "_shared"
@@ -311,8 +407,11 @@ func TestTsan(t *testing.T) {
 		expectSharedLinkDep(t, ctx, libTsan, libTransitive)
 	}
 
-	t.Run("host", func(t *testing.T) { check(t, result, result.Config.BuildOSTarget.String()) })
-	t.Run("device", func(t *testing.T) { check(t, result, "android_arm64_armv8-a") })
+	t.Run("host", func(t *testing.T) { check(t, buildOS, preparer) })
+	t.Run("device", func(t *testing.T) { check(t, "android_arm64_armv8-a", preparer) })
+	t.Run("host musl", func(t *testing.T) {
+		check(t, "linux_musl_x86_64", android.GroupFixturePreparers(preparer, PrepareForTestWithHostMusl))
+	})
 }
 
 func TestMiscUndefined(t *testing.T) {
@@ -369,11 +468,13 @@ func TestMiscUndefined(t *testing.T) {
 	}
 `
 
-	result := android.GroupFixturePreparers(
+	preparer := android.GroupFixturePreparers(
 		prepareForCcTest,
-	).RunTestWithBp(t, bp)
+	)
+	buildOS := preparer.RunTestWithBp(t, bp).Config.BuildOSTarget.String()
 
-	check := func(t *testing.T, result *android.TestResult, variant string) {
+	check := func(t *testing.T, variant string, preparer android.FixturePreparer) {
+		result := preparer.RunTestWithBp(t, bp)
 		ctx := result.TestContext
 		staticVariant := variant + "_static"
 
@@ -415,8 +516,11 @@ func TestMiscUndefined(t *testing.T) {
 		expectStaticLinkDep(t, ctx, binNoUbsan, libUbsan)
 	}
 
-	t.Run("host", func(t *testing.T) { check(t, result, result.Config.BuildOSTarget.String()) })
-	t.Run("device", func(t *testing.T) { check(t, result, "android_arm64_armv8-a") })
+	t.Run("host", func(t *testing.T) { check(t, buildOS, preparer) })
+	t.Run("device", func(t *testing.T) { check(t, "android_arm64_armv8-a", preparer) })
+	t.Run("host musl", func(t *testing.T) {
+		check(t, "linux_musl_x86_64", android.GroupFixturePreparers(preparer, PrepareForTestWithHostMusl))
+	})
 }
 
 func TestFuzz(t *testing.T) {
@@ -609,6 +713,15 @@ func TestUbsan(t *testing.T) {
 			],
 		}
 
+		cc_binary {
+			name: "static_bin_with_ubsan_dep",
+			static_executable: true,
+			host_supported: true,
+			static_libs: [
+				"libubsan_diag",
+			],
+		}
+
 		cc_library_shared {
 			name: "libshared",
 			host_supported: true,
@@ -637,6 +750,17 @@ func TestUbsan(t *testing.T) {
 		}
 
 		cc_library_static {
+			name: "libubsan_diag",
+			host_supported: true,
+			sanitize: {
+				undefined: true,
+				diag: {
+					undefined: true,
+				},
+			},
+		}
+
+		cc_library_static {
 			name: "libstatic",
 			host_supported: true,
 		}
@@ -647,15 +771,18 @@ func TestUbsan(t *testing.T) {
 		}
 	`
 
-	result := android.GroupFixturePreparers(
+	preparer := android.GroupFixturePreparers(
 		prepareForCcTest,
-	).RunTestWithBp(t, bp)
+	)
+	buildOS := preparer.RunTestWithBp(t, bp).Config.BuildOSTarget.String()
 
-	check := func(t *testing.T, result *android.TestResult, variant string) {
+	check := func(t *testing.T, variant string, preparer android.FixturePreparer) {
+		result := preparer.RunTestWithBp(t, bp)
 		staticVariant := variant + "_static"
 		sharedVariant := variant + "_shared"
 
 		minimalRuntime := result.ModuleForTests("libclang_rt.ubsan_minimal", staticVariant)
+		standaloneRuntime := result.ModuleForTests("libclang_rt.ubsan_standalone.static", staticVariant)
 
 		// The binaries, one with ubsan and one without
 		binWithUbsan := result.ModuleForTests("bin_with_ubsan", variant)
@@ -663,6 +790,7 @@ func TestUbsan(t *testing.T) {
 		libSharedUbsan := result.ModuleForTests("libsharedubsan", sharedVariant)
 		binDependsUbsanShared := result.ModuleForTests("bin_depends_ubsan_shared", variant)
 		binNoUbsan := result.ModuleForTests("bin_no_ubsan", variant)
+		staticBin := result.ModuleForTests("static_bin_with_ubsan_dep", variant)
 
 		android.AssertStringListContains(t, "missing libclang_rt.ubsan_minimal in bin_with_ubsan static libs",
 			strings.Split(binWithUbsan.Rule("ld").Args["libFlags"], " "),
@@ -703,10 +831,18 @@ func TestUbsan(t *testing.T) {
 		android.AssertStringListDoesNotContain(t, "unexpected -Wl,--exclude-libs for minimal runtime in bin_no_ubsan static libs",
 			strings.Split(binNoUbsan.Rule("ld").Args["ldFlags"], " "),
 			"-Wl,--exclude-libs="+minimalRuntime.OutputFiles(t, "")[0].Base())
+
+		android.AssertStringListContains(t, "missing libclang_rt.ubsan_standalone.static in static_bin_with_ubsan_dep static libs",
+			strings.Split(staticBin.Rule("ld").Args["libFlags"], " "),
+			standaloneRuntime.OutputFiles(t, "")[0].String())
+
 	}
 
-	t.Run("host", func(t *testing.T) { check(t, result, result.Config.BuildOSTarget.String()) })
-	t.Run("device", func(t *testing.T) { check(t, result, "android_arm64_armv8-a") })
+	t.Run("host", func(t *testing.T) { check(t, buildOS, preparer) })
+	t.Run("device", func(t *testing.T) { check(t, "android_arm64_armv8-a", preparer) })
+	t.Run("host musl", func(t *testing.T) {
+		check(t, "linux_musl_x86_64", android.GroupFixturePreparers(preparer, PrepareForTestWithHostMusl))
+	})
 }
 
 type MemtagNoteType int
@@ -1055,4 +1191,203 @@ func TestSanitizeMemtagHeapWithSanitizeDeviceDiag(t *testing.T) {
 	checkHasMemtagNote(t, ctx.ModuleForTests("unset_test_override_default_async", variant), Sync)
 	checkHasMemtagNote(t, ctx.ModuleForTests("unset_test_override_default_disable", variant), Sync)
 	checkHasMemtagNote(t, ctx.ModuleForTests("unset_test_override_default_sync", variant), Sync)
+}
+
+func TestCfi(t *testing.T) {
+	t.Parallel()
+
+	bp := `
+	cc_library_shared {
+		name: "shared_with_cfi",
+		static_libs: [
+			"static_dep_with_cfi",
+			"static_dep_no_cfi",
+		],
+		sanitize: {
+			cfi: true,
+		},
+	}
+
+	cc_library_shared {
+		name: "shared_no_cfi",
+		static_libs: [
+			"static_dep_with_cfi",
+			"static_dep_no_cfi",
+		],
+	}
+
+	cc_library_static {
+		name: "static_dep_with_cfi",
+		sanitize: {
+			cfi: true,
+		},
+	}
+
+	cc_library_static {
+		name: "static_dep_no_cfi",
+	}
+
+	cc_library_shared {
+		name: "shared_rdep_no_cfi",
+		static_libs: ["static_dep_with_cfi_2"],
+	}
+
+	cc_library_static {
+		name: "static_dep_with_cfi_2",
+		sanitize: {
+			cfi: true,
+		},
+	}
+`
+	preparer := android.GroupFixturePreparers(
+		prepareForCcTest,
+	)
+	result := preparer.RunTestWithBp(t, bp)
+	ctx := result.TestContext
+
+	buildOs := "android_arm64_armv8-a"
+	shared_suffix := "_shared"
+	cfi_suffix := "_cfi"
+	static_suffix := "_static"
+
+	sharedWithCfiLib := result.ModuleForTests("shared_with_cfi", buildOs+shared_suffix+cfi_suffix)
+	sharedNoCfiLib := result.ModuleForTests("shared_no_cfi", buildOs+shared_suffix)
+	staticWithCfiLib := result.ModuleForTests("static_dep_with_cfi", buildOs+static_suffix)
+	staticWithCfiLibCfiVariant := result.ModuleForTests("static_dep_with_cfi", buildOs+static_suffix+cfi_suffix)
+	staticNoCfiLib := result.ModuleForTests("static_dep_no_cfi", buildOs+static_suffix)
+	staticNoCfiLibCfiVariant := result.ModuleForTests("static_dep_no_cfi", buildOs+static_suffix+cfi_suffix)
+	sharedRdepNoCfi := result.ModuleForTests("shared_rdep_no_cfi", buildOs+shared_suffix)
+	staticDepWithCfi2Lib := result.ModuleForTests("static_dep_with_cfi_2", buildOs+static_suffix)
+
+	// Confirm assumptions about propagation of CFI enablement
+	expectStaticLinkDep(t, ctx, sharedWithCfiLib, staticWithCfiLibCfiVariant)
+	expectStaticLinkDep(t, ctx, sharedNoCfiLib, staticWithCfiLib)
+	expectStaticLinkDep(t, ctx, sharedWithCfiLib, staticNoCfiLibCfiVariant)
+	expectStaticLinkDep(t, ctx, sharedNoCfiLib, staticNoCfiLib)
+	expectStaticLinkDep(t, ctx, sharedRdepNoCfi, staticDepWithCfi2Lib)
+
+	// Confirm that non-CFI variants do not add CFI flags
+	bazLibCflags := staticWithCfiLib.Rule("cc").Args["cFlags"]
+	if strings.Contains(bazLibCflags, "-fsanitize-cfi-cross-dso") {
+		t.Errorf("non-CFI variant of baz not expected to contain CFI flags ")
+	}
+}
+
+func TestHwasan(t *testing.T) {
+	t.Parallel()
+
+	bp := `
+	cc_library_shared {
+		name: "shared_with_hwaddress",
+		static_libs: [
+			"static_dep_with_hwaddress",
+			"static_dep_no_hwaddress",
+		],
+		sanitize: {
+			hwaddress: true,
+		},
+		sdk_version: "current",
+			stl: "c++_shared",
+	}
+
+	cc_library_static {
+		name: "static_dep_with_hwaddress",
+		sanitize: {
+			hwaddress: true,
+		},
+		sdk_version: "current",
+			stl: "c++_shared",
+	}
+
+	cc_library_static {
+		name: "static_dep_no_hwaddress",
+		sdk_version: "current",
+			stl: "c++_shared",
+	}
+`
+
+	androidArm := "android_arm_armv7-a-neon"
+	androidArm64 := "android_arm64_armv8-a"
+	androidX86 := "android_x86_silvermont"
+	sharedSuffix := "_shared"
+	hwasanSuffix := "_hwasan"
+	staticSuffix := "_static"
+	sdkSuffix := "_sdk"
+
+	sharedWithHwasanVariant := sharedSuffix + hwasanSuffix
+	sharedWithSdkVariant := sdkSuffix + sharedSuffix
+	staticWithHwasanVariant := staticSuffix + hwasanSuffix
+	staticWithSdkVariant := sdkSuffix + staticSuffix
+
+	testCases := []struct {
+		buildOs          string
+		extraPreparer    android.FixturePreparer
+		expectedVariants map[string][]string
+	}{
+		{
+			buildOs: androidArm64,
+			expectedVariants: map[string][]string{
+				"shared_with_hwaddress": []string{
+					androidArm64 + sharedWithHwasanVariant,
+					androidArm64 + sharedWithSdkVariant,
+					androidArm + sharedSuffix,
+					androidArm + sharedWithSdkVariant,
+				},
+				"static_dep_with_hwaddress": []string{
+					androidArm64 + staticSuffix,
+					androidArm64 + staticWithHwasanVariant,
+					androidArm64 + staticWithSdkVariant,
+					androidArm + staticSuffix,
+					androidArm + staticWithSdkVariant,
+				},
+				"static_dep_no_hwaddress": []string{
+					androidArm64 + staticSuffix,
+					androidArm64 + staticWithHwasanVariant,
+					androidArm64 + staticWithSdkVariant,
+					androidArm + staticSuffix,
+					androidArm + staticWithSdkVariant,
+				},
+			},
+		},
+		{
+			buildOs: androidX86,
+			extraPreparer: android.FixtureModifyConfig(func(config android.Config) {
+				config.Targets[android.Android] = []android.Target{
+					{
+						android.Android,
+						android.Arch{
+							ArchType: android.X86, ArchVariant: "silvermont", Abi: []string{"armeabi-v7a"}}, android.NativeBridgeDisabled, "", "", false},
+				}
+			}),
+			expectedVariants: map[string][]string{
+				"shared_with_hwaddress": []string{
+					androidX86 + sharedSuffix,
+					androidX86 + sharedWithSdkVariant,
+				},
+				"static_dep_with_hwaddress": []string{
+					androidX86 + staticSuffix,
+					androidX86 + staticWithSdkVariant,
+				},
+				"static_dep_no_hwaddress": []string{
+					androidX86 + staticSuffix,
+					androidX86 + staticWithSdkVariant,
+				},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		preparer := android.GroupFixturePreparers(
+			prepareForCcTest,
+			android.OptionalFixturePreparer(tc.extraPreparer),
+		)
+		result := preparer.RunTestWithBp(t, bp)
+
+		for m, v := range tc.expectedVariants {
+			variants := result.ModuleVariantsForTests(m)
+			if !reflect.DeepEqual(variants, v) {
+				t.Errorf("Expected variants of %q to be %q, but got %q", m, v, variants)
+			}
+		}
+	}
 }

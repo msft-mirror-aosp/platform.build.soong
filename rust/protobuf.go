@@ -16,9 +16,11 @@ package rust
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"android/soong/android"
+	"android/soong/cc"
 )
 
 var (
@@ -52,14 +54,18 @@ type ProtobufProperties struct {
 
 	// List of libraries which export include paths required for this module
 	Header_libs []string `android:"arch_variant,variant_prepend"`
+
+	// List of exported include paths containing proto files for dependent rust_protobuf modules.
+	Exported_include_dirs []string
 }
 
 type protobufDecorator struct {
 	*BaseSourceProvider
 
-	Properties ProtobufProperties
-	protoNames []string
-	grpcNames  []string
+	Properties       ProtobufProperties
+	protoNames       []string
+	additionalCrates []string
+	grpcNames        []string
 
 	grpcProtoFlags android.ProtoFlags
 	protoFlags     android.ProtoFlags
@@ -73,6 +79,7 @@ func (proto *protobufDecorator) GenerateSource(ctx ModuleContext, deps PathDeps)
 	outDir := android.PathForModuleOut(ctx)
 	protoFiles := android.PathsForModuleSrc(ctx, proto.Properties.Protos)
 	grpcFiles := android.PathsForModuleSrc(ctx, proto.Properties.Grpc_protos)
+
 	protoPluginPath := ctx.Config().HostToolPath(ctx, "protoc-gen-rust")
 
 	commonProtoFlags = append(commonProtoFlags, defaultProtobufFlags...)
@@ -116,41 +123,65 @@ func (proto *protobufDecorator) GenerateSource(ctx ModuleContext, deps PathDeps)
 	// stemFile must be first here as the first path in BaseSourceProvider.OutputFiles is the library entry-point.
 	var outputs android.WritablePaths
 
-	rule := android.NewRuleBuilder(pctx, ctx)
+	for i, shard := range android.ShardPaths(protoFiles, 50) {
+		rule := android.NewRuleBuilder(pctx, ctx)
 
-	for _, protoFile := range protoFiles {
-		// Since we're iterating over the protoFiles already, make sure they're not redeclared in grpcFiles
-		if android.InList(protoFile.String(), grpcFiles.Strings()) {
-			ctx.PropertyErrorf("protos",
-				"A proto can only be added once to either grpc_protos or protos. %q is declared in both properties",
-				protoFile.String())
+		for _, protoFile := range shard {
+			// Since we're iterating over the protoFiles already, make sure they're not redeclared in grpcFiles
+			if android.InList(protoFile.String(), grpcFiles.Strings()) {
+				ctx.PropertyErrorf("protos",
+					"A proto can only be added once to either grpc_protos or protos. %q is declared in both properties",
+					protoFile.String())
+			}
+
+			protoName := strings.TrimSuffix(protoFile.Base(), ".proto")
+			proto.protoNames = append(proto.protoNames, protoName)
+
+			protoOut := android.PathForModuleOut(ctx, protoName+".rs")
+			depFile := android.PathForModuleOut(ctx, protoName+".d")
+
+			ruleOutputs := android.WritablePaths{protoOut, depFile}
+
+			android.ProtoRule(rule, protoFile, protoFlags, protoFlags.Deps, outDir, depFile, ruleOutputs)
+			outputs = append(outputs, ruleOutputs...)
 		}
 
-		protoName := strings.TrimSuffix(protoFile.Base(), ".proto")
-		proto.protoNames = append(proto.protoNames, protoName)
+		ruleName := "protoc"
+		ruleDesc := "protoc"
+		if i > 0 {
+			ruleName += "_" + strconv.Itoa(i+1)
+			ruleDesc += " " + strconv.Itoa(i+1)
+		}
 
-		protoOut := android.PathForModuleOut(ctx, protoName+".rs")
-		depFile := android.PathForModuleOut(ctx, protoName+".d")
-
-		ruleOutputs := android.WritablePaths{protoOut, depFile}
-
-		android.ProtoRule(rule, protoFile, protoFlags, protoFlags.Deps, outDir, depFile, ruleOutputs)
-		outputs = append(outputs, ruleOutputs...)
+		rule.Build(ruleName, ruleDesc)
 	}
 
-	for _, grpcFile := range grpcFiles {
-		grpcName := strings.TrimSuffix(grpcFile.Base(), ".proto")
-		proto.grpcNames = append(proto.grpcNames, grpcName)
+	for i, shard := range android.ShardPaths(grpcFiles, 50) {
+		rule := android.NewRuleBuilder(pctx, ctx)
 
-		// GRPC protos produce two files, a proto.rs and a proto_grpc.rs
-		protoOut := android.WritablePath(android.PathForModuleOut(ctx, grpcName+".rs"))
-		grpcOut := android.WritablePath(android.PathForModuleOut(ctx, grpcName+grpcSuffix+".rs"))
-		depFile := android.PathForModuleOut(ctx, grpcName+".d")
+		for _, grpcFile := range shard {
+			grpcName := strings.TrimSuffix(grpcFile.Base(), ".proto")
+			proto.grpcNames = append(proto.grpcNames, grpcName)
 
-		ruleOutputs := android.WritablePaths{protoOut, grpcOut, depFile}
+			// GRPC protos produce two files, a proto.rs and a proto_grpc.rs
+			protoOut := android.WritablePath(android.PathForModuleOut(ctx, grpcName+".rs"))
+			grpcOut := android.WritablePath(android.PathForModuleOut(ctx, grpcName+grpcSuffix+".rs"))
+			depFile := android.PathForModuleOut(ctx, grpcName+".d")
 
-		android.ProtoRule(rule, grpcFile, grpcProtoFlags, grpcProtoFlags.Deps, outDir, depFile, ruleOutputs)
-		outputs = append(outputs, ruleOutputs...)
+			ruleOutputs := android.WritablePaths{protoOut, grpcOut, depFile}
+
+			android.ProtoRule(rule, grpcFile, grpcProtoFlags, grpcProtoFlags.Deps, outDir, depFile, ruleOutputs)
+			outputs = append(outputs, ruleOutputs...)
+		}
+
+		ruleName := "protoc_grpc"
+		ruleDesc := "protoc grpc"
+		if i > 0 {
+			ruleName += "_" + strconv.Itoa(i+1)
+			ruleDesc += " " + strconv.Itoa(i+1)
+		}
+
+		rule.Build(ruleName, ruleDesc)
 	}
 
 	// Check that all proto base filenames are unique as outputs are written to the same directory.
@@ -162,10 +193,12 @@ func (proto *protobufDecorator) GenerateSource(ctx ModuleContext, deps PathDeps)
 
 	android.WriteFileRule(ctx, stemFile, proto.genModFileContents())
 
-	rule.Build("protoc_"+ctx.ModuleName(), "protoc "+ctx.ModuleName())
-
 	// stemFile must be first here as the first path in BaseSourceProvider.OutputFiles is the library entry-point.
 	proto.BaseSourceProvider.OutputFiles = append(android.Paths{stemFile}, outputs.Paths()...)
+
+	android.SetProvider(ctx, cc.FlagExporterInfoProvider, cc.FlagExporterInfo{
+		IncludeDirs: android.PathsForModuleSrc(ctx, proto.Properties.Exported_include_dirs),
+	})
 
 	// mod_stem.rs is the entry-point for our library modules, so this is what we return.
 	return stemFile
@@ -175,8 +208,14 @@ func (proto *protobufDecorator) genModFileContents() string {
 	lines := []string{
 		"// @Soong generated Source",
 	}
+
 	for _, protoName := range proto.protoNames {
 		lines = append(lines, fmt.Sprintf("pub mod %s;", protoName))
+	}
+
+	for _, crate := range proto.additionalCrates {
+		lines = append(lines, fmt.Sprintf("pub use %s::*;", crate))
+
 	}
 
 	for _, grpcName := range proto.grpcNames {
@@ -187,13 +226,7 @@ func (proto *protobufDecorator) genModFileContents() string {
 		lines = append(
 			lines,
 			"pub mod empty {",
-			"    pub use protobuf::well_known_types::Empty;",
-			"}",
-			"pub mod wrappers {",
-			"    pub use protobuf::well_known_types::{",
-			"        DoubleValue, FloatValue, Int64Value, UInt64Value, Int32Value, UInt32Value,",
-			"        BoolValue, StringValue, BytesValue",
-			"    };",
+			"    pub use protobuf::well_known_types::empty::Empty;",
 			"}")
 	}
 
@@ -219,7 +252,7 @@ func (proto *protobufDecorator) SourceProviderDeps(ctx DepsContext, deps Deps) D
 
 // rust_protobuf generates protobuf rust code from the provided proto file. This uses the protoc-gen-rust plugin for
 // protoc. Additional flags to the protoc command can be passed via the proto_flags property. This module type will
-// create library variants that can be used as a crate dependency by adding it to the rlibs, dylibs, and rustlibs
+// create library variants that can be used as a crate dependency by adding it to the rlibs and rustlibs
 // properties of other modules.
 func RustProtobufFactory() android.Module {
 	module, _ := NewRustProtobuf(android.HostAndDeviceSupported)

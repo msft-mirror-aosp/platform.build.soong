@@ -19,6 +19,7 @@ import argparse
 import collections
 import json
 import os
+import sys
 
 import linker_config_pb2 #pylint: disable=import-error
 from google.protobuf.descriptor import FieldDescriptor
@@ -26,18 +27,43 @@ from google.protobuf.json_format import ParseDict
 from google.protobuf.text_format import MessageToString
 
 
+def LoadJsonMessage(path):
+    """
+    Loads a message from a .json file with `//` comments strippedfor convenience.
+    """
+    json_content = ''
+    with open(path) as f:
+        for line in f:
+            if not line.lstrip().startswith('//'):
+                json_content += line
+    obj = json.loads(json_content, object_pairs_hook=collections.OrderedDict)
+    return ParseDict(obj, linker_config_pb2.LinkerConfig())
+
+
 def Proto(args):
+    """
+    Merges input json files (--source) into a protobuf message (--output).
+    Fails if the output file exists. Set --force or --append to deal with the existing
+    output file.
+    --force to overwrite the output file with the input (.json files).
+    --append to append the input to the output file.
+    """
     pb = linker_config_pb2.LinkerConfig()
-    for input in args.source.split(':'):
-        json_content = ''
-        with open(input) as f:
-            for line in f:
-                if not line.lstrip().startswith('//'):
-                    json_content += line
-        obj = json.loads(json_content, object_pairs_hook=collections.OrderedDict)
-        ParseDict(obj, pb)
-    with open(args.output, 'wb') as f:
-        f.write(pb.SerializeToString())
+    if os.path.isfile(args.output):
+        if args.force:
+            pass
+        elif args.append:
+            with open(args.output, 'rb') as f:
+                pb.ParseFromString(f.read())
+        else:
+            sys.stderr.write(f'Error: {args.output} exists. Use --force or --append.\n')
+            sys.exit(1)
+
+    if args.source:
+        for input in args.source.split(':'):
+            pb.MergeFrom(LoadJsonMessage(input))
+
+    ValidateAndWriteAsPbFile(pb, args.output)
 
 
 def Print(args):
@@ -64,8 +90,8 @@ def SystemProvide(args):
     for item in installed_libraries:
         if item not in getattr(pb, 'provideLibs'):
             getattr(pb, 'provideLibs').append(item)
-    with open(args.output, 'wb') as f:
-        f.write(pb.SerializeToString())
+
+    ValidateAndWriteAsPbFile(pb, args.output)
 
 
 def Append(args):
@@ -80,8 +106,8 @@ def Append(args):
     else:
         setattr(pb, args.key, args.value)
 
-    with open(args.output, 'wb') as f:
-        f.write(pb.SerializeToString())
+    ValidateAndWriteAsPbFile(pb, args.output)
+
 
 
 def Merge(args):
@@ -90,8 +116,66 @@ def Merge(args):
         with open(other, 'rb') as f:
             pb.MergeFromString(f.read())
 
-    with open(args.out, 'wb') as f:
+    ValidateAndWriteAsPbFile(pb, args.output)
+
+
+def Validate(args):
+    if os.path.isdir(args.input):
+        config_file = os.path.join(args.input, 'etc/linker.config.pb')
+        if os.path.exists(config_file):
+            args.input = config_file
+            Validate(args)
+        # OK if there's no linker config file.
+        return
+
+    if not os.path.isfile(args.input):
+        sys.exit(f"{args.input} is not a file")
+
+    pb = linker_config_pb2.LinkerConfig()
+    with open(args.input, 'rb') as f:
+        pb.ParseFromString(f.read())
+
+    if args.type == 'apex':
+        # Shouldn't use provideLibs/requireLibs in APEX linker.config.pb
+        if getattr(pb, 'provideLibs'):
+            sys.exit(f'{args.input}: provideLibs is set. Use provideSharedLibs in apex_manifest')
+        if getattr(pb, 'requireLibs'):
+            sys.exit(f'{args.input}: requireLibs is set. Use requireSharedLibs in apex_manifest')
+    elif args.type == 'system':
+        if getattr(pb, 'visible'):
+            sys.exit(f'{args.input}: do not use visible, which is for APEX')
+        if getattr(pb, 'permittedPaths'):
+            sys.exit(f'{args.input}: do not use permittedPaths, which is for APEX')
+    else:
+        sys.exit(f'Unknown type: {args.type}')
+
+    # Reject contributions field at build time while keeping the runtime behavior for GRF.
+    if getattr(pb, 'contributions'):
+        sys.exit(f"{args.input}: 'contributions' is set. "
+                 "It's deprecated. Instead, make the APEX 'visible' and use android_dlopen_ext().")
+
+
+def ValidateAndWriteAsPbFile(pb, output_path):
+    ValidateConfiguration(pb)
+    with open(output_path, 'wb') as f:
         f.write(pb.SerializeToString())
+
+
+def ValidateConfiguration(pb):
+    """
+    Validate if the configuration is valid to be used as linker configuration
+    """
+
+    # Validate if provideLibs and requireLibs have common module
+    provideLibs = set(getattr(pb, 'provideLibs'))
+    requireLibs = set(getattr(pb, 'requireLibs'))
+
+    intersectLibs = provideLibs.intersection(requireLibs)
+
+    if intersectLibs:
+        for lib in intersectLibs:
+            print(f'{lib} exists both in requireLibs and provideLibs', file=sys.stderr)
+        sys.exit(1)
 
 
 def GetArgParser():
@@ -104,7 +188,7 @@ def GetArgParser():
     parser_proto.add_argument(
         '-s',
         '--source',
-        required=True,
+        nargs='?',
         type=str,
         help='Colon-separated list of linker configuration files in JSON.')
     parser_proto.add_argument(
@@ -113,6 +197,17 @@ def GetArgParser():
         required=True,
         type=str,
         help='Target path to create protobuf file.')
+    option_for_existing_output = parser_proto.add_mutually_exclusive_group()
+    option_for_existing_output.add_argument(
+        '-f',
+        '--force',
+        action='store_true',
+        help='Overwrite if the output file exists.')
+    option_for_existing_output.add_argument(
+        '-a',
+        '--append',
+        action='store_true',
+        help='Append the input to the output file if the output file exists.')
     parser_proto.set_defaults(func=Proto)
 
     print_proto = subparsers.add_parser(
@@ -190,12 +285,28 @@ def GetArgParser():
         help='Linker configuration files to merge.')
     append.set_defaults(func=Merge)
 
+    validate = subparsers.add_parser('validate', help='Validate configuration')
+    validate.add_argument(
+        '--type',
+        required=True,
+        choices=['apex', 'system'],
+        help='Type of linker configuration')
+    validate.add_argument(
+        'input',
+        help='Input can be a directory which has etc/linker.config.pb or a path'
+        ' to the linker config file')
+    validate.set_defaults(func=Validate)
+
     return parser
 
 
 def main():
-    args = GetArgParser().parse_args()
-    args.func(args)
+    parser = GetArgParser()
+    args = parser.parse_args()
+    if 'func' in args:
+        args.func(args)
+    else:
+        parser.print_help()
 
 
 if __name__ == '__main__':

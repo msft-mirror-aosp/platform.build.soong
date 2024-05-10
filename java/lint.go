@@ -17,7 +17,6 @@ package java
 import (
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/google/blueprint/proptools"
@@ -56,7 +55,8 @@ type LintProperties struct {
 		// Modules that provide extra lint checks
 		Extra_check_modules []string
 
-		// Name of the file that lint uses as the baseline. Defaults to "lint-baseline.xml".
+		// The lint baseline file to use. If specified, lint warnings listed in this file will be
+		// suppressed during lint checks.
 		Baseline_filename *string
 
 		// If true, baselining updatability lint checks (e.g. NewApi) is prohibited. Defaults to false.
@@ -66,6 +66,10 @@ type LintProperties struct {
 		// This will be true by default for test module types, false otherwise.
 		// If soong gets support for testonly, this flag should be replaced with that.
 		Test *bool
+
+		// Whether to ignore the exit code of Android lint. This is the --exit_code
+		// option. Defaults to false.
+		Suppress_exit_code *bool
 	}
 }
 
@@ -80,15 +84,16 @@ type linter struct {
 	classes                 android.Path
 	extraLintCheckJars      android.Paths
 	library                 bool
-	minSdkVersion           int
-	targetSdkVersion        int
-	compileSdkVersion       int
+	minSdkVersion           android.ApiLevel
+	targetSdkVersion        android.ApiLevel
+	compileSdkVersion       android.ApiLevel
 	compileSdkKind          android.SdkKind
 	javaLanguageLevel       string
 	kotlinLanguageLevel     string
 	outputs                 lintOutputs
 	properties              LintProperties
 	extraMainlineLintErrors []string
+	compile_data            android.Paths
 
 	reports android.Paths
 
@@ -96,9 +101,10 @@ type linter struct {
 }
 
 type lintOutputs struct {
-	html android.Path
-	text android.Path
-	xml  android.Path
+	html              android.Path
+	text              android.Path
+	xml               android.Path
+	referenceBaseline android.Path
 
 	depSets LintDepSets
 }
@@ -116,18 +122,18 @@ type LintDepSetsIntf interface {
 }
 
 type LintDepSets struct {
-	HTML, Text, XML *android.DepSet
+	HTML, Text, XML *android.DepSet[android.Path]
 }
 
 type LintDepSetsBuilder struct {
-	HTML, Text, XML *android.DepSetBuilder
+	HTML, Text, XML *android.DepSetBuilder[android.Path]
 }
 
 func NewLintDepSetBuilder() LintDepSetsBuilder {
 	return LintDepSetsBuilder{
-		HTML: android.NewDepSetBuilder(android.POSTORDER),
-		Text: android.NewDepSetBuilder(android.POSTORDER),
-		XML:  android.NewDepSetBuilder(android.POSTORDER),
+		HTML: android.NewDepSetBuilder[android.Path](android.POSTORDER),
+		Text: android.NewDepSetBuilder[android.Path](android.POSTORDER),
+		XML:  android.NewDepSetBuilder[android.Path](android.POSTORDER),
 	}
 }
 
@@ -351,25 +357,12 @@ func (l *linter) generateManifest(ctx android.ModuleContext, rule *android.RuleB
 		Text(`echo "<?xml version='1.0' encoding='utf-8'?>" &&`).
 		Text(`echo "<manifest xmlns:android='http://schemas.android.com/apk/res/android'" &&`).
 		Text(`echo "    android:versionCode='1' android:versionName='1' >" &&`).
-		Textf(`echo "  <uses-sdk android:minSdkVersion='%d' android:targetSdkVersion='%d'/>" &&`,
-			l.minSdkVersion, l.targetSdkVersion).
+		Textf(`echo "  <uses-sdk android:minSdkVersion='%s' android:targetSdkVersion='%s'/>" &&`,
+			l.minSdkVersion.String(), l.targetSdkVersion.String()).
 		Text(`echo "</manifest>"`).
 		Text(") >").Output(manifestPath)
 
 	return manifestPath
-}
-
-func (l *linter) getBaselineFilepath(ctx android.ModuleContext) android.OptionalPath {
-	var lintBaseline android.OptionalPath
-	if lintFilename := proptools.StringDefault(l.properties.Lint.Baseline_filename, "lint-baseline.xml"); lintFilename != "" {
-		if String(l.properties.Lint.Baseline_filename) != "" {
-			// if manually specified, we require the file to exist
-			lintBaseline = android.OptionalPathForPath(android.PathForModuleSrc(ctx, lintFilename))
-		} else {
-			lintBaseline = android.ExistentPathForSource(ctx, ctx.ModuleDir(), lintFilename)
-		}
-	}
-	return lintBaseline
 }
 
 func (l *linter) lint(ctx android.ModuleContext) {
@@ -377,7 +370,13 @@ func (l *linter) lint(ctx android.ModuleContext) {
 		return
 	}
 
-	if l.minSdkVersion != l.compileSdkVersion {
+	for _, flag := range l.properties.Lint.Flags {
+		if strings.Contains(flag, "--disable") || strings.Contains(flag, "--enable") || strings.Contains(flag, "--check") {
+			ctx.PropertyErrorf("lint.flags", "Don't use --disable, --enable, or --check in the flags field, instead use the dedicated disabled_checks, warning_checks, error_checks, or fatal_checks fields")
+		}
+	}
+
+	if l.minSdkVersion.CompareTo(l.compileSdkVersion) == -1 {
 		l.extraMainlineLintErrors = append(l.extraMainlineLintErrors, updatabilityChecks...)
 		// Skip lint warning checks for NewApi warnings for libcore where they come from source
 		// files that reference the API they are adding (b/208656169).
@@ -407,8 +406,7 @@ func (l *linter) lint(ctx android.ModuleContext) {
 
 	extraLintCheckModules := ctx.GetDirectDepsWithTag(extraLintCheckTag)
 	for _, extraLintCheckModule := range extraLintCheckModules {
-		if ctx.OtherModuleHasProvider(extraLintCheckModule, JavaInfoProvider) {
-			dep := ctx.OtherModuleProvider(extraLintCheckModule, JavaInfoProvider).(JavaInfo)
+		if dep, ok := android.OtherModuleProvider(ctx, extraLintCheckModule, JavaInfoProvider); ok {
 			l.extraLintCheckJars = append(l.extraLintCheckJars, dep.ImplementationAndResourcesJars...)
 		} else {
 			ctx.PropertyErrorf("lint.extra_check_modules",
@@ -443,14 +441,14 @@ func (l *linter) lint(ctx android.ModuleContext) {
 
 	srcsList := android.PathForModuleOut(ctx, "lint", "lint-srcs.list")
 	srcsListRsp := android.PathForModuleOut(ctx, "lint-srcs.list.rsp")
-	rule.Command().Text("cp").FlagWithRspFileInputList("", srcsListRsp, l.srcs).Output(srcsList)
+	rule.Command().Text("cp").FlagWithRspFileInputList("", srcsListRsp, l.srcs).Output(srcsList).Implicits(l.compile_data)
 
 	lintPaths := l.writeLintProjectXML(ctx, rule, srcsList)
 
 	html := android.PathForModuleOut(ctx, "lint", "lint-report.html")
 	text := android.PathForModuleOut(ctx, "lint", "lint-report.txt")
 	xml := android.PathForModuleOut(ctx, "lint", "lint-report.xml")
-	baseline := android.PathForModuleOut(ctx, "lint", "lint-baseline.xml")
+	referenceBaseline := android.PathForModuleOut(ctx, "lint", "lint-baseline.xml")
 
 	depSetsBuilder := NewLintDepSetBuilder().Direct(html, text, xml)
 
@@ -486,16 +484,16 @@ func (l *linter) lint(ctx android.ModuleContext) {
 
 	cmd.BuiltTool("lint").ImplicitTool(ctx.Config().HostJavaToolPath(ctx, "lint.jar")).
 		Flag("--quiet").
+		Flag("--include-aosp-issues").
 		FlagWithInput("--project ", lintPaths.projectXML).
 		FlagWithInput("--config ", lintPaths.configXML).
 		FlagWithOutput("--html ", html).
 		FlagWithOutput("--text ", text).
 		FlagWithOutput("--xml ", xml).
-		FlagWithArg("--compile-sdk-version ", strconv.Itoa(l.compileSdkVersion)).
+		FlagWithArg("--compile-sdk-version ", l.compileSdkVersion.String()).
 		FlagWithArg("--java-language-level ", l.javaLanguageLevel).
 		FlagWithArg("--kotlin-language-level ", l.kotlinLanguageLevel).
 		FlagWithArg("--url ", fmt.Sprintf(".=.,%s=out", android.PathForOutput(ctx).String())).
-		Flag("--exitcode").
 		Flag("--apply-suggestions"). // applies suggested fixes to files in the sandbox
 		Flags(l.properties.Lint.Flags).
 		Implicit(annotationsZipPath).
@@ -504,16 +502,20 @@ func (l *linter) lint(ctx android.ModuleContext) {
 	rule.Temporary(lintPaths.projectXML)
 	rule.Temporary(lintPaths.configXML)
 
+	suppressExitCode := BoolDefault(l.properties.Lint.Suppress_exit_code, false)
+	if exitCode := ctx.Config().Getenv("ANDROID_LINT_SUPPRESS_EXIT_CODE"); exitCode == "" && !suppressExitCode {
+		cmd.Flag("--exitcode")
+	}
+
 	if checkOnly := ctx.Config().Getenv("ANDROID_LINT_CHECK"); checkOnly != "" {
 		cmd.FlagWithArg("--check ", checkOnly)
 	}
 
-	lintBaseline := l.getBaselineFilepath(ctx)
-	if lintBaseline.Valid() {
-		cmd.FlagWithInput("--baseline ", lintBaseline.Path())
+	if l.properties.Lint.Baseline_filename != nil {
+		cmd.FlagWithInput("--baseline ", android.PathForModuleSrc(ctx, *l.properties.Lint.Baseline_filename))
 	}
 
-	cmd.FlagWithOutput("--write-reference-baseline ", baseline)
+	cmd.FlagWithOutput("--write-reference-baseline ", referenceBaseline)
 
 	cmd.Text("; EXITCODE=$?; ")
 
@@ -535,9 +537,10 @@ func (l *linter) lint(ctx android.ModuleContext) {
 	rule.Build("lint", "lint")
 
 	l.outputs = lintOutputs{
-		html: html,
-		text: text,
-		xml:  xml,
+		html:              html,
+		text:              text,
+		xml:               xml,
+		referenceBaseline: referenceBaseline,
 
 		depSets: depSetsBuilder.Build(),
 	}
@@ -545,12 +548,16 @@ func (l *linter) lint(ctx android.ModuleContext) {
 	if l.buildModuleReportZip {
 		l.reports = BuildModuleLintReportZips(ctx, l.LintDepSets())
 	}
+
+	// Create a per-module phony target to run the lint check.
+	phonyName := ctx.ModuleName() + "-lint"
+	ctx.Phony(phonyName, xml)
 }
 
 func BuildModuleLintReportZips(ctx android.ModuleContext, depSets LintDepSets) android.Paths {
-	htmlList := depSets.HTML.ToSortedList()
-	textList := depSets.Text.ToSortedList()
-	xmlList := depSets.XML.ToSortedList()
+	htmlList := android.SortedUniquePaths(depSets.HTML.ToList())
+	textList := android.SortedUniquePaths(depSets.Text.ToList())
+	xmlList := android.SortedUniquePaths(depSets.XML.ToList())
 
 	if len(htmlList) == 0 && len(textList) == 0 && len(xmlList) == 0 {
 		return nil
@@ -569,9 +576,10 @@ func BuildModuleLintReportZips(ctx android.ModuleContext, depSets LintDepSets) a
 }
 
 type lintSingleton struct {
-	htmlZip android.WritablePath
-	textZip android.WritablePath
-	xmlZip  android.WritablePath
+	htmlZip              android.WritablePath
+	textZip              android.WritablePath
+	xmlZip               android.WritablePath
+	referenceBaselineZip android.WritablePath
 }
 
 func (l *lintSingleton) GenerateBuildActions(ctx android.SingletonContext) {
@@ -604,7 +612,7 @@ func (l *lintSingleton) copyLintDependencies(ctx android.SingletonContext) {
 		apiVersionsDb := findModuleOrErr(ctx, files.apiVersionsModule)
 		if apiVersionsDb == nil {
 			if !ctx.Config().AllowMissingDependencies() {
-				ctx.Errorf("lint: missing module api_versions_public")
+				ctx.Errorf("lint: missing module %s", files.apiVersionsModule)
 			}
 			return
 		}
@@ -612,7 +620,7 @@ func (l *lintSingleton) copyLintDependencies(ctx android.SingletonContext) {
 		sdkAnnotations := findModuleOrErr(ctx, files.annotationsModule)
 		if sdkAnnotations == nil {
 			if !ctx.Config().AllowMissingDependencies() {
-				ctx.Errorf("lint: missing module sdk-annotations.zip")
+				ctx.Errorf("lint: missing module %s", files.annotationsModule)
 			}
 			return
 		}
@@ -648,7 +656,7 @@ func (l *lintSingleton) generateLintReportZips(ctx android.SingletonContext) {
 		}
 
 		if apex, ok := m.(android.ApexModule); ok && apex.NotAvailableForPlatform() {
-			apexInfo := ctx.ModuleProvider(m, android.ApexInfoProvider).(android.ApexInfo)
+			apexInfo, _ := android.SingletonModuleProvider(ctx, m, android.ApexInfoProvider)
 			if apexInfo.IsForPlatform() {
 				// There are stray platform variants of modules in apexes that are not available for
 				// the platform, and they sometimes can't be built.  Don't depend on them.
@@ -684,19 +692,22 @@ func (l *lintSingleton) generateLintReportZips(ctx android.SingletonContext) {
 	l.xmlZip = android.PathForOutput(ctx, "lint-report-xml.zip")
 	zip(l.xmlZip, func(l *lintOutputs) android.Path { return l.xml })
 
-	ctx.Phony("lint-check", l.htmlZip, l.textZip, l.xmlZip)
+	l.referenceBaselineZip = android.PathForOutput(ctx, "lint-report-reference-baselines.zip")
+	zip(l.referenceBaselineZip, func(l *lintOutputs) android.Path { return l.referenceBaseline })
+
+	ctx.Phony("lint-check", l.htmlZip, l.textZip, l.xmlZip, l.referenceBaselineZip)
 }
 
 func (l *lintSingleton) MakeVars(ctx android.MakeVarsContext) {
 	if !ctx.Config().UnbundledBuild() {
-		ctx.DistForGoal("lint-check", l.htmlZip, l.textZip, l.xmlZip)
+		ctx.DistForGoal("lint-check", l.htmlZip, l.textZip, l.xmlZip, l.referenceBaselineZip)
 	}
 }
 
 var _ android.SingletonMakeVarsProvider = (*lintSingleton)(nil)
 
 func init() {
-	android.RegisterSingletonType("lint",
+	android.RegisterParallelSingletonType("lint",
 		func() android.Singleton { return &lintSingleton{} })
 
 	registerLintBuildComponents(android.InitRegistrationContext)

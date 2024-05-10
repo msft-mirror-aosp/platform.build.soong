@@ -103,8 +103,8 @@ type classpathJar struct {
 func gatherPossibleApexModuleNamesAndStems(ctx android.ModuleContext, contents []string, tag blueprint.DependencyTag) []string {
 	set := map[string]struct{}{}
 	for _, name := range contents {
-		dep := ctx.GetDirectDepWithTag(name, tag)
-		set[name] = struct{}{}
+		dep, _ := ctx.GetDirectDepWithTag(name, tag).(android.Module)
+		set[ModuleStemForDeapexing(dep)] = struct{}{}
 		if m, ok := dep.(ModuleWithStem); ok {
 			set[m.Stem()] = struct{}{}
 		} else {
@@ -130,17 +130,17 @@ func configuredJarListToClasspathJars(ctx android.ModuleContext, configuredJars 
 				if s, ok := m.(*SdkLibrary); ok {
 					// TODO(208456999): instead of mapping "current" to latest, min_sdk_version should never be set to "current"
 					if s.minSdkVersion.Specified() {
-						if s.minSdkVersion.ApiLevel.IsCurrent() {
+						if s.minSdkVersion.IsCurrent() {
 							jar.minSdkVersion = ctx.Config().DefaultAppTargetSdk(ctx).String()
 						} else {
-							jar.minSdkVersion = s.minSdkVersion.ApiLevel.String()
+							jar.minSdkVersion = s.minSdkVersion.String()
 						}
 					}
 					if s.maxSdkVersion.Specified() {
-						if s.maxSdkVersion.ApiLevel.IsCurrent() {
+						if s.maxSdkVersion.IsCurrent() {
 							jar.maxSdkVersion = ctx.Config().DefaultAppTargetSdk(ctx).String()
 						} else {
-							jar.maxSdkVersion = s.maxSdkVersion.ApiLevel.String()
+							jar.maxSdkVersion = s.maxSdkVersion.String()
 						}
 					}
 				}
@@ -151,10 +151,14 @@ func configuredJarListToClasspathJars(ctx android.ModuleContext, configuredJars 
 	return jars
 }
 
+func (c *ClasspathFragmentBase) outputFilename() string {
+	return strings.ToLower(c.classpathType.String()) + ".pb"
+}
+
 func (c *ClasspathFragmentBase) generateClasspathProtoBuildActions(ctx android.ModuleContext, configuredJars android.ConfiguredJarList, jars []classpathJar) {
 	generateProto := proptools.BoolDefault(c.properties.Generate_classpaths_proto, true)
 	if generateProto {
-		outputFilename := strings.ToLower(c.classpathType.String()) + ".pb"
+		outputFilename := c.outputFilename()
 		c.outputFilepath = android.PathForModuleOut(ctx, outputFilename).OutputPath
 		c.installDirPath = android.PathForModuleInstall(ctx, "etc", "classpaths")
 
@@ -178,7 +182,11 @@ func (c *ClasspathFragmentBase) generateClasspathProtoBuildActions(ctx android.M
 		ClasspathFragmentProtoInstallDir: c.installDirPath,
 		ClasspathFragmentProtoOutput:     c.outputFilepath,
 	}
-	ctx.SetProvider(ClasspathFragmentProtoContentInfoProvider, classpathProtoInfo)
+	android.SetProvider(ctx, ClasspathFragmentProtoContentInfoProvider, classpathProtoInfo)
+}
+
+func (c *ClasspathFragmentBase) installClasspathProto(ctx android.ModuleContext) android.InstallPath {
+	return ctx.InstallFile(c.installDirPath, c.outputFilename(), c.outputFilepath)
 }
 
 func writeClasspathsTextproto(ctx android.ModuleContext, output android.WritablePath, jars []classpathJar) {
@@ -211,7 +219,7 @@ func (c *ClasspathFragmentBase) androidMkEntries() []android.AndroidMkEntries {
 	}}
 }
 
-var ClasspathFragmentProtoContentInfoProvider = blueprint.NewProvider(ClasspathFragmentProtoContentInfo{})
+var ClasspathFragmentProtoContentInfoProvider = blueprint.NewProvider[ClasspathFragmentProtoContentInfo]()
 
 type ClasspathFragmentProtoContentInfo struct {
 	// Whether the classpaths.proto config is generated for the fragment.

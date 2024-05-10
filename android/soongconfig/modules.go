@@ -20,12 +20,9 @@ import (
 	"reflect"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/google/blueprint/parser"
 	"github.com/google/blueprint/proptools"
-
-	"android/soong/starlark_fmt"
 )
 
 const conditionsDefault = "conditions_default"
@@ -119,6 +116,10 @@ type ModuleTypeProperties struct {
 	// the list of SOONG_CONFIG variables that this module type will read. The value will be
 	// inserted into the properties with %s substitution.
 	Value_variables []string
+
+	// the list of SOONG_CONFIG list variables that this module type will read. Each value will be
+	// inserted into the properties with %s substitution.
+	List_variables []string
 
 	// the list of properties that this module type will extend.
 	Properties []string
@@ -234,88 +235,6 @@ type SoongConfigDefinition struct {
 	ModuleTypes map[string]*ModuleType
 
 	variables map[string]soongConfigVariable
-}
-
-// Bp2BuildSoongConfigDefinition keeps a global record of all soong config
-// string vars, bool vars and value vars created by every
-// soong_config_module_type in this build.
-type Bp2BuildSoongConfigDefinitions struct {
-	// varCache contains a cache of string variables namespace + property
-	// The same variable may be used in multiple module types (for example, if need support
-	// for cc_default and java_default), only need to process once
-	varCache map[string]bool
-
-	StringVars map[string][]string
-	BoolVars   map[string]bool
-	ValueVars  map[string]bool
-}
-
-var bp2buildSoongConfigVarsLock sync.Mutex
-
-// SoongConfigVariablesForBp2build extracts information from a
-// SoongConfigDefinition that bp2build needs to generate constraint settings and
-// values for, in order to migrate soong_config_module_type usages to Bazel.
-func (defs *Bp2BuildSoongConfigDefinitions) AddVars(mtDef SoongConfigDefinition) {
-	// In bp2build mode, this method is called concurrently in goroutines from
-	// loadhooks while parsing soong_config_module_type, so add a mutex to
-	// prevent concurrent map writes. See b/207572723
-	bp2buildSoongConfigVarsLock.Lock()
-	defer bp2buildSoongConfigVarsLock.Unlock()
-
-	if defs.StringVars == nil {
-		defs.StringVars = make(map[string][]string)
-	}
-	if defs.BoolVars == nil {
-		defs.BoolVars = make(map[string]bool)
-	}
-	if defs.ValueVars == nil {
-		defs.ValueVars = make(map[string]bool)
-	}
-	if defs.varCache == nil {
-		defs.varCache = make(map[string]bool)
-	}
-	for _, moduleType := range mtDef.ModuleTypes {
-		for _, v := range moduleType.Variables {
-			key := strings.Join([]string{moduleType.ConfigNamespace, v.variableProperty()}, "__")
-
-			// The same variable may be used in multiple module types (for example, if need support
-			// for cc_default and java_default), only need to process once
-			if _, keyInCache := defs.varCache[key]; keyInCache {
-				continue
-			} else {
-				defs.varCache[key] = true
-			}
-
-			if strVar, ok := v.(*stringVariable); ok {
-				for _, value := range strVar.values {
-					defs.StringVars[key] = append(defs.StringVars[key], value)
-				}
-			} else if _, ok := v.(*boolVariable); ok {
-				defs.BoolVars[key] = true
-			} else if _, ok := v.(*valueVariable); ok {
-				defs.ValueVars[key] = true
-			} else {
-				panic(fmt.Errorf("Unsupported variable type: %+v", v))
-			}
-		}
-	}
-}
-
-// String emits the Soong config variable definitions as Starlark dictionaries.
-func (defs Bp2BuildSoongConfigDefinitions) String() string {
-	ret := ""
-	ret += "soong_config_bool_variables = "
-	ret += starlark_fmt.PrintBoolDict(defs.BoolVars, 0)
-	ret += "\n\n"
-
-	ret += "soong_config_value_variables = "
-	ret += starlark_fmt.PrintBoolDict(defs.ValueVars, 0)
-	ret += "\n\n"
-
-	ret += "soong_config_string_variables = "
-	ret += starlark_fmt.PrintStringListDict(defs.StringVars, 0)
-
-	return ret
 }
 
 // CreateProperties returns a reflect.Value of a newly constructed type that contains the desired
@@ -553,6 +472,18 @@ func newModuleType(props *ModuleTypeProperties) (*ModuleType, []error) {
 		})
 	}
 
+	for _, name := range props.List_variables {
+		if err := checkVariableName(name); err != nil {
+			return nil, []error{fmt.Errorf("list_variables %s", err)}
+		}
+
+		mt.Variables = append(mt.Variables, &listVariable{
+			baseVariable: baseVariable{
+				variable: name,
+			},
+		})
+	}
+
 	return mt, nil
 }
 
@@ -766,6 +697,14 @@ func (s *valueVariable) PropertiesToApply(config SoongConfig, values reflect.Val
 	if !propStruct.IsValid() {
 		return nil, nil
 	}
+	if err := s.printfIntoPropertyRecursive(nil, propStruct, configValue); err != nil {
+		return nil, err
+	}
+
+	return values.Interface(), nil
+}
+
+func (s *valueVariable) printfIntoPropertyRecursive(fieldName []string, propStruct reflect.Value, configValue string) error {
 	for i := 0; i < propStruct.NumField(); i++ {
 		field := propStruct.Field(i)
 		kind := field.Kind()
@@ -774,28 +713,121 @@ func (s *valueVariable) PropertiesToApply(config SoongConfig, values reflect.Val
 				continue
 			}
 			field = field.Elem()
+			kind = field.Kind()
 		}
 		switch kind {
 		case reflect.String:
 			err := printfIntoProperty(field, configValue)
 			if err != nil {
-				return nil, fmt.Errorf("soong_config_variables.%s.%s: %s", s.variable, propStruct.Type().Field(i).Name, err)
+				fieldName = append(fieldName, propStruct.Type().Field(i).Name)
+				return fmt.Errorf("soong_config_variables.%s.%s: %s", s.variable, strings.Join(fieldName, "."), err)
 			}
 		case reflect.Slice:
 			for j := 0; j < field.Len(); j++ {
 				err := printfIntoProperty(field.Index(j), configValue)
 				if err != nil {
-					return nil, fmt.Errorf("soong_config_variables.%s.%s: %s", s.variable, propStruct.Type().Field(i).Name, err)
+					fieldName = append(fieldName, propStruct.Type().Field(i).Name)
+					return fmt.Errorf("soong_config_variables.%s.%s: %s", s.variable, strings.Join(fieldName, "."), err)
 				}
 			}
 		case reflect.Bool:
 			// Nothing to do
+		case reflect.Struct:
+			fieldName = append(fieldName, propStruct.Type().Field(i).Name)
+			if err := s.printfIntoPropertyRecursive(fieldName, field, configValue); err != nil {
+				return err
+			}
+			fieldName = fieldName[:len(fieldName)-1]
 		default:
-			return nil, fmt.Errorf("soong_config_variables.%s.%s: unsupported property type %q", s.variable, propStruct.Type().Field(i).Name, kind)
+			fieldName = append(fieldName, propStruct.Type().Field(i).Name)
+			return fmt.Errorf("soong_config_variables.%s.%s: unsupported property type %q", s.variable, strings.Join(fieldName, "."), kind)
 		}
+	}
+	return nil
+}
+
+// Struct to allow conditions set based on a list variable, supporting string substitution.
+type listVariable struct {
+	baseVariable
+}
+
+func (s *listVariable) variableValuesType() reflect.Type {
+	return emptyInterfaceType
+}
+
+// initializeProperties initializes a property to zero value of typ with an additional conditions
+// default field.
+func (s *listVariable) initializeProperties(v reflect.Value, typ reflect.Type) {
+	initializePropertiesWithDefault(v, typ)
+}
+
+// PropertiesToApply returns an interface{} value based on initializeProperties to be applied to
+// the module. If the variable was not set, conditions_default interface will be returned;
+// otherwise, the interface in values, without conditions_default will be returned with all
+// appropriate string substitutions based on variable being set.
+func (s *listVariable) PropertiesToApply(config SoongConfig, values reflect.Value) (interface{}, error) {
+	// If this variable was not referenced in the module, there are no properties to apply.
+	if !values.IsValid() || values.Elem().IsZero() {
+		return nil, nil
+	}
+	if !config.IsSet(s.variable) {
+		return conditionsDefaultField(values.Elem().Elem()).Interface(), nil
+	}
+	configValues := strings.Split(config.String(s.variable), " ")
+
+	values = removeDefault(values)
+	propStruct := values.Elem()
+	if !propStruct.IsValid() {
+		return nil, nil
+	}
+	if err := s.printfIntoPropertyRecursive(nil, propStruct, configValues); err != nil {
+		return nil, err
 	}
 
 	return values.Interface(), nil
+}
+
+func (s *listVariable) printfIntoPropertyRecursive(fieldName []string, propStruct reflect.Value, configValues []string) error {
+	for i := 0; i < propStruct.NumField(); i++ {
+		field := propStruct.Field(i)
+		kind := field.Kind()
+		if kind == reflect.Ptr {
+			if field.IsNil() {
+				continue
+			}
+			field = field.Elem()
+			kind = field.Kind()
+		}
+		switch kind {
+		case reflect.Slice:
+			elemType := field.Type().Elem()
+			newLen := field.Len() * len(configValues)
+			newField := reflect.MakeSlice(field.Type(), 0, newLen)
+			for j := 0; j < field.Len(); j++ {
+				for _, configValue := range configValues {
+					res := reflect.Indirect(reflect.New(elemType))
+					res.Set(field.Index(j))
+					err := printfIntoProperty(res, configValue)
+					if err != nil {
+						fieldName = append(fieldName, propStruct.Type().Field(i).Name)
+						return fmt.Errorf("soong_config_variables.%s.%s: %s", s.variable, strings.Join(fieldName, "."), err)
+					}
+					newField = reflect.Append(newField, res)
+				}
+			}
+			field.Set(newField)
+		case reflect.Struct:
+			fieldName = append(fieldName, propStruct.Type().Field(i).Name)
+			if err := s.printfIntoPropertyRecursive(fieldName, field, configValues); err != nil {
+				return err
+			}
+			fieldName = fieldName[:len(fieldName)-1]
+		default:
+			fieldName = append(fieldName, propStruct.Type().Field(i).Name)
+			return fmt.Errorf("soong_config_variables.%s.%s: unsupported property type %q", s.variable, strings.Join(fieldName, "."), kind)
+		}
+	}
+	return nil
 }
 
 func printfIntoProperty(propertyValue reflect.Value, configValue string) error {
@@ -807,7 +839,7 @@ func printfIntoProperty(propertyValue reflect.Value, configValue string) error {
 	}
 
 	if count > 1 {
-		return fmt.Errorf("value variable properties only support a single '%%'")
+		return fmt.Errorf("list/value variable properties only support a single '%%'")
 	}
 
 	if !strings.Contains(s, "%s") {

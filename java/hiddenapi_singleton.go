@@ -25,7 +25,7 @@ func init() {
 }
 
 func RegisterHiddenApiSingletonComponents(ctx android.RegistrationContext) {
-	ctx.RegisterSingletonType("hiddenapi", hiddenAPISingletonFactory)
+	ctx.RegisterParallelSingletonType("hiddenapi", hiddenAPISingletonFactory)
 }
 
 var PrepareForTestWithHiddenApiBuildComponents = android.FixtureRegisterWithContext(RegisterHiddenApiSingletonComponents)
@@ -121,8 +121,8 @@ type hiddenAPISingleton struct {
 
 // hiddenAPI singleton rules
 func (h *hiddenAPISingleton) GenerateBuildActions(ctx android.SingletonContext) {
-	// Don't run any hiddenapi rules if UNSAFE_DISABLE_HIDDENAPI_FLAGS=true
-	if ctx.Config().IsEnvTrue("UNSAFE_DISABLE_HIDDENAPI_FLAGS") {
+	// Don't run any hiddenapi rules if hiddenapi checks are disabled
+	if ctx.Config().DisableHiddenApiChecks() {
 		return
 	}
 
@@ -150,6 +150,10 @@ func isModuleInConfiguredList(ctx android.BaseModuleContext, module android.Modu
 	// Strip a prebuilt_ prefix so that this can match a prebuilt module that has not been renamed.
 	name = android.RemoveOptionalPrebuiltPrefix(name)
 
+	// Strip the ".impl" suffix, so that the implementation library of the java_sdk_library is
+	// treated identical to the top level java_sdk_library.
+	name = strings.TrimSuffix(name, ".impl")
+
 	// Ignore any module that is not listed in the boot image configuration.
 	index := configuredBootJars.IndexOfJar(name)
 	if index == -1 {
@@ -162,11 +166,11 @@ func isModuleInConfiguredList(ctx android.BaseModuleContext, module android.Modu
 		return false
 	}
 
-	apexInfo := ctx.OtherModuleProvider(module, android.ApexInfoProvider).(android.ApexInfo)
+	apexInfo, _ := android.OtherModuleProvider(ctx, module, android.ApexInfoProvider)
 
 	// Now match the apex part of the boot image configuration.
 	requiredApex := configuredBootJars.Apex(index)
-	if requiredApex == "platform" || requiredApex == "system_ext" {
+	if android.IsConfiguredJarForPlatform(requiredApex) {
 		if len(apexInfo.InApexVariants) != 0 {
 			// A platform variant is required but this is for an apex so ignore it.
 			return false

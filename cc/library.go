@@ -24,9 +24,6 @@ import (
 	"sync"
 
 	"android/soong/android"
-	"android/soong/bazel"
-	"android/soong/bazel/cquery"
-	"android/soong/cc/config"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/pathtools"
@@ -94,6 +91,13 @@ type LibraryProperties struct {
 			Suffix *string `android:"arch_variant"`
 
 			Header_abi_checker headerAbiCheckerProperties
+
+			// Disable stubs for vendor/product variants
+			// This is a workaround to keep `stubs` only for "core" variant (not product/vendor).
+			// It would be nice if we could put `stubs` into a `target: { core: {} }`
+			// block but it's not supported in soong yet. This could be removed/simplified once we have
+			// a better syntax.
+			No_stubs bool
 		}
 
 		Platform struct {
@@ -215,400 +219,6 @@ func RegisterLibraryBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("cc_library_host_shared", LibraryHostSharedFactory)
 }
 
-// TODO(b/199902614): Can this be factored to share with the other Attributes?
-// For bp2build conversion.
-type bazelCcLibraryAttributes struct {
-	// Attributes pertaining to both static and shared variants.
-	Srcs    bazel.LabelListAttribute
-	Srcs_c  bazel.LabelListAttribute
-	Srcs_as bazel.LabelListAttribute
-
-	Copts      bazel.StringListAttribute
-	Cppflags   bazel.StringListAttribute
-	Conlyflags bazel.StringListAttribute
-	Asflags    bazel.StringListAttribute
-
-	Hdrs bazel.LabelListAttribute
-
-	Deps                              bazel.LabelListAttribute
-	Implementation_deps               bazel.LabelListAttribute
-	Dynamic_deps                      bazel.LabelListAttribute
-	Implementation_dynamic_deps       bazel.LabelListAttribute
-	Whole_archive_deps                bazel.LabelListAttribute
-	Implementation_whole_archive_deps bazel.LabelListAttribute
-	System_dynamic_deps               bazel.LabelListAttribute
-
-	Export_includes        bazel.StringListAttribute
-	Export_system_includes bazel.StringListAttribute
-	Local_includes         bazel.StringListAttribute
-	Absolute_includes      bazel.StringListAttribute
-	Linkopts               bazel.StringListAttribute
-	Rtti                   bazel.BoolAttribute
-
-	Stl     *string
-	Cpp_std *string
-	C_std   *string
-
-	// This is shared only.
-	Additional_linker_inputs bazel.LabelListAttribute
-
-	// Common properties shared between both shared and static variants.
-	Shared staticOrSharedAttributes
-	Static staticOrSharedAttributes
-
-	Strip stripAttributes
-
-	Features bazel.StringListAttribute
-}
-
-type aidlLibraryAttributes struct {
-	Srcs        bazel.LabelListAttribute
-	Include_dir *string
-}
-
-type ccAidlLibraryAttributes struct {
-	Deps                        bazel.LabelListAttribute
-	Implementation_dynamic_deps bazel.LabelListAttribute
-}
-
-type stripAttributes struct {
-	Keep_symbols                 bazel.BoolAttribute
-	Keep_symbols_and_debug_frame bazel.BoolAttribute
-	Keep_symbols_list            bazel.StringListAttribute
-	All                          bazel.BoolAttribute
-	None                         bazel.BoolAttribute
-}
-
-func stripAttrsFromLinkerAttrs(la *linkerAttributes) stripAttributes {
-	return stripAttributes{
-		Keep_symbols:                 la.stripKeepSymbols,
-		Keep_symbols_and_debug_frame: la.stripKeepSymbolsAndDebugFrame,
-		Keep_symbols_list:            la.stripKeepSymbolsList,
-		All:                          la.stripAll,
-		None:                         la.stripNone,
-	}
-}
-
-func libraryBp2Build(ctx android.TopDownMutatorContext, m *Module) {
-	sharedAttrs := bp2BuildParseSharedProps(ctx, m)
-	staticAttrs := bp2BuildParseStaticProps(ctx, m)
-	baseAttributes := bp2BuildParseBaseProps(ctx, m)
-	compilerAttrs := baseAttributes.compilerAttributes
-	linkerAttrs := baseAttributes.linkerAttributes
-	exportedIncludes := bp2BuildParseExportedIncludes(ctx, m, &compilerAttrs.includes)
-
-	srcs := compilerAttrs.srcs
-
-	sharedAttrs.Dynamic_deps.Add(baseAttributes.protoDependency)
-	staticAttrs.Deps.Add(baseAttributes.protoDependency)
-
-	asFlags := compilerAttrs.asFlags
-	if compilerAttrs.asSrcs.IsEmpty() && sharedAttrs.Srcs_as.IsEmpty() && staticAttrs.Srcs_as.IsEmpty() {
-		// Skip asflags for BUILD file simplicity if there are no assembly sources.
-		asFlags = bazel.MakeStringListAttribute(nil)
-	}
-
-	staticCommonAttrs := staticOrSharedAttributes{
-		Srcs:    *srcs.Clone().Append(staticAttrs.Srcs),
-		Srcs_c:  *compilerAttrs.cSrcs.Clone().Append(staticAttrs.Srcs_c),
-		Srcs_as: *compilerAttrs.asSrcs.Clone().Append(staticAttrs.Srcs_as),
-		Copts:   *compilerAttrs.copts.Clone().Append(staticAttrs.Copts),
-		Hdrs:    *compilerAttrs.hdrs.Clone().Append(staticAttrs.Hdrs),
-
-		Deps:                              *linkerAttrs.deps.Clone().Append(staticAttrs.Deps),
-		Implementation_deps:               *linkerAttrs.implementationDeps.Clone().Append(staticAttrs.Implementation_deps),
-		Dynamic_deps:                      *linkerAttrs.dynamicDeps.Clone().Append(staticAttrs.Dynamic_deps),
-		Implementation_dynamic_deps:       *linkerAttrs.implementationDynamicDeps.Clone().Append(staticAttrs.Implementation_dynamic_deps),
-		Implementation_whole_archive_deps: linkerAttrs.implementationWholeArchiveDeps,
-		Whole_archive_deps:                *linkerAttrs.wholeArchiveDeps.Clone().Append(staticAttrs.Whole_archive_deps),
-		System_dynamic_deps:               *linkerAttrs.systemDynamicDeps.Clone().Append(staticAttrs.System_dynamic_deps),
-		Runtime_deps:                      linkerAttrs.runtimeDeps,
-		sdkAttributes:                     bp2BuildParseSdkAttributes(m),
-		Native_coverage:                   baseAttributes.Native_coverage,
-	}
-
-	sharedCommonAttrs := staticOrSharedAttributes{
-		Srcs:    *srcs.Clone().Append(sharedAttrs.Srcs),
-		Srcs_c:  *compilerAttrs.cSrcs.Clone().Append(sharedAttrs.Srcs_c),
-		Srcs_as: *compilerAttrs.asSrcs.Clone().Append(sharedAttrs.Srcs_as),
-		Copts:   *compilerAttrs.copts.Clone().Append(sharedAttrs.Copts),
-		Hdrs:    *compilerAttrs.hdrs.Clone().Append(sharedAttrs.Hdrs),
-
-		Deps:                              *linkerAttrs.deps.Clone().Append(sharedAttrs.Deps),
-		Implementation_deps:               *linkerAttrs.implementationDeps.Clone().Append(sharedAttrs.Implementation_deps),
-		Dynamic_deps:                      *linkerAttrs.dynamicDeps.Clone().Append(sharedAttrs.Dynamic_deps),
-		Implementation_dynamic_deps:       *linkerAttrs.implementationDynamicDeps.Clone().Append(sharedAttrs.Implementation_dynamic_deps),
-		Whole_archive_deps:                *linkerAttrs.wholeArchiveDeps.Clone().Append(sharedAttrs.Whole_archive_deps),
-		Implementation_whole_archive_deps: linkerAttrs.implementationWholeArchiveDeps,
-		System_dynamic_deps:               *linkerAttrs.systemDynamicDeps.Clone().Append(sharedAttrs.System_dynamic_deps),
-		Runtime_deps:                      linkerAttrs.runtimeDeps,
-		sdkAttributes:                     bp2BuildParseSdkAttributes(m),
-		Native_coverage:                   baseAttributes.Native_coverage,
-	}
-
-	staticTargetAttrs := &bazelCcLibraryStaticAttributes{
-		staticOrSharedAttributes: staticCommonAttrs,
-
-		Cppflags:   compilerAttrs.cppFlags,
-		Conlyflags: compilerAttrs.conlyFlags,
-		Asflags:    asFlags,
-
-		Export_includes:          exportedIncludes.Includes,
-		Export_absolute_includes: exportedIncludes.AbsoluteIncludes,
-		Export_system_includes:   exportedIncludes.SystemIncludes,
-		Local_includes:           compilerAttrs.localIncludes,
-		Absolute_includes:        compilerAttrs.absoluteIncludes,
-		Rtti:                     compilerAttrs.rtti,
-		Stl:                      compilerAttrs.stl,
-		Cpp_std:                  compilerAttrs.cppStd,
-		C_std:                    compilerAttrs.cStd,
-
-		Features: baseAttributes.features,
-	}
-
-	sharedTargetAttrs := &bazelCcLibrarySharedAttributes{
-		staticOrSharedAttributes: sharedCommonAttrs,
-		Cppflags:                 compilerAttrs.cppFlags,
-		Conlyflags:               compilerAttrs.conlyFlags,
-		Asflags:                  asFlags,
-
-		Export_includes:          exportedIncludes.Includes,
-		Export_absolute_includes: exportedIncludes.AbsoluteIncludes,
-		Export_system_includes:   exportedIncludes.SystemIncludes,
-		Local_includes:           compilerAttrs.localIncludes,
-		Absolute_includes:        compilerAttrs.absoluteIncludes,
-		Linkopts:                 linkerAttrs.linkopts,
-		Rtti:                     compilerAttrs.rtti,
-		Stl:                      compilerAttrs.stl,
-		Cpp_std:                  compilerAttrs.cppStd,
-		C_std:                    compilerAttrs.cStd,
-		Use_version_lib:          linkerAttrs.useVersionLib,
-
-		Additional_linker_inputs: linkerAttrs.additionalLinkerInputs,
-
-		Strip:                             stripAttrsFromLinkerAttrs(&linkerAttrs),
-		Features:                          baseAttributes.features,
-		bazelCcHeaderAbiCheckerAttributes: bp2buildParseAbiCheckerProps(ctx, m),
-
-		Fdo_profile: compilerAttrs.fdoProfile,
-	}
-
-	if compilerAttrs.stubsSymbolFile != nil && len(compilerAttrs.stubsVersions.Value) > 0 {
-		sharedTargetAttrs.Stubs_symbol_file = compilerAttrs.stubsSymbolFile
-	}
-
-	sharedTargetAttrs.Suffix = compilerAttrs.suffix
-
-	for axis, configToProps := range m.GetArchVariantProperties(ctx, &LibraryProperties{}) {
-		for cfg, props := range configToProps {
-			if props, ok := props.(*LibraryProperties); ok {
-				if props.Inject_bssl_hash != nil {
-					// This is an edge case applies only to libcrypto
-					if m.Name() == "libcrypto" || m.Name() == "libcrypto_for_testing" {
-						sharedTargetAttrs.Inject_bssl_hash.SetSelectValue(axis, cfg, props.Inject_bssl_hash)
-					} else {
-						ctx.PropertyErrorf("inject_bssl_hash", "only applies to libcrypto")
-					}
-				}
-			}
-		}
-	}
-
-	staticProps := bazel.BazelTargetModuleProperties{
-		Rule_class:        "cc_library_static",
-		Bzl_load_location: "//build/bazel/rules/cc:cc_library_static.bzl",
-	}
-	sharedProps := bazel.BazelTargetModuleProperties{
-		Rule_class:        "cc_library_shared",
-		Bzl_load_location: "//build/bazel/rules/cc:cc_library_shared.bzl",
-	}
-
-	var tagsForStaticVariant bazel.StringListAttribute
-	if compilerAttrs.stubsSymbolFile == nil && len(compilerAttrs.stubsVersions.Value) == 0 {
-		tagsForStaticVariant = android.ApexAvailableTags(m)
-	}
-
-	tagsForSharedVariant := android.ApexAvailableTags(m)
-
-	ctx.CreateBazelTargetModuleWithRestrictions(staticProps,
-		android.CommonAttributes{
-			Name: m.Name() + "_bp2build_cc_library_static",
-			Tags: tagsForStaticVariant,
-		},
-		staticTargetAttrs, staticAttrs.Enabled)
-	ctx.CreateBazelTargetModuleWithRestrictions(sharedProps,
-		android.CommonAttributes{
-			Name: m.Name(),
-			Tags: tagsForSharedVariant,
-		},
-		sharedTargetAttrs, sharedAttrs.Enabled)
-
-	createStubsBazelTargetIfNeeded(ctx, m, compilerAttrs, exportedIncludes, baseAttributes)
-}
-
-func createStubsBazelTargetIfNeeded(ctx android.TopDownMutatorContext, m *Module, compilerAttrs compilerAttributes, exportedIncludes BazelIncludes, baseAttributes baseAttributes) {
-	if compilerAttrs.stubsSymbolFile != nil && len(compilerAttrs.stubsVersions.Value) > 0 {
-		stubSuitesProps := bazel.BazelTargetModuleProperties{
-			Rule_class:        "cc_stub_suite",
-			Bzl_load_location: "//build/bazel/rules/cc:cc_stub_library.bzl",
-		}
-		soname := m.Name() + ".so"
-		stubSuitesAttrs := &bazelCcStubSuiteAttributes{
-			Symbol_file:     compilerAttrs.stubsSymbolFile,
-			Versions:        compilerAttrs.stubsVersions,
-			Export_includes: exportedIncludes.Includes,
-			Soname:          &soname,
-			Source_library:  *bazel.MakeLabelAttribute(":" + m.Name()),
-			Deps:            baseAttributes.deps,
-		}
-		ctx.CreateBazelTargetModule(stubSuitesProps,
-			android.CommonAttributes{Name: m.Name() + "_stub_libs"},
-			stubSuitesAttrs)
-	}
-}
-
-func apiContributionBp2Build(ctx android.TopDownMutatorContext, module *Module) {
-	apiSurfaces := make([]string, 0)
-	apiHeaders := make([]string, 0)
-	// module-libapi for apexes (non-null `stubs` property)
-	if module.HasStubsVariants() {
-		apiSurfaces = append(apiSurfaces, android.ModuleLibApi.String())
-		apiIncludes := getModuleLibApiIncludes(ctx, module)
-		if !apiIncludes.isEmpty() {
-			createApiHeaderTarget(ctx, apiIncludes)
-			apiHeaders = append(apiHeaders, apiIncludes.name)
-		}
-	}
-	// vendorapi (non-null `llndk` property)
-	if module.HasLlndkStubs() {
-		apiSurfaces = append(apiSurfaces, android.VendorApi.String())
-		apiIncludes := getVendorApiIncludes(ctx, module)
-		if !apiIncludes.isEmpty() {
-			createApiHeaderTarget(ctx, apiIncludes)
-			apiHeaders = append(apiHeaders, apiIncludes.name)
-		}
-	}
-	// create a target only if this module contributes to an api surface
-	// TODO: Currently this does not distinguish modulelibapi-only headers and vendrorapi-only headers
-	// TODO: Update so that modulelibapi-only headers do not get exported to vendorapi (and vice-versa)
-	if len(apiSurfaces) > 0 {
-		props := bazel.BazelTargetModuleProperties{
-			Rule_class:        "cc_api_contribution",
-			Bzl_load_location: "//build/bazel/rules/apis:cc_api_contribution.bzl",
-		}
-		attrs := &bazelCcApiContributionAttributes{
-			Library_name: module.Name(),
-			Api_surfaces: bazel.MakeStringListAttribute(apiSurfaces),
-			Api:          apiLabelAttribute(ctx, module),
-			Hdrs: bazel.MakeLabelListAttribute(
-				bazel.MakeLabelListFromTargetNames(apiHeaders),
-			),
-		}
-		ctx.CreateBazelTargetModule(
-			props,
-			android.CommonAttributes{
-				Name:     android.ApiContributionTargetName(module.Name()),
-				SkipData: proptools.BoolPtr(true),
-			},
-			attrs,
-		)
-	}
-}
-
-// Native apis are versioned in a single .map.txt for all api surfaces
-// Pick any one of the .map.txt files
-func apiLabelAttribute(ctx android.TopDownMutatorContext, module *Module) bazel.LabelAttribute {
-	var apiFile *string
-	linker := module.linker.(*libraryDecorator)
-	if llndkApi := linker.Properties.Llndk.Symbol_file; llndkApi != nil {
-		apiFile = llndkApi
-	} else if moduleLibApi := linker.Properties.Stubs.Symbol_file; moduleLibApi != nil {
-		apiFile = moduleLibApi
-	} else {
-		ctx.ModuleErrorf("API surface library does not have any API file")
-	}
-	apiLabel := android.BazelLabelForModuleSrcSingle(ctx, proptools.String(apiFile)).Label
-	return *bazel.MakeLabelAttribute(apiLabel)
-}
-
-// wrapper struct to flatten the arch and os specific export_include_dirs
-// flattening is necessary since we want to export apis of all arches even when we build for x86 (e.g.)
-type bazelCcApiLibraryHeadersAttributes struct {
-	bazelCcLibraryHeadersAttributes
-
-	Arch *string
-}
-
-func (a *bazelCcApiLibraryHeadersAttributes) isEmpty() bool {
-	return a.Export_includes.IsEmpty() &&
-		a.Export_system_includes.IsEmpty() &&
-		a.Deps.IsEmpty()
-}
-
-type apiIncludes struct {
-	name  string // name of the Bazel target in the generated bp2build workspace
-	attrs bazelCcApiLibraryHeadersAttributes
-}
-
-func (includes *apiIncludes) isEmpty() bool {
-	return includes.attrs.isEmpty()
-}
-
-func (includes *apiIncludes) addDep(name string) {
-	l := bazel.Label{Label: ":" + name}
-	ll := bazel.MakeLabelList([]bazel.Label{l})
-	lla := bazel.MakeLabelListAttribute(ll)
-	includes.attrs.Deps.Append(lla)
-}
-
-// includes provided to the module-lib API surface. This API surface is used by apexes.
-func getModuleLibApiIncludes(ctx android.TopDownMutatorContext, c *Module) apiIncludes {
-	flagProps := c.library.(*libraryDecorator).flagExporter.Properties
-	linkProps := c.library.(*libraryDecorator).baseLinker.Properties
-	includes := android.FirstUniqueStrings(flagProps.Export_include_dirs)
-	systemIncludes := android.FirstUniqueStrings(flagProps.Export_system_include_dirs)
-	headerLibs := android.FirstUniqueStrings(linkProps.Export_header_lib_headers)
-	attrs := bazelCcLibraryHeadersAttributes{
-		Export_includes:        bazel.MakeStringListAttribute(includes),
-		Export_system_includes: bazel.MakeStringListAttribute(systemIncludes),
-		Deps:                   bazel.MakeLabelListAttribute(apiHeaderLabels(ctx, headerLibs)),
-	}
-
-	return apiIncludes{
-		name: c.Name() + ".module-libapi.headers",
-		attrs: bazelCcApiLibraryHeadersAttributes{
-			bazelCcLibraryHeadersAttributes: attrs,
-		},
-	}
-}
-
-func getVendorApiIncludes(ctx android.TopDownMutatorContext, c *Module) apiIncludes {
-	baseProps := c.library.(*libraryDecorator).flagExporter.Properties
-	llndkProps := c.library.(*libraryDecorator).Properties.Llndk
-	includes := baseProps.Export_include_dirs
-	systemIncludes := baseProps.Export_system_include_dirs
-	// LLNDK can override the base includes
-	if llndkIncludes := llndkProps.Override_export_include_dirs; llndkIncludes != nil {
-		includes = llndkIncludes
-	}
-	if proptools.Bool(llndkProps.Export_headers_as_system) {
-		systemIncludes = append(systemIncludes, includes...)
-		includes = nil
-	}
-
-	attrs := bazelCcLibraryHeadersAttributes{
-		Export_includes:        bazel.MakeStringListAttribute(includes),
-		Export_system_includes: bazel.MakeStringListAttribute(systemIncludes),
-		Deps:                   bazel.MakeLabelListAttribute(apiHeaderLabels(ctx, llndkProps.Export_llndk_headers)),
-	}
-	return apiIncludes{
-		name: c.Name() + ".vendorapi.headers",
-		attrs: bazelCcApiLibraryHeadersAttributes{
-			bazelCcLibraryHeadersAttributes: attrs,
-		},
-	}
-}
-
 // cc_library creates both static and/or shared libraries for a device and/or
 // host. By default, a cc_library has a single variant that targets the device.
 // Specifying `host_supported: true` also creates a library that targets the
@@ -621,8 +231,6 @@ func LibraryFactory() android.Module {
 		staticLibrarySdkMemberType,
 		staticAndSharedLibrarySdkMemberType,
 	}
-	module.bazelable = true
-	module.bazelHandler = &ccLibraryBazelHandler{module: module}
 	return module.Init()
 }
 
@@ -631,8 +239,6 @@ func LibraryStaticFactory() android.Module {
 	module, library := NewLibrary(android.HostAndDeviceSupported)
 	library.BuildOnlyStatic()
 	module.sdkMemberTypes = []android.SdkMemberType{staticLibrarySdkMemberType}
-	module.bazelable = true
-	module.bazelHandler = &ccLibraryBazelHandler{module: module}
 	return module.Init()
 }
 
@@ -641,8 +247,6 @@ func LibrarySharedFactory() android.Module {
 	module, library := NewLibrary(android.HostAndDeviceSupported)
 	library.BuildOnlyShared()
 	module.sdkMemberTypes = []android.SdkMemberType{sharedLibrarySdkMemberType}
-	module.bazelable = true
-	module.bazelHandler = &ccLibraryBazelHandler{module: module}
 	return module.Init()
 }
 
@@ -652,8 +256,6 @@ func LibraryHostStaticFactory() android.Module {
 	module, library := NewLibrary(android.HostSupported)
 	library.BuildOnlyStatic()
 	module.sdkMemberTypes = []android.SdkMemberType{staticLibrarySdkMemberType}
-	module.bazelable = true
-	module.bazelHandler = &ccLibraryBazelHandler{module: module}
 	return module.Init()
 }
 
@@ -662,8 +264,6 @@ func LibraryHostSharedFactory() android.Module {
 	module, library := NewLibrary(android.HostSupported)
 	library.BuildOnlyShared()
 	module.sdkMemberTypes = []android.SdkMemberType{sharedLibrarySdkMemberType}
-	module.bazelable = true
-	module.bazelHandler = &ccLibraryBazelHandler{module: module}
 	return module.Init()
 }
 
@@ -692,6 +292,10 @@ func (f *flagExporter) exportedIncludes(ctx ModuleContext) android.Paths {
 		return android.PathsForModuleSrc(ctx, f.Properties.Target.Product.Override_export_include_dirs)
 	}
 	return android.PathsForModuleSrc(ctx, f.Properties.Export_include_dirs)
+}
+
+func (f *flagExporter) exportedSystemIncludes(ctx ModuleContext) android.Paths {
+	return android.PathsForModuleSrc(ctx, f.Properties.Export_system_include_dirs)
 }
 
 // exportIncludes registers the include directories and system include directories to be exported
@@ -742,7 +346,7 @@ func (f *flagExporter) addExportedGeneratedHeaders(headers ...android.Path) {
 }
 
 func (f *flagExporter) setProvider(ctx android.ModuleContext) {
-	ctx.SetProvider(FlagExporterInfoProvider, FlagExporterInfo{
+	android.SetProvider(ctx, FlagExporterInfoProvider, FlagExporterInfo{
 		// Comes from Export_include_dirs property, and those of exported transitive deps
 		IncludeDirs: android.FirstUniquePaths(f.dirs),
 		// Comes from Export_system_include_dirs property, and those of exported transitive deps
@@ -789,9 +393,6 @@ type libraryDecorator struct {
 	// Output archive of gcno coverage information files
 	coverageOutputFile android.OptionalPath
 
-	// linked Source Abi Dump
-	sAbiOutputFile android.OptionalPath
-
 	// Source Abi Diff
 	sAbiDiff android.Paths
 
@@ -801,6 +402,8 @@ type libraryDecorator struct {
 
 	// Location of the linked, unstripped library for shared libraries
 	unstrippedOutputFile android.Path
+	// Location of the linked, stripped library for shared libraries, strip: "all"
+	strippedAllOutputFile android.Path
 
 	// Location of the file that should be copied to dist dir when requested
 	distFile android.Path
@@ -821,257 +424,7 @@ type libraryDecorator struct {
 	*baseLinker
 	*baseInstaller
 
-	collectedSnapshotHeaders android.Paths
-
 	apiListCoverageXmlPath android.ModuleOutPath
-}
-
-type ccLibraryBazelHandler struct {
-	module *Module
-}
-
-var _ BazelHandler = (*ccLibraryBazelHandler)(nil)
-
-// generateStaticBazelBuildActions constructs the StaticLibraryInfo Soong
-// provider from a Bazel shared library's CcInfo provider.
-func (handler *ccLibraryBazelHandler) generateStaticBazelBuildActions(ctx android.ModuleContext, label string, ccInfo cquery.CcInfo) {
-	rootStaticArchives := ccInfo.RootStaticArchives
-	if len(rootStaticArchives) != 1 {
-		ctx.ModuleErrorf("expected exactly one root archive file for '%s', but got %s", label, rootStaticArchives)
-		return
-	}
-	var outputFilePath android.Path = android.PathForBazelOut(ctx, rootStaticArchives[0])
-	if len(ccInfo.TidyFiles) > 0 {
-		handler.module.tidyFiles = android.PathsForBazelOut(ctx, ccInfo.TidyFiles)
-		outputFilePath = android.AttachValidationActions(ctx, outputFilePath, handler.module.tidyFiles)
-	}
-	handler.module.outputFile = android.OptionalPathForPath(outputFilePath)
-
-	objPaths := ccInfo.CcObjectFiles
-	objFiles := make(android.Paths, len(objPaths))
-	for i, objPath := range objPaths {
-		objFiles[i] = android.PathForBazelOut(ctx, objPath)
-	}
-	objects := Objects{
-		objFiles: objFiles,
-	}
-
-	ctx.SetProvider(StaticLibraryInfoProvider, StaticLibraryInfo{
-		StaticLibrary: outputFilePath,
-		ReuseObjects:  objects,
-		Objects:       objects,
-
-		// TODO(b/190524881): Include transitive static libraries in this provider to support
-		// static libraries with deps.
-		TransitiveStaticLibrariesForOrdering: android.NewDepSetBuilder(android.TOPOLOGICAL).
-			Direct(outputFilePath).
-			Build(),
-	})
-
-	return
-}
-
-// generateSharedBazelBuildActions constructs the SharedLibraryInfo Soong
-// provider from a Bazel shared library's CcInfo provider.
-func (handler *ccLibraryBazelHandler) generateSharedBazelBuildActions(ctx android.ModuleContext, label string, ccInfo cquery.CcInfo) {
-	rootDynamicLibraries := ccInfo.RootDynamicLibraries
-
-	if len(rootDynamicLibraries) != 1 {
-		ctx.ModuleErrorf("expected exactly one root dynamic library file for '%s', but got %s", label, rootDynamicLibraries)
-		return
-	}
-	var outputFilePath android.Path = android.PathForBazelOut(ctx, rootDynamicLibraries[0])
-	if len(ccInfo.TidyFiles) > 0 {
-		handler.module.tidyFiles = android.PathsForBazelOut(ctx, ccInfo.TidyFiles)
-		outputFilePath = android.AttachValidationActions(ctx, outputFilePath, handler.module.tidyFiles)
-	}
-
-	handler.module.outputFile = android.OptionalPathForPath(outputFilePath)
-	handler.module.linker.(*libraryDecorator).unstrippedOutputFile = android.PathForBazelOut(ctx, ccInfo.UnstrippedOutput)
-
-	var tocFile android.OptionalPath
-	if len(ccInfo.TocFile) > 0 {
-		tocFile = android.OptionalPathForPath(android.PathForBazelOut(ctx, ccInfo.TocFile))
-	}
-	handler.module.linker.(*libraryDecorator).tocFile = tocFile
-
-	if len(ccInfo.AbiDiffFiles) > 0 {
-		handler.module.linker.(*libraryDecorator).sAbiDiff = android.PathsForBazelOut(ctx, ccInfo.AbiDiffFiles)
-	}
-
-	ctx.SetProvider(SharedLibraryInfoProvider, SharedLibraryInfo{
-		TableOfContents: tocFile,
-		SharedLibrary:   outputFilePath,
-		Target:          ctx.Target(),
-		// TODO(b/190524881): Include transitive static libraries in this provider to support
-		// static libraries with deps. The provider key for this is TransitiveStaticLibrariesForOrdering.
-	})
-}
-
-func (handler *ccLibraryBazelHandler) QueueBazelCall(ctx android.BaseModuleContext, label string) {
-	bazelCtx := ctx.Config().BazelContext
-	bazelCtx.QueueBazelRequest(label, cquery.GetCcInfo, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
-}
-
-func (handler *ccLibraryBazelHandler) ProcessBazelQueryResponse(ctx android.ModuleContext, label string) {
-	bazelCtx := ctx.Config().BazelContext
-	ccInfo, err := bazelCtx.GetCcInfo(label, android.GetConfigKeyApexVariant(ctx, GetApexConfigKey(ctx)))
-	if err != nil {
-		ctx.ModuleErrorf("Error getting Bazel CcInfo: %s", err)
-		return
-	}
-
-	if handler.module.static() {
-		handler.generateStaticBazelBuildActions(ctx, label, ccInfo)
-	} else if handler.module.Shared() {
-		handler.generateSharedBazelBuildActions(ctx, label, ccInfo)
-	} else {
-		ctx.ModuleErrorf("Unhandled bazel case for %s (neither shared nor static!)", ctx.ModuleName())
-	}
-
-	handler.module.linker.(*libraryDecorator).setFlagExporterInfoFromCcInfo(ctx, ccInfo)
-	handler.module.maybeUnhideFromMake()
-
-	if i, ok := handler.module.linker.(snapshotLibraryInterface); ok {
-		// Dependencies on this library will expect collectedSnapshotHeaders to
-		// be set, otherwise validation will fail. For now, set this to an empty
-		// list.
-		// TODO(b/190533363): More closely mirror the collectHeadersForSnapshot
-		// implementation.
-		i.(*libraryDecorator).collectedSnapshotHeaders = android.Paths{}
-	}
-
-	handler.module.setAndroidMkVariablesFromCquery(ccInfo.CcAndroidMkInfo)
-}
-
-func (library *libraryDecorator) setFlagExporterInfoFromCcInfo(ctx android.ModuleContext, ccInfo cquery.CcInfo) {
-	flagExporterInfo := flagExporterInfoFromCcInfo(ctx, ccInfo)
-	// flag exporters consolidates properties like includes, flags, dependencies that should be
-	// exported from this module to other modules
-	ctx.SetProvider(FlagExporterInfoProvider, flagExporterInfo)
-	// Store flag info to be passed along to androidmk
-	// TODO(b/184387147): Androidmk should be done in Bazel, not Soong.
-	library.flagExporterInfo = &flagExporterInfo
-}
-
-func GlobHeadersForSnapshot(ctx android.ModuleContext, paths android.Paths) android.Paths {
-	ret := android.Paths{}
-
-	// Headers in the source tree should be globbed. On the contrast, generated headers
-	// can't be globbed, and they should be manually collected.
-	// So, we first filter out intermediate directories (which contains generated headers)
-	// from exported directories, and then glob headers under remaining directories.
-	for _, path := range paths {
-		dir := path.String()
-		// Skip if dir is for generated headers
-		if strings.HasPrefix(dir, ctx.Config().OutDir()) {
-			continue
-		}
-
-		// Filter out the generated headers from bazel.
-		if strings.HasPrefix(dir, android.PathForBazelOut(ctx, "bazel-out").String()) {
-			continue
-		}
-
-		// libeigen wrongly exports the root directory "external/eigen". But only two
-		// subdirectories "Eigen" and "unsupported" contain exported header files. Even worse
-		// some of them have no extension. So we need special treatment for libeigen in order
-		// to glob correctly.
-		if dir == "external/eigen" {
-			// Only these two directories contains exported headers.
-			for _, subdir := range []string{"Eigen", "unsupported/Eigen"} {
-				globDir := "external/eigen/" + subdir + "/**/*"
-				glob, err := ctx.GlobWithDeps(globDir, nil)
-				if err != nil {
-					ctx.ModuleErrorf("glob of %q failed: %s", globDir, err)
-					return nil
-				}
-				for _, header := range glob {
-					if strings.HasSuffix(header, "/") {
-						continue
-					}
-					ext := filepath.Ext(header)
-					if ext != "" && ext != ".h" {
-						continue
-					}
-					ret = append(ret, android.PathForSource(ctx, header))
-				}
-			}
-			continue
-		}
-		globDir := dir + "/**/*"
-		glob, err := ctx.GlobWithDeps(globDir, nil)
-		if err != nil {
-			ctx.ModuleErrorf("glob of %q failed: %s", globDir, err)
-			return nil
-		}
-		isLibcxx := strings.HasPrefix(dir, "external/libcxx/include")
-		for _, header := range glob {
-			if isLibcxx {
-				// Glob all files under this special directory, because of C++ headers with no
-				// extension.
-				if strings.HasSuffix(header, "/") {
-					continue
-				}
-			} else {
-				// Filter out only the files with extensions that are headers.
-				found := false
-				for _, ext := range HeaderExts {
-					if strings.HasSuffix(header, ext) {
-						found = true
-						break
-					}
-				}
-				if !found {
-					continue
-				}
-			}
-			ret = append(ret, android.PathForSource(ctx, header))
-		}
-	}
-	return ret
-}
-
-func GlobGeneratedHeadersForSnapshot(_ android.ModuleContext, paths android.Paths) android.Paths {
-	ret := android.Paths{}
-	for _, header := range paths {
-		// TODO(b/148123511): remove exportedDeps after cleaning up genrule
-		if strings.HasSuffix(header.Base(), "-phony") {
-			continue
-		}
-		ret = append(ret, header)
-	}
-	return ret
-}
-
-// collectHeadersForSnapshot collects all exported headers from library.
-// It globs header files in the source tree for exported include directories,
-// and tracks generated header files separately.
-//
-// This is to be called from GenerateAndroidBuildActions, and then collected
-// header files can be retrieved by snapshotHeaders().
-func (l *libraryDecorator) collectHeadersForSnapshot(ctx android.ModuleContext) {
-	ret := android.Paths{}
-
-	// Headers in the source tree should be globbed. On the contrast, generated headers
-	// can't be globbed, and they should be manually collected.
-	// So, we first filter out intermediate directories (which contains generated headers)
-	// from exported directories, and then glob headers under remaining directories.
-	ret = append(ret, GlobHeadersForSnapshot(ctx, append(android.CopyOfPaths(l.flagExporter.dirs), l.flagExporter.systemDirs...))...)
-
-	// Collect generated headers
-	ret = append(ret, GlobGeneratedHeadersForSnapshot(ctx, append(android.CopyOfPaths(l.flagExporter.headers), l.flagExporter.deps...))...)
-
-	l.collectedSnapshotHeaders = ret
-}
-
-// This returns all exported header files, both generated ones and headers from source tree.
-// collectHeadersForSnapshot() must be called before calling this.
-func (l *libraryDecorator) snapshotHeaders() android.Paths {
-	if l.collectedSnapshotHeaders == nil {
-		panic("snapshotHeaders() must be called after collectHeadersForSnapshot()")
-	}
-	return l.collectedSnapshotHeaders
 }
 
 // linkerProps returns the list of properties structs relevant for this library. (For example, if
@@ -1207,18 +560,16 @@ func (library *libraryDecorator) getHeaderAbiCheckerProperties(ctx android.BaseM
 
 func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) Objects {
 	if ctx.IsLlndk() {
+		vendorApiLevel := ctx.Config().VendorApiLevel()
+		if vendorApiLevel == "" {
+			// TODO(b/321892570): Some tests relying on old fixtures which
+			// doesn't set vendorApiLevel. Needs to fix them.
+			vendorApiLevel = ctx.Config().PlatformSdkVersion().String()
+		}
 		// This is the vendor variant of an LLNDK library, build the LLNDK stubs.
-		vndkVer := ctx.Module().(*Module).VndkVersion()
-		if !inList(vndkVer, ctx.Config().PlatformVersionActiveCodenames()) || vndkVer == "" {
-			// For non-enforcing devices, vndkVer is empty. Use "current" in that case, too.
-			vndkVer = "current"
-		}
-		if library.stubsVersion() != "" {
-			vndkVer = library.stubsVersion()
-		}
 		nativeAbiResult := parseNativeAbiDefinition(ctx,
 			String(library.Properties.Llndk.Symbol_file),
-			android.ApiLevelOrPanic(ctx, vndkVer), "--llndk")
+			android.ApiLevelOrPanic(ctx, vendorApiLevel), "--llndk")
 		objs := compileStubLibrary(ctx, flags, nativeAbiResult.stubSrc)
 		if !Bool(library.Properties.Llndk.Unversioned) {
 			library.versionScriptPath = android.OptionalPathForPath(
@@ -1288,15 +639,11 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 		return Objects{}
 	}
 	if library.sabi.shouldCreateSourceAbiDump() {
-		exportIncludeDirs := library.flagExporter.exportedIncludes(ctx)
-		var SourceAbiFlags []string
-		for _, dir := range exportIncludeDirs.Strings() {
-			SourceAbiFlags = append(SourceAbiFlags, "-I"+dir)
+		dirs := library.exportedIncludeDirsForAbiCheck(ctx)
+		flags.SAbiFlags = make([]string, 0, len(dirs))
+		for _, dir := range dirs {
+			flags.SAbiFlags = append(flags.SAbiFlags, "-I"+dir)
 		}
-		for _, reexportedInclude := range library.sabi.Properties.ReexportedIncludes {
-			SourceAbiFlags = append(SourceAbiFlags, "-I"+reexportedInclude)
-		}
-		flags.SAbiFlags = SourceAbiFlags
 		totalLength := len(library.baseCompiler.Properties.Srcs) + len(deps.GeneratedSources) +
 			len(library.SharedProperties.Shared.Srcs) + len(library.StaticProperties.Static.Srcs)
 		if totalLength > 0 {
@@ -1402,14 +749,6 @@ func (library *libraryDecorator) getLibNameHelper(baseModuleName string, inVendo
 func (library *libraryDecorator) getLibName(ctx BaseModuleContext) string {
 	name := library.getLibNameHelper(ctx.baseModuleName(), ctx.inVendor(), ctx.inProduct())
 
-	if ctx.IsVndkExt() {
-		// vndk-ext lib should have the same name with original lib
-		ctx.VisitDirectDepsWithTag(vndkExtDepTag, func(module android.Module) {
-			originalName := module.(*Module).outputFile.Path()
-			name = strings.TrimSuffix(originalName.Base(), originalName.Ext())
-		})
-	}
-
 	if ctx.Host() && Bool(library.Properties.Unique_host_soname) {
 		if !strings.HasSuffix(name, "-host") {
 			name = name + "-host"
@@ -1498,6 +837,10 @@ func (library *libraryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 		if library.baseLinker.Properties.crt() {
 			deps.CrtBegin = append(deps.CrtBegin, ctx.toolchain().CrtBeginSharedLibrary()...)
 			deps.CrtEnd = append(deps.CrtEnd, ctx.toolchain().CrtEndSharedLibrary()...)
+
+		}
+		if library.baseLinker.Properties.crtPadSegment() {
+			deps.CrtEnd = append(deps.CrtEnd, ctx.toolchain().CrtPadSegmentSharedLibrary()...)
 		}
 		deps.WholeStaticLibs = append(deps.WholeStaticLibs, library.SharedProperties.Shared.Whole_static_libs...)
 		deps.StaticLibs = append(deps.StaticLibs, library.SharedProperties.Shared.Static_libs...)
@@ -1505,6 +848,8 @@ func (library *libraryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 
 		deps.ReexportSharedLibHeaders = append(deps.ReexportSharedLibHeaders, library.SharedProperties.Shared.Export_shared_lib_headers...)
 		deps.ReexportStaticLibHeaders = append(deps.ReexportStaticLibHeaders, library.SharedProperties.Shared.Export_static_lib_headers...)
+
+		deps.LlndkHeaderLibs = append(deps.LlndkHeaderLibs, library.Properties.Llndk.Export_llndk_headers...)
 	}
 	if ctx.inVendor() {
 		deps.WholeStaticLibs = removeListFromList(deps.WholeStaticLibs, library.baseLinker.Properties.Target.Vendor.Exclude_static_libs)
@@ -1573,6 +918,40 @@ func (library *libraryDecorator) linkerSpecifiedDeps(specifiedDeps specifiedDeps
 	return specifiedDeps
 }
 
+func (library *libraryDecorator) moduleInfoJSON(ctx ModuleContext, moduleInfoJSON *android.ModuleInfoJSON) {
+	if library.static() {
+		moduleInfoJSON.Class = []string{"STATIC_LIBRARIES"}
+		moduleInfoJSON.Uninstallable = true
+	} else if library.shared() {
+		moduleInfoJSON.Class = []string{"SHARED_LIBRARIES"}
+	} else if library.header() {
+		moduleInfoJSON.Class = []string{"HEADER_LIBRARIES"}
+		moduleInfoJSON.Uninstallable = true
+	}
+
+	if library.buildStubs() && library.stubsVersion() != "" {
+		moduleInfoJSON.SubName += "." + library.stubsVersion()
+	}
+
+	// If a library providing a stub is included in an APEX, the private APIs of the library
+	// is accessible only inside the APEX. From outside of the APEX, clients can only use the
+	// public APIs via the stub. To enforce this, the (latest version of the) stub gets the
+	// name of the library. The impl library instead gets the `.bootstrap` suffix to so that
+	// they can be exceptionally used directly when APEXes are not available (e.g. during the
+	// very early stage in the boot process).
+	if len(library.Properties.Stubs.Versions) > 0 && !ctx.Host() && ctx.notInPlatform() &&
+		!ctx.inRamdisk() && !ctx.inVendorRamdisk() && !ctx.inRecovery() && !ctx.useVndk() && !ctx.static() {
+		if library.buildStubs() && library.isLatestStubVersion() {
+			moduleInfoJSON.SubName = ""
+		}
+		if !library.buildStubs() {
+			moduleInfoJSON.SubName = ".bootstrap"
+		}
+	}
+
+	library.baseLinker.moduleInfoJSON(ctx, moduleInfoJSON)
+}
+
 func (library *libraryDecorator) linkStatic(ctx ModuleContext,
 	flags Flags, deps PathDeps, objs Objects) android.Path {
 
@@ -1603,13 +982,13 @@ func (library *libraryDecorator) linkStatic(ctx ModuleContext,
 	ctx.CheckbuildFile(outputFile)
 
 	if library.static() {
-		ctx.SetProvider(StaticLibraryInfoProvider, StaticLibraryInfo{
+		android.SetProvider(ctx, StaticLibraryInfoProvider, StaticLibraryInfo{
 			StaticLibrary:                outputFile,
 			ReuseObjects:                 library.reuseObjects,
 			Objects:                      library.objects,
 			WholeStaticLibsFromPrebuilts: library.wholeStaticLibsFromPrebuilts,
 
-			TransitiveStaticLibrariesForOrdering: android.NewDepSetBuilder(android.TOPOLOGICAL).
+			TransitiveStaticLibrariesForOrdering: android.NewDepSetBuilder[android.Path](android.TOPOLOGICAL).
 				Direct(outputFile).
 				Transitive(deps.TranstiveStaticLibrariesForOrdering).
 				Build(),
@@ -1617,7 +996,7 @@ func (library *libraryDecorator) linkStatic(ctx ModuleContext,
 	}
 
 	if library.header() {
-		ctx.SetProvider(HeaderLibraryInfoProvider, HeaderLibraryInfo{})
+		android.SetProvider(ctx, HeaderLibraryInfoProvider, HeaderLibraryInfo{})
 	}
 
 	return outputFile
@@ -1735,6 +1114,17 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 		}
 	}
 
+	// Generate an output file for dist as if strip: "all" is set on the module.
+	// Currently this is for layoutlib release process only.
+	for _, dist := range ctx.Module().(*Module).Dists() {
+		if dist.Tag != nil && *dist.Tag == "stripped_all" {
+			strippedAllOutputFile := android.PathForModuleOut(ctx, "stripped_all", fileName)
+			transformStrip(ctx, outputFile, strippedAllOutputFile, StripFlags{Toolchain: flags.Toolchain})
+			library.strippedAllOutputFile = strippedAllOutputFile
+			break
+		}
+	}
+
 	sharedLibs := deps.EarlySharedLibs
 	sharedLibs = append(sharedLibs, deps.SharedLibs...)
 	sharedLibs = append(sharedLibs, deps.LateSharedLibs...)
@@ -1752,45 +1142,52 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 	objs.sAbiDumpFiles = append(objs.sAbiDumpFiles, deps.WholeStaticLibObjs.sAbiDumpFiles...)
 
 	library.coverageOutputFile = transformCoverageFilesToZip(ctx, objs, library.getLibName(ctx))
-	library.linkSAbiDumpFiles(ctx, objs, fileName, unstrippedOutputFile)
+	library.linkSAbiDumpFiles(ctx, deps, objs, fileName, unstrippedOutputFile)
 
-	var transitiveStaticLibrariesForOrdering *android.DepSet
+	var transitiveStaticLibrariesForOrdering *android.DepSet[android.Path]
 	if static := ctx.GetDirectDepsWithTag(staticVariantTag); len(static) > 0 {
-		s := ctx.OtherModuleProvider(static[0], StaticLibraryInfoProvider).(StaticLibraryInfo)
+		s, _ := android.OtherModuleProvider(ctx, static[0], StaticLibraryInfoProvider)
 		transitiveStaticLibrariesForOrdering = s.TransitiveStaticLibrariesForOrdering
 	}
 
-	ctx.SetProvider(SharedLibraryInfoProvider, SharedLibraryInfo{
+	android.SetProvider(ctx, SharedLibraryInfoProvider, SharedLibraryInfo{
 		TableOfContents:                      android.OptionalPathForPath(tocFile),
 		SharedLibrary:                        unstrippedOutputFile,
 		TransitiveStaticLibrariesForOrdering: transitiveStaticLibrariesForOrdering,
 		Target:                               ctx.Target(),
 	})
 
+	addStubDependencyProviders(ctx)
+
+	return unstrippedOutputFile
+}
+
+func addStubDependencyProviders(ctx ModuleContext) {
 	stubs := ctx.GetDirectDepsWithTag(stubImplDepTag)
 	if len(stubs) > 0 {
 		var stubsInfo []SharedStubLibrary
 		for _, stub := range stubs {
-			stubInfo := ctx.OtherModuleProvider(stub, SharedLibraryInfoProvider).(SharedLibraryInfo)
-			flagInfo := ctx.OtherModuleProvider(stub, FlagExporterInfoProvider).(FlagExporterInfo)
+			stubInfo, _ := android.OtherModuleProvider(ctx, stub, SharedLibraryInfoProvider)
+			flagInfo, _ := android.OtherModuleProvider(ctx, stub, FlagExporterInfoProvider)
 			stubsInfo = append(stubsInfo, SharedStubLibrary{
 				Version:           moduleLibraryInterface(stub).stubsVersion(),
 				SharedLibraryInfo: stubInfo,
 				FlagExporterInfo:  flagInfo,
 			})
 		}
-		ctx.SetProvider(SharedLibraryStubsProvider, SharedLibraryStubsInfo{
+		android.SetProvider(ctx, SharedLibraryStubsProvider, SharedLibraryStubsInfo{
 			SharedStubLibraries: stubsInfo,
-
-			IsLLNDK: ctx.IsLlndk(),
+			IsLLNDK:             ctx.IsLlndk(),
 		})
 	}
-
-	return unstrippedOutputFile
 }
 
 func (library *libraryDecorator) unstrippedOutputFilePath() android.Path {
 	return library.unstrippedOutputFile
+}
+
+func (library *libraryDecorator) strippedAllOutputFilePath() android.Path {
+	return library.strippedAllOutputFile
 }
 
 func (library *libraryDecorator) disableStripping() {
@@ -1808,6 +1205,75 @@ func (library *libraryDecorator) coverageOutputFilePath() android.OptionalPath {
 	return library.coverageOutputFile
 }
 
+func (library *libraryDecorator) exportedIncludeDirsForAbiCheck(ctx ModuleContext) []string {
+	exportIncludeDirs := library.flagExporter.exportedIncludes(ctx).Strings()
+	exportIncludeDirs = append(exportIncludeDirs, library.sabi.Properties.ReexportedIncludes...)
+	exportSystemIncludeDirs := library.flagExporter.exportedSystemIncludes(ctx).Strings()
+	exportSystemIncludeDirs = append(exportSystemIncludeDirs, library.sabi.Properties.ReexportedSystemIncludes...)
+	// The ABI checker does not distinguish normal and system headers.
+	return append(exportIncludeDirs, exportSystemIncludeDirs...)
+}
+
+func (library *libraryDecorator) llndkIncludeDirsForAbiCheck(ctx ModuleContext, deps PathDeps) []string {
+	var includeDirs, systemIncludeDirs []string
+
+	// The ABI checker does not need the preprocess which adds macro guards to function declarations.
+	preprocessedDirs := android.PathsForModuleSrc(ctx, library.Properties.Llndk.Export_preprocessed_headers).Strings()
+	if Bool(library.Properties.Llndk.Export_headers_as_system) {
+		systemIncludeDirs = append(systemIncludeDirs, preprocessedDirs...)
+	} else {
+		includeDirs = append(includeDirs, preprocessedDirs...)
+	}
+
+	if library.Properties.Llndk.Override_export_include_dirs != nil {
+		includeDirs = append(includeDirs, android.PathsForModuleSrc(
+			ctx, library.Properties.Llndk.Override_export_include_dirs).Strings()...)
+	} else {
+		includeDirs = append(includeDirs, library.flagExporter.exportedIncludes(ctx).Strings()...)
+		// Ignore library.sabi.Properties.ReexportedIncludes because
+		// LLNDK does not reexport the implementation's dependencies, such as export_header_libs.
+	}
+
+	systemIncludeDirs = append(systemIncludeDirs,
+		library.flagExporter.exportedSystemIncludes(ctx).Strings()...)
+	if Bool(library.Properties.Llndk.Export_headers_as_system) {
+		systemIncludeDirs = append(systemIncludeDirs, includeDirs...)
+		includeDirs = nil
+	}
+	// Header libs.
+	includeDirs = append(includeDirs, deps.LlndkIncludeDirs.Strings()...)
+	systemIncludeDirs = append(systemIncludeDirs, deps.LlndkSystemIncludeDirs.Strings()...)
+	// The ABI checker does not distinguish normal and system headers.
+	return append(includeDirs, systemIncludeDirs...)
+}
+
+func (library *libraryDecorator) linkLlndkSAbiDumpFiles(ctx ModuleContext,
+	deps PathDeps, sAbiDumpFiles android.Paths, soFile android.Path, libFileName string,
+	excludeSymbolVersions, excludeSymbolTags []string,
+	vendorApiLevel string) android.Path {
+	// NDK symbols in version 34 are LLNDK symbols. Those in version 35 are not.
+	return transformDumpToLinkedDump(ctx,
+		sAbiDumpFiles, soFile, libFileName+".llndk",
+		library.llndkIncludeDirsForAbiCheck(ctx, deps),
+		android.OptionalPathForModuleSrc(ctx, library.Properties.Llndk.Symbol_file),
+		append([]string{"*_PLATFORM", "*_PRIVATE"}, excludeSymbolVersions...),
+		append([]string{"platform-only"}, excludeSymbolTags...),
+		[]string{"llndk=" + vendorApiLevel}, "34", true /* isLlndk */)
+}
+
+func (library *libraryDecorator) linkApexSAbiDumpFiles(ctx ModuleContext,
+	deps PathDeps, sAbiDumpFiles android.Paths, soFile android.Path, libFileName string,
+	excludeSymbolVersions, excludeSymbolTags []string,
+	sdkVersion string) android.Path {
+	return transformDumpToLinkedDump(ctx,
+		sAbiDumpFiles, soFile, libFileName+".apex",
+		library.exportedIncludeDirsForAbiCheck(ctx),
+		android.OptionalPathForModuleSrc(ctx, library.Properties.Stubs.Symbol_file),
+		append([]string{"*_PLATFORM", "*_PRIVATE"}, excludeSymbolVersions...),
+		append([]string{"platform-only"}, excludeSymbolTags...),
+		[]string{"apex", "systemapi"}, sdkVersion, false /* isLlndk */)
+}
+
 func getRefAbiDumpFile(ctx android.ModuleInstallPathContext,
 	versionedDumpDir, fileName string) android.OptionalPath {
 
@@ -1822,42 +1288,29 @@ func getRefAbiDumpFile(ctx android.ModuleInstallPathContext,
 		fileName+".lsdump")
 }
 
-func getRefAbiDumpDir(isNdk, isVndk bool) string {
-	var dirName string
-	if isNdk {
-		dirName = "ndk"
-	} else if isVndk {
-		dirName = "vndk"
-	} else {
-		dirName = "platform"
-	}
-	return filepath.Join("prebuilts", "abi-dumps", dirName)
-}
-
-func prevRefAbiDumpVersion(ctx ModuleContext, dumpDir string) int {
+// Return the previous and current SDK versions for cross-version ABI diff.
+func crossVersionAbiDiffSdkVersions(ctx ModuleContext, dumpDir string) (int, int) {
 	sdkVersionInt := ctx.Config().PlatformSdkVersion().FinalInt()
-	sdkVersionStr := ctx.Config().PlatformSdkVersion().String()
 
 	if ctx.Config().PlatformSdkFinal() {
-		return sdkVersionInt - 1
+		return sdkVersionInt - 1, sdkVersionInt
 	} else {
 		// The platform SDK version can be upgraded before finalization while the corresponding abi dumps hasn't
 		// been generated. Thus the Cross-Version Check chooses PLATFORM_SDK_VERION - 1 as previous version.
 		// This situation could be identified by checking the existence of the PLATFORM_SDK_VERION dump directory.
-		versionedDumpDir := android.ExistentPathForSource(ctx, dumpDir, sdkVersionStr)
+		versionedDumpDir := android.ExistentPathForSource(ctx,
+			dumpDir, ctx.Config().PlatformSdkVersion().String())
 		if versionedDumpDir.Valid() {
-			return sdkVersionInt
+			return sdkVersionInt, sdkVersionInt + 1
 		} else {
-			return sdkVersionInt - 1
+			return sdkVersionInt - 1, sdkVersionInt
 		}
 	}
 }
 
-func currRefAbiDumpVersion(ctx ModuleContext, isVndk bool) string {
-	if isVndk {
-		// Each version of VNDK is independent, so follow the VNDK version which is the codename or PLATFORM_SDK_VERSION.
-		return ctx.Module().(*Module).VndkVersion()
-	} else if ctx.Config().PlatformSdkFinal() {
+// Return the SDK version for same-version ABI diff.
+func currRefAbiDumpSdkVersion(ctx ModuleContext) string {
+	if ctx.Config().PlatformSdkFinal() {
 		// After sdk finalization, the ABI of the latest API level must be consistent with the source code,
 		// so choose PLATFORM_SDK_VERSION as the current version.
 		return ctx.Config().PlatformSdkVersion().String()
@@ -1867,11 +1320,10 @@ func currRefAbiDumpVersion(ctx ModuleContext, isVndk bool) string {
 }
 
 // sourceAbiDiff registers a build statement to compare linked sAbi dump files (.lsdump).
-func (library *libraryDecorator) sourceAbiDiff(ctx android.ModuleContext, referenceDump android.Path,
-	baseName, nameExt string, isLlndkOrNdk, allowExtensions bool,
+func (library *libraryDecorator) sourceAbiDiff(ctx android.ModuleContext,
+	sourceDump, referenceDump android.Path,
+	baseName, nameExt string, isLlndk, allowExtensions bool,
 	sourceVersion, errorMessage string) {
-
-	sourceDump := library.sAbiOutputFile.Path()
 
 	extraFlags := []string{"-target-version", sourceVersion}
 	headerAbiChecker := library.getHeaderAbiCheckerProperties(ctx)
@@ -1882,7 +1334,7 @@ func (library *libraryDecorator) sourceAbiDiff(ctx android.ModuleContext, refere
 			"-allow-unreferenced-changes",
 			"-allow-unreferenced-elf-symbol-changes")
 	}
-	if isLlndkOrNdk {
+	if isLlndk {
 		extraFlags = append(extraFlags, "-consider-opaque-types-different")
 	}
 	if allowExtensions {
@@ -1896,79 +1348,147 @@ func (library *libraryDecorator) sourceAbiDiff(ctx android.ModuleContext, refere
 			baseName, nameExt, extraFlags, errorMessage))
 }
 
-func (library *libraryDecorator) crossVersionAbiDiff(ctx android.ModuleContext, referenceDump android.Path,
-	baseName string, isLlndkOrNdk bool, sourceVersion, prevVersion string) {
+func (library *libraryDecorator) crossVersionAbiDiff(ctx android.ModuleContext,
+	sourceDump, referenceDump android.Path,
+	baseName string, isLlndk bool, sourceVersion, prevVersion string) {
 
-	errorMessage := "error: Please follow https://android.googlesource.com/platform/development/+/master/vndk/tools/header-checker/README.md#configure-cross_version-abi-check to resolve the ABI difference between your source code and version " + prevVersion + "."
+	errorMessage := "error: Please follow https://android.googlesource.com/platform/development/+/main/vndk/tools/header-checker/README.md#configure-cross_version-abi-check to resolve the ABI difference between your source code and version " + prevVersion + "."
 
-	library.sourceAbiDiff(ctx, referenceDump, baseName, prevVersion,
-		isLlndkOrNdk, true /* allowExtensions */, sourceVersion, errorMessage)
+	library.sourceAbiDiff(ctx, sourceDump, referenceDump, baseName, prevVersion,
+		isLlndk, true /* allowExtensions */, sourceVersion, errorMessage)
 }
 
-func (library *libraryDecorator) sameVersionAbiDiff(ctx android.ModuleContext, referenceDump android.Path,
-	baseName string, isLlndkOrNdk, allowExtensions bool) {
+func (library *libraryDecorator) sameVersionAbiDiff(ctx android.ModuleContext,
+	sourceDump, referenceDump android.Path,
+	baseName, nameExt string, isLlndk bool) {
 
 	libName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 	errorMessage := "error: Please update ABI references with: $$ANDROID_BUILD_TOP/development/vndk/tools/header-checker/utils/create_reference_dumps.py -l " + libName
 
-	library.sourceAbiDiff(ctx, referenceDump, baseName, "",
-		isLlndkOrNdk, allowExtensions, "current", errorMessage)
+	library.sourceAbiDiff(ctx, sourceDump, referenceDump, baseName, nameExt,
+		isLlndk, false /* allowExtensions */, "current", errorMessage)
 }
 
-func (library *libraryDecorator) optInAbiDiff(ctx android.ModuleContext, referenceDump android.Path,
-	baseName, nameExt string, isLlndkOrNdk bool, refDumpDir string) {
+func (library *libraryDecorator) optInAbiDiff(ctx android.ModuleContext,
+	sourceDump, referenceDump android.Path,
+	baseName, nameExt string, refDumpDir string) {
 
 	libName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 	errorMessage := "error: Please update ABI references with: $$ANDROID_BUILD_TOP/development/vndk/tools/header-checker/utils/create_reference_dumps.py -l " + libName + " -ref-dump-dir $$ANDROID_BUILD_TOP/" + refDumpDir
+	// Most opt-in libraries do not have dumps for all default architectures.
+	if ctx.Config().HasDeviceProduct() {
+		errorMessage += " -products " + ctx.Config().DeviceProduct()
+	}
 
-	library.sourceAbiDiff(ctx, referenceDump, baseName, nameExt,
-		isLlndkOrNdk, false /* allowExtensions */, "current", errorMessage)
+	library.sourceAbiDiff(ctx, sourceDump, referenceDump, baseName, nameExt,
+		false /* isLlndk */, false /* allowExtensions */, "current", errorMessage)
 }
 
-func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objects, fileName string, soFile android.Path) {
+func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, deps PathDeps, objs Objects, fileName string, soFile android.Path) {
 	if library.sabi.shouldCreateSourceAbiDump() {
-		exportIncludeDirs := library.flagExporter.exportedIncludes(ctx)
-		var SourceAbiFlags []string
-		for _, dir := range exportIncludeDirs.Strings() {
-			SourceAbiFlags = append(SourceAbiFlags, "-I"+dir)
-		}
-		for _, reexportedInclude := range library.sabi.Properties.ReexportedIncludes {
-			SourceAbiFlags = append(SourceAbiFlags, "-I"+reexportedInclude)
-		}
-		exportedHeaderFlags := strings.Join(SourceAbiFlags, " ")
+		exportedIncludeDirs := library.exportedIncludeDirsForAbiCheck(ctx)
 		headerAbiChecker := library.getHeaderAbiCheckerProperties(ctx)
-		library.sAbiOutputFile = transformDumpToLinkedDump(ctx, objs.sAbiDumpFiles, soFile, fileName, exportedHeaderFlags,
+		currSdkVersion := currRefAbiDumpSdkVersion(ctx)
+		currVendorVersion := ctx.Config().VendorApiLevel()
+
+		// Generate source dumps.
+		implDump := transformDumpToLinkedDump(ctx,
+			objs.sAbiDumpFiles, soFile, fileName,
+			exportedIncludeDirs,
 			android.OptionalPathForModuleSrc(ctx, library.symbolFileForAbiCheck(ctx)),
 			headerAbiChecker.Exclude_symbol_versions,
-			headerAbiChecker.Exclude_symbol_tags)
+			headerAbiChecker.Exclude_symbol_tags,
+			[]string{} /* includeSymbolTags */, currSdkVersion, false /* isLlndk */)
 
-		addLsdumpPath(classifySourceAbiDump(ctx) + ":" + library.sAbiOutputFile.String())
+		var llndkDump, apexVariantDump android.Path
+		tags := classifySourceAbiDump(ctx)
+		for _, tag := range tags {
+			if tag == llndkLsdumpTag && currVendorVersion != "" {
+				if llndkDump == nil {
+					// TODO(b/323447559): Evaluate if replacing sAbiDumpFiles with implDump is faster
+					llndkDump = library.linkLlndkSAbiDumpFiles(ctx,
+						deps, objs.sAbiDumpFiles, soFile, fileName,
+						headerAbiChecker.Exclude_symbol_versions,
+						headerAbiChecker.Exclude_symbol_tags,
+						currVendorVersion)
+				}
+				addLsdumpPath(string(tag) + ":" + llndkDump.String())
+			} else if tag == apexLsdumpTag {
+				if apexVariantDump == nil {
+					apexVariantDump = library.linkApexSAbiDumpFiles(ctx,
+						deps, objs.sAbiDumpFiles, soFile, fileName,
+						headerAbiChecker.Exclude_symbol_versions,
+						headerAbiChecker.Exclude_symbol_tags,
+						currSdkVersion)
+				}
+				addLsdumpPath(string(tag) + ":" + apexVariantDump.String())
+			} else {
+				addLsdumpPath(string(tag) + ":" + implDump.String())
+			}
+		}
 
-		// The logic must be consistent with classifySourceAbiDump.
-		isVndk := ctx.useVndk() && ctx.isVndk()
-		isNdk := ctx.isNdk(ctx.Config())
-		isLlndk := ctx.isImplementationForLLNDKPublic()
-		dumpDir := getRefAbiDumpDir(isNdk, isVndk)
-		binderBitness := ctx.DeviceConfig().BinderBitness()
-		// If NDK or PLATFORM library, check against previous version ABI.
-		if !isVndk {
-			prevVersionInt := prevRefAbiDumpVersion(ctx, dumpDir)
-			prevVersion := strconv.Itoa(prevVersionInt)
+		// Diff source dumps and reference dumps.
+		for _, tag := range tags {
+			dumpDirName := tag.dirName()
+			if dumpDirName == "" {
+				continue
+			}
+			dumpDir := filepath.Join("prebuilts", "abi-dumps", dumpDirName)
+			isLlndk := (tag == llndkLsdumpTag)
+			isApex := (tag == apexLsdumpTag)
+			binderBitness := ctx.DeviceConfig().BinderBitness()
+			nameExt := ""
+			if isLlndk {
+				nameExt = "llndk"
+			} else if isApex {
+				nameExt = "apex"
+			}
+			// Check against the previous version.
+			var prevVersion, currVersion string
+			sourceDump := implDump
+			// If this release config does not define VendorApiLevel, fall back to the old policy.
+			if isLlndk && currVendorVersion != "" {
+				prevVersion = ctx.Config().PrevVendorApiLevel()
+				currVersion = currVendorVersion
+				// LLNDK dumps are generated by different rules after trunk stable.
+				if android.IsTrunkStableVendorApiLevel(prevVersion) {
+					sourceDump = llndkDump
+				}
+			} else {
+				prevVersionInt, currVersionInt := crossVersionAbiDiffSdkVersions(ctx, dumpDir)
+				prevVersion = strconv.Itoa(prevVersionInt)
+				currVersion = strconv.Itoa(currVersionInt)
+				// APEX dumps are generated by different rules after trunk stable.
+				if isApex && prevVersionInt > 34 {
+					sourceDump = apexVariantDump
+				}
+			}
 			prevDumpDir := filepath.Join(dumpDir, prevVersion, binderBitness)
 			prevDumpFile := getRefAbiDumpFile(ctx, prevDumpDir, fileName)
 			if prevDumpFile.Valid() {
-				library.crossVersionAbiDiff(ctx, prevDumpFile.Path(),
-					fileName, isLlndk || isNdk,
-					strconv.Itoa(prevVersionInt+1), prevVersion)
+				library.crossVersionAbiDiff(ctx, sourceDump, prevDumpFile.Path(),
+					fileName, isLlndk, currVersion, nameExt+prevVersion)
 			}
-		}
-		// Check against the current version.
-		currVersion := currRefAbiDumpVersion(ctx, isVndk)
-		currDumpDir := filepath.Join(dumpDir, currVersion, binderBitness)
-		currDumpFile := getRefAbiDumpFile(ctx, currDumpDir, fileName)
-		if currDumpFile.Valid() {
-			library.sameVersionAbiDiff(ctx, currDumpFile.Path(),
-				fileName, isLlndk || isNdk, ctx.IsVndkExt())
+			// Check against the current version.
+			sourceDump = implDump
+			if isLlndk && currVendorVersion != "" {
+				currVersion = currVendorVersion
+				if android.IsTrunkStableVendorApiLevel(currVersion) {
+					sourceDump = llndkDump
+				}
+			} else {
+				currVersion = currSdkVersion
+				if isApex && (!ctx.Config().PlatformSdkFinal() ||
+					ctx.Config().PlatformSdkVersion().FinalInt() > 34) {
+					sourceDump = apexVariantDump
+				}
+			}
+			currDumpDir := filepath.Join(dumpDir, currVersion, binderBitness)
+			currDumpFile := getRefAbiDumpFile(ctx, currDumpDir, fileName)
+			if currDumpFile.Valid() {
+				library.sameVersionAbiDiff(ctx, sourceDump, currDumpFile.Path(),
+					fileName, nameExt, isLlndk)
+			}
 		}
 		// Check against the opt-in reference dumps.
 		for i, optInDumpDir := range headerAbiChecker.Ref_dump_dirs {
@@ -1979,9 +1499,9 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, objs Objec
 			if !optInDumpFile.Valid() {
 				continue
 			}
-			library.optInAbiDiff(ctx, optInDumpFile.Path(),
-				fileName, "opt"+strconv.Itoa(i), isLlndk || isNdk,
-				optInDumpDirPath.String())
+			library.optInAbiDiff(ctx,
+				implDump, optInDumpFile.Path(),
+				fileName, "opt"+strconv.Itoa(i), optInDumpDirPath.String())
 		}
 	}
 }
@@ -2075,9 +1595,15 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 
 	// Optionally export aidl headers.
 	if Bool(library.Properties.Aidl.Export_aidl_headers) {
-		if library.baseCompiler.hasSrcExt(".aidl") {
-			dir := android.PathForModuleGen(ctx, "aidl")
-			library.reexportDirs(dir)
+		if library.baseCompiler.hasAidl(deps) {
+			if library.baseCompiler.hasSrcExt(".aidl") {
+				dir := android.PathForModuleGen(ctx, "aidl")
+				library.reexportDirs(dir)
+			}
+			if len(deps.AidlLibraryInfos) > 0 {
+				dir := android.PathForModuleGen(ctx, "aidl_library")
+				library.reexportDirs(dir)
+			}
 
 			library.reexportDeps(library.baseCompiler.aidlOrderOnlyDeps...)
 			library.addExportedGeneratedHeaders(library.baseCompiler.aidlHeaders...)
@@ -2173,7 +1699,16 @@ func (library *libraryDecorator) toc() android.OptionalPath {
 func (library *libraryDecorator) installSymlinkToRuntimeApex(ctx ModuleContext, file android.Path) {
 	dir := library.baseInstaller.installDir(ctx)
 	dirOnDevice := android.InstallPathToOnDevicePath(ctx, dir)
-	target := "/" + filepath.Join("apex", "com.android.runtime", dir.Base(), "bionic", file.Base())
+	// libc_hwasan has relative_install_dir set, which would mess up the dir.Base() logic.
+	// hardcode here because it's the only target, if we have other targets that use this
+	// we can generalise this.
+	var target string
+	if ctx.baseModuleName() == "libc_hwasan" {
+		target = "/" + filepath.Join("apex", "com.android.runtime", "lib64", "bionic", "hwasan", file.Base())
+	} else {
+		base := dir.Base()
+		target = "/" + filepath.Join("apex", "com.android.runtime", base, "bionic", file.Base())
+	}
 	ctx.InstallAbsoluteSymlink(dir, file.Base(), target)
 	library.postInstallCmds = append(library.postInstallCmds, makeSymlinkCmd(dirOnDevice, file.Base(), target))
 }
@@ -2213,7 +1748,7 @@ func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 
 			// do not install vndk libs
 			// vndk libs are packaged into VNDK APEX
-			if ctx.isVndk() && !ctx.IsVndkExt() {
+			if ctx.isVndk() && !ctx.IsVndkExt() && !ctx.Config().IsVndkDeprecated() && !ctx.inProduct() {
 				return
 			}
 		} else if library.hasStubsVariants() && !ctx.Host() && ctx.directlyInAnyApex() {
@@ -2237,11 +1772,10 @@ func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 	}
 
 	if Bool(library.Properties.Static_ndk_lib) && library.static() &&
-		!ctx.useVndk() && !ctx.inRamdisk() && !ctx.inVendorRamdisk() && !ctx.inRecovery() && ctx.Device() &&
+		!ctx.InVendorOrProduct() && !ctx.inRamdisk() && !ctx.inVendorRamdisk() && !ctx.inRecovery() && ctx.Device() &&
 		library.baseLinker.sanitize.isUnsanitizedVariant() &&
 		ctx.isForPlatform() && !ctx.isPreventInstall() {
-		installPath := getNdkSysrootBase(ctx).Join(
-			ctx, "usr/lib", config.NDKTriple(ctx.toolchain()), file.Base())
+		installPath := getUnversionedLibraryInstallPath(ctx).Join(ctx, file.Base())
 
 		ctx.ModuleBuild(pctx, android.ModuleBuildParams{
 			Rule:        android.Cp,
@@ -2333,11 +1867,12 @@ func (library *libraryDecorator) symbolFileForAbiCheck(ctx ModuleContext) *strin
 	if props := library.getHeaderAbiCheckerProperties(ctx); props.Symbol_file != nil {
 		return props.Symbol_file
 	}
-	if ctx.Module().(*Module).IsLlndk() {
-		return library.Properties.Llndk.Symbol_file
-	}
 	if library.hasStubsVariants() && library.Properties.Stubs.Symbol_file != nil {
 		return library.Properties.Stubs.Symbol_file
+	}
+	// TODO(b/309880485): Distinguish platform, NDK, LLNDK, and APEX version scripts.
+	if library.baseLinker.Properties.Version_script != nil {
+		return library.baseLinker.Properties.Version_script
 	}
 	return nil
 }
@@ -2358,13 +1893,19 @@ func (library *libraryDecorator) stubsVersions(ctx android.BaseMutatorContext) [
 		return nil
 	}
 
-	if library.hasLLNDKStubs() && ctx.Module().(*Module).UseVndk() {
-		// LLNDK libraries only need a single stubs variant.
-		return []string{android.FutureApiLevel.String()}
+	if library.hasLLNDKStubs() && ctx.Module().(*Module).InVendorOrProduct() {
+		// LLNDK libraries only need a single stubs variant (""), which is
+		// added automatically in createVersionVariations().
+		return nil
 	}
 
 	// Future API level is implicitly added if there isn't
-	vers := library.Properties.Stubs.Versions
+	versions := addCurrentVersionIfNotPresent(library.Properties.Stubs.Versions)
+	normalizeVersions(ctx, versions)
+	return versions
+}
+
+func addCurrentVersionIfNotPresent(vers []string) []string {
 	if inList(android.FutureApiLevel.String(), vers) {
 		return vers
 	}
@@ -2733,10 +2274,6 @@ func setStubsVersions(mctx android.BottomUpMutatorContext, library libraryInterf
 		return
 	}
 	versions := library.stubsVersions(mctx)
-	if len(versions) <= 0 {
-		return
-	}
-	normalizeVersions(mctx, versions)
 	if mctx.Failed() {
 		return
 	}
@@ -2799,244 +2336,4 @@ func maybeInjectBoringSSLHash(ctx android.ModuleContext, outputFile android.Modu
 	}
 
 	return outputFile
-}
-
-func bp2buildParseAbiCheckerProps(ctx android.TopDownMutatorContext, module *Module) bazelCcHeaderAbiCheckerAttributes {
-	lib, ok := module.linker.(*libraryDecorator)
-	if !ok {
-		return bazelCcHeaderAbiCheckerAttributes{}
-	}
-
-	abiChecker := lib.getHeaderAbiCheckerProperties(ctx)
-
-	abiCheckerAttrs := bazelCcHeaderAbiCheckerAttributes{
-		Abi_checker_enabled:                 abiChecker.Enabled,
-		Abi_checker_exclude_symbol_versions: abiChecker.Exclude_symbol_versions,
-		Abi_checker_exclude_symbol_tags:     abiChecker.Exclude_symbol_tags,
-		Abi_checker_check_all_apis:          abiChecker.Check_all_apis,
-		Abi_checker_diff_flags:              abiChecker.Diff_flags,
-	}
-	if abiChecker.Symbol_file != nil {
-		symbolFile := android.BazelLabelForModuleSrcSingle(ctx, *abiChecker.Symbol_file)
-		abiCheckerAttrs.Abi_checker_symbol_file = &symbolFile
-	}
-
-	return abiCheckerAttrs
-}
-
-func sharedOrStaticLibraryBp2Build(ctx android.TopDownMutatorContext, module *Module, isStatic bool) {
-	baseAttributes := bp2BuildParseBaseProps(ctx, module)
-	compilerAttrs := baseAttributes.compilerAttributes
-	linkerAttrs := baseAttributes.linkerAttributes
-
-	exportedIncludes := bp2BuildParseExportedIncludes(ctx, module, &compilerAttrs.includes)
-
-	// Append shared/static{} stanza properties. These won't be specified on
-	// cc_library_* itself, but may be specified in cc_defaults that this module
-	// depends on.
-	libSharedOrStaticAttrs := bp2BuildParseLibProps(ctx, module, isStatic)
-
-	compilerAttrs.srcs.Append(libSharedOrStaticAttrs.Srcs)
-	compilerAttrs.cSrcs.Append(libSharedOrStaticAttrs.Srcs_c)
-	compilerAttrs.asSrcs.Append(libSharedOrStaticAttrs.Srcs_as)
-	compilerAttrs.copts.Append(libSharedOrStaticAttrs.Copts)
-
-	linkerAttrs.deps.Append(libSharedOrStaticAttrs.Deps)
-	linkerAttrs.implementationDeps.Append(libSharedOrStaticAttrs.Implementation_deps)
-	linkerAttrs.dynamicDeps.Append(libSharedOrStaticAttrs.Dynamic_deps)
-	linkerAttrs.implementationDynamicDeps.Append(libSharedOrStaticAttrs.Implementation_dynamic_deps)
-	linkerAttrs.systemDynamicDeps.Append(libSharedOrStaticAttrs.System_dynamic_deps)
-
-	asFlags := compilerAttrs.asFlags
-	if compilerAttrs.asSrcs.IsEmpty() {
-		// Skip asflags for BUILD file simplicity if there are no assembly sources.
-		asFlags = bazel.MakeStringListAttribute(nil)
-	}
-
-	commonAttrs := staticOrSharedAttributes{
-		Srcs:    compilerAttrs.srcs,
-		Srcs_c:  compilerAttrs.cSrcs,
-		Srcs_as: compilerAttrs.asSrcs,
-		Copts:   compilerAttrs.copts,
-		Hdrs:    compilerAttrs.hdrs,
-
-		Deps:                              linkerAttrs.deps,
-		Implementation_deps:               linkerAttrs.implementationDeps,
-		Dynamic_deps:                      linkerAttrs.dynamicDeps,
-		Implementation_dynamic_deps:       linkerAttrs.implementationDynamicDeps,
-		Whole_archive_deps:                linkerAttrs.wholeArchiveDeps,
-		Implementation_whole_archive_deps: linkerAttrs.implementationWholeArchiveDeps,
-		System_dynamic_deps:               linkerAttrs.systemDynamicDeps,
-		sdkAttributes:                     bp2BuildParseSdkAttributes(module),
-		Runtime_deps:                      linkerAttrs.runtimeDeps,
-		Native_coverage:                   baseAttributes.Native_coverage,
-	}
-
-	module.convertTidyAttributes(ctx, &commonAttrs.tidyAttributes)
-
-	var attrs interface{}
-	if isStatic {
-		commonAttrs.Deps.Add(baseAttributes.protoDependency)
-		attrs = &bazelCcLibraryStaticAttributes{
-			staticOrSharedAttributes: commonAttrs,
-			Rtti:                     compilerAttrs.rtti,
-			Stl:                      compilerAttrs.stl,
-			Cpp_std:                  compilerAttrs.cppStd,
-			C_std:                    compilerAttrs.cStd,
-
-			Export_includes:          exportedIncludes.Includes,
-			Export_absolute_includes: exportedIncludes.AbsoluteIncludes,
-			Export_system_includes:   exportedIncludes.SystemIncludes,
-			Local_includes:           compilerAttrs.localIncludes,
-			Absolute_includes:        compilerAttrs.absoluteIncludes,
-
-			Cppflags:   compilerAttrs.cppFlags,
-			Conlyflags: compilerAttrs.conlyFlags,
-			Asflags:    asFlags,
-
-			Features: baseAttributes.features,
-		}
-	} else {
-		commonAttrs.Dynamic_deps.Add(baseAttributes.protoDependency)
-
-		sharedLibAttrs := &bazelCcLibrarySharedAttributes{
-			staticOrSharedAttributes: commonAttrs,
-
-			Cppflags:   compilerAttrs.cppFlags,
-			Conlyflags: compilerAttrs.conlyFlags,
-			Asflags:    asFlags,
-
-			Linkopts:        linkerAttrs.linkopts,
-			Use_version_lib: linkerAttrs.useVersionLib,
-
-			Rtti:    compilerAttrs.rtti,
-			Stl:     compilerAttrs.stl,
-			Cpp_std: compilerAttrs.cppStd,
-			C_std:   compilerAttrs.cStd,
-
-			Export_includes:          exportedIncludes.Includes,
-			Export_absolute_includes: exportedIncludes.AbsoluteIncludes,
-			Export_system_includes:   exportedIncludes.SystemIncludes,
-			Local_includes:           compilerAttrs.localIncludes,
-			Absolute_includes:        compilerAttrs.absoluteIncludes,
-			Additional_linker_inputs: linkerAttrs.additionalLinkerInputs,
-
-			Strip: stripAttrsFromLinkerAttrs(&linkerAttrs),
-
-			Features: baseAttributes.features,
-
-			Suffix: compilerAttrs.suffix,
-
-			bazelCcHeaderAbiCheckerAttributes: bp2buildParseAbiCheckerProps(ctx, module),
-
-			Fdo_profile: compilerAttrs.fdoProfile,
-		}
-		if compilerAttrs.stubsSymbolFile != nil && len(compilerAttrs.stubsVersions.Value) > 0 {
-			sharedLibAttrs.Stubs_symbol_file = compilerAttrs.stubsSymbolFile
-		}
-		attrs = sharedLibAttrs
-	}
-
-	var modType string
-	if isStatic {
-		modType = "cc_library_static"
-	} else {
-		modType = "cc_library_shared"
-		createStubsBazelTargetIfNeeded(ctx, module, compilerAttrs, exportedIncludes, baseAttributes)
-	}
-	props := bazel.BazelTargetModuleProperties{
-		Rule_class:        modType,
-		Bzl_load_location: fmt.Sprintf("//build/bazel/rules/cc:%s.bzl", modType),
-	}
-
-	tags := android.ApexAvailableTags(module)
-
-	// This lib needs some special handling in bazel, so add this tag to the build
-	// file.
-	if module.Name() == "libprofile-clang-extras" {
-		tags.Append(bazel.MakeStringListAttribute([]string{"NO_EXPORTING"}))
-	}
-
-	ctx.CreateBazelTargetModule(props, android.CommonAttributes{Name: module.Name(), Tags: tags}, attrs)
-}
-
-// TODO(b/199902614): Can this be factored to share with the other Attributes?
-type bazelCcLibraryStaticAttributes struct {
-	staticOrSharedAttributes
-
-	Use_version_lib bazel.BoolAttribute
-	Rtti            bazel.BoolAttribute
-	Stl             *string
-	Cpp_std         *string
-	C_std           *string
-
-	Export_includes          bazel.StringListAttribute
-	Export_absolute_includes bazel.StringListAttribute
-	Export_system_includes   bazel.StringListAttribute
-	Local_includes           bazel.StringListAttribute
-	Absolute_includes        bazel.StringListAttribute
-	Hdrs                     bazel.LabelListAttribute
-
-	Cppflags   bazel.StringListAttribute
-	Conlyflags bazel.StringListAttribute
-	Asflags    bazel.StringListAttribute
-
-	Features bazel.StringListAttribute
-}
-
-// TODO(b/199902614): Can this be factored to share with the other Attributes?
-type bazelCcLibrarySharedAttributes struct {
-	staticOrSharedAttributes
-
-	Linkopts        bazel.StringListAttribute
-	Use_version_lib bazel.BoolAttribute
-
-	Rtti    bazel.BoolAttribute
-	Stl     *string
-	Cpp_std *string
-	C_std   *string
-
-	Export_includes          bazel.StringListAttribute
-	Export_absolute_includes bazel.StringListAttribute
-	Export_system_includes   bazel.StringListAttribute
-	Local_includes           bazel.StringListAttribute
-	Absolute_includes        bazel.StringListAttribute
-	Hdrs                     bazel.LabelListAttribute
-
-	Strip                    stripAttributes
-	Additional_linker_inputs bazel.LabelListAttribute
-
-	Cppflags   bazel.StringListAttribute
-	Conlyflags bazel.StringListAttribute
-	Asflags    bazel.StringListAttribute
-
-	Features bazel.StringListAttribute
-
-	Stubs_symbol_file *string
-
-	Inject_bssl_hash bazel.BoolAttribute
-
-	Suffix bazel.StringAttribute
-
-	bazelCcHeaderAbiCheckerAttributes
-
-	Fdo_profile bazel.LabelAttribute
-}
-
-type bazelCcStubSuiteAttributes struct {
-	Symbol_file     *string
-	Versions        bazel.StringListAttribute
-	Export_includes bazel.StringListAttribute
-	Source_library  bazel.LabelAttribute
-	Soname          *string
-	Deps            bazel.LabelListAttribute
-}
-
-type bazelCcHeaderAbiCheckerAttributes struct {
-	Abi_checker_enabled                 *bool
-	Abi_checker_symbol_file             *bazel.Label
-	Abi_checker_exclude_symbol_versions []string
-	Abi_checker_exclude_symbol_tags     []string
-	Abi_checker_check_all_apis          *bool
-	Abi_checker_diff_flags              []string
 }

@@ -74,7 +74,7 @@ func fixtureAddPrebuiltApexForBootclasspathFragment(apex, fragment string) andro
 func TestSnapshotWithBootclasspathFragment_ImageName(t *testing.T) {
 	result := android.GroupFixturePreparers(
 		prepareForSdkTestWithJava,
-		java.PrepareForTestWithJavaDefaultModules,
+		java.PrepareForTestWithDexpreopt,
 		prepareForSdkTestWithApex,
 
 		// Some additional files needed for the art apex.
@@ -86,27 +86,27 @@ func TestSnapshotWithBootclasspathFragment_ImageName(t *testing.T) {
 
 		// Add a platform_bootclasspath that depends on the fragment.
 		fixtureAddPlatformBootclasspathForBootclasspathFragmentWithExtra(
-			"com.android.art", "mybootclasspathfragment", java.ApexBootJarFragmentsForPlatformBootclasspath),
+			"com.android.art", "art-bootclasspath-fragment", java.ApexBootJarFragmentsForPlatformBootclasspath),
 
 		java.PrepareForBootImageConfigTest,
 		java.PrepareApexBootJarConfigsAndModules,
 		android.FixtureWithRootAndroidBp(`
 			sdk {
 				name: "mysdk",
-				bootclasspath_fragments: ["mybootclasspathfragment"],
+				bootclasspath_fragments: ["art-bootclasspath-fragment"],
 			}
 
 			apex {
 				name: "com.android.art",
 				key: "com.android.art.key",
 				bootclasspath_fragments: [
-					"mybootclasspathfragment",
+					"art-bootclasspath-fragment",
 				],
 				updatable: false,
 			}
 
 			bootclasspath_fragment {
-				name: "mybootclasspathfragment",
+				name: "art-bootclasspath-fragment",
 				image_name: "art",
 				contents: ["core1", "core2"],
 				apex_available: ["com.android.art"],
@@ -142,18 +142,23 @@ func TestSnapshotWithBootclasspathFragment_ImageName(t *testing.T) {
 	).RunTest(t)
 
 	// A preparer to update the test fixture used when processing an unpackage snapshot.
-	preparerForSnapshot := fixtureAddPrebuiltApexForBootclasspathFragment("com.android.art", "mybootclasspathfragment")
+	preparerForSnapshot := fixtureAddPrebuiltApexForBootclasspathFragment("com.android.art", "art-bootclasspath-fragment")
 
 	// Check that source on its own configures the bootImageConfig correctly.
-	java.CheckMutatedArtBootImageConfig(t, result, "out/soong/.intermediates/mybootclasspathfragment/android_common_apex10000/meta_lic")
-	java.CheckMutatedFrameworkBootImageConfig(t, result, "out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/meta_lic")
+	java.CheckMutatedArtBootImageConfig(t, result, "out/soong/.intermediates/default/java/dex_bootjars/android_common/meta_lic")
+	java.CheckMutatedFrameworkBootImageConfig(t, result, "out/soong/.intermediates/default/java/dex_bootjars/android_common/meta_lic")
 
 	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: [],
+}
+
 prebuilt_bootclasspath_fragment {
-    name: "mybootclasspathfragment",
+    name: "art-bootclasspath-fragment",
     prefer: false,
     visibility: ["//visibility:public"],
     apex_available: ["com.android.art"],
@@ -187,14 +192,15 @@ java_import {
     apex_available: ["com.android.art"],
     jars: ["java_boot_libs/snapshot/jars/are/invalid/core2.jar"],
 }
+
 `),
 		checkAllCopyRules(`
-.intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/annotation-flags.csv -> hiddenapi/annotation-flags.csv
-.intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/metadata.csv -> hiddenapi/metadata.csv
-.intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/index.csv -> hiddenapi/index.csv
-.intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/signature-patterns.csv -> hiddenapi/signature-patterns.csv
-.intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/filtered-stub-flags.csv -> hiddenapi/filtered-stub-flags.csv
-.intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/filtered-flags.csv -> hiddenapi/filtered-flags.csv
+.intermediates/art-bootclasspath-fragment/android_common/modular-hiddenapi/annotation-flags.csv -> hiddenapi/annotation-flags.csv
+.intermediates/art-bootclasspath-fragment/android_common/modular-hiddenapi/metadata.csv -> hiddenapi/metadata.csv
+.intermediates/art-bootclasspath-fragment/android_common/modular-hiddenapi/index.csv -> hiddenapi/index.csv
+.intermediates/art-bootclasspath-fragment/android_common/modular-hiddenapi/signature-patterns.csv -> hiddenapi/signature-patterns.csv
+.intermediates/art-bootclasspath-fragment/android_common/modular-hiddenapi/filtered-stub-flags.csv -> hiddenapi/filtered-stub-flags.csv
+.intermediates/art-bootclasspath-fragment/android_common/modular-hiddenapi/filtered-flags.csv -> hiddenapi/filtered-flags.csv
 .intermediates/mysdk/common_os/empty -> java_boot_libs/snapshot/jars/are/invalid/core1.jar
 .intermediates/mysdk/common_os/empty -> java_boot_libs/snapshot/jars/are/invalid/core2.jar
 		`),
@@ -206,31 +212,31 @@ java_import {
 			checkBootJarsPackageCheckRule(t, result,
 				append(
 					[]string{
-						"out/soong/.intermediates/prebuilts/apex/com.android.art.deapexer/android_common/deapexer/javalib/core1.jar",
-						"out/soong/.intermediates/prebuilts/apex/com.android.art.deapexer/android_common/deapexer/javalib/core2.jar",
+						"out/soong/.intermediates/prebuilts/apex/prebuilt_com.android.art.deapexer/android_common/deapexer/javalib/core1.jar",
+						"out/soong/.intermediates/prebuilts/apex/prebuilt_com.android.art.deapexer/android_common/deapexer/javalib/core2.jar",
 						"out/soong/.intermediates/default/java/framework/android_common/aligned/framework.jar",
 					},
 					java.ApexBootJarDexJarPaths...,
 				)...,
 			)
-			java.CheckMutatedArtBootImageConfig(t, result, "out/soong/.intermediates/snapshot/mybootclasspathfragment/android_common_com.android.art/meta_lic")
-			java.CheckMutatedFrameworkBootImageConfig(t, result, "out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/meta_lic")
+			java.CheckMutatedArtBootImageConfig(t, result, "out/soong/.intermediates/default/java/dex_bootjars/android_common/meta_lic")
+			java.CheckMutatedFrameworkBootImageConfig(t, result, "out/soong/.intermediates/default/java/dex_bootjars/android_common/meta_lic")
 		}),
 
 		snapshotTestPreparer(checkSnapshotWithSourcePreferred, preparerForSnapshot),
 
 		// Check the behavior of the snapshot when the source is preferred.
 		snapshotTestChecker(checkSnapshotWithSourcePreferred, func(t *testing.T, result *android.TestResult) {
-			java.CheckMutatedArtBootImageConfig(t, result, "out/soong/.intermediates/mybootclasspathfragment/android_common_apex10000/meta_lic")
-			java.CheckMutatedFrameworkBootImageConfig(t, result, "out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/meta_lic")
+			java.CheckMutatedArtBootImageConfig(t, result, "out/soong/.intermediates/default/java/dex_bootjars/android_common/meta_lic")
+			java.CheckMutatedFrameworkBootImageConfig(t, result, "out/soong/.intermediates/default/java/dex_bootjars/android_common/meta_lic")
 		}),
 
 		snapshotTestPreparer(checkSnapshotPreferredWithSource, preparerForSnapshot),
 
 		// Check the behavior of the snapshot when it is preferred.
 		snapshotTestChecker(checkSnapshotPreferredWithSource, func(t *testing.T, result *android.TestResult) {
-			java.CheckMutatedArtBootImageConfig(t, result, "out/soong/.intermediates/snapshot/prebuilt_mybootclasspathfragment/android_common_com.android.art/meta_lic")
-			java.CheckMutatedFrameworkBootImageConfig(t, result, "out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/meta_lic")
+			java.CheckMutatedArtBootImageConfig(t, result, "out/soong/.intermediates/default/java/dex_bootjars/android_common/meta_lic")
+			java.CheckMutatedFrameworkBootImageConfig(t, result, "out/soong/.intermediates/default/java/dex_bootjars/android_common/meta_lic")
 		}),
 	)
 
@@ -269,6 +275,12 @@ func testSnapshotWithBootClasspathFragment_Contents(t *testing.T, sdk string, co
 
 		// Add a platform_bootclasspath that depends on the fragment.
 		fixtureAddPlatformBootclasspathForBootclasspathFragment("myapex", "mybootclasspathfragment"),
+
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
+		}),
 
 		android.FixtureWithRootAndroidBp(sdk+`
 			apex {
@@ -346,6 +358,15 @@ func testSnapshotWithBootClasspathFragment_Contents(t *testing.T, sdk string, co
 	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: [
+        "prebuilt_myothersdklibrary",
+        "prebuilt_mysdklibrary",
+        "prebuilt_mycoreplatform",
+    ],
+}
 
 prebuilt_bootclasspath_fragment {
     name: "mybootclasspathfragment",
@@ -489,15 +510,15 @@ func TestSnapshotWithBootClasspathFragment_Contents(t *testing.T) {
 .intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/filtered-stub-flags.csv -> hiddenapi/filtered-stub-flags.csv
 .intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/filtered-flags.csv -> hiddenapi/filtered-flags.csv
 .intermediates/mysdk/common_os/empty -> java_boot_libs/snapshot/jars/are/invalid/mybootlib.jar
-.intermediates/myothersdklibrary.stubs/android_common/javac/myothersdklibrary.stubs.jar -> sdk_library/public/myothersdklibrary-stubs.jar
-.intermediates/myothersdklibrary.stubs.source/android_common/metalava/myothersdklibrary.stubs.source_api.txt -> sdk_library/public/myothersdklibrary.txt
-.intermediates/myothersdklibrary.stubs.source/android_common/metalava/myothersdklibrary.stubs.source_removed.txt -> sdk_library/public/myothersdklibrary-removed.txt
-.intermediates/mysdklibrary.stubs/android_common/javac/mysdklibrary.stubs.jar -> sdk_library/public/mysdklibrary-stubs.jar
-.intermediates/mysdklibrary.stubs.source/android_common/metalava/mysdklibrary.stubs.source_api.txt -> sdk_library/public/mysdklibrary.txt
-.intermediates/mysdklibrary.stubs.source/android_common/metalava/mysdklibrary.stubs.source_removed.txt -> sdk_library/public/mysdklibrary-removed.txt
-.intermediates/mycoreplatform.stubs/android_common/javac/mycoreplatform.stubs.jar -> sdk_library/public/mycoreplatform-stubs.jar
-.intermediates/mycoreplatform.stubs.source/android_common/metalava/mycoreplatform.stubs.source_api.txt -> sdk_library/public/mycoreplatform.txt
-.intermediates/mycoreplatform.stubs.source/android_common/metalava/mycoreplatform.stubs.source_removed.txt -> sdk_library/public/mycoreplatform-removed.txt
+.intermediates/myothersdklibrary.stubs.exportable/android_common/combined/myothersdklibrary.stubs.exportable.jar -> sdk_library/public/myothersdklibrary-stubs.jar
+.intermediates/myothersdklibrary.stubs.source/android_common/exportable/myothersdklibrary.stubs.source_api.txt -> sdk_library/public/myothersdklibrary.txt
+.intermediates/myothersdklibrary.stubs.source/android_common/exportable/myothersdklibrary.stubs.source_removed.txt -> sdk_library/public/myothersdklibrary-removed.txt
+.intermediates/mysdklibrary.stubs.exportable/android_common/combined/mysdklibrary.stubs.exportable.jar -> sdk_library/public/mysdklibrary-stubs.jar
+.intermediates/mysdklibrary.stubs.source/android_common/exportable/mysdklibrary.stubs.source_api.txt -> sdk_library/public/mysdklibrary.txt
+.intermediates/mysdklibrary.stubs.source/android_common/exportable/mysdklibrary.stubs.source_removed.txt -> sdk_library/public/mysdklibrary-removed.txt
+.intermediates/mycoreplatform.stubs.exportable/android_common/combined/mycoreplatform.stubs.exportable.jar -> sdk_library/public/mycoreplatform-stubs.jar
+.intermediates/mycoreplatform.stubs.source/android_common/exportable/mycoreplatform.stubs.source_api.txt -> sdk_library/public/mycoreplatform.txt
+.intermediates/mycoreplatform.stubs.source/android_common/exportable/mycoreplatform.stubs.source_removed.txt -> sdk_library/public/mycoreplatform-removed.txt
 `)
 	})
 
@@ -509,15 +530,15 @@ func TestSnapshotWithBootClasspathFragment_Contents(t *testing.T) {
 .intermediates/mybootclasspathfragment/android_common_myapex/modular-hiddenapi/filtered-stub-flags.csv -> hiddenapi/filtered-stub-flags.csv
 .intermediates/mybootclasspathfragment/android_common_myapex/modular-hiddenapi/filtered-flags.csv -> hiddenapi/filtered-flags.csv
 .intermediates/mysdk/common_os/empty -> java_boot_libs/snapshot/jars/are/invalid/mybootlib.jar
-.intermediates/myothersdklibrary.stubs/android_common/javac/myothersdklibrary.stubs.jar -> sdk_library/public/myothersdklibrary-stubs.jar
-.intermediates/myothersdklibrary.stubs.source/android_common/metalava/myothersdklibrary.stubs.source_api.txt -> sdk_library/public/myothersdklibrary.txt
-.intermediates/myothersdklibrary.stubs.source/android_common/metalava/myothersdklibrary.stubs.source_removed.txt -> sdk_library/public/myothersdklibrary-removed.txt
-.intermediates/mysdklibrary.stubs/android_common/javac/mysdklibrary.stubs.jar -> sdk_library/public/mysdklibrary-stubs.jar
-.intermediates/mysdklibrary.stubs.source/android_common/metalava/mysdklibrary.stubs.source_api.txt -> sdk_library/public/mysdklibrary.txt
-.intermediates/mysdklibrary.stubs.source/android_common/metalava/mysdklibrary.stubs.source_removed.txt -> sdk_library/public/mysdklibrary-removed.txt
-.intermediates/mycoreplatform.stubs/android_common/javac/mycoreplatform.stubs.jar -> sdk_library/public/mycoreplatform-stubs.jar
-.intermediates/mycoreplatform.stubs.source/android_common/metalava/mycoreplatform.stubs.source_api.txt -> sdk_library/public/mycoreplatform.txt
-.intermediates/mycoreplatform.stubs.source/android_common/metalava/mycoreplatform.stubs.source_removed.txt -> sdk_library/public/mycoreplatform-removed.txt
+.intermediates/myothersdklibrary.stubs.exportable/android_common/combined/myothersdklibrary.stubs.exportable.jar -> sdk_library/public/myothersdklibrary-stubs.jar
+.intermediates/myothersdklibrary.stubs.source/android_common/exportable/myothersdklibrary.stubs.source_api.txt -> sdk_library/public/myothersdklibrary.txt
+.intermediates/myothersdklibrary.stubs.source/android_common/exportable/myothersdklibrary.stubs.source_removed.txt -> sdk_library/public/myothersdklibrary-removed.txt
+.intermediates/mysdklibrary.stubs.exportable/android_common/combined/mysdklibrary.stubs.exportable.jar -> sdk_library/public/mysdklibrary-stubs.jar
+.intermediates/mysdklibrary.stubs.source/android_common/exportable/mysdklibrary.stubs.source_api.txt -> sdk_library/public/mysdklibrary.txt
+.intermediates/mysdklibrary.stubs.source/android_common/exportable/mysdklibrary.stubs.source_removed.txt -> sdk_library/public/mysdklibrary-removed.txt
+.intermediates/mycoreplatform.stubs.exportable/android_common/combined/mycoreplatform.stubs.exportable.jar -> sdk_library/public/mycoreplatform-stubs.jar
+.intermediates/mycoreplatform.stubs.source/android_common/exportable/mycoreplatform.stubs.source_api.txt -> sdk_library/public/mycoreplatform.txt
+.intermediates/mycoreplatform.stubs.source/android_common/exportable/mycoreplatform.stubs.source_removed.txt -> sdk_library/public/mycoreplatform-removed.txt
 `
 	t.Run("added-via-apex", func(t *testing.T) {
 		testSnapshotWithBootClasspathFragment_Contents(t, `
@@ -635,6 +656,11 @@ func TestSnapshotWithBootClasspathFragment_Fragments(t *testing.T) {
 	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_mysdklibrary"],
+}
 
 prebuilt_bootclasspath_fragment {
     name: "mybootclasspathfragment",
@@ -760,6 +786,12 @@ func TestSnapshotWithBootclasspathFragment_HiddenAPI(t *testing.T) {
 		// Add a platform_bootclasspath that depends on the fragment.
 		fixtureAddPlatformBootclasspathForBootclasspathFragment("myapex", "mybootclasspathfragment"),
 
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
+		}),
+
 		android.MockFS{
 			"my-blocked.txt":                   nil,
 			"my-max-target-o-low-priority.txt": nil,
@@ -839,6 +871,7 @@ func TestSnapshotWithBootclasspathFragment_HiddenAPI(t *testing.T) {
 				compile_dex: true,
 				public: {enabled: true},
 				permitted_packages: ["mysdklibrary"],
+				min_sdk_version: "current",
 			}
 
 			java_sdk_library {
@@ -867,6 +900,14 @@ func TestSnapshotWithBootclasspathFragment_HiddenAPI(t *testing.T) {
 	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: [
+        "prebuilt_mynewlibrary",
+        "prebuilt_mysdklibrary",
+    ],
+}
 
 prebuilt_bootclasspath_fragment {
     name: "mybootclasspathfragment",
@@ -962,12 +1003,12 @@ my-unsupported-packages.txt -> hiddenapi/my-unsupported-packages.txt
 .intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/filtered-stub-flags.csv -> hiddenapi/filtered-stub-flags.csv
 .intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/filtered-flags.csv -> hiddenapi/filtered-flags.csv
 .intermediates/mysdk/common_os/empty -> java_boot_libs/snapshot/jars/are/invalid/mybootlib.jar
-.intermediates/mynewlibrary.stubs/android_common/javac/mynewlibrary.stubs.jar -> sdk_library/public/mynewlibrary-stubs.jar
-.intermediates/mynewlibrary.stubs.source/android_common/metalava/mynewlibrary.stubs.source_api.txt -> sdk_library/public/mynewlibrary.txt
-.intermediates/mynewlibrary.stubs.source/android_common/metalava/mynewlibrary.stubs.source_removed.txt -> sdk_library/public/mynewlibrary-removed.txt
-.intermediates/mysdklibrary.stubs/android_common/javac/mysdklibrary.stubs.jar -> sdk_library/public/mysdklibrary-stubs.jar
-.intermediates/mysdklibrary.stubs.source/android_common/metalava/mysdklibrary.stubs.source_api.txt -> sdk_library/public/mysdklibrary.txt
-.intermediates/mysdklibrary.stubs.source/android_common/metalava/mysdklibrary.stubs.source_removed.txt -> sdk_library/public/mysdklibrary-removed.txt
+.intermediates/mynewlibrary.stubs.exportable/android_common/combined/mynewlibrary.stubs.exportable.jar -> sdk_library/public/mynewlibrary-stubs.jar
+.intermediates/mynewlibrary.stubs.source/android_common/exportable/mynewlibrary.stubs.source_api.txt -> sdk_library/public/mynewlibrary.txt
+.intermediates/mynewlibrary.stubs.source/android_common/exportable/mynewlibrary.stubs.source_removed.txt -> sdk_library/public/mynewlibrary-removed.txt
+.intermediates/mysdklibrary.stubs.exportable/android_common/combined/mysdklibrary.stubs.exportable.jar -> sdk_library/public/mysdklibrary-stubs.jar
+.intermediates/mysdklibrary.stubs.source/android_common/exportable/mysdklibrary.stubs.source_api.txt -> sdk_library/public/mysdklibrary.txt
+.intermediates/mysdklibrary.stubs.source/android_common/exportable/mysdklibrary.stubs.source_removed.txt -> sdk_library/public/mysdklibrary-removed.txt
 `),
 		snapshotTestPreparer(checkSnapshotWithoutSource, preparerForSnapshot),
 		snapshotTestPreparer(checkSnapshotWithSourcePreferred, preparerForSnapshot),
@@ -994,6 +1035,15 @@ func testSnapshotWithBootClasspathFragment_MinSdkVersion(t *testing.T, targetBui
 
 		android.FixtureMergeEnv(map[string]string{
 			"SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE": targetBuildRelease,
+		}),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.Platform_version_active_codenames = []string{"VanillaIceCream"}
+		}),
+
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
 		}),
 
 		android.FixtureWithRootAndroidBp(`
@@ -1045,7 +1095,7 @@ func testSnapshotWithBootClasspathFragment_MinSdkVersion(t *testing.T, targetBui
 
 	bcpf := result.ModuleForTests("mybootclasspathfragment", "android_common")
 	rule := bcpf.Output("out/soong/.intermediates/mybootclasspathfragment/android_common/modular-hiddenapi" + suffix + "/stub-flags.csv")
-	android.AssertPathsRelativeToTopEquals(t, "stub flags inputs", expectedStubFlagsInputs, rule.Implicits)
+	android.AssertPathsRelativeToTopEquals(t, "stub flags inputs", android.SortedUniqueStrings(expectedStubFlagsInputs), android.SortedUniquePaths(rule.Implicits))
 
 	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(expectedSdkSnapshot),
@@ -1094,16 +1144,16 @@ java_sdk_library_import {
 .intermediates/mybootclasspathfragment/android_common_myapex/modular-hiddenapi-for-sdk-snapshot/index.csv -> hiddenapi/index.csv
 .intermediates/mybootclasspathfragment/android_common_myapex/modular-hiddenapi-for-sdk-snapshot/stub-flags.csv -> hiddenapi/stub-flags.csv
 .intermediates/mybootclasspathfragment/android_common_myapex/modular-hiddenapi-for-sdk-snapshot/all-flags.csv -> hiddenapi/all-flags.csv
-.intermediates/mysdklibrary.stubs/android_common/javac/mysdklibrary.stubs.jar -> sdk_library/public/mysdklibrary-stubs.jar
-.intermediates/mysdklibrary.stubs.source/android_common/metalava/mysdklibrary.stubs.source_api.txt -> sdk_library/public/mysdklibrary.txt
-.intermediates/mysdklibrary.stubs.source/android_common/metalava/mysdklibrary.stubs.source_removed.txt -> sdk_library/public/mysdklibrary-removed.txt
+.intermediates/mysdklibrary.stubs.exportable/android_common/combined/mysdklibrary.stubs.exportable.jar -> sdk_library/public/mysdklibrary-stubs.jar
+.intermediates/mysdklibrary.stubs.source/android_common/exportable/mysdklibrary.stubs.source_api.txt -> sdk_library/public/mysdklibrary.txt
+.intermediates/mysdklibrary.stubs.source/android_common/exportable/mysdklibrary.stubs.source_removed.txt -> sdk_library/public/mysdklibrary-removed.txt
 `
 
 		// On S the stub flags should only be generated from mysdklibrary as mynewsdklibrary is not part
 		// of the snapshot.
 		expectedStubFlagsInputs := []string{
-			"out/soong/.intermediates/mysdklibrary.stubs/android_common/dex/mysdklibrary.stubs.jar",
-			"out/soong/.intermediates/mysdklibrary/android_common/aligned/mysdklibrary.jar",
+			"out/soong/.intermediates/mysdklibrary.stubs.exportable/android_common/dex/mysdklibrary.stubs.exportable.jar",
+			"out/soong/.intermediates/mysdklibrary.impl/android_common/aligned/mysdklibrary.jar",
 		}
 
 		testSnapshotWithBootClasspathFragment_MinSdkVersion(t, "S",
@@ -1172,24 +1222,82 @@ java_sdk_library_import {
 .intermediates/mybootclasspathfragment/android_common_myapex/modular-hiddenapi/signature-patterns.csv -> hiddenapi/signature-patterns.csv
 .intermediates/mybootclasspathfragment/android_common_myapex/modular-hiddenapi/filtered-stub-flags.csv -> hiddenapi/filtered-stub-flags.csv
 .intermediates/mybootclasspathfragment/android_common_myapex/modular-hiddenapi/filtered-flags.csv -> hiddenapi/filtered-flags.csv
-.intermediates/mysdklibrary.stubs/android_common/javac/mysdklibrary.stubs.jar -> sdk_library/public/mysdklibrary-stubs.jar
-.intermediates/mysdklibrary.stubs.source/android_common/metalava/mysdklibrary.stubs.source_api.txt -> sdk_library/public/mysdklibrary.txt
-.intermediates/mysdklibrary.stubs.source/android_common/metalava/mysdklibrary.stubs.source_removed.txt -> sdk_library/public/mysdklibrary-removed.txt
-.intermediates/mynewsdklibrary.stubs/android_common/javac/mynewsdklibrary.stubs.jar -> sdk_library/public/mynewsdklibrary-stubs.jar
-.intermediates/mynewsdklibrary.stubs.source/android_common/metalava/mynewsdklibrary.stubs.source_api.txt -> sdk_library/public/mynewsdklibrary.txt
-.intermediates/mynewsdklibrary.stubs.source/android_common/metalava/mynewsdklibrary.stubs.source_removed.txt -> sdk_library/public/mynewsdklibrary-removed.txt
+.intermediates/mysdklibrary.stubs.exportable/android_common/combined/mysdklibrary.stubs.exportable.jar -> sdk_library/public/mysdklibrary-stubs.jar
+.intermediates/mysdklibrary.stubs.source/android_common/exportable/mysdklibrary.stubs.source_api.txt -> sdk_library/public/mysdklibrary.txt
+.intermediates/mysdklibrary.stubs.source/android_common/exportable/mysdklibrary.stubs.source_removed.txt -> sdk_library/public/mysdklibrary-removed.txt
+.intermediates/mynewsdklibrary.stubs.exportable/android_common/combined/mynewsdklibrary.stubs.exportable.jar -> sdk_library/public/mynewsdklibrary-stubs.jar
+.intermediates/mynewsdklibrary.stubs.source/android_common/exportable/mynewsdklibrary.stubs.source_api.txt -> sdk_library/public/mynewsdklibrary.txt
+.intermediates/mynewsdklibrary.stubs.source/android_common/exportable/mynewsdklibrary.stubs.source_removed.txt -> sdk_library/public/mynewsdklibrary-removed.txt
 `
 
 		// On tiramisu the stub flags should be generated from both mynewsdklibrary and mysdklibrary as
 		// they are both part of the snapshot.
 		expectedStubFlagsInputs := []string{
-			"out/soong/.intermediates/mynewsdklibrary.stubs/android_common/dex/mynewsdklibrary.stubs.jar",
-			"out/soong/.intermediates/mynewsdklibrary/android_common/aligned/mynewsdklibrary.jar",
-			"out/soong/.intermediates/mysdklibrary.stubs/android_common/dex/mysdklibrary.stubs.jar",
-			"out/soong/.intermediates/mysdklibrary/android_common/aligned/mysdklibrary.jar",
+			"out/soong/.intermediates/mynewsdklibrary.stubs.exportable/android_common/dex/mynewsdklibrary.stubs.exportable.jar",
+			"out/soong/.intermediates/mynewsdklibrary.impl/android_common/aligned/mynewsdklibrary.jar",
+			"out/soong/.intermediates/mysdklibrary.stubs.exportable/android_common/dex/mysdklibrary.stubs.exportable.jar",
+			"out/soong/.intermediates/mysdklibrary.impl/android_common/aligned/mysdklibrary.jar",
 		}
 
 		testSnapshotWithBootClasspathFragment_MinSdkVersion(t, "Tiramisu",
 			expectedSnapshot, expectedCopyRules, expectedStubFlagsInputs, "")
 	})
+}
+
+func TestSnapshotWithEmptyBootClasspathFragment(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForSdkTestWithJava,
+		java.PrepareForTestWithJavaDefaultModules,
+		java.PrepareForTestWithJavaSdkLibraryFiles,
+		java.FixtureWithLastReleaseApis("mysdklibrary", "mynewsdklibrary"),
+		java.FixtureConfigureApexBootJars("myapex:mysdklibrary", "myapex:mynewsdklibrary"),
+		prepareForSdkTestWithApex,
+		// Add a platform_bootclasspath that depends on the fragment.
+		fixtureAddPlatformBootclasspathForBootclasspathFragment("myapex", "mybootclasspathfragment"),
+		android.FixtureMergeEnv(map[string]string{
+			"SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE": "S",
+		}),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.Platform_version_active_codenames = []string{"VanillaIceCream"}
+		}),
+		android.FixtureWithRootAndroidBp(`
+			sdk {
+				name: "mysdk",
+				apexes: ["myapex"],
+			}
+			apex {
+				name: "myapex",
+				key: "myapex.key",
+				min_sdk_version: "S",
+				bootclasspath_fragments: ["mybootclasspathfragment"],
+			}
+			bootclasspath_fragment {
+				name: "mybootclasspathfragment",
+				apex_available: ["myapex"],
+				contents: ["mysdklibrary", "mynewsdklibrary"],
+				hidden_api: {
+					split_packages: [],
+				},
+			}
+			java_sdk_library {
+				name: "mysdklibrary",
+				apex_available: ["myapex"],
+				srcs: ["Test.java"],
+				shared_library: false,
+				public: {enabled: true},
+				min_sdk_version: "Tiramisu",
+			}
+			java_sdk_library {
+				name: "mynewsdklibrary",
+				apex_available: ["myapex"],
+				srcs: ["Test.java"],
+				compile_dex: true,
+				public: {enabled: true},
+				min_sdk_version: "Tiramisu",
+				permitted_packages: ["mynewsdklibrary"],
+			}
+		`),
+	).RunTest(t)
+
+	CheckSnapshot(t, result, "mysdk", "", checkAndroidBpContents(`// This is auto-generated. DO NOT EDIT.`))
 }

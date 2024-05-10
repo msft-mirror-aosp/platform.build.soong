@@ -15,14 +15,12 @@
 package cc
 
 import (
-	"encoding/json"
 	"path/filepath"
 	"testing"
 
 	"android/soong/android"
 	"android/soong/genrule"
 	"android/soong/multitree"
-	"android/soong/snapshot"
 )
 
 func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
@@ -35,14 +33,14 @@ func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 
 	multitree.RegisterApiImportsModule(ctx)
 
+	ctx.RegisterModuleType("prebuilt_build_tool", android.NewPrebuiltBuildTool)
 	ctx.RegisterModuleType("cc_benchmark", BenchmarkFactory)
 	ctx.RegisterModuleType("cc_object", ObjectFactory)
 	ctx.RegisterModuleType("cc_genrule", GenRuleFactory)
 	ctx.RegisterModuleType("ndk_prebuilt_shared_stl", NdkPrebuiltSharedStlFactory)
 	ctx.RegisterModuleType("ndk_prebuilt_static_stl", NdkPrebuiltStaticStlFactory)
-	ctx.RegisterModuleType("ndk_prebuilt_object", NdkPrebuiltObjectFactory)
 	ctx.RegisterModuleType("ndk_library", NdkLibraryFactory)
-	ctx.RegisterModuleType("ndk_headers", ndkHeadersFactory)
+	ctx.RegisterModuleType("ndk_headers", NdkHeadersFactory)
 }
 
 func GatherRequiredDepsForTest(oses ...android.OsType) string {
@@ -70,18 +68,24 @@ func commonDefaultModules() string {
 	return `
 		cc_defaults {
 			name: "toolchain_libs_defaults",
+			host_supported: true,
 			vendor_available: true,
 			product_available: true,
 			recovery_available: true,
 			no_libcrt: true,
 			sdk_version: "minimum",
 			nocrt: true,
+			no_crt_pad_segment: true,
 			system_shared_libs: [],
 			stl: "none",
 			check_elf_files: false,
 			sanitize: {
 				never: true,
 			},
+			apex_available: [
+				"//apex_available:anyapex",
+				"//apex_available:platform",
+			],
 		}
 
 		cc_prebuilt_library_static {
@@ -135,6 +139,12 @@ func commonDefaultModules() string {
 		}
 
 		cc_prebuilt_library_static {
+			name: "libclang_rt.ubsan_standalone.static",
+			defaults: ["toolchain_libs_defaults"],
+			srcs: [""],
+		}
+
+		cc_prebuilt_library_static {
 			name: "libclang_rt.ubsan_minimal",
 			defaults: ["toolchain_libs_defaults"],
 			host_supported: true,
@@ -149,6 +159,12 @@ func commonDefaultModules() string {
 					srcs: ["libclang_rt.ubsan_minimal.x86_64.a"],
 				},
 				linux_glibc_x86: {
+					srcs: ["libclang_rt.ubsan_minimal.x86.a"],
+				},
+				linux_musl_x86_64: {
+					srcs: ["libclang_rt.ubsan_minimal.x86_64.a"],
+				},
+				linux_musl_x86: {
 					srcs: ["libclang_rt.ubsan_minimal.x86.a"],
 				},
 			},
@@ -287,10 +303,7 @@ func commonDefaultModules() string {
 			recovery_available: true,
 			host_supported: true,
 			min_sdk_version: "29",
-			vndk: {
-				enabled: true,
-				support_system_process: true,
-			},
+			double_loadable: true,
 			apex_available: [
 				"//apex_available:platform",
 				"//apex_available:anyapex",
@@ -368,6 +381,11 @@ func commonDefaultModules() string {
 		}
 
 		cc_object {
+			name: "crt_pad_segment",
+			defaults: ["crt_defaults"],
+		}
+
+		cc_object {
 			name: "crtbrand",
 			defaults: ["crt_defaults"],
 			srcs: ["crtbrand.c"],
@@ -405,11 +423,6 @@ func commonDefaultModules() string {
 		ndk_prebuilt_shared_stl {
 			name: "ndk_libc++_shared",
 			export_include_dirs: ["ndk_libc++_shared"],
-		}
-
-		ndk_prebuilt_static_stl {
-			name: "ndk_libandroid_support",
-			export_include_dirs: ["ndk_libandroid_support"],
 		}
 
 		cc_library_static {
@@ -541,13 +554,14 @@ var PrepareForTestWithCcBuildComponents = android.GroupFixturePreparers(
 		ctx.RegisterModuleType("vndk_prebuilt_shared", VndkPrebuiltSharedFactory)
 
 		RegisterVndkLibraryTxtTypes(ctx)
+		RegisterLlndkLibraryTxtType(ctx)
 	}),
 
 	// Additional files needed in tests that disallow non-existent source files.
 	// This includes files that are needed by all, or at least most, instances of a cc module type.
 	android.MockFS{
 		// Needed for ndk_prebuilt_(shared|static)_stl.
-		"prebuilts/ndk/current/sources/cxx-stl/llvm-libc++/libs": nil,
+		"defaults/cc/common/current/sources/cxx-stl/llvm-libc++/libs": nil,
 	}.AddToFixture(),
 )
 
@@ -557,16 +571,17 @@ var PrepareForTestWithCcDefaultModules = android.GroupFixturePreparers(
 
 	// Additional files needed in tests that disallow non-existent source.
 	android.MockFS{
-		"defaults/cc/common/libc.map.txt":           nil,
-		"defaults/cc/common/libdl.map.txt":          nil,
-		"defaults/cc/common/libm.map.txt":           nil,
-		"defaults/cc/common/ndk_libandroid_support": nil,
-		"defaults/cc/common/ndk_libc++_shared":      nil,
-		"defaults/cc/common/crtbegin_so.c":          nil,
-		"defaults/cc/common/crtbegin.c":             nil,
-		"defaults/cc/common/crtend_so.c":            nil,
-		"defaults/cc/common/crtend.c":               nil,
-		"defaults/cc/common/crtbrand.c":             nil,
+		"defaults/cc/common/libc.map.txt":                nil,
+		"defaults/cc/common/libdl.map.txt":               nil,
+		"defaults/cc/common/libft2.map.txt":              nil,
+		"defaults/cc/common/libm.map.txt":                nil,
+		"defaults/cc/common/ndk_libc++_shared":           nil,
+		"defaults/cc/common/crtbegin_so.c":               nil,
+		"defaults/cc/common/crtbegin.c":                  nil,
+		"defaults/cc/common/crtend_so.c":                 nil,
+		"defaults/cc/common/crtend.c":                    nil,
+		"defaults/cc/common/crtbrand.c":                  nil,
+		"external/compiler-rt/lib/cfi/cfi_blocklist.txt": nil,
 
 		"defaults/cc/common/libclang_rt.ubsan_minimal.android_arm64.a": nil,
 		"defaults/cc/common/libclang_rt.ubsan_minimal.android_arm.a":   nil,
@@ -606,18 +621,50 @@ var PrepareForTestOnLinuxBionic = android.GroupFixturePreparers(
 	android.FixtureOverrideTextFile(linuxBionicDefaultsPath, withLinuxBionic()),
 )
 
-// This adds some additional modules and singletons which might negatively impact the performance
-// of tests so they are not included in the PrepareForIntegrationTestWithCc.
-var PrepareForTestWithCcIncludeVndk = android.GroupFixturePreparers(
-	PrepareForIntegrationTestWithCc,
-	android.FixtureRegisterWithContext(func(ctx android.RegistrationContext) {
-		snapshot.VendorSnapshotImageSingleton.Init(ctx)
-		snapshot.RecoverySnapshotImageSingleton.Init(ctx)
-		RegisterVendorSnapshotModules(ctx)
-		RegisterRecoverySnapshotModules(ctx)
-		ctx.RegisterSingletonType("vndk-snapshot", VndkSnapshotSingleton)
-	}),
+// PrepareForTestWithHostMusl sets the host configuration to musl libc instead of glibc.  It also disables the test
+// on mac, which doesn't support musl libc, and adds musl modules.
+var PrepareForTestWithHostMusl = android.GroupFixturePreparers(
+	android.FixtureModifyConfig(android.ModifyTestConfigForMusl),
+	android.PrepareForSkipTestOnMac,
+	android.FixtureAddTextFile("external/musl/Android.bp", `
+		cc_defaults {
+			name: "libc_musl_crt_defaults",
+			host_supported: true,
+			device_supported: false,
+		}
+
+		cc_object {
+			name: "libc_musl_crtbegin_so",
+			defaults: ["libc_musl_crt_defaults"],
+		}
+
+		cc_object {
+			name: "libc_musl_crtend_so",
+			defaults: ["libc_musl_crt_defaults"],
+		}
+
+		cc_object {
+			name: "libc_musl_crtbegin_dynamic",
+			defaults: ["libc_musl_crt_defaults"],
+		}
+
+		cc_object {
+			name: "libc_musl_crtbegin_static",
+			defaults: ["libc_musl_crt_defaults"],
+		}
+
+		cc_object {
+			name: "libc_musl_crtend",
+			defaults: ["libc_musl_crt_defaults"],
+		}
+	`),
 )
+
+// PrepareForTestWithFdoProfile registers module types to test with fdo_profile
+var PrepareForTestWithFdoProfile = android.FixtureRegisterWithContext(func(ctx android.RegistrationContext) {
+	ctx.RegisterModuleType("soong_namespace", android.NamespaceFactory)
+	ctx.RegisterModuleType("fdo_profile", FdoProfileFactory)
+})
 
 // TestConfig is the legacy way of creating a test Config for testing cc modules.
 //
@@ -655,12 +702,8 @@ func CreateTestContext(config android.Config) *android.TestContext {
 	ctx.RegisterModuleType("filegroup", android.FileGroupFactory)
 	ctx.RegisterModuleType("vndk_prebuilt_shared", VndkPrebuiltSharedFactory)
 
-	snapshot.VendorSnapshotImageSingleton.Init(ctx)
-	snapshot.RecoverySnapshotImageSingleton.Init(ctx)
-	RegisterVendorSnapshotModules(ctx)
-	RegisterRecoverySnapshotModules(ctx)
-	ctx.RegisterSingletonType("vndk-snapshot", VndkSnapshotSingleton)
 	RegisterVndkLibraryTxtTypes(ctx)
+	RegisterLlndkLibraryTxtType(ctx)
 
 	ctx.PreArchMutators(android.RegisterDefaultsPreArchMutators)
 	android.RegisterPrebuiltMutators(ctx)
@@ -713,14 +756,6 @@ func CheckSnapshotRule(t *testing.T, ctx *android.TestContext, singleton android
 	checkSnapshotIncludeExclude(t, ctx, singleton, moduleName, snapshotFilename, subDir, variant, true, true)
 }
 
-func AssertExcludeFromVendorSnapshotIs(t *testing.T, ctx *android.TestContext, name string, expected bool, variant string) {
-	t.Helper()
-	m := ctx.ModuleForTests(name, variant).Module().(LinkableInterface)
-	if m.ExcludeFromVendorSnapshot() != expected {
-		t.Errorf("expected %q ExcludeFromVendorSnapshot to be %t", m.String(), expected)
-	}
-}
-
 func GetOutputPaths(ctx *android.TestContext, variant string, moduleNames []string) (paths android.Paths) {
 	for _, moduleName := range moduleNames {
 		module := ctx.ModuleForTests(moduleName, variant).Module().(*Module)
@@ -728,31 +763,4 @@ func GetOutputPaths(ctx *android.TestContext, variant string, moduleNames []stri
 		paths = append(paths, output)
 	}
 	return paths
-}
-
-func AssertExcludeFromRecoverySnapshotIs(t *testing.T, ctx *android.TestContext, name string, expected bool, variant string) {
-	t.Helper()
-	m := ctx.ModuleForTests(name, variant).Module().(LinkableInterface)
-	if m.ExcludeFromRecoverySnapshot() != expected {
-		t.Errorf("expected %q ExcludeFromRecoverySnapshot to be %t", m.String(), expected)
-	}
-}
-
-func checkOverrides(t *testing.T, ctx *android.TestContext, singleton android.TestingSingleton, jsonPath string, expected []string) {
-	t.Helper()
-	out := singleton.MaybeOutput(jsonPath)
-	content := android.ContentFromFileRuleForTests(t, out)
-
-	var flags snapshotJsonFlags
-	if err := json.Unmarshal([]byte(content), &flags); err != nil {
-		t.Errorf("Error while unmarshalling json %q: %s", jsonPath, err.Error())
-		return
-	}
-
-	for _, moduleName := range expected {
-		if !android.InList(moduleName, flags.Overrides) {
-			t.Errorf("expected %q to be in %q: %q", moduleName, flags.Overrides, content)
-			return
-		}
-	}
 }

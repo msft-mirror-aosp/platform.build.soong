@@ -37,7 +37,7 @@ type BinaryProperties struct {
 	// this file must also be listed in srcs.
 	// If left unspecified, module name is used instead.
 	// If name doesn’t match any filename in srcs, main must be specified.
-	Main *string `android:"arch_variant"`
+	Main *string
 
 	// set the name of the output binary.
 	Stem *string `android:"arch_variant"`
@@ -71,6 +71,9 @@ type PythonBinaryModule struct {
 	installedDest android.Path
 
 	androidMkSharedLibs []string
+
+	// Aconfig files for all transitive deps.  Also exposed via TransitiveDeclarationsInfo
+	mergedAconfigFiles map[string]android.Paths
 }
 
 var _ android.AndroidMkEntriesProvider = (*PythonBinaryModule)(nil)
@@ -95,7 +98,6 @@ func (p *PythonBinaryModule) init() android.Module {
 	p.AddProperties(&p.binaryProperties)
 	android.InitAndroidArchModule(p, p.hod, p.multilib)
 	android.InitDefaultableModule(p)
-	android.InitBazelModule(p)
 	return p
 }
 
@@ -104,6 +106,7 @@ func (p *PythonBinaryModule) GenerateAndroidBuildActions(ctx android.ModuleConte
 	p.buildBinary(ctx)
 	p.installedDest = ctx.InstallFile(installDir(ctx, "bin", "", ""),
 		p.installSource.Base(), p.installSource)
+	android.CollectDependencyAconfigFiles(ctx, &p.mergedAconfigFiles)
 }
 
 func (p *PythonBinaryModule) buildBinary(ctx android.ModuleContext) {
@@ -167,6 +170,7 @@ func (p *PythonBinaryModule) AndroidMkEntries() []android.AndroidMkEntries {
 			entries.SetString("LOCAL_MODULE_STEM", stem)
 			entries.AddStrings("LOCAL_SHARED_LIBRARIES", p.androidMkSharedLibs...)
 			entries.SetBool("LOCAL_CHECK_ELF_FILES", false)
+			android.SetAconfigFileMkEntries(&p.ModuleBase, entries, p.mergedAconfigFiles)
 		})
 
 	return []android.AndroidMkEntries{entries}
@@ -199,7 +203,7 @@ func (p *PythonBinaryModule) OutputFiles(tag string) (android.Paths, error) {
 }
 
 func (p *PythonBinaryModule) isEmbeddedLauncherEnabled() bool {
-	return Bool(p.properties.Embedded_launcher)
+	return BoolDefault(p.properties.Embedded_launcher, true)
 }
 
 func (b *PythonBinaryModule) autorun() bool {

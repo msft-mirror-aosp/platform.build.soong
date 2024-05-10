@@ -40,8 +40,9 @@ type ApiImports struct {
 }
 
 type apiImportsProperties struct {
-	Shared_libs []string // List of C shared libraries from API surfaces
-	Header_libs []string // List of C header libraries from API surfaces
+	Shared_libs      []string // List of C shared libraries from API surfaces
+	Header_libs      []string // List of C header libraries from API surfaces
+	Apex_shared_libs []string // List of C shared libraries with APEX stubs
 }
 
 // 'api_imports' is a module which describes modules available from API surfaces.
@@ -60,10 +61,10 @@ func (imports *ApiImports) GenerateAndroidBuildActions(ctx android.ModuleContext
 }
 
 type ApiImportInfo struct {
-	SharedLibs, HeaderLibs map[string]string
+	SharedLibs, HeaderLibs, ApexSharedLibs map[string]string
 }
 
-var ApiImportsProvider = blueprint.NewMutatorProvider(ApiImportInfo{}, "deps")
+var ApiImportsProvider = blueprint.NewMutatorProvider[ApiImportInfo]("deps")
 
 // Store module lists into ApiImportInfo and share it over mutator provider.
 func (imports *ApiImports) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -78,10 +79,12 @@ func (imports *ApiImports) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 	sharedLibs := generateNameMapWithSuffix(imports.properties.Shared_libs)
 	headerLibs := generateNameMapWithSuffix(imports.properties.Header_libs)
+	apexSharedLibs := generateNameMapWithSuffix(imports.properties.Apex_shared_libs)
 
-	ctx.SetProvider(ApiImportsProvider, ApiImportInfo{
-		SharedLibs: sharedLibs,
-		HeaderLibs: headerLibs,
+	android.SetProvider(ctx, ApiImportsProvider, ApiImportInfo{
+		SharedLibs:     sharedLibs,
+		HeaderLibs:     headerLibs,
+		ApexSharedLibs: apexSharedLibs,
 	})
 }
 

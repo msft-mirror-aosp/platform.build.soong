@@ -30,7 +30,9 @@ import (
 
 const (
 	// File containing the environment state when ninja is executed
-	ninjaEnvFileName = "ninja.environment"
+	ninjaEnvFileName        = "ninja.environment"
+	ninjaLogFileName        = ".ninja_log"
+	ninjaWeightListFileName = ".ninja_weight_list"
 )
 
 // Constructs and runs the Ninja command line with a restricted set of
@@ -83,6 +85,20 @@ func runNinjaForBuild(ctx Context, config Config) {
 		// Reads and executes a shell script from Kati that sets/unsets the
 		// environment Ninja runs in.
 		cmd.Environment.AppendFromKati(config.KatiEnvFile())
+	}
+
+	switch config.NinjaWeightListSource() {
+	case NINJA_LOG:
+		cmd.Args = append(cmd.Args, "-o", "usesninjalogasweightlist=yes")
+	case EVENLY_DISTRIBUTED:
+		// pass empty weight list means ninja considers every tasks's weight as 1(default value).
+		cmd.Args = append(cmd.Args, "-o", "usesweightlist=/dev/null")
+	case EXTERNAL_FILE:
+		fallthrough
+	case HINT_FROM_SOONG:
+		// The weight list is already copied/generated.
+		ninjaWeightListPath := filepath.Join(config.OutDir(), ninjaWeightListFileName)
+		cmd.Args = append(cmd.Args, "-o", "usesweightlist="+ninjaWeightListPath)
 	}
 
 	// Allow both NINJA_ARGS and NINJA_EXTRA_ARGS, since both have been
@@ -178,6 +194,10 @@ func runNinjaForBuild(ctx Context, config Config) {
 
 			// LLVM compiler wrapper options
 			"TOOLCHAIN_RUSAGE_OUTPUT",
+
+			// We don't want this build broken flag to cause reanalysis, so allow it through to the
+			// actions.
+			"BUILD_BROKEN_INCORRECT_PARTITION_IMAGES",
 		}, config.BuildBrokenNinjaUsesEnvVars()...)...)
 	}
 
@@ -215,7 +235,7 @@ func runNinjaForBuild(ctx Context, config Config) {
 	ticker := time.NewTicker(ninjaHeartbeatDuration)
 	defer ticker.Stop()
 	ninjaChecker := &ninjaStucknessChecker{
-		logPath: filepath.Join(config.OutDir(), ".ninja_log"),
+		logPath: filepath.Join(config.OutDir(), ninjaLogFileName),
 	}
 	go func() {
 		for {
@@ -251,11 +271,13 @@ func (c *ninjaStucknessChecker) check(ctx Context, config Config) {
 		// The Ninja file hasn't been modified since the last time it was
 		// checked, so Ninja could be stuck. Output some diagnostics.
 		ctx.Verbosef("ninja may be stuck; last update to %v was %v. dumping process tree...", c.logPath, newModTime)
+		ctx.Printf("ninja may be stuck, check %v for list of running processes.",
+			filepath.Join(config.LogsDir(), config.logsPrefix+"soong.log"))
 
 		// The "pstree" command doesn't exist on Mac, but "pstree" on Linux
 		// gives more convenient output than "ps" So, we try pstree first, and
 		// ps second
-		commandText := fmt.Sprintf("pstree -pal %v || ps -ef", os.Getpid())
+		commandText := fmt.Sprintf("pstree -palT %v || ps -ef", os.Getpid())
 
 		cmd := Command(ctx, config, "dump process tree", "bash", "-c", commandText)
 		output := cmd.CombinedOutputOrFatal()

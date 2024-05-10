@@ -44,14 +44,14 @@ var manifestMergerRule = pctx.AndroidStaticRule("manifestMerger",
 // When TARGET_BUILD_APPS is not empty, this method returns 10000 for modules targeting an unreleased SDK
 // This enables release builds (that run with TARGET_BUILD_APPS=[val...]) to target APIs that have not yet been finalized as part of an SDK
 func targetSdkVersionForManifestFixer(ctx android.ModuleContext, params ManifestFixerParams) string {
-	targetSdkVersionSpec := params.SdkContext.TargetSdkVersion(ctx)
+	targetSdkVersionLevel := params.SdkContext.TargetSdkVersion(ctx)
 
 	// Check if we want to return 10000
 	// TODO(b/240294501): Determine the rules for handling test apexes
-	if shouldReturnFinalOrFutureInt(ctx, targetSdkVersionSpec, params.EnforceDefaultTargetSdkVersion) {
+	if shouldReturnFinalOrFutureInt(ctx, targetSdkVersionLevel, params.EnforceDefaultTargetSdkVersion) {
 		return strconv.Itoa(android.FutureApiLevel.FinalOrFutureInt())
 	}
-	targetSdkVersion, err := targetSdkVersionSpec.EffectiveVersionString(ctx)
+	targetSdkVersion, err := targetSdkVersionLevel.EffectiveVersionString(ctx)
 	if err != nil {
 		ctx.ModuleErrorf("invalid targetSdkVersion: %s", err)
 	}
@@ -62,11 +62,13 @@ func targetSdkVersionForManifestFixer(ctx android.ModuleContext, params Manifest
 // 1. The module is built in unbundled mode (TARGET_BUILD_APPS not empty)
 // 2. The module is run as part of MTS, and should be testable on stable branches
 // Do not return 10000 if we are enforcing default targetSdkVersion and sdk has been finalised
-func shouldReturnFinalOrFutureInt(ctx android.ModuleContext, targetSdkVersionSpec android.SdkSpec, enforceDefaultTargetSdkVersion bool) bool {
-	if enforceDefaultTargetSdkVersion && ctx.Config().PlatformSdkFinal() {
+func shouldReturnFinalOrFutureInt(ctx android.ModuleContext, targetSdkVersionLevel android.ApiLevel, enforceDefaultTargetSdkVersion bool) bool {
+	// If this is a REL branch, do not return 10000
+	if ctx.Config().PlatformSdkFinal() {
 		return false
 	}
-	return targetSdkVersionSpec.ApiLevel.IsPreview() && (ctx.Config().UnbundledBuildApps() || includedInMts(ctx.Module()))
+	// If this a module targeting an unreleased SDK (MTS or unbundled builds), return 10000
+	return targetSdkVersionLevel.IsPreview() && (ctx.Config().UnbundledBuildApps() || includedInMts(ctx.Module()))
 }
 
 // Helper function that casts android.Module to java.androidTestApp
@@ -150,9 +152,10 @@ func ManifestFixer(ctx android.ModuleContext, manifest android.Path,
 	if params.SdkContext != nil {
 		targetSdkVersion := targetSdkVersionForManifestFixer(ctx, params)
 
-		if UseApiFingerprint(ctx) && ctx.ModuleName() != "framework-res" {
-			targetSdkVersion = ctx.Config().PlatformSdkCodename() + fmt.Sprintf(".$$(cat %s)", ApiFingerprintPath(ctx).String())
-			deps = append(deps, ApiFingerprintPath(ctx))
+		if useApiFingerprint, fingerprintTargetSdkVersion, fingerprintDeps :=
+			UseApiFingerprint(ctx); useApiFingerprint && ctx.ModuleName() != "framework-res" {
+			targetSdkVersion = fingerprintTargetSdkVersion
+			deps = append(deps, fingerprintDeps)
 		}
 
 		args = append(args, "--targetSdkVersion ", targetSdkVersion)
@@ -167,9 +170,10 @@ func ManifestFixer(ctx android.ModuleContext, manifest android.Path,
 			ctx.ModuleErrorf("invalid ReplaceMaxSdkVersionPlaceholder: %s", err)
 		}
 
-		if UseApiFingerprint(ctx) && ctx.ModuleName() != "framework-res" {
-			minSdkVersion = ctx.Config().PlatformSdkCodename() + fmt.Sprintf(".$$(cat %s)", ApiFingerprintPath(ctx).String())
-			deps = append(deps, ApiFingerprintPath(ctx))
+		if useApiFingerprint, fingerprintMinSdkVersion, fingerprintDeps :=
+			UseApiFingerprint(ctx); useApiFingerprint && ctx.ModuleName() != "framework-res" {
+			minSdkVersion = fingerprintMinSdkVersion
+			deps = append(deps, fingerprintDeps)
 		}
 
 		if err != nil {
@@ -198,13 +202,24 @@ func ManifestFixer(ctx android.ModuleContext, manifest android.Path,
 	return fixedManifest.WithoutRel()
 }
 
-func manifestMerger(ctx android.ModuleContext, manifest android.Path, staticLibManifests android.Paths,
-	isLibrary bool) android.Path {
+type ManifestMergerParams struct {
+	staticLibManifests android.Paths
+	isLibrary          bool
+	packageName        string
+}
 
-	var args string
-	if !isLibrary {
+func manifestMerger(ctx android.ModuleContext, manifest android.Path,
+	params ManifestMergerParams) android.Path {
+
+	var args []string
+	if !params.isLibrary {
 		// Follow Gradle's behavior, only pass --remove-tools-declarations when merging app manifests.
-		args = "--remove-tools-declarations"
+		args = append(args, "--remove-tools-declarations")
+	}
+
+	packageName := params.packageName
+	if packageName != "" {
+		args = append(args, "--property PACKAGE="+packageName)
 	}
 
 	mergedManifest := android.PathForModuleOut(ctx, "manifest_merger", "AndroidManifest.xml")
@@ -212,11 +227,11 @@ func manifestMerger(ctx android.ModuleContext, manifest android.Path, staticLibM
 		Rule:        manifestMergerRule,
 		Description: "merge manifest",
 		Input:       manifest,
-		Implicits:   staticLibManifests,
+		Implicits:   params.staticLibManifests,
 		Output:      mergedManifest,
 		Args: map[string]string{
-			"libs": android.JoinWithPrefix(staticLibManifests.Strings(), "--libs "),
-			"args": args,
+			"libs": android.JoinWithPrefix(params.staticLibManifests.Strings(), "--libs "),
+			"args": strings.Join(args, " "),
 		},
 	})
 

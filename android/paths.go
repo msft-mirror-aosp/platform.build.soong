@@ -60,6 +60,7 @@ type EarlyModulePathContext interface {
 
 	ModuleDir() string
 	ModuleErrorf(fmt string, args ...interface{})
+	OtherModulePropertyErrorf(module Module, property, fmt string, args ...interface{})
 }
 
 var _ EarlyModulePathContext = ModuleContext(nil)
@@ -111,10 +112,67 @@ type ModuleInstallPathContext interface {
 	InstallInDebugRamdisk() bool
 	InstallInRecovery() bool
 	InstallInRoot() bool
+	InstallInOdm() bool
+	InstallInProduct() bool
+	InstallInVendor() bool
 	InstallForceOS() (*OsType, *ArchType)
 }
 
 var _ ModuleInstallPathContext = ModuleContext(nil)
+
+type baseModuleContextToModuleInstallPathContext struct {
+	BaseModuleContext
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInData() bool {
+	return ctx.Module().InstallInData()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInTestcases() bool {
+	return ctx.Module().InstallInTestcases()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInSanitizerDir() bool {
+	return ctx.Module().InstallInSanitizerDir()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInRamdisk() bool {
+	return ctx.Module().InstallInRamdisk()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInVendorRamdisk() bool {
+	return ctx.Module().InstallInVendorRamdisk()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInDebugRamdisk() bool {
+	return ctx.Module().InstallInDebugRamdisk()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInRecovery() bool {
+	return ctx.Module().InstallInRecovery()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInRoot() bool {
+	return ctx.Module().InstallInRoot()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInOdm() bool {
+	return ctx.Module().InstallInOdm()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInProduct() bool {
+	return ctx.Module().InstallInProduct()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInVendor() bool {
+	return ctx.Module().InstallInVendor()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallForceOS() (*OsType, *ArchType) {
+	return ctx.Module().InstallForceOS()
+}
+
+var _ ModuleInstallPathContext = (*baseModuleContextToModuleInstallPathContext)(nil)
 
 // errorfContext is the interface containing the Errorf method matching the
 // Errorf method in blueprint.SingletonContext.
@@ -124,13 +182,13 @@ type errorfContext interface {
 
 var _ errorfContext = blueprint.SingletonContext(nil)
 
-// moduleErrorf is the interface containing the ModuleErrorf method matching
+// ModuleErrorfContext is the interface containing the ModuleErrorf method matching
 // the ModuleErrorf method in blueprint.ModuleContext.
-type moduleErrorf interface {
+type ModuleErrorfContext interface {
 	ModuleErrorf(format string, args ...interface{})
 }
 
-var _ moduleErrorf = blueprint.ModuleContext(nil)
+var _ ModuleErrorfContext = blueprint.ModuleContext(nil)
 
 // reportPathError will register an error with the attached context. It
 // attempts ctx.ModuleErrorf for a better error message first, then falls
@@ -143,7 +201,7 @@ func reportPathError(ctx PathContext, err error) {
 // attempts ctx.ModuleErrorf for a better error message first, then falls
 // back to ctx.Errorf.
 func ReportPathErrorf(ctx PathContext, format string, args ...interface{}) {
-	if mctx, ok := ctx.(moduleErrorf); ok {
+	if mctx, ok := ctx.(ModuleErrorfContext); ok {
 		mctx.ModuleErrorf(format, args...)
 	} else if ectx, ok := ctx.(errorfContext); ok {
 		ectx.Errorf(format, args...)
@@ -220,6 +278,7 @@ type WritablePath interface {
 
 type genPathProvider interface {
 	genPathWithExt(ctx ModuleOutPathContext, subdir, ext string) ModuleGenPath
+	genPathWithExtAndTrimExt(ctx ModuleOutPathContext, subdir, ext string, trimExt string) ModuleGenPath
 }
 type objPathProvider interface {
 	objPathWithExt(ctx ModuleOutPathContext, subdir, ext string) ModuleObjPath
@@ -233,6 +292,16 @@ type resPathProvider interface {
 func GenPathWithExt(ctx ModuleOutPathContext, subdir string, p Path, ext string) ModuleGenPath {
 	if path, ok := p.(genPathProvider); ok {
 		return path.genPathWithExt(ctx, subdir, ext)
+	}
+	ReportPathErrorf(ctx, "Tried to create generated file from unsupported path: %s(%s)", reflect.TypeOf(p).Name(), p)
+	return PathForModuleGen(ctx)
+}
+
+// GenPathWithExtAndTrimExt derives a new file path in ctx's generated sources directory
+// from the current path, but with the new extension and trim the suffix.
+func GenPathWithExtAndTrimExt(ctx ModuleOutPathContext, subdir string, p Path, ext string, trimExt string) ModuleGenPath {
+	if path, ok := p.(genPathProvider); ok {
+		return path.genPathWithExtAndTrimExt(ctx, subdir, ext, trimExt)
 	}
 	ReportPathErrorf(ctx, "Tried to create generated file from unsupported path: %s(%s)", reflect.TypeOf(p).Name(), p)
 	return PathForModuleGen(ctx)
@@ -396,7 +465,7 @@ func ExistentPathsForSources(ctx PathGlobContext, paths []string) Paths {
 //
 // Properties passed as the paths argument must have been annotated with struct tag
 // `android:"path"` so that dependencies on SourceFileProducer modules will have already been handled by the
-// path_deps mutator.
+// pathdeps mutator.
 // If a requested module is not found as a dependency:
 //   - if ctx.Config().AllowMissingDependencies() is true, this module to be marked as having
 //     missing dependencies
@@ -425,7 +494,7 @@ type SourceInput struct {
 // excluding the items (similarly resolved
 // Properties passed as the paths argument must have been annotated with struct tag
 // `android:"path"` so that dependencies on SourceFileProducer modules will have already been handled by the
-// path_deps mutator.
+// pathdeps mutator.
 // If a requested module is not found as a dependency:
 //   - if ctx.Config().AllowMissingDependencies() is true, this module to be marked as having
 //     missing dependencies
@@ -480,7 +549,7 @@ func (p OutputPaths) Strings() []string {
 
 // PathForGoBinary returns the path to the installed location of a bootstrap_go_binary module.
 func PathForGoBinary(ctx PathContext, goBinary bootstrap.GoBinaryTool) Path {
-	goBinaryInstallDir := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "bin", false)
+	goBinaryInstallDir := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "bin")
 	rel := Rel(ctx, goBinaryInstallDir.String(), goBinary.InstallPath())
 	return goBinaryInstallDir.Join(ctx, rel)
 }
@@ -493,7 +562,7 @@ func getPathsFromModuleDep(ctx ModuleWithDepsPathContext, path, moduleName, tag 
 	if module == nil {
 		return nil, missingDependencyError{[]string{moduleName}}
 	}
-	if aModule, ok := module.(Module); ok && !aModule.Enabled() {
+	if aModule, ok := module.(Module); ok && !aModule.Enabled(ctx) {
 		return nil, missingDependencyError{[]string{moduleName}}
 	}
 	if outProducer, ok := module.(OutputFileProducer); ok {
@@ -560,7 +629,7 @@ func GetModuleFromPathDep(ctx ModuleWithDepsPathContext, moduleName, tag string)
 // and a list of the module names of missing module dependencies are returned as the second return.
 // Properties passed as the paths argument must have been annotated with struct tag
 // `android:"path"` so that dependencies on SourceFileProducer modules will have already been handled by the
-// path_deps mutator.
+// pathdeps mutator.
 func PathsAndMissingDepsForModuleSrcExcludes(ctx ModuleMissingDepsPathContext, paths, excludes []string) (Paths, []string) {
 	return PathsAndMissingDepsRelativeToModuleSourceDir(SourceInput{
 		Context:      ctx,
@@ -616,7 +685,8 @@ func PathsAndMissingDepsRelativeToModuleSourceDir(input SourceInput) (Paths, []s
 		expandedSrcFiles = append(expandedSrcFiles, srcFiles...)
 	}
 
-	return expandedSrcFiles, append(missingDeps, missingExcludeDeps...)
+	// TODO: b/334169722 - Replace with an error instead of implicitly removing duplicates.
+	return FirstUniquePaths(expandedSrcFiles), append(missingDeps, missingExcludeDeps...)
 }
 
 type missingDependencyError struct {
@@ -1029,14 +1099,14 @@ func (p basePath) withRel(rel string) basePath {
 	return p
 }
 
+func (p basePath) RelativeToTop() Path {
+	ensureTestOnly()
+	return p
+}
+
 // SourcePath is a Path representing a file path rooted from SrcDir
 type SourcePath struct {
 	basePath
-}
-
-func (p SourcePath) RelativeToTop() Path {
-	ensureTestOnly()
-	return p
 }
 
 var _ Path = SourcePath{}
@@ -1124,6 +1194,16 @@ func PathForSource(ctx PathContext, pathComponents ...string) SourcePath {
 		ReportPathErrorf(ctx, "source path %q does not exist", path)
 	}
 	return path
+}
+
+// PathForArbitraryOutput creates a path for the given components. Unlike PathForOutput,
+// the path is relative to the root of the output folder, not the out/soong folder.
+func PathForArbitraryOutput(ctx PathContext, pathComponents ...string) Path {
+	p, err := validatePath(pathComponents...)
+	if err != nil {
+		reportPathError(ctx, err)
+	}
+	return basePath{path: filepath.Join(ctx.Config().OutDir(), p)}
 }
 
 // MaybeExistentPathForSource joins the provided path components and validates that the result
@@ -1439,6 +1519,17 @@ func (p SourcePath) genPathWithExt(ctx ModuleOutPathContext, subdir, ext string)
 	return PathForModuleGen(ctx, subdir, pathtools.ReplaceExtension(p.path, ext))
 }
 
+func (p SourcePath) genPathWithExtAndTrimExt(ctx ModuleOutPathContext, subdir, ext string, trimExt string) ModuleGenPath {
+	// If Trim_extension being set, force append Output_extension without replace original extension.
+	if trimExt != "" {
+		if ext != "" {
+			return PathForModuleGen(ctx, subdir, strings.TrimSuffix(p.path, trimExt)+"."+ext)
+		}
+		return PathForModuleGen(ctx, subdir, strings.TrimSuffix(p.path, trimExt))
+	}
+	return PathForModuleGen(ctx, subdir, pathtools.ReplaceExtension(p.path, ext))
+}
+
 func (p SourcePath) objPathWithExt(ctx ModuleOutPathContext, subdir, ext string) ModuleObjPath {
 	return PathForModuleObj(ctx, subdir, pathtools.ReplaceExtension(p.path, ext))
 }
@@ -1472,10 +1563,11 @@ type ModuleOutPathContext interface {
 	ModuleName() string
 	ModuleDir() string
 	ModuleSubDir() string
+	SoongConfigTraceHash() string
 }
 
 func pathForModuleOut(ctx ModuleOutPathContext) OutputPath {
-	return PathForOutput(ctx, ".intermediates", ctx.ModuleDir(), ctx.ModuleName(), ctx.ModuleSubDir())
+	return PathForOutput(ctx, ".intermediates", ctx.ModuleDir(), ctx.ModuleName(), ctx.ModuleSubDir(), ctx.SoongConfigTraceHash())
 }
 
 // PathForModuleOut returns a Path representing the paths... under the module's
@@ -1522,6 +1614,17 @@ func PathForModuleGen(ctx ModuleOutPathContext, paths ...string) ModuleGenPath {
 
 func (p ModuleGenPath) genPathWithExt(ctx ModuleOutPathContext, subdir, ext string) ModuleGenPath {
 	// TODO: make a different path for local vs remote generated files?
+	return PathForModuleGen(ctx, subdir, pathtools.ReplaceExtension(p.path, ext))
+}
+
+func (p ModuleGenPath) genPathWithExtAndTrimExt(ctx ModuleOutPathContext, subdir, ext string, trimExt string) ModuleGenPath {
+	// If Trim_extension being set, force append Output_extension without replace original extension.
+	if trimExt != "" {
+		if ext != "" {
+			return PathForModuleGen(ctx, subdir, strings.TrimSuffix(p.path, trimExt)+"."+ext)
+		}
+		return PathForModuleGen(ctx, subdir, strings.TrimSuffix(p.path, trimExt))
+	}
 	return PathForModuleGen(ctx, subdir, pathtools.ReplaceExtension(p.path, ext))
 }
 
@@ -1593,6 +1696,8 @@ type InstallPath struct {
 
 	// makePath indicates whether this path is for Soong (false) or Make (true).
 	makePath bool
+
+	fullPath string
 }
 
 // Will panic if called from outside a test environment.
@@ -1605,7 +1710,12 @@ func ensureTestOnly() {
 
 func (p InstallPath) RelativeToTop() Path {
 	ensureTestOnly()
-	p.soongOutDir = OutSoongDir
+	if p.makePath {
+		p.soongOutDir = OutDir
+	} else {
+		p.soongOutDir = OutSoongDir
+	}
+	p.fullPath = filepath.Join(p.soongOutDir, p.path)
 	return p
 }
 
@@ -1623,12 +1733,7 @@ var _ WritablePath = InstallPath{}
 func (p InstallPath) writablePath() {}
 
 func (p InstallPath) String() string {
-	if p.makePath {
-		// Make path starts with out/ instead of out/soong.
-		return filepath.Join(p.soongOutDir, "../", p.path)
-	} else {
-		return filepath.Join(p.soongOutDir, p.path)
-	}
+	return p.fullPath
 }
 
 // PartitionDir returns the path to the partition where the install path is rooted at. It is
@@ -1658,6 +1763,7 @@ func (p InstallPath) Join(ctx PathContext, paths ...string) InstallPath {
 
 func (p InstallPath) withRel(rel string) InstallPath {
 	p.basePath = p.basePath.withRel(rel)
+	p.fullPath = filepath.Join(p.fullPath, rel)
 	return p
 }
 
@@ -1672,20 +1778,20 @@ func (p InstallPath) ToMakePath() InstallPath {
 // module appended with paths...
 func PathForModuleInstall(ctx ModuleInstallPathContext, pathComponents ...string) InstallPath {
 	os, arch := osAndArch(ctx)
-	partition := modulePartition(ctx, os)
-	return makePathForInstall(ctx, os, arch, partition, ctx.Debug(), pathComponents...)
+	partition := modulePartition(ctx, os.Class == Device)
+	return pathForInstall(ctx, os, arch, partition, pathComponents...)
 }
 
 // PathForHostDexInstall returns an InstallPath representing the install path for the
 // module appended with paths...
 func PathForHostDexInstall(ctx ModuleInstallPathContext, pathComponents ...string) InstallPath {
-	return makePathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "", ctx.Debug(), pathComponents...)
+	return pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "", pathComponents...)
 }
 
 // PathForModuleInPartitionInstall is similar to PathForModuleInstall but partition is provided by the caller
 func PathForModuleInPartitionInstall(ctx ModuleInstallPathContext, partition string, pathComponents ...string) InstallPath {
 	os, arch := osAndArch(ctx)
-	return makePathForInstall(ctx, os, arch, partition, ctx.Debug(), pathComponents...)
+	return pathForInstall(ctx, os, arch, partition, pathComponents...)
 }
 
 func osAndArch(ctx ModuleInstallPathContext) (OsType, ArchType) {
@@ -1701,12 +1807,26 @@ func osAndArch(ctx ModuleInstallPathContext) (OsType, ArchType) {
 	return os, arch
 }
 
-func makePathForInstall(ctx ModuleInstallPathContext, os OsType, arch ArchType, partition string, debug bool, pathComponents ...string) InstallPath {
-	ret := pathForInstall(ctx, os, arch, partition, debug, pathComponents...)
-	return ret
+func pathForPartitionInstallDir(ctx PathContext, partition, partitionPath string, makePath bool) InstallPath {
+	fullPath := ctx.Config().SoongOutDir()
+	if makePath {
+		// Make path starts with out/ instead of out/soong.
+		fullPath = filepath.Join(fullPath, "../", partitionPath)
+	} else {
+		fullPath = filepath.Join(fullPath, partitionPath)
+	}
+
+	return InstallPath{
+		basePath:     basePath{partitionPath, ""},
+		soongOutDir:  ctx.Config().soongOutDir,
+		partitionDir: partitionPath,
+		partition:    partition,
+		makePath:     makePath,
+		fullPath:     fullPath,
+	}
 }
 
-func pathForInstall(ctx PathContext, os OsType, arch ArchType, partition string, debug bool,
+func pathForInstall(ctx PathContext, os OsType, arch ArchType, partition string,
 	pathComponents ...string) InstallPath {
 
 	var partitionPaths []string
@@ -1736,45 +1856,23 @@ func pathForInstall(ctx PathContext, os OsType, arch ArchType, partition string,
 		}
 		partitionPaths = []string{"host", osName + "-" + archName, partition}
 	}
-	if debug {
-		partitionPaths = append([]string{"debug"}, partitionPaths...)
-	}
 
 	partitionPath, err := validatePath(partitionPaths...)
 	if err != nil {
 		reportPathError(ctx, err)
 	}
 
-	base := InstallPath{
-		basePath:     basePath{partitionPath, ""},
-		soongOutDir:  ctx.Config().soongOutDir,
-		partitionDir: partitionPath,
-		partition:    partition,
-	}
-
-	if ctx.Config().KatiEnabled() {
-		base.makePath = true
-	}
-
+	base := pathForPartitionInstallDir(ctx, partition, partitionPath, ctx.Config().KatiEnabled())
 	return base.Join(ctx, pathComponents...)
 }
 
-func pathForNdkOrSdkInstall(ctx PathContext, prefix string, paths []string) InstallPath {
-	base := InstallPath{
-		basePath:     basePath{prefix, ""},
-		soongOutDir:  ctx.Config().soongOutDir,
-		partitionDir: prefix,
-		makePath:     false,
-	}
-	return base.Join(ctx, paths...)
-}
-
-func PathForNdkInstall(ctx PathContext, paths ...string) InstallPath {
-	return pathForNdkOrSdkInstall(ctx, "ndk", paths)
+func PathForNdkInstall(ctx PathContext, paths ...string) OutputPath {
+	return PathForOutput(ctx, append([]string{"ndk"}, paths...)...)
 }
 
 func PathForMainlineSdksInstall(ctx PathContext, paths ...string) InstallPath {
-	return pathForNdkOrSdkInstall(ctx, "mainline-sdks", paths)
+	base := pathForPartitionInstallDir(ctx, "", "mainline-sdks", false)
+	return base.Join(ctx, paths...)
 }
 
 func InstallPathToOnDevicePath(ctx PathContext, path InstallPath) string {
@@ -1782,12 +1880,12 @@ func InstallPathToOnDevicePath(ctx PathContext, path InstallPath) string {
 	return "/" + rel
 }
 
-func modulePartition(ctx ModuleInstallPathContext, os OsType) string {
+func modulePartition(ctx ModuleInstallPathContext, device bool) string {
 	var partition string
 	if ctx.InstallInTestcases() {
 		// "testcases" install directory can be used for host or device modules.
 		partition = "testcases"
-	} else if os.Class == Device {
+	} else if device {
 		if ctx.InstallInData() {
 			partition = "data"
 		} else if ctx.InstallInRamdisk() {
@@ -1821,11 +1919,11 @@ func modulePartition(ctx ModuleInstallPathContext, os OsType) string {
 				// the layout of recovery partion is the same as that of system partition
 				partition = "recovery/root/system"
 			}
-		} else if ctx.SocSpecific() {
+		} else if ctx.SocSpecific() || ctx.InstallInVendor() {
 			partition = ctx.DeviceConfig().VendorPath()
-		} else if ctx.DeviceSpecific() {
+		} else if ctx.DeviceSpecific() || ctx.InstallInOdm() {
 			partition = ctx.DeviceConfig().OdmPath()
-		} else if ctx.ProductSpecific() {
+		} else if ctx.ProductSpecific() || ctx.InstallInProduct() {
 			partition = ctx.DeviceConfig().ProductPath()
 		} else if ctx.SystemExtSpecific() {
 			partition = ctx.DeviceConfig().SystemExtPath()
@@ -1870,7 +1968,9 @@ func (p InstallPaths) Strings() []string {
 // validatePathInternal ensures that a path does not leave its component, and
 // optionally doesn't contain Ninja variables.
 func validatePathInternal(allowNinjaVariables bool, pathComponents ...string) (string, error) {
-	for _, path := range pathComponents {
+	initialEmpty := 0
+	finalEmpty := 0
+	for i, path := range pathComponents {
 		if !allowNinjaVariables && strings.Contains(path, "$") {
 			return "", fmt.Errorf("Path contains invalid character($): %s", path)
 		}
@@ -1879,11 +1979,25 @@ func validatePathInternal(allowNinjaVariables bool, pathComponents ...string) (s
 		if path == ".." || strings.HasPrefix(path, "../") || strings.HasPrefix(path, "/") {
 			return "", fmt.Errorf("Path is outside directory: %s", path)
 		}
+
+		if i == initialEmpty && pathComponents[i] == "" {
+			initialEmpty++
+		}
+		if i == finalEmpty && pathComponents[len(pathComponents)-1-i] == "" {
+			finalEmpty++
+		}
 	}
+	// Optimization: filepath.Join("foo", "") returns a newly allocated copy
+	// of "foo", while filepath.Join("foo") does not.  Strip out any empty
+	// path components.
+	if initialEmpty == len(pathComponents) {
+		return "", nil
+	}
+	nonEmptyPathComponents := pathComponents[initialEmpty : len(pathComponents)-finalEmpty]
 	// TODO: filepath.Join isn't necessarily correct with embedded ninja
 	// variables. '..' may remove the entire ninja variable, even if it
 	// will be expanded to multiple nested directories.
-	return filepath.Join(pathComponents...), nil
+	return filepath.Join(nonEmptyPathComponents...), nil
 }
 
 // validateSafePath validates a path that we trust (may contain ninja
@@ -2005,6 +2119,9 @@ type testModuleInstallPathContext struct {
 	inDebugRamdisk  bool
 	inRecovery      bool
 	inRoot          bool
+	inOdm           bool
+	inProduct       bool
+	inVendor        bool
 	forceOS         *OsType
 	forceArch       *ArchType
 }
@@ -2045,6 +2162,18 @@ func (m testModuleInstallPathContext) InstallInRecovery() bool {
 
 func (m testModuleInstallPathContext) InstallInRoot() bool {
 	return m.inRoot
+}
+
+func (m testModuleInstallPathContext) InstallInOdm() bool {
+	return m.inOdm
+}
+
+func (m testModuleInstallPathContext) InstallInProduct() bool {
+	return m.inProduct
+}
+
+func (m testModuleInstallPathContext) InstallInVendor() bool {
+	return m.inVendor
 }
 
 func (m testModuleInstallPathContext) InstallForceOS() (*OsType, *ArchType) {
@@ -2147,6 +2276,19 @@ type DataPath struct {
 	SrcPath Path
 	// The install path of the data file, relative to the install root.
 	RelativeInstallPath string
+	// If WithoutRel is true, use SrcPath.Base() instead of SrcPath.Rel() as the filename.
+	WithoutRel bool
+}
+
+func (d *DataPath) ToRelativeInstallPath() string {
+	relPath := d.SrcPath.Rel()
+	if d.WithoutRel {
+		relPath = d.SrcPath.Base()
+	}
+	if d.RelativeInstallPath != "" {
+		relPath = filepath.Join(d.RelativeInstallPath, relPath)
+	}
+	return relPath
 }
 
 // PathsIfNonNil returns a Paths containing only the non-nil input arguments.
@@ -2194,24 +2336,4 @@ func IsThirdPartyPath(path string) bool {
 		return true
 	}
 	return false
-}
-
-// PathsDepSet is a thin type-safe wrapper around the generic depSet.  It always uses
-// topological order.
-type PathsDepSet struct {
-	depSet
-}
-
-// newPathsDepSet returns an immutable PathsDepSet with the given direct and
-// transitive contents.
-func newPathsDepSet(direct Paths, transitive []*PathsDepSet) *PathsDepSet {
-	return &PathsDepSet{*newDepSet(TOPOLOGICAL, direct, transitive)}
-}
-
-// ToList returns the PathsDepSet flattened to a list in topological order.
-func (d *PathsDepSet) ToList() Paths {
-	if d == nil {
-		return nil
-	}
-	return d.depSet.ToList().(Paths)
 }

@@ -77,7 +77,7 @@ func addDependencyOntoApexVariants(ctx android.BottomUpMutatorContext, propertyN
 // Use gatherApexModulePairDepsWithTag to retrieve the dependencies.
 func addDependencyOntoApexModulePair(ctx android.BottomUpMutatorContext, apex string, name string, tag blueprint.DependencyTag) {
 	var variations []blueprint.Variation
-	if apex != "platform" && apex != "system_ext" {
+	if !android.IsConfiguredJarForPlatform(apex) {
 		// Pick the correct apex variant.
 		variations = []blueprint.Variation{
 			{Mutator: "apex", Variation: apex},
@@ -127,7 +127,10 @@ func reportMissingVariationDependency(ctx android.BottomUpMutatorContext, variat
 // added by addDependencyOntoApexModulePair.
 func gatherApexModulePairDepsWithTag(ctx android.BaseModuleContext, tag blueprint.DependencyTag) []android.Module {
 	var modules []android.Module
-	ctx.VisitDirectDepsIf(isActiveModule, func(module android.Module) {
+	isActiveModulePred := func(module android.Module) bool {
+		return isActiveModule(ctx, module)
+	}
+	ctx.VisitDirectDepsIf(isActiveModulePred, func(module android.Module) {
 		t := ctx.OtherModuleDependencyTag(module)
 		if t == tag {
 			modules = append(modules, module)
@@ -184,6 +187,9 @@ var _ android.ExcludeFromVisibilityEnforcementTag = bootclasspathDependencyTag{}
 
 // The tag used for dependencies onto bootclasspath_fragments.
 var bootclasspathFragmentDepTag = bootclasspathDependencyTag{name: "fragment"}
+
+// The tag used for dependencies onto platform_bootclasspath.
+var platformBootclasspathDepTag = bootclasspathDependencyTag{name: "platform"}
 
 // BootclasspathNestedAPIProperties defines properties related to the API provided by parts of the
 // bootclasspath that are nested within the main BootclasspathAPIProperties.

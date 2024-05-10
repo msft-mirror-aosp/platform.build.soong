@@ -43,11 +43,7 @@ var PrepareForTestWithRustDefaultModules = android.GroupFixturePreparers(
 // Preparer that will allow use of all rust modules fully.
 var PrepareForIntegrationTestWithRust = android.GroupFixturePreparers(
 	PrepareForTestWithRustDefaultModules,
-)
-
-var PrepareForTestWithRustIncludeVndk = android.GroupFixturePreparers(
-	PrepareForIntegrationTestWithRust,
-	cc.PrepareForTestWithCcIncludeVndk,
+	cc.PrepareForIntegrationTestWithCc,
 )
 
 func GatherRequiredDepsForTest() string {
@@ -75,6 +71,7 @@ func GatherRequiredDepsForTest() string {
 			apex_available: ["//apex_available:platform", "//apex_available:anyapex"],
 			min_sdk_version: "29",
 			vendor_available: true,
+			host_supported: true,
 			recovery_available: true,
 			llndk: {
 				symbol_file: "liblog.map.txt",
@@ -176,6 +173,7 @@ func registerRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("rust_library_host_dylib", RustLibraryDylibHostFactory)
 	ctx.RegisterModuleType("rust_library_host_rlib", RustLibraryRlibHostFactory)
 	ctx.RegisterModuleType("rust_fuzz", RustFuzzFactory)
+	ctx.RegisterModuleType("rust_fuzz_host", RustFuzzHostFactory)
 	ctx.RegisterModuleType("rust_ffi", RustFFIFactory)
 	ctx.RegisterModuleType("rust_ffi_shared", RustFFISharedFactory)
 	ctx.RegisterModuleType("rust_ffi_static", RustFFIStaticFactory)
@@ -194,10 +192,9 @@ func registerRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 		ctx.BottomUp("rust_stdlinkage", LibstdMutator).Parallel()
 		ctx.BottomUp("rust_begin", BeginMutator).Parallel()
 	})
-	ctx.RegisterSingletonType("rust_project_generator", rustProjectGeneratorSingleton)
-	ctx.RegisterSingletonType("kythe_rust_extract", kytheExtractRustFactory)
+	ctx.RegisterParallelSingletonType("rust_project_generator", rustProjectGeneratorSingleton)
+	ctx.RegisterParallelSingletonType("kythe_rust_extract", kytheExtractRustFactory)
 	ctx.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.BottomUp("rust_sanitizers", rustSanitizerRuntimeMutator).Parallel()
 	})
-	registerRustSnapshotModules(ctx)
 }

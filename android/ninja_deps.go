@@ -14,7 +14,9 @@
 
 package android
 
-import "sort"
+import (
+	"sort"
+)
 
 func (c *config) addNinjaFileDeps(deps ...string) {
 	for _, dep := range deps {

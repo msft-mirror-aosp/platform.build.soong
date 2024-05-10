@@ -16,6 +16,7 @@ package android
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -274,6 +275,15 @@ func FixtureModifyContext(mutator func(ctx *TestContext)) FixturePreparer {
 	})
 }
 
+// Sync the mock filesystem with the current config, then modify the context,
+// This allows context modification that requires filesystem access.
+func FixtureModifyContextWithMockFs(mutator func(ctx *TestContext)) FixturePreparer {
+	return newSimpleFixturePreparer(func(f *fixture) {
+		f.config.mockFileSystem("", f.mockFS)
+		mutator(f.ctx)
+	})
+}
+
 func FixtureRegisterWithContext(registeringFunc func(ctx RegistrationContext)) FixturePreparer {
 	return FixtureModifyContext(func(ctx *TestContext) { registeringFunc(ctx) })
 }
@@ -368,7 +378,7 @@ func FixtureModifyEnv(mutator func(env map[string]string)) FixturePreparer {
 
 // Allow access to the product variables when preparing the fixture.
 type FixtureProductVariables struct {
-	*productVariables
+	*ProductVariables
 }
 
 // Modify product variables.
@@ -378,6 +388,12 @@ func FixtureModifyProductVariables(mutator func(variables FixtureProductVariable
 		mutator(productVariables)
 	})
 }
+
+var PrepareForSkipTestOnMac = newSimpleFixturePreparer(func(fixture *fixture) {
+	if runtime.GOOS != "linux" {
+		fixture.t.Skip("Test is only supported on linux.")
+	}
+})
 
 // PrepareForDebug_DO_NOT_SUBMIT puts the fixture into debug which will cause it to output its
 // state before running the test.

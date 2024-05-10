@@ -42,9 +42,12 @@ var (
 		"-Wl,-z,now",
 		"-Wl,--build-id=md5",
 		"-Wl,--fatal-warnings",
-		"-Wl,--hash-style=gnu",
 		"-Wl,--no-undefined-version",
 	}
+
+	linuxCrossLldflags = append(linuxCrossLdflags,
+		"-Wl,--compress-debug-sections=zstd",
+	)
 
 	// Embed the linker into host bionic binaries. This is needed to support host bionic,
 	// as the linux kernel requires that the ELF interpreter referenced by PT_INTERP be
@@ -58,8 +61,9 @@ var (
 )
 
 func init() {
-	exportedVars.ExportStringListStaticVariable("LinuxBionicArm64Cflags", linuxCrossCflags)
-	exportedVars.ExportStringListStaticVariable("LinuxBionicArm64Ldflags", linuxCrossLdflags)
+	pctx.StaticVariable("LinuxBionicArm64Cflags", strings.Join(linuxCrossCflags, " "))
+	pctx.StaticVariable("LinuxBionicArm64Ldflags", strings.Join(linuxCrossLdflags, " "))
+	pctx.StaticVariable("LinuxBionicArm64Lldflags", strings.Join(linuxCrossLldflags, " "))
 }
 
 // toolchain config for ARM64 Linux CrossHost. Almost everything is the same as the ARM64 Android

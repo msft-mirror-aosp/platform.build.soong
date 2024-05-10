@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"android/soong/bazel"
+	"android/soong/aidl_library"
 	"github.com/google/blueprint"
 
 	"android/soong/android"
@@ -105,7 +105,14 @@ func genYacc(ctx android.ModuleContext, rule *android.RuleBuilder, yaccFile andr
 	return ret
 }
 
-func genAidl(ctx android.ModuleContext, rule *android.RuleBuilder, aidlFile android.Path, aidlFlags string) (cppFile android.OutputPath, headerFiles android.Paths) {
+func genAidl(
+	ctx android.ModuleContext,
+	rule *android.RuleBuilder,
+	outDirBase string,
+	aidlFile android.Path,
+	aidlHdrs android.Paths,
+	aidlFlags string,
+) (cppFile android.OutputPath, headerFiles android.Paths) {
 	aidlPackage := strings.TrimSuffix(aidlFile.Rel(), aidlFile.Base())
 	baseName := strings.TrimSuffix(aidlFile.Base(), aidlFile.Ext())
 	shortName := baseName
@@ -117,20 +124,17 @@ func genAidl(ctx android.ModuleContext, rule *android.RuleBuilder, aidlFile andr
 		shortName = strings.TrimPrefix(baseName, "I")
 	}
 
-	outDir := android.PathForModuleGen(ctx, "aidl")
+	outDir := android.PathForModuleGen(ctx, outDirBase)
 	cppFile = outDir.Join(ctx, aidlPackage, baseName+".cpp")
 	depFile := outDir.Join(ctx, aidlPackage, baseName+".cpp.d")
 	headerI := outDir.Join(ctx, aidlPackage, baseName+".h")
 	headerBn := outDir.Join(ctx, aidlPackage, "Bn"+shortName+".h")
 	headerBp := outDir.Join(ctx, aidlPackage, "Bp"+shortName+".h")
 
-	baseDir := strings.TrimSuffix(aidlFile.String(), aidlFile.Rel())
-	if baseDir != "" {
-		aidlFlags += " -I" + baseDir
-	}
-
 	cmd := rule.Command()
 	cmd.BuiltTool("aidl-cpp").
+		// libc++ is default stl for aidl-cpp (a cc_binary_host module)
+		ImplicitTool(ctx.Config().HostCcSharedLibPath(ctx, "libc++")).
 		FlagWithDepFile("-d", depFile).
 		Flag("--ninja").
 		Flag(aidlFlags).
@@ -142,6 +146,10 @@ func genAidl(ctx android.ModuleContext, rule *android.RuleBuilder, aidlFile andr
 			headerBn,
 			headerBp,
 		})
+
+	if aidlHdrs != nil {
+		cmd.Implicits(aidlHdrs)
+	}
 
 	return cppFile, android.Paths{
 		headerI,
@@ -170,41 +178,6 @@ func genLex(ctx android.ModuleContext, lexFile android.Path, outFile android.Mod
 	})
 }
 
-type LexAttrs struct {
-	Srcs    bazel.LabelListAttribute
-	Lexopts bazel.StringListAttribute
-}
-
-type LexNames struct {
-	cSrcName bazel.LabelAttribute
-	srcName  bazel.LabelAttribute
-}
-
-func bp2BuildLex(ctx android.Bp2buildMutatorContext, moduleName string, ca compilerAttributes) LexNames {
-	names := LexNames{}
-	if !ca.lSrcs.IsEmpty() {
-		names.cSrcName = createLexTargetModule(ctx, moduleName+"_genlex_l", ca.lSrcs, ca.lexopts)
-	}
-	if !ca.llSrcs.IsEmpty() {
-		names.srcName = createLexTargetModule(ctx, moduleName+"_genlex_ll", ca.llSrcs, ca.lexopts)
-	}
-	return names
-}
-
-func createLexTargetModule(ctx android.Bp2buildMutatorContext, name string, srcs bazel.LabelListAttribute, opts bazel.StringListAttribute) bazel.LabelAttribute {
-	ctx.CreateBazelTargetModule(
-		bazel.BazelTargetModuleProperties{
-			Rule_class:        "genlex",
-			Bzl_load_location: "//build/bazel/rules/cc:flex.bzl",
-		},
-		android.CommonAttributes{Name: name},
-		&LexAttrs{
-			Srcs:    srcs,
-			Lexopts: opts,
-		})
-	return bazel.LabelAttribute{Value: &bazel.Label{Label: ":" + name}}
-}
-
 func genSysprop(ctx android.ModuleContext, syspropFile android.Path) (android.Path, android.Paths) {
 	headerFile := android.PathForModuleGen(ctx, "sysprop", "include", syspropFile.Rel()+".h")
 	publicHeaderFile := android.PathForModuleGen(ctx, "sysprop/public", "include", syspropFile.Rel()+".h")
@@ -227,34 +200,6 @@ func genSysprop(ctx android.ModuleContext, syspropFile android.Path) (android.Pa
 	})
 
 	return cppFile, headers.Paths()
-}
-
-func bp2buildCcSysprop(ctx android.Bp2buildMutatorContext, moduleName string, minSdkVersion *string, srcs bazel.LabelListAttribute) *bazel.LabelAttribute {
-	labels := SyspropLibraryLabels{
-		SyspropLibraryLabel: moduleName + "_sysprop_library",
-		StaticLibraryLabel:  moduleName + "_cc_sysprop_library_static",
-	}
-	Bp2buildSysprop(ctx, labels, srcs, minSdkVersion)
-	return createLabelAttributeCorrespondingToSrcs(":"+labels.StaticLibraryLabel, srcs)
-}
-
-// Creates a LabelAttribute for a given label where the value is only set for
-// the same config values that have values in a given LabelListAttribute
-func createLabelAttributeCorrespondingToSrcs(baseLabelName string, srcs bazel.LabelListAttribute) *bazel.LabelAttribute {
-	baseLabel := bazel.Label{Label: baseLabelName}
-	label := bazel.LabelAttribute{}
-	if !srcs.Value.IsNil() && !srcs.Value.IsEmpty() {
-		label.Value = &baseLabel
-		return &label
-	}
-	for axis, configToSrcs := range srcs.ConfigurableValues {
-		for config, val := range configToSrcs {
-			if !val.IsNil() && !val.IsEmpty() {
-				label.SetSelectValue(axis, config, baseLabel)
-			}
-		}
-	}
-	return &label
 }
 
 // Used to communicate information from the genSources method back to the library code that uses
@@ -280,17 +225,29 @@ type generatedSourceInfo struct {
 	// The files that can be used as order only dependencies in order to ensure that the sysprop
 	// header files are up to date.
 	syspropOrderOnlyDeps android.Paths
+
+	// List of generated code path.
+	//   ex) '*.cpp' files generated from '*.ll / *.yy'.
+	generatedSources android.Paths
 }
 
-func genSources(ctx android.ModuleContext, srcFiles android.Paths,
-	buildFlags builderFlags) (android.Paths, android.Paths, generatedSourceInfo) {
+func genSources(
+	ctx android.ModuleContext,
+	aidlLibraryInfos []aidl_library.AidlLibraryInfo,
+	srcFiles android.Paths,
+	buildFlags builderFlags,
+) (android.Paths, android.Paths, generatedSourceInfo) {
 
 	var info generatedSourceInfo
 
 	var deps android.Paths
 	var rsFiles android.Paths
 
+	// aidlRule supports compiling aidl files from srcs prop while aidlLibraryRule supports
+	// compiling aidl files from aidl_library modules specified in aidl.libs prop.
+	// The rules are separated so that they don't wipe out the other's outputDir
 	var aidlRule *android.RuleBuilder
+	var aidlLibraryRule *android.RuleBuilder
 
 	var yaccRule_ *android.RuleBuilder
 	yaccRule := func() *android.RuleBuilder {
@@ -301,36 +258,51 @@ func genSources(ctx android.ModuleContext, srcFiles android.Paths,
 		return yaccRule_
 	}
 
+	var generatedSources android.Paths = nil
+
 	for i, srcFile := range srcFiles {
 		switch srcFile.Ext() {
 		case ".y":
 			cFile := android.GenPathWithExt(ctx, "yacc", srcFile, "c")
 			srcFiles[i] = cFile
 			deps = append(deps, genYacc(ctx, yaccRule(), srcFile, cFile, buildFlags.yacc)...)
+			generatedSources = append(generatedSources, cFile)
 		case ".yy":
 			cppFile := android.GenPathWithExt(ctx, "yacc", srcFile, "cpp")
 			srcFiles[i] = cppFile
 			deps = append(deps, genYacc(ctx, yaccRule(), srcFile, cppFile, buildFlags.yacc)...)
+			generatedSources = append(generatedSources, cppFile)
 		case ".l":
 			cFile := android.GenPathWithExt(ctx, "lex", srcFile, "c")
 			srcFiles[i] = cFile
 			genLex(ctx, srcFile, cFile, buildFlags.lex)
+			generatedSources = append(generatedSources, cFile)
 		case ".ll":
 			cppFile := android.GenPathWithExt(ctx, "lex", srcFile, "cpp")
 			srcFiles[i] = cppFile
 			genLex(ctx, srcFile, cppFile, buildFlags.lex)
+			generatedSources = append(generatedSources, cppFile)
 		case ".proto":
 			ccFile, headerFile := genProto(ctx, srcFile, buildFlags)
 			srcFiles[i] = ccFile
 			info.protoHeaders = append(info.protoHeaders, headerFile)
 			// Use the generated header as an order only dep to ensure that it is up to date when needed.
 			info.protoOrderOnlyDeps = append(info.protoOrderOnlyDeps, headerFile)
+			generatedSources = append(generatedSources, ccFile)
 		case ".aidl":
 			if aidlRule == nil {
 				aidlRule = android.NewRuleBuilder(pctx, ctx).Sbox(android.PathForModuleGen(ctx, "aidl"),
 					android.PathForModuleGen(ctx, "aidl.sbox.textproto"))
 			}
-			cppFile, aidlHeaders := genAidl(ctx, aidlRule, srcFile, buildFlags.aidlFlags)
+			baseDir := strings.TrimSuffix(srcFile.String(), srcFile.Rel())
+			cppFile, aidlHeaders := genAidl(
+				ctx,
+				aidlRule,
+				"aidl",
+				srcFile,
+				nil,
+				buildFlags.aidlFlags+" -I"+baseDir,
+			)
 			srcFiles[i] = cppFile
 
 			info.aidlHeaders = append(info.aidlHeaders, aidlHeaders...)
@@ -338,10 +310,12 @@ func genSources(ctx android.ModuleContext, srcFiles android.Paths,
 			// needed.
 			// TODO: Reduce the size of the ninja file by using one order only dep for the whole rule
 			info.aidlOrderOnlyDeps = append(info.aidlOrderOnlyDeps, aidlHeaders...)
+			generatedSources = append(generatedSources, cppFile)
 		case ".rscript", ".fs":
 			cppFile := rsGeneratedCppFile(ctx, srcFile)
 			rsFiles = append(rsFiles, srcFiles[i])
 			srcFiles[i] = cppFile
+			generatedSources = append(generatedSources, cppFile)
 		case ".sysprop":
 			cppFile, headerFiles := genSysprop(ctx, srcFile)
 			srcFiles[i] = cppFile
@@ -349,11 +323,44 @@ func genSources(ctx android.ModuleContext, srcFiles android.Paths,
 			// Use the generated headers as order only deps to ensure that they are up to date when
 			// needed.
 			info.syspropOrderOnlyDeps = append(info.syspropOrderOnlyDeps, headerFiles...)
+			generatedSources = append(generatedSources, cppFile)
+		}
+	}
+
+	info.generatedSources = generatedSources
+
+	for _, aidlLibraryInfo := range aidlLibraryInfos {
+		if aidlLibraryRule == nil {
+			aidlLibraryRule = android.NewRuleBuilder(pctx, ctx).Sbox(
+				android.PathForModuleGen(ctx, "aidl_library"),
+				android.PathForModuleGen(ctx, "aidl_library.sbox.textproto"),
+			).SandboxInputs()
+		}
+		for _, aidlSrc := range aidlLibraryInfo.Srcs {
+			cppFile, aidlHeaders := genAidl(
+				ctx,
+				aidlLibraryRule,
+				"aidl_library",
+				aidlSrc,
+				aidlLibraryInfo.Hdrs.ToList(),
+				buildFlags.aidlFlags,
+			)
+
+			srcFiles = append(srcFiles, cppFile)
+			info.aidlHeaders = append(info.aidlHeaders, aidlHeaders...)
+			// Use the generated headers as order only deps to ensure that they are up to date when
+			// needed.
+			// TODO: Reduce the size of the ninja file by using one order only dep for the whole rule
+			info.aidlOrderOnlyDeps = append(info.aidlOrderOnlyDeps, aidlHeaders...)
 		}
 	}
 
 	if aidlRule != nil {
 		aidlRule.Build("aidl", "gen aidl")
+	}
+
+	if aidlLibraryRule != nil {
+		aidlLibraryRule.Build("aidl_library", "gen aidl_library")
 	}
 
 	if yaccRule_ != nil {

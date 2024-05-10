@@ -148,6 +148,7 @@ var BannerVars = []string{
 	"PLATFORM_VERSION_CODENAME",
 	"PLATFORM_VERSION",
 	"PRODUCT_INCLUDE_TAGS",
+	"PRODUCT_SOURCE_ROOT_DIRS",
 	"TARGET_PRODUCT",
 	"TARGET_BUILD_VARIANT",
 	"TARGET_BUILD_APPS",
@@ -189,6 +190,9 @@ func runMakeProductConfig(ctx Context, config Config) {
 		"TARGET_BUILD_VARIANT",
 		"TARGET_BUILD_APPS",
 		"TARGET_BUILD_UNBUNDLED",
+
+		// Additional release config maps
+		"PRODUCT_RELEASE_CONFIG_MAPS",
 
 		// compiler wrappers set up by make
 		"CC_WRAPPER",
@@ -233,7 +237,6 @@ func runMakeProductConfig(ctx Context, config Config) {
 		"BUILD_BROKEN_SRC_DIR_RW_ALLOWLIST",
 
 		// Not used, but useful to be in the soong.log
-		"BOARD_VNDK_VERSION",
 		"TARGET_BUILD_TYPE",
 		"HOST_ARCH",
 		"HOST_2ND_ARCH",
@@ -299,4 +302,5 @@ func runMakeProductConfig(ctx Context, config Config) {
 	config.SetBuildBrokenUsesNetwork(makeVars["BUILD_BROKEN_USES_NETWORK"] == "true")
 	config.SetBuildBrokenNinjaUsesEnvVars(strings.Fields(makeVars["BUILD_BROKEN_NINJA_USES_ENV_VARS"]))
 	config.SetIncludeTags(strings.Fields(makeVars["PRODUCT_INCLUDE_TAGS"]))
+	config.SetSourceRootDirs(strings.Fields(makeVars["PRODUCT_SOURCE_ROOT_DIRS"]))
 }

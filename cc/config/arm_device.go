@@ -28,13 +28,19 @@ var (
 
 	armCflags = []string{
 		"-fomit-frame-pointer",
+		// Revert this after b/322359235 is fixed
+		"-mllvm", "-enable-shrink-wrap=false",
 	}
 
-	armCppflags = []string{}
+	armCppflags = []string{
+		// Revert this after b/322359235 is fixed
+		"-mllvm", "-enable-shrink-wrap=false",
+	}
 
 	armLdflags = []string{
-		"-Wl,--hash-style=gnu",
 		"-Wl,-m,armelf",
+		// Revert this after b/322359235 is fixed
+		"-Wl,-mllvm", "-Wl,-enable-shrink-wrap=false",
 	}
 
 	armLldflags = armLdflags
@@ -43,9 +49,7 @@ var (
 
 	armNoFixCortexA8LdFlags = []string{"-Wl,--no-fix-cortex-a8"}
 
-	armArmCflags = []string{
-		"-fstrict-aliasing",
-	}
+	armArmCflags = []string{}
 
 	armThumbCflags = []string{
 		"-mthumb",
@@ -90,6 +94,15 @@ var (
 		},
 		"cortex-a15": []string{
 			"-mcpu=cortex-a15",
+			"-mfpu=neon-vfpv4",
+			// Fake an ARM compiler flag as these processors support LPAE which clang
+			// don't advertise.
+			// TODO This is a hack and we need to add it for each processor that supports LPAE until some
+			// better solution comes around. See Bug 27340895
+			"-D__ARM_FEATURE_LPAE=1",
+		},
+		"cortex-a32": []string{
+			"-mcpu=cortex-a32",
 			"-mfpu=neon-vfpv4",
 			// Fake an ARM compiler flag as these processors support LPAE which clang
 			// don't advertise.
@@ -172,42 +185,37 @@ const (
 )
 
 func init() {
-	// Just exported. Not created as a Ninja static variable.
-	exportedVars.ExportString("ArmClangTriple", clangTriple)
+	pctx.StaticVariable("ArmLdflags", strings.Join(armLdflags, " "))
+	pctx.StaticVariable("ArmLldflags", strings.Join(armLldflags, " "))
 
-	exportedVars.ExportStringListStaticVariable("ArmLdflags", armLdflags)
-	exportedVars.ExportStringListStaticVariable("ArmLldflags", armLldflags)
-
-	exportedVars.ExportStringListStaticVariable("ArmFixCortexA8LdFlags", armFixCortexA8LdFlags)
-	exportedVars.ExportStringListStaticVariable("ArmNoFixCortexA8LdFlags", armNoFixCortexA8LdFlags)
+	pctx.StaticVariable("ArmFixCortexA8LdFlags", strings.Join(armFixCortexA8LdFlags, " "))
+	pctx.StaticVariable("ArmNoFixCortexA8LdFlags", strings.Join(armNoFixCortexA8LdFlags, " "))
 
 	// Clang cflags
-	exportedVars.ExportStringListStaticVariable("ArmToolchainCflags", armToolchainCflags)
-	exportedVars.ExportStringListStaticVariable("ArmCflags", armCflags)
-	exportedVars.ExportStringListStaticVariable("ArmCppflags", armCppflags)
+	pctx.StaticVariable("ArmToolchainCflags", strings.Join(armToolchainCflags, " "))
+	pctx.StaticVariable("ArmCflags", strings.Join(armCflags, " "))
+	pctx.StaticVariable("ArmCppflags", strings.Join(armCppflags, " "))
 
 	// Clang ARM vs. Thumb instruction set cflags
-	exportedVars.ExportStringListStaticVariable("ArmArmCflags", armArmCflags)
-	exportedVars.ExportStringListStaticVariable("ArmThumbCflags", armThumbCflags)
-
-	exportedVars.ExportVariableReferenceDict("ArmArchVariantCflags", armArchVariantCflagsVar)
-	exportedVars.ExportVariableReferenceDict("ArmCpuVariantCflags", armCpuVariantCflagsVar)
+	pctx.StaticVariable("ArmArmCflags", strings.Join(armArmCflags, " "))
+	pctx.StaticVariable("ArmThumbCflags", strings.Join(armThumbCflags, " "))
 
 	// Clang arch variant cflags
-	exportedVars.ExportStringListStaticVariable("ArmArmv7ACflags", armArchVariantCflags["armv7-a"])
-	exportedVars.ExportStringListStaticVariable("ArmArmv7ANeonCflags", armArchVariantCflags["armv7-a-neon"])
-	exportedVars.ExportStringListStaticVariable("ArmArmv8ACflags", armArchVariantCflags["armv8-a"])
-	exportedVars.ExportStringListStaticVariable("ArmArmv82ACflags", armArchVariantCflags["armv8-2a"])
+	pctx.StaticVariable("ArmArmv7ACflags", strings.Join(armArchVariantCflags["armv7-a"], " "))
+	pctx.StaticVariable("ArmArmv7ANeonCflags", strings.Join(armArchVariantCflags["armv7-a-neon"], " "))
+	pctx.StaticVariable("ArmArmv8ACflags", strings.Join(armArchVariantCflags["armv8-a"], " "))
+	pctx.StaticVariable("ArmArmv82ACflags", strings.Join(armArchVariantCflags["armv8-2a"], " "))
 
 	// Clang cpu variant cflags
-	exportedVars.ExportStringListStaticVariable("ArmGenericCflags", armCpuVariantCflags[""])
-	exportedVars.ExportStringListStaticVariable("ArmCortexA7Cflags", armCpuVariantCflags["cortex-a7"])
-	exportedVars.ExportStringListStaticVariable("ArmCortexA8Cflags", armCpuVariantCflags["cortex-a8"])
-	exportedVars.ExportStringListStaticVariable("ArmCortexA15Cflags", armCpuVariantCflags["cortex-a15"])
-	exportedVars.ExportStringListStaticVariable("ArmCortexA53Cflags", armCpuVariantCflags["cortex-a53"])
-	exportedVars.ExportStringListStaticVariable("ArmCortexA55Cflags", armCpuVariantCflags["cortex-a55"])
-	exportedVars.ExportStringListStaticVariable("ArmKraitCflags", armCpuVariantCflags["krait"])
-	exportedVars.ExportStringListStaticVariable("ArmKryoCflags", armCpuVariantCflags["kryo"])
+	pctx.StaticVariable("ArmGenericCflags", strings.Join(armCpuVariantCflags[""], " "))
+	pctx.StaticVariable("ArmCortexA7Cflags", strings.Join(armCpuVariantCflags["cortex-a7"], " "))
+	pctx.StaticVariable("ArmCortexA8Cflags", strings.Join(armCpuVariantCflags["cortex-a8"], " "))
+	pctx.StaticVariable("ArmCortexA15Cflags", strings.Join(armCpuVariantCflags["cortex-a15"], " "))
+	pctx.StaticVariable("ArmCortexA32Cflags", strings.Join(armCpuVariantCflags["cortex-a32"], " "))
+	pctx.StaticVariable("ArmCortexA53Cflags", strings.Join(armCpuVariantCflags["cortex-a53"], " "))
+	pctx.StaticVariable("ArmCortexA55Cflags", strings.Join(armCpuVariantCflags["cortex-a55"], " "))
+	pctx.StaticVariable("ArmKraitCflags", strings.Join(armCpuVariantCflags["krait"], " "))
+	pctx.StaticVariable("ArmKryoCflags", strings.Join(armCpuVariantCflags["kryo"], " "))
 }
 
 var (
@@ -224,6 +232,7 @@ var (
 		"cortex-a8":      "${config.ArmCortexA8Cflags}",
 		"cortex-a9":      "${config.ArmGenericCflags}",
 		"cortex-a15":     "${config.ArmCortexA15Cflags}",
+		"cortex-a32":     "${config.ArmCortexA32Cflags}",
 		"cortex-a53":     "${config.ArmCortexA53Cflags}",
 		"cortex-a53.a57": "${config.ArmCortexA53Cflags}",
 		"cortex-a55":     "${config.ArmCortexA55Cflags}",

@@ -25,7 +25,7 @@ import (
 
 // minApiLevelForSdkSnapshot provides access to the min_sdk_version for MinApiLevelForSdkSnapshot
 type minApiLevelForSdkSnapshot interface {
-	MinSdkVersion(ctx EarlyModuleContext) SdkSpec
+	MinSdkVersion(ctx EarlyModuleContext) ApiLevel
 }
 
 // MinApiLevelForSdkSnapshot returns the ApiLevel of the min_sdk_version of the supplied module.
@@ -34,7 +34,7 @@ type minApiLevelForSdkSnapshot interface {
 func MinApiLevelForSdkSnapshot(ctx EarlyModuleContext, module Module) ApiLevel {
 	minApiLevel := NoneApiLevel
 	if m, ok := module.(minApiLevelForSdkSnapshot); ok {
-		minApiLevel = m.MinSdkVersion(ctx).ApiLevel
+		minApiLevel = m.MinSdkVersion(ctx)
 	}
 	if minApiLevel == NoneApiLevel {
 		// The default min API level is 1.
@@ -830,6 +830,9 @@ type SdkMemberContext interface {
 	// IsTargetBuildBeforeTiramisu return true if the target build release for which this snapshot is
 	// being generated is before Tiramisu, i.e. S.
 	IsTargetBuildBeforeTiramisu() bool
+
+	// ModuleErrorf reports an error at the line number of the module type in the module definition.
+	ModuleErrorf(fmt string, args ...interface{})
 }
 
 // ExportedComponentsInfo contains information about the components that this module exports to an
@@ -857,11 +860,19 @@ type ExportedComponentsInfo struct {
 	Components []string
 }
 
-var ExportedComponentsInfoProvider = blueprint.NewProvider(ExportedComponentsInfo{})
+var ExportedComponentsInfoProvider = blueprint.NewProvider[ExportedComponentsInfo]()
 
 // AdditionalSdkInfo contains additional properties to add to the generated SDK info file.
 type AdditionalSdkInfo struct {
 	Properties map[string]interface{}
 }
 
-var AdditionalSdkInfoProvider = blueprint.NewProvider(AdditionalSdkInfo{})
+var AdditionalSdkInfoProvider = blueprint.NewProvider[AdditionalSdkInfo]()
+
+var apiFingerprintPathKey = NewOnceKey("apiFingerprintPathKey")
+
+func ApiFingerprintPath(ctx PathContext) OutputPath {
+	return ctx.Config().Once(apiFingerprintPathKey, func() interface{} {
+		return PathForOutput(ctx, "api_fingerprint.txt")
+	}).(OutputPath)
+}

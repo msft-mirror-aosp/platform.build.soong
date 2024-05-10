@@ -19,9 +19,12 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 
 	"android/soong/android"
+	"android/soong/cc"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -33,27 +36,31 @@ func init() {
 
 func registerBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("android_filesystem", filesystemFactory)
+	ctx.RegisterModuleType("android_filesystem_defaults", filesystemDefaultsFactory)
 	ctx.RegisterModuleType("android_system_image", systemImageFactory)
 	ctx.RegisterModuleType("avb_add_hash_footer", avbAddHashFooterFactory)
+	ctx.RegisterModuleType("avb_add_hash_footer_defaults", avbAddHashFooterDefaultsFactory)
 	ctx.RegisterModuleType("avb_gen_vbmeta_image", avbGenVbmetaImageFactory)
+	ctx.RegisterModuleType("avb_gen_vbmeta_image_defaults", avbGenVbmetaImageDefaultsFactory)
 }
 
 type filesystem struct {
 	android.ModuleBase
 	android.PackagingBase
+	android.DefaultableModuleBase
 
 	properties filesystemProperties
 
 	// Function that builds extra files under the root directory and returns the files
 	buildExtraFiles func(ctx android.ModuleContext, root android.OutputPath) android.OutputPaths
 
-	// Function that filters PackagingSpecs returned by PackagingBase.GatherPackagingSpecs()
-	filterPackagingSpecs func(specs map[string]android.PackagingSpec)
+	// Function that filters PackagingSpec in PackagingBase.GatherPackagingSpecs()
+	filterPackagingSpec func(spec android.PackagingSpec) bool
 
 	output     android.OutputPath
 	installDir android.InstallPath
 
-	// For testing. Keeps the result of CopyDepsToZip()
+	// For testing. Keeps the result of CopySpecsToDir()
 	entries []string
 }
 
@@ -77,12 +84,19 @@ type filesystemProperties struct {
 	// avbtool. Default used by avbtool is sha1.
 	Avb_hash_algorithm *string
 
+	// The index used to prevent rollback of the image. Only used if use_avb is true.
+	Rollback_index *int64
+
 	// Name of the partition stored in vbmeta desc. Defaults to the name of this module.
 	Partition_name *string
 
 	// Type of the filesystem. Currently, ext4, cpio, and compressed_cpio are supported. Default
 	// is ext4.
 	Type *string
+
+	// Identifies which partition this is for //visibility:any_system_image (and others) visibility
+	// checks, and will be used in the future for API surface checks.
+	Partition_type *string
 
 	// file_contexts file to make image. Currently, only ext4 is supported.
 	File_contexts *string `android:"path"`
@@ -103,6 +117,21 @@ type filesystemProperties struct {
 	// When set, passed to mkuserimg_mke2fs --mke2fs_uuid & --mke2fs_hash_seed.
 	// Otherwise, they'll be set as random which might cause indeterministic build output.
 	Uuid *string
+
+	// Mount point for this image. Default is "/"
+	Mount_point *string
+
+	// If set to the name of a partition ("system", "vendor", etc), this filesystem module
+	// will also include the contents of the make-built staging directories. If any soong
+	// modules would be installed to the same location as a make module, they will overwrite
+	// the make version.
+	Include_make_built_files string
+
+	// When set, builds etc/event-log-tags file by merging logtags from all dependencies.
+	// Default is false
+	Build_logtags *bool
+
+	Fsverity fsverityProperties
 }
 
 // android_filesystem packages a set of modules and their transitive dependencies into a filesystem
@@ -112,6 +141,7 @@ type filesystemProperties struct {
 // partitions like system.img. For example, cc_library modules are placed under ./lib[64] directory.
 func filesystemFactory() android.Module {
 	module := &filesystem{}
+	module.filterPackagingSpec = module.filterInstallablePackagingSpec
 	initFilesystemModule(module)
 	return module
 }
@@ -120,6 +150,7 @@ func initFilesystemModule(module *filesystem) {
 	module.AddProperties(&module.properties)
 	android.InitPackageModule(module)
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
 }
 
 var dependencyTag = struct {
@@ -159,9 +190,20 @@ func (f *filesystem) installFileName() string {
 	return f.BaseModuleName() + ".img"
 }
 
+func (f *filesystem) partitionName() string {
+	return proptools.StringDefault(f.properties.Partition_name, f.Name())
+}
+
+func (f *filesystem) filterInstallablePackagingSpec(ps android.PackagingSpec) bool {
+	// Filesystem module respects the installation semantic. A PackagingSpec from a module with
+	// IsSkipInstall() is skipped.
+	return !ps.SkipInstall()
+}
+
 var pctx = android.NewPackageContext("android/soong/filesystem")
 
 func (f *filesystem) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	validatePartitionType(ctx, f)
 	switch f.fsType(ctx) {
 	case ext4Type:
 		f.output = f.buildImageUsingBuildImage(ctx)
@@ -177,13 +219,25 @@ func (f *filesystem) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	ctx.InstallFile(f.installDir, f.installFileName(), f.output)
 }
 
-// root zip will contain extra files/dirs that are not from the `deps` property.
-func (f *filesystem) buildRootZip(ctx android.ModuleContext) android.OutputPath {
-	rootDir := android.PathForModuleGen(ctx, "root").OutputPath
-	builder := android.NewRuleBuilder(pctx, ctx)
-	builder.Command().Text("rm -rf").Text(rootDir.String())
-	builder.Command().Text("mkdir -p").Text(rootDir.String())
+func validatePartitionType(ctx android.ModuleContext, p partition) {
+	if !android.InList(p.PartitionType(), validPartitions) {
+		ctx.PropertyErrorf("partition_type", "partition_type must be one of %s, found: %s", validPartitions, p.PartitionType())
+	}
 
+	ctx.VisitDirectDepsWithTag(android.DefaultsDepTag, func(m android.Module) {
+		if fdm, ok := m.(*filesystemDefaults); ok {
+			if p.PartitionType() != fdm.PartitionType() {
+				ctx.PropertyErrorf("partition_type",
+					"%s doesn't match with the partition type %s of the filesystem default module %s",
+					p.PartitionType(), fdm.PartitionType(), m.Name())
+			}
+		}
+	})
+}
+
+// Copy extra files/dirs that are not from the `deps` property to `rootDir`, checking for conflicts with files
+// already in `rootDir`.
+func (f *filesystem) buildNonDepsFiles(ctx android.ModuleContext, builder *android.RuleBuilder, rootDir android.OutputPath) {
 	// create dirs and symlinks
 	for _, dir := range f.properties.Dirs {
 		// OutputPath.Join verifies dir
@@ -206,65 +260,46 @@ func (f *filesystem) buildRootZip(ctx android.ModuleContext) android.OutputPath 
 
 		// OutputPath.Join verifies name. don't need to verify target.
 		dst := rootDir.Join(ctx, name)
-
+		builder.Command().Textf("(! [ -e %s -o -L %s ] || (echo \"%s already exists from an earlier stage of the build\" && exit 1))", dst, dst, dst)
 		builder.Command().Text("mkdir -p").Text(filepath.Dir(dst.String()))
 		builder.Command().Text("ln -sf").Text(proptools.ShellEscape(target)).Text(dst.String())
 	}
 
 	// create extra files if there's any
-	rootForExtraFiles := android.PathForModuleGen(ctx, "root-extra").OutputPath
-	var extraFiles android.OutputPaths
 	if f.buildExtraFiles != nil {
-		extraFiles = f.buildExtraFiles(ctx, rootForExtraFiles)
+		rootForExtraFiles := android.PathForModuleGen(ctx, "root-extra").OutputPath
+		extraFiles := f.buildExtraFiles(ctx, rootForExtraFiles)
 		for _, f := range extraFiles {
-			rel, _ := filepath.Rel(rootForExtraFiles.String(), f.String())
-			if strings.HasPrefix(rel, "..") {
-				panic(fmt.Errorf("%q is not under %q\n", f, rootForExtraFiles))
+			rel, err := filepath.Rel(rootForExtraFiles.String(), f.String())
+			if err != nil || strings.HasPrefix(rel, "..") {
+				ctx.ModuleErrorf("can't make %q relative to %q", f, rootForExtraFiles)
 			}
 		}
-	}
-
-	// Zip them all
-	zipOut := android.PathForModuleGen(ctx, "root.zip").OutputPath
-	zipCommand := builder.Command().BuiltTool("soong_zip")
-	zipCommand.FlagWithOutput("-o ", zipOut).
-		FlagWithArg("-C ", rootDir.String()).
-		Flag("-L 0"). // no compression because this will be unzipped soon
-		FlagWithArg("-D ", rootDir.String()).
-		Flag("-d") // include empty directories
-	if len(extraFiles) > 0 {
-		zipCommand.FlagWithArg("-C ", rootForExtraFiles.String())
-		for _, f := range extraFiles {
-			zipCommand.FlagWithInput("-f ", f)
+		if len(extraFiles) > 0 {
+			builder.Command().BuiltTool("merge_directories").
+				Implicits(extraFiles.Paths()).
+				Text(rootDir.String()).
+				Text(rootForExtraFiles.String())
 		}
 	}
-
-	builder.Command().Text("rm -rf").Text(rootDir.String())
-
-	builder.Build("zip_root", fmt.Sprintf("zipping root contents for %s", ctx.ModuleName()))
-	return zipOut
 }
 
 func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) android.OutputPath {
-	depsZipFile := android.PathForModuleOut(ctx, "deps.zip").OutputPath
-	f.entries = f.CopyDepsToZip(ctx, f.gatherFilteredPackagingSpecs(ctx), depsZipFile)
-
-	builder := android.NewRuleBuilder(pctx, ctx)
-	depsBase := proptools.StringDefault(f.properties.Base_dir, ".")
-	rebasedDepsZip := android.PathForModuleOut(ctx, "rebased_deps.zip").OutputPath
-	builder.Command().
-		BuiltTool("zip2zip").
-		FlagWithInput("-i ", depsZipFile).
-		FlagWithOutput("-o ", rebasedDepsZip).
-		Text("**/*:" + proptools.ShellEscape(depsBase)) // zip2zip verifies depsBase
-
 	rootDir := android.PathForModuleOut(ctx, "root").OutputPath
-	rootZip := f.buildRootZip(ctx)
-	builder.Command().
-		BuiltTool("zipsync").
-		FlagWithArg("-d ", rootDir.String()). // zipsync wipes this. No need to clear.
-		Input(rootZip).
-		Input(rebasedDepsZip)
+	rebasedDir := rootDir
+	if f.properties.Base_dir != nil {
+		rebasedDir = rootDir.Join(ctx, *f.properties.Base_dir)
+	}
+	builder := android.NewRuleBuilder(pctx, ctx)
+	// Wipe the root dir to get rid of leftover files from prior builds
+	builder.Command().Textf("rm -rf %s && mkdir -p %s", rootDir, rootDir)
+	specs := f.gatherFilteredPackagingSpecs(ctx)
+	f.entries = f.CopySpecsToDir(ctx, builder, specs, rebasedDir)
+
+	f.buildNonDepsFiles(ctx, builder, rootDir)
+	f.addMakeBuiltFiles(ctx, builder, rootDir)
+	f.buildFsverityMetadataFiles(ctx, builder, specs, rootDir, rebasedDir)
+	f.buildEventLogtagsFile(ctx, builder, rebasedDir)
 
 	// run host_init_verifier
 	// Ideally we should have a concept of pluggable linters that verify the generated image.
@@ -305,18 +340,16 @@ func (f *filesystem) salt() string {
 }
 
 func (f *filesystem) buildPropFile(ctx android.ModuleContext) (propFile android.OutputPath, toolDeps android.Paths) {
-	type prop struct {
-		name  string
-		value string
-	}
-
-	var props []prop
 	var deps android.Paths
+	var propFileString strings.Builder
 	addStr := func(name string, value string) {
-		props = append(props, prop{name, value})
+		propFileString.WriteString(name)
+		propFileString.WriteRune('=')
+		propFileString.WriteString(value)
+		propFileString.WriteRune('\n')
 	}
 	addPath := func(name string, path android.Path) {
-		props = append(props, prop{name, path.String()})
+		addStr(name, path.String())
 		deps = append(deps, path)
 	}
 
@@ -331,7 +364,7 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (propFile android.
 	}
 
 	addStr("fs_type", fsTypeStr(f.fsType(ctx)))
-	addStr("mount_point", "/")
+	addStr("mount_point", proptools.StringDefault(f.properties.Mount_point, "/"))
 	addStr("use_dynamic_partition_size", "true")
 	addPath("ext_mkuserimg", ctx.Config().HostToolPath(ctx, "mkuserimg_mke2fs"))
 	// b/177813163 deps of the host tools have to be added. Remove this.
@@ -346,13 +379,22 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (propFile android.
 		addStr("avb_algorithm", algorithm)
 		key := android.PathForModuleSrc(ctx, proptools.String(f.properties.Avb_private_key))
 		addPath("avb_key_path", key)
+		addStr("partition_name", f.partitionName())
 		avb_add_hashtree_footer_args := "--do_not_generate_fec"
 		if hashAlgorithm := proptools.String(f.properties.Avb_hash_algorithm); hashAlgorithm != "" {
 			avb_add_hashtree_footer_args += " --hash_algorithm " + hashAlgorithm
 		}
+		if f.properties.Rollback_index != nil {
+			rollbackIndex := proptools.Int(f.properties.Rollback_index)
+			if rollbackIndex < 0 {
+				ctx.PropertyErrorf("rollback_index", "Rollback index must be non-negative")
+			}
+			avb_add_hashtree_footer_args += " --rollback_index " + strconv.Itoa(rollbackIndex)
+		}
+		securityPatchKey := "com.android.build." + f.partitionName() + ".security_patch"
+		securityPatchValue := ctx.Config().PlatformSecurityPatch()
+		avb_add_hashtree_footer_args += " --prop " + securityPatchKey + ":" + securityPatchValue
 		addStr("avb_add_hashtree_footer_args", avb_add_hashtree_footer_args)
-		partitionName := proptools.StringDefault(f.properties.Partition_name, f.Name())
-		addStr("partition_name", partitionName)
 		addStr("avb_salt", f.salt())
 	}
 
@@ -367,15 +409,7 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (propFile android.
 		addStr("hash_seed", uuid)
 	}
 	propFile = android.PathForModuleOut(ctx, "prop").OutputPath
-	builder := android.NewRuleBuilder(pctx, ctx)
-	builder.Command().Text("rm").Flag("-rf").Output(propFile)
-	for _, p := range props {
-		builder.Command().
-			Text("echo").
-			Flag(`"` + p.name + "=" + p.value + `"`).
-			Text(">>").Output(propFile)
-	}
-	builder.Build("build_filesystem_prop", fmt.Sprintf("Creating filesystem props for %s", f.BaseModuleName()))
+	android.WriteFileRuleVerbatim(ctx, propFile, propFileString.String())
 	return propFile, deps
 }
 
@@ -389,25 +423,24 @@ func (f *filesystem) buildCpioImage(ctx android.ModuleContext, compressed bool) 
 		ctx.PropertyErrorf("file_contexts", "file_contexts is not supported for compressed cpio image.")
 	}
 
-	depsZipFile := android.PathForModuleOut(ctx, "deps.zip").OutputPath
-	f.entries = f.CopyDepsToZip(ctx, f.gatherFilteredPackagingSpecs(ctx), depsZipFile)
-
-	builder := android.NewRuleBuilder(pctx, ctx)
-	depsBase := proptools.StringDefault(f.properties.Base_dir, ".")
-	rebasedDepsZip := android.PathForModuleOut(ctx, "rebased_deps.zip").OutputPath
-	builder.Command().
-		BuiltTool("zip2zip").
-		FlagWithInput("-i ", depsZipFile).
-		FlagWithOutput("-o ", rebasedDepsZip).
-		Text("**/*:" + proptools.ShellEscape(depsBase)) // zip2zip verifies depsBase
+	if f.properties.Include_make_built_files != "" {
+		ctx.PropertyErrorf("include_make_built_files", "include_make_built_files is not supported for compressed cpio image.")
+	}
 
 	rootDir := android.PathForModuleOut(ctx, "root").OutputPath
-	rootZip := f.buildRootZip(ctx)
-	builder.Command().
-		BuiltTool("zipsync").
-		FlagWithArg("-d ", rootDir.String()). // zipsync wipes this. No need to clear.
-		Input(rootZip).
-		Input(rebasedDepsZip)
+	rebasedDir := rootDir
+	if f.properties.Base_dir != nil {
+		rebasedDir = rootDir.Join(ctx, *f.properties.Base_dir)
+	}
+	builder := android.NewRuleBuilder(pctx, ctx)
+	// Wipe the root dir to get rid of leftover files from prior builds
+	builder.Command().Textf("rm -rf %s && mkdir -p %s", rootDir, rootDir)
+	specs := f.gatherFilteredPackagingSpecs(ctx)
+	f.entries = f.CopySpecsToDir(ctx, builder, specs, rebasedDir)
+
+	f.buildNonDepsFiles(ctx, builder, rootDir)
+	f.buildFsverityMetadataFiles(ctx, builder, specs, rootDir, rebasedDir)
+	f.buildEventLogtagsFile(ctx, builder, rebasedDir)
 
 	output := android.PathForModuleOut(ctx, f.installFileName()).OutputPath
 	cmd := builder.Command().
@@ -429,6 +462,82 @@ func (f *filesystem) buildCpioImage(ctx android.ModuleContext, compressed bool) 
 
 	return output
 }
+
+var validPartitions = []string{
+	"system",
+	"userdata",
+	"cache",
+	"system_other",
+	"vendor",
+	"product",
+	"system_ext",
+	"odm",
+	"vendor_dlkm",
+	"odm_dlkm",
+	"system_dlkm",
+}
+
+func (f *filesystem) addMakeBuiltFiles(ctx android.ModuleContext, builder *android.RuleBuilder, rootDir android.Path) {
+	partition := f.properties.Include_make_built_files
+	if partition == "" {
+		return
+	}
+	if !slices.Contains(validPartitions, partition) {
+		ctx.PropertyErrorf("include_make_built_files", "Expected one of %#v, found %q", validPartitions, partition)
+		return
+	}
+	stampFile := fmt.Sprintf("target/product/%s/obj/PACKAGING/%s_intermediates/staging_dir.stamp", ctx.Config().DeviceName(), partition)
+	fileListFile := fmt.Sprintf("target/product/%s/obj/PACKAGING/%s_intermediates/file_list.txt", ctx.Config().DeviceName(), partition)
+	stagingDir := fmt.Sprintf("target/product/%s/%s", ctx.Config().DeviceName(), partition)
+
+	builder.Command().BuiltTool("merge_directories").
+		Implicit(android.PathForArbitraryOutput(ctx, stampFile)).
+		Text("--ignore-duplicates").
+		FlagWithInput("--file-list", android.PathForArbitraryOutput(ctx, fileListFile)).
+		Text(rootDir.String()).
+		Text(android.PathForArbitraryOutput(ctx, stagingDir).String())
+}
+
+func (f *filesystem) buildEventLogtagsFile(ctx android.ModuleContext, builder *android.RuleBuilder, rebasedDir android.OutputPath) {
+	if !proptools.Bool(f.properties.Build_logtags) {
+		return
+	}
+
+	logtagsFilePaths := make(map[string]bool)
+	ctx.WalkDeps(func(child, parent android.Module) bool {
+		if logtagsInfo, ok := android.OtherModuleProvider(ctx, child, android.LogtagsProviderKey); ok {
+			for _, path := range logtagsInfo.Logtags {
+				logtagsFilePaths[path.String()] = true
+			}
+		}
+		return true
+	})
+
+	if len(logtagsFilePaths) == 0 {
+		return
+	}
+
+	etcPath := rebasedDir.Join(ctx, "etc")
+	eventLogtagsPath := etcPath.Join(ctx, "event-log-tags")
+	builder.Command().Text("mkdir").Flag("-p").Text(etcPath.String())
+	cmd := builder.Command().BuiltTool("merge-event-log-tags").
+		FlagWithArg("-o ", eventLogtagsPath.String()).
+		FlagWithInput("-m ", android.MergedLogtagsPath(ctx))
+
+	for _, path := range android.SortedKeys(logtagsFilePaths) {
+		cmd.Text(path)
+	}
+}
+
+type partition interface {
+	PartitionType() string
+}
+
+func (f *filesystem) PartitionType() string {
+	return proptools.StringDefault(f.properties.Partition_type, "system")
+}
+
+var _ partition = (*filesystem)(nil)
 
 var _ android.AndroidMkEntriesProvider = (*filesystem)(nil)
 
@@ -484,10 +593,7 @@ func (f *filesystem) SignedOutputPath() android.Path {
 // Note that "apex" module installs its contents to "apex"(fake partition) as well
 // for symbol lookup by imitating "activated" paths.
 func (f *filesystem) gatherFilteredPackagingSpecs(ctx android.ModuleContext) map[string]android.PackagingSpec {
-	specs := f.PackagingBase.GatherPackagingSpecs(ctx)
-	if f.filterPackagingSpecs != nil {
-		f.filterPackagingSpecs(specs)
-	}
+	specs := f.PackagingBase.GatherPackagingSpecsWithFilter(ctx, f.filterPackagingSpec)
 	return specs
 }
 
@@ -497,4 +603,46 @@ func sha1sum(values []string) string {
 		io.WriteString(h, value)
 	}
 	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// Base cc.UseCoverage
+
+var _ cc.UseCoverage = (*filesystem)(nil)
+
+func (*filesystem) IsNativeCoverageNeeded(ctx android.IncomingTransitionContext) bool {
+	return ctx.Device() && ctx.DeviceConfig().NativeCoverageEnabled()
+}
+
+// android_filesystem_defaults
+
+type filesystemDefaults struct {
+	android.ModuleBase
+	android.DefaultsModuleBase
+
+	properties filesystemDefaultsProperties
+}
+
+type filesystemDefaultsProperties struct {
+	// Identifies which partition this is for //visibility:any_system_image (and others) visibility
+	// checks, and will be used in the future for API surface checks.
+	Partition_type *string
+}
+
+// android_filesystem_defaults is a default module for android_filesystem and android_system_image
+func filesystemDefaultsFactory() android.Module {
+	module := &filesystemDefaults{}
+	module.AddProperties(&module.properties)
+	module.AddProperties(&android.PackagingProperties{})
+	android.InitDefaultsModule(module)
+	return module
+}
+
+func (f *filesystemDefaults) PartitionType() string {
+	return proptools.StringDefault(f.properties.Partition_type, "system")
+}
+
+var _ partition = (*filesystemDefaults)(nil)
+
+func (f *filesystemDefaults) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	validatePartitionType(ctx, f)
 }

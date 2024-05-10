@@ -16,6 +16,7 @@ package config
 
 import (
 	"android/soong/android"
+	"strings"
 )
 
 var (
@@ -46,12 +47,15 @@ var (
 		"-Wl,-z,now",
 		"-Wl,--build-id=md5",
 		"-Wl,--fatal-warnings",
-		"-Wl,--hash-style=gnu",
 		"-Wl,--no-undefined-version",
 
 		// Use the device gcc toolchain
 		"--gcc-toolchain=${LinuxBionicGccRoot}",
 	}
+
+	linuxBionicLldflags = append(linuxBionicLdflags,
+		"-Wl,--compress-debug-sections=zstd",
+	)
 
 	// Embed the linker into host bionic binaries. This is needed to support host bionic,
 	// as the linux kernel requires that the ELF interpreter referenced by PT_INTERP be
@@ -69,13 +73,13 @@ const (
 )
 
 func init() {
-	exportedVars.ExportStringListStaticVariable("LinuxBionicCflags", linuxBionicCflags)
-	exportedVars.ExportStringListStaticVariable("LinuxBionicLdflags", linuxBionicLdflags)
-	exportedVars.ExportStringListStaticVariable("LinuxBionicLldflags", linuxBionicLdflags)
+	pctx.StaticVariable("LinuxBionicCflags", strings.Join(linuxBionicCflags, " "))
+	pctx.StaticVariable("LinuxBionicLdflags", strings.Join(linuxBionicLdflags, " "))
+	pctx.StaticVariable("LinuxBionicLldflags", strings.Join(linuxBionicLldflags, " "))
 
 	// Use the device gcc toolchain for now
-	exportedVars.ExportStringStaticVariable("LinuxBionicGccVersion", x86_64GccVersion)
-	exportedVars.ExportSourcePathVariable("LinuxBionicGccRoot",
+	pctx.StaticVariable("LinuxBionicGccVersion", x86_64GccVersion)
+	pctx.SourcePathVariable("LinuxBionicGccRoot",
 		"prebuilts/gcc/${HostPrebuiltTag}/x86/x86_64-linux-android-${LinuxBionicGccVersion}")
 }
 

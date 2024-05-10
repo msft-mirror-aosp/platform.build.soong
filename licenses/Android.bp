@@ -923,7 +923,10 @@ license_kind {
 license_kind {
     name: "SPDX-license-identifier-Linux-syscall-note",
     // expanding visibility requires approval from an OSPO lawyer or pcounsel
-    visibility: ["//external/libbpf:__subpackages__"],
+    visibility: [
+        "//external/libbpf:__subpackages__",
+        "//prebuilts/vsdk:__subpackages__",
+    ],
     conditions: ["permissive"],
     url: "https://spdx.org/licenses/Linux-syscall-note.html",
 }
@@ -1024,42 +1027,42 @@ license_kind {
 
 license_kind {
     name: "SPDX-license-identifier-OFL",
-    conditions: ["by_exception_only"],
+    conditions: ["notice"],
 }
 
 license_kind {
     name: "SPDX-license-identifier-OFL-1.0",
-    conditions: ["by_exception_only"],
+    conditions: ["notice"],
     url: "https://spdx.org/licenses/OFL-1.0.html",
 }
 
 license_kind {
     name: "SPDX-license-identifier-OFL-1.0-RFN",
-    conditions: ["by_exception_only"],
+    conditions: ["notice"],
     url: "https://spdx.org/licenses/OFL-1.0-RFN.html",
 }
 
 license_kind {
     name: "SPDX-license-identifier-OFL-1.0-no-RFN",
-    conditions: ["by_exception_only"],
+    conditions: ["notice"],
     url: "https://spdx.org/licenses/OFL-1.0-no-RFN.html",
 }
 
 license_kind {
     name: "SPDX-license-identifier-OFL-1.1",
-    conditions: ["by_exception_only"],
+    conditions: ["notice"],
     url: "https://spdx.org/licenses/OFL-1.1.html",
 }
 
 license_kind {
     name: "SPDX-license-identifier-OFL-1.1-RFN",
-    conditions: ["by_exception_only"],
+    conditions: ["notice"],
     url: "https://spdx.org/licenses/OFL-1.1-RFN.html",
 }
 
 license_kind {
     name: "SPDX-license-identifier-OFL-1.1-no-RFN",
-    conditions: ["by_exception_only"],
+    conditions: ["notice"],
     url: "https://spdx.org/licenses/OFL-1.1-no-RFN.html",
 }
 
@@ -1120,6 +1123,12 @@ license_kind {
 license_kind {
     name: "SPDX-license-identifier-Unicode-DFS",
     conditions: ["notice"],
+}
+
+license_kind {
+    name: "SPDX-license-identifier-Unicode-3.0",
+    conditions: ["notice"],
+    url: "https://spdx.org/licenses/Unicode-3.0.html",
 }
 
 license_kind {

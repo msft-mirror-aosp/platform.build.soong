@@ -19,12 +19,14 @@ import (
 	"testing"
 
 	"android/soong/android"
+	"android/soong/dexpreopt"
 	"android/soong/java"
 )
 
 var prepareForSdkTestWithJava = android.GroupFixturePreparers(
 	java.PrepareForTestWithJavaBuildComponents,
 	PrepareForTestWithSdkBuildComponents,
+	dexpreopt.PrepareForTestWithFakeDex2oatd,
 
 	// Ensure that all source paths are provided. This helps ensure that the snapshot generation is
 	// consistent and all files referenced from the snapshot's Android.bp file have actually been
@@ -43,6 +45,11 @@ var prepareForSdkTestWithJavaSdkLibrary = android.GroupFixturePreparers(
 	java.PrepareForTestWithJavaDefaultModules,
 	java.PrepareForTestWithJavaSdkLibraryFiles,
 	java.FixtureWithLastReleaseApis("myjavalib"),
+	android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+		variables.BuildFlags = map[string]string{
+			"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+		}
+	}),
 )
 
 // Contains tests for SDK members provided by the java package.
@@ -101,6 +108,11 @@ func TestSnapshotWithJavaHeaderLibrary(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
+
 java_import {
     name: "myjavalib",
     prefer: false,
@@ -147,6 +159,11 @@ func TestHostSnapshotWithJavaHeaderLibrary(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
+
 java_import {
     name: "myjavalib",
     prefer: false,
@@ -158,7 +175,7 @@ java_import {
 }
 `),
 		checkAllCopyRules(`
-.intermediates/myjavalib/linux_glibc_common/javac/myjavalib.jar -> java/myjavalib.jar
+.intermediates/myjavalib/linux_glibc_common/javac-header/myjavalib.jar -> java/myjavalib.jar
 aidl/foo/bar/Test.aidl -> aidl/aidl/foo/bar/Test.aidl
 `),
 	)
@@ -186,6 +203,11 @@ func TestDeviceAndHostSnapshotWithJavaHeaderLibrary(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
+
 java_import {
     name: "myjavalib",
     prefer: false,
@@ -204,7 +226,7 @@ java_import {
 `),
 		checkAllCopyRules(`
 .intermediates/myjavalib/android_common/turbine-combined/myjavalib.jar -> java/android/myjavalib.jar
-.intermediates/myjavalib/linux_glibc_common/javac/myjavalib.jar -> java/linux_glibc/myjavalib.jar
+.intermediates/myjavalib/linux_glibc_common/javac-header/myjavalib.jar -> java/linux_glibc/myjavalib.jar
 `),
 	)
 }
@@ -237,6 +259,11 @@ func TestSnapshotWithJavaImplLibrary(t *testing.T) {
 	CheckSnapshot(t, result, "myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "myexports.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
 
 java_import {
     name: "myjavalib",
@@ -284,6 +311,11 @@ func TestSnapshotWithJavaBootLibrary(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: [],
+}
+
 java_import {
     name: "myjavalib",
     prefer: false,
@@ -305,6 +337,9 @@ func TestSnapshotWithJavaBootLibrary_UpdatableMedia(t *testing.T) {
 			prepareForSdkTestWithJava,
 			android.FixtureMergeEnv(map[string]string{
 				"SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE": targetBuildRelease,
+			}),
+			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+				variables.Platform_version_active_codenames = []string{"VanillaIceCream"}
 			}),
 		).RunTestWithBp(t, `
 		sdk {
@@ -388,6 +423,11 @@ func TestSnapshotWithJavaLibrary_MinSdkVersion(t *testing.T) {
 			checkAndroidBpContents(fmt.Sprintf(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_mylib"],
+}
+
 java_import {
     name: "mylib",
     prefer: false,
@@ -452,6 +492,11 @@ func TestSnapshotWithJavaSystemserverLibrary(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "myexports.contributions",
+    contents: [],
+}
+
 java_import {
     name: "myjavalib",
     prefer: false,
@@ -497,6 +542,11 @@ func TestHostSnapshotWithJavaImplLibrary(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "myexports.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
+
 java_import {
     name: "myjavalib",
     prefer: false,
@@ -534,6 +584,11 @@ func TestSnapshotWithJavaTest(t *testing.T) {
 	CheckSnapshot(t, result, "myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "myexports.contributions",
+    contents: ["prebuilt_myjavatests"],
+}
 
 java_test_import {
     name: "myjavatests",
@@ -575,6 +630,11 @@ func TestHostSnapshotWithJavaTest(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "myexports.contributions",
+    contents: ["prebuilt_myjavatests"],
+}
+
 java_test_import {
     name: "myjavatests",
     prefer: false,
@@ -606,6 +666,11 @@ func TestSnapshotWithJavaSystemModules(t *testing.T) {
 			"1": {"myjavalib"},
 			"2": {"myjavalib"},
 		}),
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
+		}),
 	).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
@@ -621,6 +686,12 @@ func TestSnapshotWithJavaSystemModules(t *testing.T) {
 			sdk_version: "current",
 			shared_library: false,
 			public: {
+				enabled: true,
+			},
+			system: {
+				enabled: true,
+			},
+			module_lib: {
 				enabled: true,
 			},
 		}
@@ -648,6 +719,15 @@ func TestSnapshotWithJavaSystemModules(t *testing.T) {
 	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: [
+        "prebuilt_exported-system-module",
+        "prebuilt_myjavalib",
+        "prebuilt_my-system-modules",
+    ],
+}
 
 java_import {
     name: "exported-system-module",
@@ -678,6 +758,20 @@ java_sdk_library_import {
         removed_api: "sdk_library/public/myjavalib-removed.txt",
         sdk_version: "current",
     },
+    system: {
+        jars: ["sdk_library/system/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/system/myjavalib_stub_sources"],
+        current_api: "sdk_library/system/myjavalib.txt",
+        removed_api: "sdk_library/system/myjavalib-removed.txt",
+        sdk_version: "system_current",
+    },
+    module_lib: {
+        jars: ["sdk_library/module-lib/myjavalib-stubs.jar"],
+        stub_srcs: ["sdk_library/module-lib/myjavalib_stub_sources"],
+        current_api: "sdk_library/module-lib/myjavalib.txt",
+        removed_api: "sdk_library/module-lib/myjavalib-removed.txt",
+        sdk_version: "module_current",
+    },
 }
 
 java_system_modules_import {
@@ -694,9 +788,15 @@ java_system_modules_import {
 		checkAllCopyRules(`
 .intermediates/exported-system-module/android_common/turbine-combined/exported-system-module.jar -> java/exported-system-module.jar
 .intermediates/system-module/android_common/turbine-combined/system-module.jar -> java/system-module.jar
-.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable/android_common/combined/myjavalib.stubs.exportable.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable.system/android_common/combined/myjavalib.stubs.exportable.system.jar -> sdk_library/system/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source.system/android_common/exportable/myjavalib.stubs.source.system_api.txt -> sdk_library/system/myjavalib.txt
+.intermediates/myjavalib.stubs.source.system/android_common/exportable/myjavalib.stubs.source.system_removed.txt -> sdk_library/system/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable.module_lib/android_common/combined/myjavalib.stubs.exportable.module_lib.jar -> sdk_library/module-lib/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source.module_lib/android_common/exportable/myjavalib.stubs.source.module_lib_api.txt -> sdk_library/module-lib/myjavalib.txt
+.intermediates/myjavalib.stubs.source.module_lib/android_common/exportable/myjavalib.stubs.source.module_lib_removed.txt -> sdk_library/module-lib/myjavalib-removed.txt
 `),
 		checkInfoContents(result.Config, `
 [
@@ -731,11 +831,23 @@ java_system_modules_import {
     "@name": "myjavalib",
     "dist_stem": "myjavalib",
     "scopes": {
+      "module-lib": {
+        "current_api": "sdk_library/module-lib/myjavalib.txt",
+        "latest_api": "out/soong/.intermediates/prebuilts/sdk/myjavalib.api.module-lib.latest/gen/myjavalib.api.module-lib.latest",
+        "latest_removed_api": "out/soong/.intermediates/prebuilts/sdk/myjavalib-removed.api.module-lib.latest/gen/myjavalib-removed.api.module-lib.latest",
+        "removed_api": "sdk_library/module-lib/myjavalib-removed.txt"
+      },
       "public": {
         "current_api": "sdk_library/public/myjavalib.txt",
         "latest_api": "out/soong/.intermediates/prebuilts/sdk/myjavalib.api.public.latest/gen/myjavalib.api.public.latest",
         "latest_removed_api": "out/soong/.intermediates/prebuilts/sdk/myjavalib-removed.api.public.latest/gen/myjavalib-removed.api.public.latest",
         "removed_api": "sdk_library/public/myjavalib-removed.txt"
+      },
+      "system": {
+        "current_api": "sdk_library/system/myjavalib.txt",
+        "latest_api": "out/soong/.intermediates/prebuilts/sdk/myjavalib.api.system.latest/gen/myjavalib.api.system.latest",
+        "latest_removed_api": "out/soong/.intermediates/prebuilts/sdk/myjavalib-removed.api.system.latest/gen/myjavalib-removed.api.system.latest",
+        "removed_api": "sdk_library/system/myjavalib-removed.txt"
       }
     }
   },
@@ -778,6 +890,11 @@ func TestHostSnapshotWithJavaSystemModules(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_my-system-modules"],
+}
+
 java_import {
     name: "mysdk_system-module",
     prefer: false,
@@ -797,7 +914,7 @@ java_system_modules_import {
     libs: ["mysdk_system-module"],
 }
 `),
-		checkAllCopyRules(".intermediates/system-module/linux_glibc_common/javac/system-module.jar -> java/system-module.jar"),
+		checkAllCopyRules(".intermediates/system-module/linux_glibc_common/javac-header/system-module.jar -> java/system-module.jar"),
 	)
 }
 
@@ -842,6 +959,15 @@ func TestDeviceAndHostSnapshotWithOsSpecificMembers(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "myexports.contributions",
+    contents: [
+        "prebuilt_hostjavalib",
+        "prebuilt_androidjavalib",
+        "prebuilt_myjavalib",
+    ],
+}
+
 java_import {
     name: "hostjavalib",
     prefer: false,
@@ -877,7 +1003,7 @@ java_import {
 }
 `),
 		checkAllCopyRules(`
-.intermediates/hostjavalib/linux_glibc_common/javac/hostjavalib.jar -> java/hostjavalib.jar
+.intermediates/hostjavalib/linux_glibc_common/javac-header/hostjavalib.jar -> java/hostjavalib.jar
 .intermediates/androidjavalib/android_common/turbine-combined/androidjavalib.jar -> java/androidjavalib.jar
 .intermediates/myjavalib/android_common/javac/myjavalib.jar -> java/android/myjavalib.jar
 .intermediates/myjavalib/linux_glibc_common/javac/myjavalib.jar -> java/linux_glibc/myjavalib.jar
@@ -907,6 +1033,11 @@ func TestSnapshotWithJavaSdkLibrary(t *testing.T) {
 	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
 
 java_sdk_library_import {
     name: "myjavalib",
@@ -939,15 +1070,15 @@ java_sdk_library_import {
 }
 `),
 		checkAllCopyRules(`
-.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
-.intermediates/myjavalib.stubs.system/android_common/javac/myjavalib.stubs.system.jar -> sdk_library/system/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source.system/android_common/metalava/myjavalib.stubs.source.system_api.txt -> sdk_library/system/myjavalib.txt
-.intermediates/myjavalib.stubs.source.system/android_common/metalava/myjavalib.stubs.source.system_removed.txt -> sdk_library/system/myjavalib-removed.txt
-.intermediates/myjavalib.stubs.test/android_common/javac/myjavalib.stubs.test.jar -> sdk_library/test/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source.test/android_common/metalava/myjavalib.stubs.source.test_api.txt -> sdk_library/test/myjavalib.txt
-.intermediates/myjavalib.stubs.source.test/android_common/metalava/myjavalib.stubs.source.test_removed.txt -> sdk_library/test/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable/android_common/combined/myjavalib.stubs.exportable.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable.system/android_common/combined/myjavalib.stubs.exportable.system.jar -> sdk_library/system/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source.system/android_common/exportable/myjavalib.stubs.source.system_api.txt -> sdk_library/system/myjavalib.txt
+.intermediates/myjavalib.stubs.source.system/android_common/exportable/myjavalib.stubs.source.system_removed.txt -> sdk_library/system/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable.test/android_common/combined/myjavalib.stubs.exportable.test.jar -> sdk_library/test/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source.test/android_common/exportable/myjavalib.stubs.source.test_api.txt -> sdk_library/test/myjavalib.txt
+.intermediates/myjavalib.stubs.source.test/android_common/exportable/myjavalib.stubs.source.test_removed.txt -> sdk_library/test/myjavalib-removed.txt
 `),
 		checkMergeZips(
 			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
@@ -981,6 +1112,11 @@ func TestSnapshotWithJavaSdkLibrary_DistStem(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib-foo"],
+}
+
 java_sdk_library_import {
     name: "myjavalib-foo",
     prefer: false,
@@ -997,9 +1133,9 @@ java_sdk_library_import {
 }
 `),
 		checkAllCopyRules(`
-.intermediates/myjavalib-foo.stubs/android_common/javac/myjavalib-foo.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib-foo.stubs.source/android_common/metalava/myjavalib-foo.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib-foo.stubs.source/android_common/metalava/myjavalib-foo.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib-foo.stubs.exportable/android_common/combined/myjavalib-foo.stubs.exportable.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib-foo.stubs.source/android_common/exportable/myjavalib-foo.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib-foo.stubs.source/android_common/exportable/myjavalib-foo.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
 `),
 		checkMergeZips(
 			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
@@ -1034,6 +1170,11 @@ func TestSnapshotWithJavaSdkLibrary_UseSrcJar(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
+
 java_sdk_library_import {
     name: "myjavalib",
     prefer: false,
@@ -1050,10 +1191,10 @@ java_sdk_library_import {
 }
 		`),
 		checkAllCopyRules(`
-.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source-stubs.srcjar -> sdk_library/public/myjavalib.srcjar
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable/android_common/combined/myjavalib.stubs.exportable.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source-stubs.srcjar -> sdk_library/public/myjavalib.srcjar
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
 		`),
 	)
 }
@@ -1081,6 +1222,11 @@ func TestSnapshotWithJavaSdkLibrary_AnnotationsZip(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
+
 java_sdk_library_import {
     name: "myjavalib",
     prefer: false,
@@ -1098,10 +1244,10 @@ java_sdk_library_import {
 }
 		`),
 		checkAllCopyRules(`
-.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_annotations.zip -> sdk_library/public/myjavalib_annotations.zip
+.intermediates/myjavalib.stubs.exportable/android_common/combined/myjavalib.stubs.exportable.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_annotations.zip -> sdk_library/public/myjavalib_annotations.zip
 		`),
 		checkMergeZips(".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip"),
 	)
@@ -1135,6 +1281,11 @@ func TestSnapshotWithJavaSdkLibrary_AnnotationsZip_PreT(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
+
 java_sdk_library_import {
     name: "myjavalib",
     prefer: false,
@@ -1151,16 +1302,23 @@ java_sdk_library_import {
 }
 		`),
 		checkAllCopyRules(`
-.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable/android_common/combined/myjavalib.stubs.exportable.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
 		`),
 		checkMergeZips(".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip"),
 	)
 }
 
 func TestSnapshotWithJavaSdkLibrary_CompileDex(t *testing.T) {
-	result := android.GroupFixturePreparers(prepareForSdkTestWithJavaSdkLibrary).RunTestWithBp(t, `
+	result := android.GroupFixturePreparers(
+		prepareForSdkTestWithJavaSdkLibrary,
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
+		}),
+	).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
 			java_sdk_libs: ["myjavalib"],
@@ -1184,6 +1342,11 @@ func TestSnapshotWithJavaSdkLibrary_CompileDex(t *testing.T) {
 	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
 
 java_sdk_library_import {
     name: "myjavalib",
@@ -1212,21 +1375,22 @@ java_sdk_library_import {
 			ctx := android.ModuleInstallPathContextForTesting(result.Config)
 			dexJarBuildPath := func(name string, kind android.SdkKind) string {
 				dep := result.Module(name, "android_common").(java.SdkLibraryDependency)
-				path := dep.SdkApiStubDexJar(ctx, kind).Path()
+				path := dep.SdkApiExportableStubDexJar(ctx, kind).Path()
 				return path.RelativeToTop().String()
 			}
 
 			dexJarPath := dexJarBuildPath("myjavalib", android.SdkPublic)
-			android.AssertStringEquals(t, "source dex public stubs jar build path", "out/soong/.intermediates/myjavalib.stubs/android_common/dex/myjavalib.stubs.jar", dexJarPath)
+			android.AssertStringEquals(t, "source dex public stubs jar build path", "out/soong/.intermediates/myjavalib.stubs.exportable/android_common/dex/myjavalib.stubs.exportable.jar", dexJarPath)
 
 			dexJarPath = dexJarBuildPath("myjavalib", android.SdkSystem)
-			systemDexJar := "out/soong/.intermediates/myjavalib.stubs.system/android_common/dex/myjavalib.stubs.system.jar"
+			systemDexJar := "out/soong/.intermediates/myjavalib.stubs.exportable.system/android_common/dex/myjavalib.stubs.exportable.system.jar"
 			android.AssertStringEquals(t, "source dex system stubs jar build path", systemDexJar, dexJarPath)
 
 			// This should fall back to system as module is not available.
 			dexJarPath = dexJarBuildPath("myjavalib", android.SdkModule)
 			android.AssertStringEquals(t, "source dex module stubs jar build path", systemDexJar, dexJarPath)
 
+			// Prebuilt dex jar does not come from the exportable stubs.
 			dexJarPath = dexJarBuildPath(android.PrebuiltNameFromSource("myjavalib"), android.SdkPublic)
 			android.AssertStringEquals(t, "prebuilt dex public stubs jar build path", "out/soong/.intermediates/snapshot/prebuilt_myjavalib.stubs/android_common/dex/myjavalib.stubs.jar", dexJarPath)
 		}),
@@ -1252,6 +1416,11 @@ func TestSnapshotWithJavaSdkLibrary_SdkVersion_None(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
+
 java_sdk_library_import {
     name: "myjavalib",
     prefer: false,
@@ -1268,9 +1437,9 @@ java_sdk_library_import {
 }
 `),
 		checkAllCopyRules(`
-.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable/android_common/combined/myjavalib.stubs.exportable.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
 `),
 		checkMergeZips(
 			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
@@ -1300,6 +1469,11 @@ func TestSnapshotWithJavaSdkLibrary_SdkVersion_ForScope(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
+
 java_sdk_library_import {
     name: "myjavalib",
     prefer: false,
@@ -1316,9 +1490,9 @@ java_sdk_library_import {
 }
 `),
 		checkAllCopyRules(`
-.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable/android_common/combined/myjavalib.stubs.exportable.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
 `),
 		checkMergeZips(
 			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
@@ -1351,6 +1525,11 @@ func TestSnapshotWithJavaSdkLibrary_ApiScopes(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
+
 java_sdk_library_import {
     name: "myjavalib",
     prefer: false,
@@ -1374,12 +1553,12 @@ java_sdk_library_import {
 }
 `),
 		checkAllCopyRules(`
-.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
-.intermediates/myjavalib.stubs.system/android_common/javac/myjavalib.stubs.system.jar -> sdk_library/system/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source.system/android_common/metalava/myjavalib.stubs.source.system_api.txt -> sdk_library/system/myjavalib.txt
-.intermediates/myjavalib.stubs.source.system/android_common/metalava/myjavalib.stubs.source.system_removed.txt -> sdk_library/system/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable/android_common/combined/myjavalib.stubs.exportable.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable.system/android_common/combined/myjavalib.stubs.exportable.system.jar -> sdk_library/system/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source.system/android_common/exportable/myjavalib.stubs.source.system_api.txt -> sdk_library/system/myjavalib.txt
+.intermediates/myjavalib.stubs.source.system/android_common/exportable/myjavalib.stubs.source.system_removed.txt -> sdk_library/system/myjavalib-removed.txt
 `),
 		checkMergeZips(
 			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
@@ -1416,6 +1595,11 @@ func TestSnapshotWithJavaSdkLibrary_ModuleLib(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
+
 java_sdk_library_import {
     name: "myjavalib",
     prefer: false,
@@ -1446,15 +1630,15 @@ java_sdk_library_import {
 }
 `),
 		checkAllCopyRules(`
-.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
-.intermediates/myjavalib.stubs.system/android_common/javac/myjavalib.stubs.system.jar -> sdk_library/system/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source.system/android_common/metalava/myjavalib.stubs.source.system_api.txt -> sdk_library/system/myjavalib.txt
-.intermediates/myjavalib.stubs.source.system/android_common/metalava/myjavalib.stubs.source.system_removed.txt -> sdk_library/system/myjavalib-removed.txt
-.intermediates/myjavalib.stubs.module_lib/android_common/javac/myjavalib.stubs.module_lib.jar -> sdk_library/module-lib/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source.module_lib/android_common/metalava/myjavalib.stubs.source.module_lib_api.txt -> sdk_library/module-lib/myjavalib.txt
-.intermediates/myjavalib.stubs.source.module_lib/android_common/metalava/myjavalib.stubs.source.module_lib_removed.txt -> sdk_library/module-lib/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable/android_common/combined/myjavalib.stubs.exportable.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable.system/android_common/combined/myjavalib.stubs.exportable.system.jar -> sdk_library/system/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source.system/android_common/exportable/myjavalib.stubs.source.system_api.txt -> sdk_library/system/myjavalib.txt
+.intermediates/myjavalib.stubs.source.system/android_common/exportable/myjavalib.stubs.source.system_removed.txt -> sdk_library/system/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable.module_lib/android_common/combined/myjavalib.stubs.exportable.module_lib.jar -> sdk_library/module-lib/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source.module_lib/android_common/exportable/myjavalib.stubs.source.module_lib_api.txt -> sdk_library/module-lib/myjavalib.txt
+.intermediates/myjavalib.stubs.source.module_lib/android_common/exportable/myjavalib.stubs.source.module_lib_removed.txt -> sdk_library/module-lib/myjavalib-removed.txt
 `),
 		checkMergeZips(
 			".intermediates/mysdk/common_os/tmp/sdk_library/module-lib/myjavalib_stub_sources.zip",
@@ -1489,6 +1673,11 @@ func TestSnapshotWithJavaSdkLibrary_SystemServer(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
+
 java_sdk_library_import {
     name: "myjavalib",
     prefer: false,
@@ -1512,12 +1701,12 @@ java_sdk_library_import {
 }
 `),
 		checkAllCopyRules(`
-.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
-.intermediates/myjavalib.stubs.system_server/android_common/javac/myjavalib.stubs.system_server.jar -> sdk_library/system-server/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source.system_server/android_common/metalava/myjavalib.stubs.source.system_server_api.txt -> sdk_library/system-server/myjavalib.txt
-.intermediates/myjavalib.stubs.source.system_server/android_common/metalava/myjavalib.stubs.source.system_server_removed.txt -> sdk_library/system-server/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable/android_common/combined/myjavalib.stubs.exportable.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable.system_server/android_common/combined/myjavalib.stubs.exportable.system_server.jar -> sdk_library/system-server/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source.system_server/android_common/exportable/myjavalib.stubs.source.system_server_api.txt -> sdk_library/system-server/myjavalib.txt
+.intermediates/myjavalib.stubs.source.system_server/android_common/exportable/myjavalib.stubs.source.system_server_removed.txt -> sdk_library/system-server/myjavalib-removed.txt
 `),
 		checkMergeZips(
 			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
@@ -1549,6 +1738,11 @@ func TestSnapshotWithJavaSdkLibrary_NamingScheme(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
+
 java_sdk_library_import {
     name: "myjavalib",
     prefer: false,
@@ -1566,9 +1760,9 @@ java_sdk_library_import {
 }
 `),
 		checkAllCopyRules(`
-.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable/android_common/combined/myjavalib.stubs.exportable.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
 `),
 		checkMergeZips(
 			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
@@ -1606,6 +1800,11 @@ func TestSnapshotWithJavaSdkLibrary_DoctagFiles(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
+
 java_sdk_library_import {
     name: "myjavalib",
     prefer: false,
@@ -1623,9 +1822,9 @@ java_sdk_library_import {
 }
 `),
 		checkAllCopyRules(`
-.intermediates/myjavalib.stubs/android_common/javac/myjavalib.stubs.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/metalava/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
+.intermediates/myjavalib.stubs.exportable/android_common/combined/myjavalib.stubs.exportable.jar -> sdk_library/public/myjavalib-stubs.jar
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
+.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
 docs/known_doctags -> doctags/docs/known_doctags
 `),
 	)

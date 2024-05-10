@@ -34,13 +34,11 @@ var (
 			`${config.Zip2ZipCmd} -i $in -o $strippedJar $stripSpec && ` +
 			`${config.JavaCmd} ${config.JavaVmFlags} -jar ${config.JacocoCLIJar} ` +
 			`  instrument --quiet --dest $tmpDir $strippedJar && ` +
-			`${config.Ziptime} $tmpJar && ` +
 			`${config.MergeZipsCmd} --ignore-duplicates -j $out $tmpJar $in`,
 		CommandDeps: []string{
 			"${config.Zip2ZipCmd}",
 			"${config.JavaCmd}",
 			"${config.JacocoCLIJar}",
-			"${config.Ziptime}",
 			"${config.MergeZipsCmd}",
 		},
 	},
@@ -55,7 +53,7 @@ func jacocoDepsMutator(ctx android.BottomUpMutatorContext) {
 	}
 
 	j, ok := ctx.Module().(instrumentable)
-	if !ctx.Module().Enabled() || !ok {
+	if !ctx.Module().Enabled(ctx) || !ok {
 		return
 	}
 

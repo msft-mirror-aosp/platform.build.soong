@@ -15,18 +15,12 @@
 package android
 
 import (
-	"fmt"
-	"strings"
-	"testing"
-
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/bootstrap"
-	"github.com/google/blueprint/proptools"
 )
 
 var (
-	pctx         = NewPackageContext("android/soong/android")
-	exportedVars = NewExportedVariables(pctx)
+	pctx = NewPackageContext("android/soong/android")
 
 	cpPreserveSymlinks = pctx.VariableConfigMethod("cpPreserveSymlinks",
 		Config.CpPreserveSymlinksFlags)
@@ -72,8 +66,7 @@ var (
 			Command:     "if ! cmp -s $in $out; then cp $in $out; fi",
 			Description: "cp if changed $out",
 			Restat:      true,
-		},
-		"cpFlags")
+		})
 
 	CpExecutable = pctx.AndroidStaticRule("CpExecutable",
 		blueprint.RuleParams{
@@ -92,9 +85,8 @@ var (
 	// A symlink rule.
 	Symlink = pctx.AndroidStaticRule("Symlink",
 		blueprint.RuleParams{
-			Command:        "rm -f $out && ln -f -s $fromPath $out",
-			Description:    "symlink $out",
-			SymlinkOutputs: []string{"$out"},
+			Command:     "rm -f $out && ln -f -s $fromPath $out",
+			Description: "symlink $out",
 		},
 		"fromPath")
 
@@ -107,19 +99,9 @@ var (
 
 	Cat = pctx.AndroidStaticRule("Cat",
 		blueprint.RuleParams{
-			Command:     "cat $in > $out",
-			Description: "concatenate licenses $out",
+			Command:     "rm -f $out && cat $in > $out",
+			Description: "concatenate files to $out",
 		})
-
-	// ubuntu 14.04 offcially use dash for /bin/sh, and its builtin echo command
-	// doesn't support -e option. Therefore we force to use /bin/bash when writing out
-	// content to file.
-	writeFile = pctx.AndroidStaticRule("writeFile",
-		blueprint.RuleParams{
-			Command:     `/bin/bash -c 'echo -e -n "$$0" > $out' $content`,
-			Description: "writing file $out",
-		},
-		"content")
 
 	// Used only when USE_GOMA=true is set, to restrict non-goma jobs to the local parallelism value
 	localPool = blueprint.NewBuiltinPool("local_pool")
@@ -137,111 +119,6 @@ func init() {
 	pctx.VariableFunc("RBEWrapper", func(ctx PackageVarContext) string {
 		return ctx.Config().RBEWrapper()
 	})
-
-	exportedVars.ExportStringList("NeverAllowNotInIncludeDir", neverallowNotInIncludeDir)
-	exportedVars.ExportStringList("NeverAllowNoUseIncludeDir", neverallowNoUseIncludeDir)
-}
-
-func BazelCcToolchainVars(config Config) string {
-	return BazelToolchainVars(config, exportedVars)
-}
-
-var (
-	// echoEscaper escapes a string such that passing it to "echo -e" will produce the input value.
-	echoEscaper = strings.NewReplacer(
-		`\`, `\\`, // First escape existing backslashes so they aren't interpreted by `echo -e`.
-		"\n", `\n`, // Then replace newlines with \n
-	)
-
-	// echoEscaper reverses echoEscaper.
-	echoUnescaper = strings.NewReplacer(
-		`\n`, "\n",
-		`\\`, `\`,
-	)
-
-	// shellUnescaper reverses the replacer in proptools.ShellEscape
-	shellUnescaper = strings.NewReplacer(`'\''`, `'`)
-)
-
-func buildWriteFileRule(ctx BuilderContext, outputFile WritablePath, content string) {
-	content = echoEscaper.Replace(content)
-	content = proptools.NinjaEscape(proptools.ShellEscapeIncludingSpaces(content))
-	if content == "" {
-		content = "''"
-	}
-	ctx.Build(pctx, BuildParams{
-		Rule:        writeFile,
-		Output:      outputFile,
-		Description: "write " + outputFile.Base(),
-		Args: map[string]string{
-			"content": content,
-		},
-	})
-}
-
-// WriteFileRule creates a ninja rule to write contents to a file.  The contents will be escaped
-// so that the file contains exactly the contents passed to the function, plus a trailing newline.
-func WriteFileRule(ctx BuilderContext, outputFile WritablePath, content string) {
-	WriteFileRuleVerbatim(ctx, outputFile, content+"\n")
-}
-
-// WriteFileRuleVerbatim creates a ninja rule to write contents to a file.  The contents will be
-// escaped so that the file contains exactly the contents passed to the function.
-func WriteFileRuleVerbatim(ctx BuilderContext, outputFile WritablePath, content string) {
-	// This is MAX_ARG_STRLEN subtracted with some safety to account for shell escapes
-	const SHARD_SIZE = 131072 - 10000
-
-	if len(content) > SHARD_SIZE {
-		var chunks WritablePaths
-		for i, c := range ShardString(content, SHARD_SIZE) {
-			tempPath := outputFile.ReplaceExtension(ctx, fmt.Sprintf("%s.%d", outputFile.Ext(), i))
-			buildWriteFileRule(ctx, tempPath, c)
-			chunks = append(chunks, tempPath)
-		}
-		ctx.Build(pctx, BuildParams{
-			Rule:        Cat,
-			Inputs:      chunks.Paths(),
-			Output:      outputFile,
-			Description: "Merging to " + outputFile.Base(),
-		})
-		return
-	}
-	buildWriteFileRule(ctx, outputFile, content)
-}
-
-func CatFileRule(ctx BuilderContext, paths Paths, outputFile WritablePath) {
-	ctx.Build(pctx, BuildParams{
-		Rule:        Cat,
-		Inputs:      paths,
-		Output:      outputFile,
-		Description: "combine files to " + outputFile.Base(),
-	})
-}
-
-// shellUnescape reverses proptools.ShellEscape
-func shellUnescape(s string) string {
-	// Remove leading and trailing quotes if present
-	if len(s) >= 2 && s[0] == '\'' {
-		s = s[1 : len(s)-1]
-	}
-	s = shellUnescaper.Replace(s)
-	return s
-}
-
-// ContentFromFileRuleForTests returns the content that was passed to a WriteFileRule for use
-// in tests.
-func ContentFromFileRuleForTests(t *testing.T, params TestingBuildParams) string {
-	t.Helper()
-	if g, w := params.Rule, writeFile; g != w {
-		t.Errorf("expected params.Rule to be %q, was %q", w, g)
-		return ""
-	}
-
-	content := params.Args["content"]
-	content = shellUnescape(content)
-	content = echoUnescaper.Replace(content)
-
-	return content
 }
 
 // GlobToListFileRule creates a rule that writes a list of files matching a pattern to a file.

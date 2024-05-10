@@ -40,21 +40,33 @@ func TestFileGroupWithPathProp(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		outBaseDir := "outputbase"
 		result := GroupFixturePreparers(
 			PrepareForTestWithFilegroup,
-			FixtureModifyConfig(func(config Config) {
-				config.BazelContext = MockBazelContext{
-					OutputBaseDir: outBaseDir,
-					LabelToOutputFiles: map[string][]string{
-						"//:baz": []string{"a/b/c/d/test.aidl"},
-					},
-				}
-			}),
 		).RunTestWithBp(t, testCase.bp)
 
 		fg := result.Module("baz", "").(*fileGroup)
 		AssertStringEquals(t, "src relativeRoot", testCase.rel, fg.srcs[0].Rel())
 		AssertStringEquals(t, "src full path", expectedOutputfile, fg.srcs[0].String())
 	}
+}
+
+func TestFilegroupDefaults(t *testing.T) {
+	bp := FixtureAddTextFile("p/Android.bp", `
+		filegroup_defaults {
+			name: "defaults",
+			visibility: ["//x"],
+		}
+		filegroup {
+			name: "foo",
+			defaults: ["defaults"],
+			visibility: ["//y"],
+		}
+	`)
+	result := GroupFixturePreparers(
+		PrepareForTestWithFilegroup,
+		PrepareForTestWithDefaults,
+		PrepareForTestWithVisibility,
+		bp).RunTest(t)
+	rules := effectiveVisibilityRules(result.Config, qualifiedModuleName{pkg: "p", name: "foo"})
+	AssertDeepEquals(t, "visibility", []string{"//x", "//y"}, rules.Strings())
 }

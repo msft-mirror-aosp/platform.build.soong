@@ -11,9 +11,9 @@ bootstrap_go_package {
     ],
     srcs: [
         "autogen.go",
-        "autogen_bazel.go",
         "config.go",
         "makevars.go",
+        "providers.go",
     ],
     pluginFor: ["soong_build"],
 }

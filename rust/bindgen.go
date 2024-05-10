@@ -29,7 +29,7 @@ var (
 	defaultBindgenFlags = []string{""}
 
 	// bindgen should specify its own Clang revision so updating Clang isn't potentially blocked on bindgen failures.
-	bindgenClangVersion = "clang-r475365b"
+	bindgenClangVersion = "clang-r510928"
 
 	_ = pctx.VariableFunc("bindgenClangVersion", func(ctx android.PackageVarContext) string {
 		if override := ctx.Config().Getenv("LLVM_BINDGEN_PREBUILTS_VERSION"); override != "" {
@@ -61,15 +61,18 @@ var (
 		"${cc_config.ClangBase}/${bindgenHostPrebuiltTag}/${bindgenClangVersion}/${bindgenClangLibdir}")
 
 	//TODO(ivanlozano) Switch this to RuleBuilder
+	//
+	//TODO Pass the flag files directly to bindgen e.g. with @file when it supports that.
+	//See https://github.com/rust-lang/rust-bindgen/issues/2508.
 	bindgen = pctx.AndroidStaticRule("bindgen",
 		blueprint.RuleParams{
 			Command: "CLANG_PATH=$bindgenClang LIBCLANG_PATH=$bindgenLibClang RUSTFMT=${config.RustBin}/rustfmt " +
-				"$cmd $flags $in -o $out -- -MD -MF $out.d $cflags",
+				"$cmd $flags $$(cat $flagfiles) $in -o $out -- -MD -MF $out.d $cflags",
 			CommandDeps: []string{"$cmd"},
 			Deps:        blueprint.DepsGCC,
 			Depfile:     "$out.d",
 		},
-		"cmd", "flags", "cflags")
+		"cmd", "flags", "flagfiles", "cflags")
 )
 
 func init() {
@@ -90,11 +93,26 @@ type BindgenProperties struct {
 	// list of bindgen-specific flags and options
 	Bindgen_flags []string `android:"arch_variant"`
 
+	// list of files containing extra bindgen flags
+	Bindgen_flag_files []string `android:"arch_variant"`
+
 	// module name of a custom binary/script which should be used instead of the 'bindgen' binary. This custom
 	// binary must expect arguments in a similar fashion to bindgen, e.g.
 	//
 	// "my_bindgen [flags] wrapper_header.h -o [output_path] -- [clang flags]"
 	Custom_bindgen string
+
+	// flag to indicate if bindgen should handle `static inline` functions (default is false).
+	// If true, Static_inline_library must be set.
+	Handle_static_inline *bool
+
+	// module name of the corresponding cc_library_static which includes the static_inline wrapper
+	// generated functions from bindgen. Must be used together with handle_static_inline.
+	//
+	// If there are no static inline functions provided through the header file,
+	// then bindgen (as of 0.69.2) will silently fail to output a .c file, and
+	// the cc_library_static depending on this module will fail compilation.
+	Static_inline_library *string
 }
 
 type bindgenDecorator struct {
@@ -118,18 +136,20 @@ func (b *bindgenDecorator) getStdVersion(ctx ModuleContext, src android.Path) (s
 		ctx.PropertyErrorf("c_std", "c_std and cpp_std cannot both be defined at the same time.")
 	}
 
-	if String(b.ClangProperties.Cpp_std) != "" {
+	if b.ClangProperties.Cpp_std != nil {
+		isCpp = true
 		if String(b.ClangProperties.Cpp_std) == "experimental" {
 			stdVersion = cc_config.ExperimentalCppStdVersion
-		} else if String(b.ClangProperties.Cpp_std) == "default" {
+		} else if String(b.ClangProperties.Cpp_std) == "default" || String(b.ClangProperties.Cpp_std) == "" {
 			stdVersion = cc_config.CppStdVersion
 		} else {
 			stdVersion = String(b.ClangProperties.Cpp_std)
 		}
 	} else if b.ClangProperties.C_std != nil {
+		isCpp = false
 		if String(b.ClangProperties.C_std) == "experimental" {
 			stdVersion = cc_config.ExperimentalCStdVersion
-		} else if String(b.ClangProperties.C_std) == "default" {
+		} else if String(b.ClangProperties.C_std) == "default" || String(b.ClangProperties.C_std) == "" {
 			stdVersion = cc_config.CStdVersion
 		} else {
 			stdVersion = String(b.ClangProperties.C_std)
@@ -148,6 +168,18 @@ func (b *bindgenDecorator) GenerateSource(ctx ModuleContext, deps PathDeps) andr
 
 	var cflags []string
 	var implicits android.Paths
+	var implicitOutputs android.WritablePaths
+	var validations android.Paths
+
+	if Bool(b.Properties.Handle_static_inline) && b.Properties.Static_inline_library == nil {
+		ctx.PropertyErrorf("handle_static_inline",
+			"requires declaring static_inline_library to the corresponding cc_library module that includes the generated C source from bindgen.")
+	}
+
+	if b.Properties.Static_inline_library != nil && !Bool(b.Properties.Handle_static_inline) {
+		ctx.PropertyErrorf("static_inline_library",
+			"requires declaring handle_static_inline.")
+	}
 
 	implicits = append(implicits, deps.depGeneratedHeaders...)
 
@@ -162,10 +194,19 @@ func (b *bindgenDecorator) GenerateSource(ctx ModuleContext, deps PathDeps) andr
 	cflags = append(cflags, strings.ReplaceAll(ccToolchain.Cflags(), "${config.", "${cc_config."))
 	cflags = append(cflags, strings.ReplaceAll(ccToolchain.ToolchainCflags(), "${config.", "${cc_config."))
 
-	if ctx.RustModule().UseVndk() {
+	if ctx.RustModule().InVendorOrProduct() {
 		cflags = append(cflags, "-D__ANDROID_VNDK__")
 		if ctx.RustModule().InVendor() {
 			cflags = append(cflags, "-D__ANDROID_VENDOR__")
+
+			vendorApiLevel := ctx.Config().VendorApiLevel()
+			if vendorApiLevel == "" {
+				// TODO(b/314036847): This is a fallback for UDC targets.
+				// This must be a build failure when UDC is no longer built
+				// from this source tree.
+				vendorApiLevel = ctx.Config().PlatformSdkVersion().String()
+			}
+			cflags = append(cflags, "-D__ANDROID_VENDOR_API__="+vendorApiLevel)
 		} else if ctx.RustModule().InProduct() {
 			cflags = append(cflags, "-D__ANDROID_PRODUCT__")
 		}
@@ -215,6 +256,20 @@ func (b *bindgenDecorator) GenerateSource(ctx ModuleContext, deps PathDeps) andr
 
 	bindgenFlags := defaultBindgenFlags
 	bindgenFlags = append(bindgenFlags, esc(b.Properties.Bindgen_flags)...)
+	if Bool(b.Properties.Handle_static_inline) {
+		outputStaticFnsFile := android.PathForModuleOut(ctx, b.BaseSourceProvider.getStem(ctx)+".c")
+		implicitOutputs = append(implicitOutputs, outputStaticFnsFile)
+		validations = append(validations, outputStaticFnsFile)
+		bindgenFlags = append(bindgenFlags, []string{"--experimental", "--wrap-static-fns", "--wrap-static-fns-path=" + outputStaticFnsFile.String()}...)
+	}
+
+	// cat reads from stdin if its command line is empty,
+	// so we pass in /dev/null if there are no other flag files
+	bindgenFlagFiles := []string{"/dev/null"}
+	for _, flagFile := range b.Properties.Bindgen_flag_files {
+		bindgenFlagFiles = append(bindgenFlagFiles, android.PathForModuleSrc(ctx, flagFile).String())
+		implicits = append(implicits, android.PathForModuleSrc(ctx, flagFile))
+	}
 
 	wrapperFile := android.OptionalPathForModuleSrc(ctx, b.Properties.Wrapper_src)
 	if !wrapperFile.Valid() {
@@ -238,16 +293,15 @@ func (b *bindgenDecorator) GenerateSource(ctx ModuleContext, deps PathDeps) andr
 	// clang: error: '-x c' after last input file has no effect [-Werror,-Wunused-command-line-argument]
 	cflags = append(cflags, "-Wno-unused-command-line-argument")
 
-	// LLVM_NEXT may contain flags that bindgen doesn't recognise. Turn off unknown flags warning.
-	if ctx.Config().IsEnvTrue("LLVM_NEXT") {
-		cflags = append(cflags, "-Wno-unknown-warning-option")
-	}
+	// The Clang version used by CXX can be newer than the one used by Bindgen, and uses warning related flags that
+	// it cannot recognize. Turn off unknown warning flags warning.
+	cflags = append(cflags, "-Wno-unknown-warning-option")
 
 	outputFile := android.PathForModuleOut(ctx, b.BaseSourceProvider.getStem(ctx)+".rs")
 
 	var cmd, cmdDesc string
 	if b.Properties.Custom_bindgen != "" {
-		cmd = ctx.GetDirectDepWithTag(b.Properties.Custom_bindgen, customBindgenDepTag).(*Module).HostToolPath().String()
+		cmd = ctx.GetDirectDepWithTag(b.Properties.Custom_bindgen, customBindgenDepTag).(android.HostToolProvider).HostToolPath().String()
 		cmdDesc = b.Properties.Custom_bindgen
 	} else {
 		cmd = "$bindgenCmd"
@@ -255,19 +309,30 @@ func (b *bindgenDecorator) GenerateSource(ctx ModuleContext, deps PathDeps) andr
 	}
 
 	ctx.Build(pctx, android.BuildParams{
-		Rule:        bindgen,
-		Description: strings.Join([]string{cmdDesc, wrapperFile.Path().Rel()}, " "),
-		Output:      outputFile,
-		Input:       wrapperFile.Path(),
-		Implicits:   implicits,
+		Rule:            bindgen,
+		Description:     strings.Join([]string{cmdDesc, wrapperFile.Path().Rel()}, " "),
+		Output:          outputFile,
+		Input:           wrapperFile.Path(),
+		Implicits:       implicits,
+		ImplicitOutputs: implicitOutputs,
+		Validations:     validations,
 		Args: map[string]string{
-			"cmd":    cmd,
-			"flags":  strings.Join(bindgenFlags, " "),
-			"cflags": strings.Join(cflags, " "),
+			"cmd":       cmd,
+			"flags":     strings.Join(bindgenFlags, " "),
+			"flagfiles": strings.Join(bindgenFlagFiles, " "),
+			"cflags":    strings.Join(cflags, " "),
 		},
 	})
 
 	b.BaseSourceProvider.OutputFiles = android.Paths{outputFile}
+
+	// Append any additional implicit outputs after the entry point source.
+	// We append any generated .c file here so it can picked up by cc_library_static modules.
+	// Those CC modules need to be sure not to pass any included .rs files to Clang.
+	// We don't have to worry about the additional .c files for Rust modules as only the entry point
+	// is passed to rustc.
+	b.BaseSourceProvider.OutputFiles = append(b.BaseSourceProvider.OutputFiles, implicitOutputs.Paths()...)
+
 	return outputFile
 }
 
@@ -279,7 +344,7 @@ func (b *bindgenDecorator) SourceProviderProps() []interface{} {
 // rust_bindgen generates Rust FFI bindings to C libraries using bindgen given a wrapper header as the primary input.
 // Bindgen has a number of flags to control the generated source, and additional flags can be passed to clang to ensure
 // the header and generated source is appropriately handled. It is recommended to add it as a dependency in the
-// rlibs, dylibs or rustlibs property. It may also be added in the srcs property for external crates, using the ":"
+// rlibs or rustlibs property. It may also be added in the srcs property for external crates, using the ":"
 // prefix.
 func RustBindgenFactory() android.Module {
 	module, _ := NewRustBindgen(android.HostAndDeviceSupported)
@@ -319,8 +384,16 @@ func (b *bindgenDecorator) SourceProviderDeps(ctx DepsContext, deps Deps) Deps {
 		deps = muslDeps(ctx, deps, false)
 	}
 
+	if !ctx.RustModule().Source() && b.Properties.Static_inline_library != nil {
+		// This is not the source variant, so add the static inline library as a dependency.
+		//
+		// This is necessary to avoid a circular dependency between the source variant and the
+		// dependent cc module.
+		deps.StaticLibs = append(deps.StaticLibs, String(b.Properties.Static_inline_library))
+	}
+
 	deps.SharedLibs = append(deps.SharedLibs, b.ClangProperties.Shared_libs...)
 	deps.StaticLibs = append(deps.StaticLibs, b.ClangProperties.Static_libs...)
-	deps.HeaderLibs = append(deps.StaticLibs, b.ClangProperties.Header_libs...)
+	deps.HeaderLibs = append(deps.HeaderLibs, b.ClangProperties.Header_libs...)
 	return deps
 }

@@ -15,18 +15,17 @@
 package rust
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 
 	"android/soong/android"
 	"android/soong/cc"
-	"android/soong/snapshot"
 )
 
 var (
-	DylibStdlibSuffix = ".dylib-std"
-	RlibStdlibSuffix  = ".rlib-std"
+	RlibStdlibSuffix = ".rlib-std"
 )
 
 func init() {
@@ -55,8 +54,12 @@ type LibraryCompilerProperties struct {
 	Shared VariantLibraryProperties `android:"arch_variant"`
 	Static VariantLibraryProperties `android:"arch_variant"`
 
-	// path to include directories to pass to cc_* modules, only relevant for static/shared variants.
+	// TODO: Remove this when all instances of Include_dirs have been removed from rust_ffi modules.
+	// path to include directories to pass to cc_* modules, only relevant for static/shared variants (deprecated, use export_include_dirs instead).
 	Include_dirs []string `android:"path,arch_variant"`
+
+	// path to include directories to export to cc_* modules, only relevant for static/shared variants.
+	Export_include_dirs []string `android:"path,arch_variant"`
 
 	// Whether this library is part of the Rust toolchain sysroot.
 	Sysroot *bool
@@ -100,8 +103,6 @@ type libraryDecorator struct {
 	MutatedProperties LibraryMutatedProperties
 	includeDirs       android.Paths
 	sourceProvider    SourceProvider
-
-	collectedSnapshotHeaders android.Paths
 
 	// table-of-contents file for cdylib crates to optimize out relinking when possible
 	tocFile android.OptionalPath
@@ -237,10 +238,7 @@ func (library *libraryDecorator) setSource() {
 }
 
 func (library *libraryDecorator) autoDep(ctx android.BottomUpMutatorContext) autoDep {
-	if ctx.Module().(*Module).InVendor() {
-		// Vendor modules should statically link libstd.
-		return rlibAutoDep
-	} else if library.preferRlib() {
+	if library.preferRlib() {
 		return rlibAutoDep
 	} else if library.rlib() || library.static() {
 		return rlibAutoDep
@@ -252,10 +250,7 @@ func (library *libraryDecorator) autoDep(ctx android.BottomUpMutatorContext) aut
 }
 
 func (library *libraryDecorator) stdLinkage(ctx *depsContext) RustLinkage {
-	if ctx.RustModule().InVendor() {
-		// Vendor modules should statically link libstd.
-		return RlibLinkage
-	} else if library.static() || library.MutatedProperties.VariantIsStaticStd {
+	if library.static() || library.MutatedProperties.VariantIsStaticStd {
 		return RlibLinkage
 	} else if library.baseCompiler.preferRlib() {
 		return RlibLinkage
@@ -472,9 +467,18 @@ func (library *libraryDecorator) compilerFlags(ctx ModuleContext, flags Flags) F
 	flags.RustFlags = append(flags.RustFlags, "-C metadata="+ctx.ModuleName())
 	if library.shared() || library.static() {
 		library.includeDirs = append(library.includeDirs, android.PathsForModuleSrc(ctx, library.Properties.Include_dirs)...)
+		library.includeDirs = append(library.includeDirs, android.PathsForModuleSrc(ctx, library.Properties.Export_include_dirs)...)
 	}
 	if library.shared() {
-		flags.LinkFlags = append(flags.LinkFlags, "-Wl,-soname="+library.sharedLibFilename(ctx))
+		if ctx.Darwin() {
+			flags.LinkFlags = append(
+				flags.LinkFlags,
+				"-dynamic_lib",
+				"-install_name @rpath/"+library.sharedLibFilename(ctx),
+			)
+		} else {
+			flags.LinkFlags = append(flags.LinkFlags, "-Wl,-soname="+library.sharedLibFilename(ctx))
+		}
 	}
 
 	return flags
@@ -484,7 +488,7 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 	var outputFile android.ModuleOutPath
 	var ret buildOutput
 	var fileName string
-	srcPath := library.srcPath(ctx, deps)
+	crateRootPath := crateRootPath(ctx, library)
 
 	if library.sourceProvider != nil {
 		deps.srcProviderFiles = append(deps.srcProviderFiles, library.sourceProvider.Srcs()...)
@@ -531,13 +535,13 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 
 	// Call the appropriate builder for this library type
 	if library.rlib() {
-		ret.kytheFile = TransformSrctoRlib(ctx, srcPath, deps, flags, outputFile).kytheFile
+		ret.kytheFile = TransformSrctoRlib(ctx, crateRootPath, deps, flags, outputFile).kytheFile
 	} else if library.dylib() {
-		ret.kytheFile = TransformSrctoDylib(ctx, srcPath, deps, flags, outputFile).kytheFile
+		ret.kytheFile = TransformSrctoDylib(ctx, crateRootPath, deps, flags, outputFile).kytheFile
 	} else if library.static() {
-		ret.kytheFile = TransformSrctoStatic(ctx, srcPath, deps, flags, outputFile).kytheFile
+		ret.kytheFile = TransformSrctoStatic(ctx, crateRootPath, deps, flags, outputFile).kytheFile
 	} else if library.shared() {
-		ret.kytheFile = TransformSrctoShared(ctx, srcPath, deps, flags, outputFile).kytheFile
+		ret.kytheFile = TransformSrctoShared(ctx, crateRootPath, deps, flags, outputFile).kytheFile
 	}
 
 	if library.rlib() || library.dylib() {
@@ -546,7 +550,7 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 	}
 
 	if library.static() || library.shared() {
-		ctx.SetProvider(cc.FlagExporterInfoProvider, cc.FlagExporterInfo{
+		android.SetProvider(ctx, cc.FlagExporterInfoProvider, cc.FlagExporterInfo{
 			IncludeDirs: library.includeDirs,
 		})
 	}
@@ -558,7 +562,7 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 		library.tocFile = android.OptionalPathForPath(tocFile)
 		cc.TransformSharedObjectToToc(ctx, outputFile, tocFile)
 
-		ctx.SetProvider(cc.SharedLibraryInfoProvider, cc.SharedLibraryInfo{
+		android.SetProvider(ctx, cc.SharedLibraryInfoProvider, cc.SharedLibraryInfo{
 			TableOfContents: android.OptionalPathForPath(tocFile),
 			SharedLibrary:   outputFile,
 			Target:          ctx.Target(),
@@ -566,8 +570,8 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 	}
 
 	if library.static() {
-		depSet := android.NewDepSetBuilder(android.TOPOLOGICAL).Direct(outputFile).Build()
-		ctx.SetProvider(cc.StaticLibraryInfoProvider, cc.StaticLibraryInfo{
+		depSet := android.NewDepSetBuilder[android.Path](android.TOPOLOGICAL).Direct(outputFile).Build()
+		android.SetProvider(ctx, cc.StaticLibraryInfoProvider, cc.StaticLibraryInfo{
 			StaticLibrary: outputFile,
 
 			TransitiveStaticLibrariesForOrdering: depSet,
@@ -579,13 +583,16 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 	return ret
 }
 
-func (library *libraryDecorator) srcPath(ctx ModuleContext, _ PathDeps) android.Path {
+func (library *libraryDecorator) checkedCrateRootPath() (android.Path, error) {
 	if library.sourceProvider != nil {
+		srcs := library.sourceProvider.Srcs()
+		if len(srcs) == 0 {
+			return nil, errors.New("Source provider generated 0 sources")
+		}
 		// Assume the first source from the source provider is the library entry point.
-		return library.sourceProvider.Srcs()[0]
+		return srcs[0], nil
 	} else {
-		path, _ := srcPathFromModuleSrcs(ctx, library.baseCompiler.Properties.Srcs)
-		return path
+		return library.baseCompiler.checkedCrateRootPath()
 	}
 }
 
@@ -600,7 +607,7 @@ func (library *libraryDecorator) rustdoc(ctx ModuleContext, flags Flags,
 		return android.OptionalPath{}
 	}
 
-	return android.OptionalPathForPath(Rustdoc(ctx, library.srcPath(ctx, deps),
+	return android.OptionalPathForPath(Rustdoc(ctx, crateRootPath(ctx, library),
 		deps, flags))
 }
 
@@ -693,24 +700,6 @@ func LibraryMutator(mctx android.BottomUpMutatorContext) {
 				v.(*Module).Disable()
 			}
 
-			variation := v.(*Module).ModuleBase.ImageVariation().Variation
-			if strings.HasPrefix(variation, cc.VendorVariationPrefix) {
-				// TODO(b/204303985)
-				// Disable vendor dylibs until they are supported
-				v.(*Module).Disable()
-			}
-
-			if strings.HasPrefix(variation, cc.VendorVariationPrefix) &&
-				m.HasVendorVariant() &&
-				!snapshot.IsVendorProprietaryModule(mctx) &&
-				strings.TrimPrefix(variation, cc.VendorVariationPrefix) == mctx.DeviceConfig().VndkVersion() {
-
-				// cc.MutateImage runs before LibraryMutator, so vendor variations which are meant for rlibs only are
-				// produced for Dylibs; however, dylibs should not be enabled for boardVndkVersion for
-				// non-vendor proprietary modules.
-				v.(*Module).Disable()
-			}
-
 		case "source":
 			v.(*Module).compiler.(libraryInterface).setSource()
 			// The source variant does not produce any library.
@@ -724,7 +713,7 @@ func LibraryMutator(mctx android.BottomUpMutatorContext) {
 	if sourceVariant {
 		sv := modules[0]
 		for _, v := range modules[1:] {
-			if !v.Enabled() {
+			if !v.Enabled(mctx) {
 				continue
 			}
 			mctx.AddInterVariantDependency(sourceDepTag, v, sv)
@@ -747,68 +736,14 @@ func LibstdMutator(mctx android.BottomUpMutatorContext) {
 				dylib := modules[1].(*Module)
 				rlib.compiler.(libraryInterface).setRlibStd()
 				dylib.compiler.(libraryInterface).setDylibStd()
-				if dylib.ModuleBase.ImageVariation().Variation == android.VendorRamdiskVariation ||
-					strings.HasPrefix(dylib.ModuleBase.ImageVariation().Variation, cc.VendorVariationPrefix) {
+				if dylib.ModuleBase.ImageVariation().Variation == android.VendorRamdiskVariation {
 					// TODO(b/165791368)
-					// Disable rlibs that link against dylib-std on vendor and vendor ramdisk variations until those dylib
+					// Disable rlibs that link against dylib-std on vendor ramdisk variations until those dylib
 					// variants are properly supported.
 					dylib.Disable()
 				}
 				rlib.Properties.RustSubName += RlibStdlibSuffix
-				dylib.Properties.RustSubName += DylibStdlibSuffix
 			}
 		}
 	}
-}
-
-func (l *libraryDecorator) snapshotHeaders() android.Paths {
-	if l.collectedSnapshotHeaders == nil {
-		panic("snapshotHeaders() must be called after collectHeadersForSnapshot()")
-	}
-	return l.collectedSnapshotHeaders
-}
-
-// collectHeadersForSnapshot collects all exported headers from library.
-// It globs header files in the source tree for exported include directories,
-// and tracks generated header files separately.
-//
-// This is to be called from GenerateAndroidBuildActions, and then collected
-// header files can be retrieved by snapshotHeaders().
-func (l *libraryDecorator) collectHeadersForSnapshot(ctx android.ModuleContext, deps PathDeps) {
-	ret := android.Paths{}
-
-	// Glob together the headers from the modules include_dirs property
-	for _, path := range android.CopyOfPaths(l.includeDirs) {
-		dir := path.String()
-		globDir := dir + "/**/*"
-		glob, err := ctx.GlobWithDeps(globDir, nil)
-		if err != nil {
-			ctx.ModuleErrorf("glob of %q failed: %s", globDir, err)
-			return
-		}
-
-		for _, header := range glob {
-			// Filter out only the files with extensions that are headers.
-			found := false
-			for _, ext := range cc.HeaderExts {
-				if strings.HasSuffix(header, ext) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				continue
-			}
-			ret = append(ret, android.PathForSource(ctx, header))
-		}
-	}
-
-	// Glob together the headers from C dependencies as well, starting with non-generated headers.
-	ret = append(ret, cc.GlobHeadersForSnapshot(ctx, append(android.CopyOfPaths(deps.depIncludePaths), deps.depSystemIncludePaths...))...)
-
-	// Collect generated headers from C dependencies.
-	ret = append(ret, cc.GlobGeneratedHeadersForSnapshot(ctx, deps.depGeneratedHeaders)...)
-
-	// TODO(185577950): If support for generated headers is added, they need to be collected here as well.
-	l.collectedSnapshotHeaders = ret
 }

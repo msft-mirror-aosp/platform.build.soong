@@ -55,6 +55,11 @@ type prebuiltApisProperties struct {
 
 	// If set to true, compile dex for java_import modules. Defaults to false.
 	Imports_compile_dex *bool
+
+	// If set to true, allow incremental platform API of the form MM.m where MM is the major release
+	// version corresponding to the API level/SDK_INT and m is an incremental release version
+	// (e.g. API changes associated with QPR). Defaults to false.
+	Allow_incremental_platform_api *bool
 }
 
 type prebuiltApis struct {
@@ -69,6 +74,8 @@ func (module *prebuiltApis) GenerateAndroidBuildActions(ctx android.ModuleContex
 // parsePrebuiltPath parses the relevant variables out of a variety of paths, e.g.
 // <version>/<scope>/<module>.jar
 // <version>/<scope>/api/<module>.txt
+// *Note when using incremental platform API, <version> may be of the form MM.m where MM is the
+// API level and m is an incremental release, otherwise <version> is a single integer corresponding to the API level only.
 // extensions/<version>/<scope>/<module>.jar
 // extensions/<version>/<scope>/api/<module>.txt
 func parsePrebuiltPath(ctx android.LoadHookContext, p string) (module string, version string, scope string) {
@@ -90,8 +97,25 @@ func parsePrebuiltPath(ctx android.LoadHookContext, p string) (module string, ve
 }
 
 // parseFinalizedPrebuiltPath is like parsePrebuiltPath, but verifies the version is numeric (a finalized version).
-func parseFinalizedPrebuiltPath(ctx android.LoadHookContext, p string) (module string, version int, scope string) {
+func parseFinalizedPrebuiltPath(ctx android.LoadHookContext, p string, allowIncremental bool) (module string, version int, release int, scope string) {
 	module, v, scope := parsePrebuiltPath(ctx, p)
+	if allowIncremental {
+		parts := strings.Split(v, ".")
+		if len(parts) != 2 {
+			ctx.ModuleErrorf("Found unexpected version '%v' for incremental prebuilts - expect MM.m format for incremental API with both major (MM) an minor (m) revision.", v)
+			return
+		}
+		sdk, sdk_err := strconv.Atoi(parts[0])
+		qpr, qpr_err := strconv.Atoi(parts[1])
+		if sdk_err != nil || qpr_err != nil {
+			ctx.ModuleErrorf("Unable to read version number for incremental prebuilt api '%v'", v)
+			return
+		}
+		version = sdk
+		release = qpr
+		return
+	}
+	release = 0
 	version, err := strconv.Atoi(v)
 	if err != nil {
 		ctx.ModuleErrorf("Found finalized API files in non-numeric dir '%v'", v)
@@ -103,7 +127,6 @@ func parseFinalizedPrebuiltPath(ctx android.LoadHookContext, p string) (module s
 func prebuiltApiModuleName(mctx android.LoadHookContext, module, scope, version string) string {
 	return fmt.Sprintf("%s_%s_%s_%s", mctx.ModuleName(), scope, version, module)
 }
-
 func createImport(mctx android.LoadHookContext, module, scope, version, path, sdkVersion string, compileDex bool) {
 	props := struct {
 		Name        *string
@@ -111,13 +134,13 @@ func createImport(mctx android.LoadHookContext, module, scope, version, path, sd
 		Sdk_version *string
 		Installable *bool
 		Compile_dex *bool
-	}{}
-	props.Name = proptools.StringPtr(prebuiltApiModuleName(mctx, module, scope, version))
-	props.Jars = append(props.Jars, path)
-	props.Sdk_version = proptools.StringPtr(sdkVersion)
-	props.Installable = proptools.BoolPtr(false)
-	props.Compile_dex = proptools.BoolPtr(compileDex)
-
+	}{
+		Name:        proptools.StringPtr(prebuiltApiModuleName(mctx, module, scope, version)),
+		Jars:        []string{path},
+		Sdk_version: proptools.StringPtr(sdkVersion),
+		Installable: proptools.BoolPtr(false),
+		Compile_dex: proptools.BoolPtr(compileDex),
+	}
 	mctx.CreateModule(ImportFactory, &props)
 }
 
@@ -132,6 +155,34 @@ func createApiModule(mctx android.LoadHookContext, name string, path string) {
 	genruleProps.Srcs = []string{path}
 	genruleProps.Out = []string{name}
 	genruleProps.Cmd = proptools.StringPtr("cp $(in) $(out)")
+	mctx.CreateModule(genrule.GenRuleFactory, &genruleProps)
+}
+
+func createCombinedApiFilegroupModule(mctx android.LoadHookContext, name string, srcs []string) {
+	filegroupProps := struct {
+		Name *string
+		Srcs []string
+	}{}
+	filegroupProps.Name = proptools.StringPtr(name)
+
+	var transformedSrcs []string
+	for _, src := range srcs {
+		transformedSrcs = append(transformedSrcs, ":"+src)
+	}
+	filegroupProps.Srcs = transformedSrcs
+	mctx.CreateModule(android.FileGroupFactory, &filegroupProps)
+}
+
+func createLatestApiModuleExtensionVersionFile(mctx android.LoadHookContext, name string, version string) {
+	genruleProps := struct {
+		Name *string
+		Srcs []string
+		Out  []string
+		Cmd  *string
+	}{}
+	genruleProps.Name = proptools.StringPtr(name)
+	genruleProps.Out = []string{name}
+	genruleProps.Cmd = proptools.StringPtr("echo " + version + " > $(out)")
 	mctx.CreateModule(genrule.GenRuleFactory, &genruleProps)
 }
 
@@ -216,6 +267,10 @@ func PrebuiltApiModuleName(module, scope, version string) string {
 	return module + ".api." + scope + "." + version
 }
 
+func PrebuiltApiCombinedModuleName(module, scope, version string) string {
+	return module + ".api.combined." + scope + "." + version
+}
+
 func prebuiltApiFiles(mctx android.LoadHookContext, p *prebuiltApis) {
 	// <apiver>/<scope>/api/<module>.txt
 	apiLevelFiles := globApiDirs(mctx, p, "api/*.txt")
@@ -224,37 +279,44 @@ func prebuiltApiFiles(mctx android.LoadHookContext, p *prebuiltApis) {
 	}
 
 	// Create modules for all (<module>, <scope, <version>) triplets,
+	allowIncremental := proptools.BoolDefault(p.properties.Allow_incremental_platform_api, false)
 	for _, f := range apiLevelFiles {
-		module, version, scope := parseFinalizedPrebuiltPath(mctx, f)
-		createApiModule(mctx, PrebuiltApiModuleName(module, scope, strconv.Itoa(version)), f)
+		module, version, release, scope := parseFinalizedPrebuiltPath(mctx, f, allowIncremental)
+		if allowIncremental {
+			incrementalVersion := strconv.Itoa(version) + "." + strconv.Itoa(release)
+			createApiModule(mctx, PrebuiltApiModuleName(module, scope, incrementalVersion), f)
+		} else {
+			createApiModule(mctx, PrebuiltApiModuleName(module, scope, strconv.Itoa(version)), f)
+		}
 	}
 
 	// Figure out the latest version of each module/scope
 	type latestApiInfo struct {
 		module, scope, path string
-		version             int
+		version, release    int
+		isExtensionApiFile  bool
 	}
 
-	getLatest := func(files []string) map[string]latestApiInfo {
+	getLatest := func(files []string, isExtensionApiFile bool) map[string]latestApiInfo {
 		m := make(map[string]latestApiInfo)
 		for _, f := range files {
-			module, version, scope := parseFinalizedPrebuiltPath(mctx, f)
+			module, version, release, scope := parseFinalizedPrebuiltPath(mctx, f, allowIncremental)
 			if strings.HasSuffix(module, "incompatibilities") {
 				continue
 			}
 			key := module + "." + scope
 			info, exists := m[key]
-			if !exists || version > info.version {
-				m[key] = latestApiInfo{module, scope, f, version}
+			if !exists || version > info.version || (version == info.version && release > info.release) {
+				m[key] = latestApiInfo{module, scope, f, version, release, isExtensionApiFile}
 			}
 		}
 		return m
 	}
 
-	latest := getLatest(apiLevelFiles)
+	latest := getLatest(apiLevelFiles, false)
 	if p.properties.Extensions_dir != nil {
 		extensionApiFiles := globExtensionDirs(mctx, p, "api/*.txt")
-		for k, v := range getLatest(extensionApiFiles) {
+		for k, v := range getLatest(extensionApiFiles, true) {
 			if _, exists := latest[k]; !exists {
 				mctx.ModuleErrorf("Module %v finalized for extension %d but never during an API level; likely error", v.module, v.version)
 			}
@@ -264,9 +326,17 @@ func prebuiltApiFiles(mctx android.LoadHookContext, p *prebuiltApis) {
 	}
 
 	// Sort the keys in order to make build.ninja stable
-	for _, k := range android.SortedKeys(latest) {
+	sortedLatestKeys := android.SortedKeys(latest)
+
+	for _, k := range sortedLatestKeys {
 		info := latest[k]
 		name := PrebuiltApiModuleName(info.module, info.scope, "latest")
+		latestExtensionVersionModuleName := PrebuiltApiModuleName(info.module, info.scope, "latest.extension_version")
+		if info.isExtensionApiFile {
+			createLatestApiModuleExtensionVersionFile(mctx, latestExtensionVersionModuleName, strconv.Itoa(info.version))
+		} else {
+			createLatestApiModuleExtensionVersionFile(mctx, latestExtensionVersionModuleName, "-1")
+		}
 		createApiModule(mctx, name, info.path)
 	}
 
@@ -284,10 +354,37 @@ func prebuiltApiFiles(mctx android.LoadHookContext, p *prebuiltApis) {
 		}
 	}
 	// Create empty incompatibilities files for remaining modules
-	for _, k := range android.SortedKeys(latest) {
+	// If the incompatibility module has been created, create a corresponding combined module
+	for _, k := range sortedLatestKeys {
 		if _, ok := incompatibilities[k]; !ok {
 			createEmptyFile(mctx, PrebuiltApiModuleName(latest[k].module+"-incompatibilities", latest[k].scope, "latest"))
 		}
+	}
+
+	// Create combined latest api and removed api files modules.
+	// The combined modules list all api files of the api scope and its subset api scopes.
+	for _, k := range sortedLatestKeys {
+		info := latest[k]
+		name := PrebuiltApiCombinedModuleName(info.module, info.scope, "latest")
+
+		// Iterate until the currentApiScope does not extend any other api scopes
+		// i.e. is not a superset of any other api scopes
+		// the relationship between the api scopes is defined in java/sdk_library.go
+		var srcs []string
+		currentApiScope := scopeByName[info.scope]
+		for currentApiScope != nil {
+			if _, ok := latest[fmt.Sprintf("%s.%s", info.module, currentApiScope.name)]; ok {
+				srcs = append(srcs, PrebuiltApiModuleName(info.module, currentApiScope.name, "latest"))
+			}
+			currentApiScope = currentApiScope.extends
+		}
+
+		// srcs is currently listed in the order from the widest api scope to the narrowest api scopes
+		// e.g. module lib -> system -> public
+		// In order to pass the files in metalava from the narrowest api scope to the widest api scope,
+		// the list has to be reversed.
+		android.ReverseSliceInPlace(srcs)
+		createCombinedApiFilegroupModule(mctx, name, srcs)
 	}
 }
 

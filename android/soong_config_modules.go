@@ -41,6 +41,7 @@ func RegisterSoongConfigModuleBuildComponents(ctx RegistrationContext) {
 	ctx.RegisterModuleType("soong_config_module_type", SoongConfigModuleTypeFactory)
 	ctx.RegisterModuleType("soong_config_string_variable", SoongConfigStringVariableDummyFactory)
 	ctx.RegisterModuleType("soong_config_bool_variable", SoongConfigBoolVariableDummyFactory)
+	ctx.RegisterModuleType("soong_config_value_variable", SoongConfigValueVariableDummyFactory)
 }
 
 var PrepareForTestWithSoongConfigModuleBuildComponents = FixtureRegisterWithContext(RegisterSoongConfigModuleBuildComponents)
@@ -63,6 +64,7 @@ type soongConfigModuleTypeImportProperties struct {
 // specified in `conditions_default` will only be used under the following conditions:
 //   bool variable: the variable is unspecified or not set to a true value
 //   value variable: the variable is unspecified
+//   list variable: the variable is unspecified
 //   string variable: the variable is unspecified or the variable is set to a string unused in the
 //                    given module. For example, string variable `test` takes values: "a" and "b",
 //                    if the module contains a property `a` and `conditions_default`, when test=b,
@@ -103,6 +105,12 @@ type soongConfigModuleTypeImportProperties struct {
 //                     cflags: ["-DWIDTH=DEFAULT"],
 //                 },
 //             },
+//             impl: {
+//                 srcs: ["impl/%s"],
+//                 conditions_default: {
+//                     srcs: ["impl/default.cpp"],
+//                 },
+//             },
 //         },
 //     }
 //
@@ -121,6 +129,7 @@ type soongConfigModuleTypeImportProperties struct {
 //         variables: ["board"],
 //         bool_variables: ["feature"],
 //         value_variables: ["width"],
+//         list_variables: ["impl"],
 //         properties: ["cflags", "srcs"],
 //     }
 //
@@ -134,8 +143,10 @@ type soongConfigModuleTypeImportProperties struct {
 //     $(call add_soong_config_var_value, acme, board, soc_a)
 //     $(call add_soong_config_var_value, acme, feature, true)
 //     $(call add_soong_config_var_value, acme, width, 200)
+//     $(call add_soong_config_var_value, acme, impl, foo.cpp bar.cpp)
 //
-// Then libacme_foo would build with cflags "-DGENERIC -DSOC_A -DFEATURE -DWIDTH=200".
+// Then libacme_foo would build with cflags "-DGENERIC -DSOC_A -DFEATURE -DWIDTH=200" and srcs
+// ["*.cpp", "impl/foo.cpp", "impl/bar.cpp"].
 //
 // Alternatively, if acme BoardConfig.mk file contained:
 //
@@ -147,7 +158,9 @@ type soongConfigModuleTypeImportProperties struct {
 //     SOONG_CONFIG_acme_feature := false
 //
 // Then libacme_foo would build with cflags:
-//   "-DGENERIC -DSOC_DEFAULT -DFEATURE_DEFAULT -DSIZE=DEFAULT".
+//   "-DGENERIC -DSOC_DEFAULT -DFEATURE_DEFAULT -DSIZE=DEFAULT"
+// and with srcs:
+//   ["*.cpp", "impl/default.cpp"].
 //
 // Similarly, if acme BoardConfig.mk file contained:
 //
@@ -157,9 +170,13 @@ type soongConfigModuleTypeImportProperties struct {
 //         feature \
 //
 //     SOONG_CONFIG_acme_board := soc_c
+//     SOONG_CONFIG_acme_impl := foo.cpp bar.cpp
 //
 // Then libacme_foo would build with cflags:
-//   "-DGENERIC -DSOC_DEFAULT -DFEATURE_DEFAULT -DSIZE=DEFAULT".
+//   "-DGENERIC -DSOC_DEFAULT -DFEATURE_DEFAULT -DSIZE=DEFAULT"
+// and with srcs:
+//   ["*.cpp", "impl/foo.cpp", "impl/bar.cpp"].
+//
 
 func SoongConfigModuleTypeImportFactory() Module {
 	module := &soongConfigModuleTypeImport{}
@@ -187,7 +204,6 @@ func (*soongConfigModuleTypeImport) GenerateAndroidBuildActions(ModuleContext) {
 
 type soongConfigModuleTypeModule struct {
 	ModuleBase
-	BazelModuleBase
 	properties soongconfig.ModuleTypeProperties
 }
 
@@ -201,6 +217,7 @@ type soongConfigModuleTypeModule struct {
 //
 //	bool variable: the variable is unspecified or not set to a true value
 //	value variable: the variable is unspecified
+//	list variable: the variable is unspecified
 //	string variable: the variable is unspecified or the variable is set to a string unused in the
 //	                 given module. For example, string variable `test` takes values: "a" and "b",
 //	                 if the module contains a property `a` and `conditions_default`, when test=b,
@@ -209,56 +226,63 @@ type soongConfigModuleTypeModule struct {
 //
 // For example, an Android.bp file could have:
 //
-//	    soong_config_module_type {
-//	        name: "acme_cc_defaults",
-//	        module_type: "cc_defaults",
-//	        config_namespace: "acme",
-//	        variables: ["board"],
-//	        bool_variables: ["feature"],
-//	        value_variables: ["width"],
-//	        properties: ["cflags", "srcs"],
-//	    }
+//	soong_config_module_type {
+//	    name: "acme_cc_defaults",
+//	    module_type: "cc_defaults",
+//	    config_namespace: "acme",
+//	    variables: ["board"],
+//	    bool_variables: ["feature"],
+//	    value_variables: ["width"],
+//	    list_variables: ["impl"],
+//	    properties: ["cflags", "srcs"],
+//	}
 //
-//	    soong_config_string_variable {
-//	        name: "board",
-//	        values: ["soc_a", "soc_b"],
-//	    }
+//	soong_config_string_variable {
+//	    name: "board",
+//	    values: ["soc_a", "soc_b"],
+//	}
 //
-//	    acme_cc_defaults {
-//	        name: "acme_defaults",
-//	        cflags: ["-DGENERIC"],
-//	        soong_config_variables: {
-//	            board: {
-//	                soc_a: {
-//	                    cflags: ["-DSOC_A"],
-//	                },
-//	                soc_b: {
-//	                    cflags: ["-DSOC_B"],
-//	                },
-//	                conditions_default: {
-//	                    cflags: ["-DSOC_DEFAULT"],
-//	                },
+//	acme_cc_defaults {
+//	    name: "acme_defaults",
+//	    cflags: ["-DGENERIC"],
+//	    soong_config_variables: {
+//	        board: {
+//	            soc_a: {
+//	                cflags: ["-DSOC_A"],
 //	            },
-//	            feature: {
-//	                cflags: ["-DFEATURE"],
-//	                conditions_default: {
-//	                    cflags: ["-DFEATURE_DEFAULT"],
-//	                },
+//	            soc_b: {
+//	                cflags: ["-DSOC_B"],
 //	            },
-//	            width: {
-//		               cflags: ["-DWIDTH=%s"],
-//	                conditions_default: {
-//	                    cflags: ["-DWIDTH=DEFAULT"],
-//	                },
+//	            conditions_default: {
+//	                cflags: ["-DSOC_DEFAULT"],
 //	            },
 //	        },
-//	    }
+//	        feature: {
+//	            cflags: ["-DFEATURE"],
+//	            conditions_default: {
+//	                cflags: ["-DFEATURE_DEFAULT"],
+//	            },
+//	        },
+//	        width: {
+//	            cflags: ["-DWIDTH=%s"],
+//	            conditions_default: {
+//	                cflags: ["-DWIDTH=DEFAULT"],
+//	            },
+//	        },
+//	        impl: {
+//	            srcs: ["impl/%s"],
+//	            conditions_default: {
+//	                srcs: ["impl/default.cpp"],
+//	            },
+//	        },
+//	    },
+//	}
 //
-//	    cc_library {
-//	        name: "libacme_foo",
-//	        defaults: ["acme_defaults"],
-//	        srcs: ["*.cpp"],
-//	    }
+//	cc_library {
+//	    name: "libacme_foo",
+//	    defaults: ["acme_defaults"],
+//	    srcs: ["*.cpp"],
+//	}
 //
 // If an acme BoardConfig.mk file contained:
 //
@@ -270,8 +294,10 @@ type soongConfigModuleTypeModule struct {
 //	SOONG_CONFIG_acme_board := soc_a
 //	SOONG_CONFIG_acme_feature := true
 //	SOONG_CONFIG_acme_width := 200
+//	SOONG_CONFIG_acme_impl := foo.cpp bar.cpp
 //
-// Then libacme_foo would build with cflags "-DGENERIC -DSOC_A -DFEATURE".
+// Then libacme_foo would build with cflags "-DGENERIC -DSOC_A -DFEATURE" and srcs
+// ["*.cpp", "impl/foo.cpp", "impl/bar.cpp"].
 func SoongConfigModuleTypeFactory() Module {
 	module := &soongConfigModuleTypeModule{}
 
@@ -304,6 +330,11 @@ type soongConfigBoolVariableDummyModule struct {
 	properties soongconfig.VariableProperties
 }
 
+type soongConfigValueVariableDummyModule struct {
+	ModuleBase
+	properties soongconfig.VariableProperties
+}
+
 // soong_config_string_variable defines a variable and a set of possible string values for use
 // in a soong_config_module_type definition.
 func SoongConfigStringVariableDummyFactory() Module {
@@ -322,6 +353,15 @@ func SoongConfigBoolVariableDummyFactory() Module {
 	return module
 }
 
+// soong_config_value_variable defines a variable whose value can be expanded into
+// the value of a string property.
+func SoongConfigValueVariableDummyFactory() Module {
+	module := &soongConfigValueVariableDummyModule{}
+	module.AddProperties(&module.properties)
+	initAndroidModuleBase(module)
+	return module
+}
+
 func (m *soongConfigStringVariableDummyModule) Name() string {
 	return m.properties.Name + fmt.Sprintf("%p", m)
 }
@@ -333,6 +373,12 @@ func (m *soongConfigBoolVariableDummyModule) Name() string {
 }
 func (*soongConfigBoolVariableDummyModule) Namespaceless()                                {}
 func (*soongConfigBoolVariableDummyModule) GenerateAndroidBuildActions(ctx ModuleContext) {}
+
+func (m *soongConfigValueVariableDummyModule) Name() string {
+	return m.properties.Name + fmt.Sprintf("%p", m)
+}
+func (*soongConfigValueVariableDummyModule) Namespaceless()                                {}
+func (*soongConfigValueVariableDummyModule) GenerateAndroidBuildActions(ctx ModuleContext) {}
 
 // importModuleTypes registers the module factories for a list of module types defined
 // in an Android.bp file. These module factories are scoped for the current Android.bp
@@ -395,10 +441,6 @@ func loadSoongConfigModuleTypeDefinition(ctx LoadHookContext, from string) map[s
 			return (map[string]blueprint.ModuleFactory)(nil)
 		}
 
-		if ctx.Config().BuildMode == Bp2build {
-			ctx.Config().Bp2buildSoongConfigDefinitions.AddVars(*mtDef)
-		}
-
 		globalModuleTypes := ctx.moduleFactories()
 
 		factories := make(map[string]blueprint.ModuleFactory)
@@ -406,7 +448,7 @@ func loadSoongConfigModuleTypeDefinition(ctx LoadHookContext, from string) map[s
 		for name, moduleType := range mtDef.ModuleTypes {
 			factory := globalModuleTypes[moduleType.BaseModuleType]
 			if factory != nil {
-				factories[name] = configModuleFactory(factory, moduleType, ctx.Config().BuildMode == Bp2build)
+				factories[name] = configModuleFactory(factory, moduleType)
 			} else {
 				reportErrors(ctx, from,
 					fmt.Errorf("missing global module type factory for %q", moduleType.BaseModuleType))
@@ -421,9 +463,60 @@ func loadSoongConfigModuleTypeDefinition(ctx LoadHookContext, from string) map[s
 	}).(map[string]blueprint.ModuleFactory)
 }
 
+// tracingConfig is a wrapper to soongconfig.SoongConfig which records all accesses to SoongConfig.
+type tracingConfig struct {
+	config    soongconfig.SoongConfig
+	boolSet   map[string]bool
+	stringSet map[string]string
+	isSetSet  map[string]bool
+}
+
+func (c *tracingConfig) Bool(name string) bool {
+	c.boolSet[name] = c.config.Bool(name)
+	return c.boolSet[name]
+}
+
+func (c *tracingConfig) String(name string) string {
+	c.stringSet[name] = c.config.String(name)
+	return c.stringSet[name]
+}
+
+func (c *tracingConfig) IsSet(name string) bool {
+	c.isSetSet[name] = c.config.IsSet(name)
+	return c.isSetSet[name]
+}
+
+func (c *tracingConfig) getTrace() soongConfigTrace {
+	ret := soongConfigTrace{}
+
+	for k, v := range c.boolSet {
+		ret.Bools = append(ret.Bools, fmt.Sprintf("%q:%t", k, v))
+	}
+	for k, v := range c.stringSet {
+		ret.Strings = append(ret.Strings, fmt.Sprintf("%q:%q", k, v))
+	}
+	for k, v := range c.isSetSet {
+		ret.IsSets = append(ret.IsSets, fmt.Sprintf("%q:%t", k, v))
+	}
+
+	return ret
+}
+
+func newTracingConfig(config soongconfig.SoongConfig) *tracingConfig {
+	c := tracingConfig{
+		config:    config,
+		boolSet:   make(map[string]bool),
+		stringSet: make(map[string]string),
+		isSetSet:  make(map[string]bool),
+	}
+	return &c
+}
+
+var _ soongconfig.SoongConfig = (*tracingConfig)(nil)
+
 // configModuleFactory takes an existing soongConfigModuleFactory and a
 // ModuleType to create a new ModuleFactory that uses a custom loadhook.
-func configModuleFactory(factory blueprint.ModuleFactory, moduleType *soongconfig.ModuleType, bp2build bool) blueprint.ModuleFactory {
+func configModuleFactory(factory blueprint.ModuleFactory, moduleType *soongconfig.ModuleType) blueprint.ModuleFactory {
 	// Defer creation of conditional properties struct until the first call from the factory
 	// method. That avoids having to make a special call to the factory to create the properties
 	// structs from which the conditional properties struct is created. This is needed in order to
@@ -464,38 +557,22 @@ func configModuleFactory(factory blueprint.ModuleFactory, moduleType *soongconfi
 		conditionalProps := proptools.CloneEmptyProperties(conditionalFactoryProps)
 		props = append(props, conditionalProps.Interface())
 
-		if bp2build {
-			// The loadhook is different for bp2build, since we don't want to set a specific
-			// set of property values based on a vendor var -- we want __all of them__ to
-			// generate select statements, so we put the entire soong_config_variables
-			// struct, together with the namespace representing those variables, while
-			// creating the custom module with the factory.
-			AddLoadHook(module, func(ctx LoadHookContext) {
-				if m, ok := module.(Bazelable); ok {
-					m.SetBaseModuleType(moduleType.BaseModuleType)
-					// Instead of applying all properties, keep the entire conditionalProps struct as
-					// part of the custom module so dependent modules can create the selects accordingly
-					m.setNamespacedVariableProps(namespacedVariableProperties{
-						moduleType.ConfigNamespace: []interface{}{conditionalProps.Interface()},
-					})
-				}
-			})
-		} else {
-			// Regular Soong operation wraps the existing module factory with a
-			// conditional on Soong config variables by reading the product
-			// config variables from Make.
-			AddLoadHook(module, func(ctx LoadHookContext) {
-				config := ctx.Config().VendorConfig(moduleType.ConfigNamespace)
-				newProps, err := soongconfig.PropertiesToApply(moduleType, conditionalProps, config)
-				if err != nil {
-					ctx.ModuleErrorf("%s", err)
-					return
-				}
-				for _, ps := range newProps {
-					ctx.AppendProperties(ps)
-				}
-			})
-		}
+		// Regular Soong operation wraps the existing module factory with a
+		// conditional on Soong config variables by reading the product
+		// config variables from Make.
+		AddLoadHook(module, func(ctx LoadHookContext) {
+			tracingConfig := newTracingConfig(ctx.Config().VendorConfig(moduleType.ConfigNamespace))
+			newProps, err := soongconfig.PropertiesToApply(moduleType, conditionalProps, tracingConfig)
+			if err != nil {
+				ctx.ModuleErrorf("%s", err)
+				return
+			}
+			for _, ps := range newProps {
+				ctx.AppendProperties(ps)
+			}
+
+			module.(Module).base().commonProperties.SoongConfigTrace = tracingConfig.getTrace()
+		})
 		return module, props
 	}
 }

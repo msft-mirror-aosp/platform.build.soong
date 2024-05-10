@@ -45,16 +45,12 @@ func vndkApexBundleFactory() android.Module {
 	return bundle
 }
 
-func (a *apexBundle) vndkVersion(config android.DeviceConfig) string {
-	vndkVersion := proptools.StringDefault(a.vndkProperties.Vndk_version, "current")
-	if vndkVersion == "current" {
-		vndkVersion = config.PlatformVndkVersion()
-	}
-	return vndkVersion
+func (a *apexBundle) vndkVersion() string {
+	return proptools.StringDefault(a.vndkProperties.Vndk_version, "current")
 }
 
 type apexVndkProperties struct {
-	// Indicates VNDK version of which this VNDK APEX bundles VNDK libs. Default is Platform VNDK Version.
+	// Indicates VNDK version of which this VNDK APEX bundles VNDK libs.
 	Vndk_version *string
 }
 
@@ -64,35 +60,32 @@ func apexVndkMutator(mctx android.TopDownMutatorContext) {
 			mctx.PropertyErrorf("native_bridge_supported", "%q doesn't support native bridge binary.", mctx.ModuleType())
 		}
 
-		vndkVersion := ab.vndkVersion(mctx.DeviceConfig())
-		apiLevel, err := android.ApiLevelFromUser(mctx, vndkVersion)
-		if err != nil {
-			mctx.PropertyErrorf("vndk_version", "%s", err.Error())
-			return
-		}
+		vndkVersion := ab.vndkVersion()
+		if vndkVersion != "" {
+			apiLevel, err := android.ApiLevelFromUser(mctx, vndkVersion)
+			if err != nil {
+				mctx.PropertyErrorf("vndk_version", "%s", err.Error())
+				return
+			}
 
-		targets := mctx.MultiTargets()
-		if len(targets) > 0 && apiLevel.LessThan(cc.MinApiForArch(mctx, targets[0].Arch.ArchType)) {
-			// Disable VNDK apexes for VNDK versions less than the minimum supported API level for the primary
-			// architecture.
-			ab.Disable()
+			targets := mctx.MultiTargets()
+			if len(targets) > 0 && apiLevel.LessThan(cc.MinApiForArch(mctx, targets[0].Arch.ArchType)) {
+				// Disable VNDK APEXes for VNDK versions less than the minimum supported API
+				// level for the primary architecture.
+				ab.Disable()
+			}
 		}
-
 	}
 }
 
 func apexVndkDepsMutator(mctx android.BottomUpMutatorContext) {
 	if m, ok := mctx.Module().(*cc.Module); ok && cc.IsForVndkApex(mctx, m) {
 		vndkVersion := m.VndkVersion()
-		// For VNDK-Lite device, we gather core-variants of VNDK-Sp libraries, which doesn't have VNDK version defined
+
 		if vndkVersion == "" {
-			vndkVersion = mctx.DeviceConfig().PlatformVndkVersion()
+			return
 		}
-		if vndkVersion == mctx.DeviceConfig().PlatformVndkVersion() {
-			vndkVersion = "current"
-		} else {
-			vndkVersion = "v" + vndkVersion
-		}
+		vndkVersion = "v" + vndkVersion
 
 		vndkApexName := "com.android.vndk." + vndkVersion
 
@@ -101,19 +94,15 @@ func apexVndkDepsMutator(mctx android.BottomUpMutatorContext) {
 		}
 	} else if a, ok := mctx.Module().(*apexBundle); ok && a.vndkApex {
 		vndkVersion := proptools.StringDefault(a.vndkProperties.Vndk_version, "current")
-		mctx.AddDependency(mctx.Module(), prebuiltTag, cc.VndkLibrariesTxtModules(vndkVersion)...)
+		mctx.AddDependency(mctx.Module(), prebuiltTag, cc.VndkLibrariesTxtModules(vndkVersion, mctx)...)
 	}
 }
 
 // name is module.BaseModuleName() which is used as LOCAL_MODULE_NAME and also LOCAL_OVERRIDES_*
-func makeCompatSymlinks(name string, ctx android.ModuleContext, primaryApex bool) (symlinks android.InstallPaths) {
+func makeCompatSymlinks(name string, ctx android.ModuleContext) (symlinks android.InstallPaths) {
 	// small helper to add symlink commands
 	addSymlink := func(target string, dir android.InstallPath, linkName string) {
-		if primaryApex {
-			symlinks = append(symlinks, ctx.InstallAbsoluteSymlink(dir, linkName, target))
-		} else {
-			symlinks = append(symlinks, dir.Join(ctx, linkName))
-		}
+		symlinks = append(symlinks, ctx.InstallAbsoluteSymlink(dir, linkName, target))
 	}
 
 	// TODO(b/142911355): [VNDK APEX] Fix hard-coded references to /system/lib/vndk

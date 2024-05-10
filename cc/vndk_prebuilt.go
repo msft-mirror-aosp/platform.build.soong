@@ -131,7 +131,6 @@ func (p *vndkPrebuiltLibraryDecorator) singleSourcePath(ctx ModuleContext) andro
 
 func (p *vndkPrebuiltLibraryDecorator) link(ctx ModuleContext,
 	flags Flags, deps PathDeps, objs Objects) android.Path {
-
 	if !p.MatchesWithDevice(ctx.DeviceConfig()) {
 		ctx.Module().HideFromMake()
 		return nil
@@ -160,12 +159,7 @@ func (p *vndkPrebuiltLibraryDecorator) link(ctx ModuleContext,
 
 		p.androidMkSuffix = p.NameSuffix()
 
-		vndkVersion := ctx.DeviceConfig().VndkVersion()
-		if vndkVersion == p.Version() {
-			p.androidMkSuffix = ""
-		}
-
-		ctx.SetProvider(SharedLibraryInfoProvider, SharedLibraryInfo{
+		android.SetProvider(ctx, SharedLibraryInfoProvider, SharedLibraryInfo{
 			SharedLibrary: in,
 			Target:        ctx.Target(),
 
@@ -179,6 +173,11 @@ func (p *vndkPrebuiltLibraryDecorator) link(ctx ModuleContext,
 
 	ctx.Module().HideFromMake()
 	return nil
+}
+
+func (p *vndkPrebuiltLibraryDecorator) moduleInfoJSON(ctx ModuleContext, moduleInfoJSON *android.ModuleInfoJSON) {
+	p.libraryDecorator.moduleInfoJSON(ctx, moduleInfoJSON)
+	moduleInfoJSON.SubName += p.androidMkSuffix
 }
 
 func (p *vndkPrebuiltLibraryDecorator) MatchesWithDevice(config android.DeviceConfig) bool {
@@ -221,6 +220,7 @@ func vndkPrebuiltSharedLibrary() *Module {
 	prebuilt.properties.Check_elf_files = BoolPtr(false)
 	prebuilt.baseLinker.Properties.No_libcrt = BoolPtr(true)
 	prebuilt.baseLinker.Properties.Nocrt = BoolPtr(true)
+	prebuilt.baseLinker.Properties.No_crt_pad_segment = BoolPtr(true)
 
 	// Prevent default system libs (libc, libm, and libdl) from being linked
 	if prebuilt.baseLinker.Properties.System_shared_libs == nil {
@@ -234,14 +234,6 @@ func vndkPrebuiltSharedLibrary() *Module {
 	module.AddProperties(
 		&prebuilt.properties,
 	)
-
-	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
-		// empty BOARD_VNDK_VERSION implies that the device won't support
-		// system only OTA. In this case, VNDK snapshots aren't needed.
-		if ctx.DeviceConfig().VndkVersion() == "" {
-			ctx.Module().Disable()
-		}
-	})
 
 	return module
 }

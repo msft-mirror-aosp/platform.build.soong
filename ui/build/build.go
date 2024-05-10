@@ -15,11 +15,13 @@
 package build
 
 import (
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sync"
 	"text/template"
+	"time"
 
 	"android/soong/ui/metrics"
 )
@@ -29,6 +31,7 @@ import (
 func SetupOutDir(ctx Context, config Config) {
 	ensureEmptyFileExists(ctx, filepath.Join(config.OutDir(), "Android.mk"))
 	ensureEmptyFileExists(ctx, filepath.Join(config.OutDir(), "CleanSpec.mk"))
+	ensureEmptyDirectoriesExist(ctx, config.TempDir())
 
 	// Potentially write a marker file for whether kati is enabled. This is used by soong_build to
 	// potentially run the AndroidMk singleton and postinstall commands.
@@ -56,6 +59,31 @@ func SetupOutDir(ctx Context, config Config) {
 	} else {
 		ctx.Fatalln("Missing BUILD_DATETIME_FILE")
 	}
+
+	// BUILD_NUMBER should be set to the source control value that
+	// represents the current state of the source code.  E.g., a
+	// perforce changelist number or a git hash.  Can be an arbitrary string
+	// (to allow for source control that uses something other than numbers),
+	// but must be a single word and a valid file name.
+	//
+	// If no BUILD_NUMBER is set, create a useful "I am an engineering build
+	// from this date/time" value.  Make it start with a non-digit so that
+	// anyone trying to parse it as an integer will probably get "0".
+	buildNumber, ok := config.environ.Get("BUILD_NUMBER")
+	if ok {
+		writeValueIfChanged(ctx, config, config.OutDir(), "file_name_tag.txt", buildNumber)
+	} else {
+		var username string
+		if username, ok = config.environ.Get("BUILD_USERNAME"); !ok {
+			ctx.Fatalln("Missing BUILD_USERNAME")
+		}
+		buildNumber = fmt.Sprintf("eng.%.6s.%s", username, time.Now().Format("20060102.150405" /* YYYYMMDD.HHMMSS */))
+		writeValueIfChanged(ctx, config, config.OutDir(), "file_name_tag.txt", username)
+	}
+	// Write the build number to a file so it can be read back in
+	// without changing the command line every time.  Avoids rebuilds
+	// when using ninja.
+	writeValueIfChanged(ctx, config, config.SoongOutDir(), "build_number.txt", buildNumber)
 }
 
 var combinedBuildNinjaTemplate = template.Must(template.New("combined").Parse(`
@@ -102,29 +130,10 @@ const (
 	// Whether to include the kati-generated ninja file in the combined ninja.
 	RunKatiNinja = 1 << iota
 	// Whether to run ninja on the combined ninja.
-	RunNinja      = 1 << iota
-	RunBuildTests = 1 << iota
-	RunAll        = RunProductConfig | RunSoong | RunKati | RunKatiNinja | RunNinja
+	RunNinja       = 1 << iota
+	RunDistActions = 1 << iota
+	RunBuildTests  = 1 << iota
 )
-
-// checkBazelMode fails the build if there are conflicting arguments for which bazel
-// build mode to use.
-func checkBazelMode(ctx Context, config Config) {
-	count := 0
-	if config.bazelProdMode {
-		count++
-	}
-	if config.bazelDevMode {
-		count++
-	}
-	if config.bazelStagingMode {
-		count++
-	}
-	if count > 1 {
-		ctx.Fatalln("Conflicting bazel mode.\n" +
-			"Do not specify more than one of --bazel-mode and --bazel-mode-dev and --bazel-mode-staging ")
-	}
-}
 
 // checkProblematicFiles fails the build if existing Android.mk or CleanSpec.mk files are found at the root of the tree.
 func checkProblematicFiles(ctx Context) {
@@ -237,8 +246,6 @@ func Build(ctx Context, config Config) {
 
 	defer waitForDist(ctx)
 
-	checkBazelMode(ctx, config)
-
 	// checkProblematicFiles aborts the build if Android.mk or CleanSpec.mk are found at the root of the tree.
 	checkProblematicFiles(ctx)
 
@@ -249,8 +256,6 @@ func Build(ctx Context, config Config) {
 	// checkCaseSensitivity issues a warning if a case-insensitive file system is being used.
 	checkCaseSensitivity(ctx, config)
 
-	ensureEmptyDirectoriesExist(ctx, config.TempDir())
-
 	SetupPath(ctx, config)
 
 	what := evaluateWhatToRun(config, ctx.Verboseln)
@@ -259,10 +264,21 @@ func Build(ctx Context, config Config) {
 		startGoma(ctx, config)
 	}
 
+	rbeCh := make(chan bool)
+	var rbePanic any
 	if config.StartRBE() {
 		cleanupRBELogsDir(ctx, config)
-		startRBE(ctx, config)
+		checkRBERequirements(ctx, config)
+		go func() {
+			defer func() {
+				rbePanic = recover()
+				close(rbeCh)
+			}()
+			startRBE(ctx, config)
+		}()
 		defer DumpRBEMetrics(ctx, config, filepath.Join(config.LogsDir(), "rbe_metrics.pb"))
+	} else {
+		close(rbeCh)
 	}
 
 	if what&RunProductConfig != 0 {
@@ -315,41 +331,54 @@ func Build(ctx Context, config Config) {
 		testForDanglingRules(ctx, config)
 	}
 
+	<-rbeCh
+	if rbePanic != nil {
+		// If there was a ctx.Fatal in startRBE, rethrow it.
+		panic(rbePanic)
+	}
+
 	if what&RunNinja != 0 {
 		if what&RunKati != 0 {
 			installCleanIfNecessary(ctx, config)
 		}
-
 		runNinjaForBuild(ctx, config)
+	}
+
+	if what&RunDistActions != 0 {
+		runDistActions(ctx, config)
 	}
 }
 
 func evaluateWhatToRun(config Config, verboseln func(v ...interface{})) int {
 	//evaluate what to run
-	what := RunAll
+	what := 0
 	if config.Checkbuild() {
 		what |= RunBuildTests
 	}
-	if config.SkipConfig() {
+	if !config.SkipConfig() {
+		what |= RunProductConfig
+	} else {
 		verboseln("Skipping Config as requested")
-		what = what &^ RunProductConfig
 	}
-	if config.SkipKati() {
-		verboseln("Skipping Kati as requested")
-		what = what &^ RunKati
-	}
-	if config.SkipKatiNinja() {
-		verboseln("Skipping use of Kati ninja as requested")
-		what = what &^ RunKatiNinja
-	}
-	if config.SkipSoong() {
+	if !config.SkipSoong() {
+		what |= RunSoong
+	} else {
 		verboseln("Skipping use of Soong as requested")
-		what = what &^ RunSoong
 	}
-
-	if config.SkipNinja() {
+	if !config.SkipKati() {
+		what |= RunKati
+	} else {
+		verboseln("Skipping Kati as requested")
+	}
+	if !config.SkipKatiNinja() {
+		what |= RunKatiNinja
+	} else {
+		verboseln("Skipping use of Kati ninja as requested")
+	}
+	if !config.SkipNinja() {
+		what |= RunNinja
+	} else {
 		verboseln("Skipping Ninja as requested")
-		what = what &^ RunNinja
 	}
 
 	if !config.SoongBuildInvocationNeeded() {
@@ -361,6 +390,11 @@ func evaluateWhatToRun(config Config, verboseln func(v ...interface{})) int {
 		what = what &^ RunNinja
 		what = what &^ RunKati
 	}
+
+	if config.Dist() {
+		what |= RunDistActions
+	}
+
 	return what
 }
 
@@ -418,4 +452,10 @@ func distFile(ctx Context, config Config, src string, subDirs ...string) {
 			ctx.Printf("failed to dist %s: %s", filepath.Base(src), err.Error())
 		}
 	}()
+}
+
+// Actions to run on every build where 'dist' is in the actions.
+// Be careful, anything added here slows down EVERY CI build
+func runDistActions(ctx Context, config Config) {
+	runStagingSnapshot(ctx, config)
 }

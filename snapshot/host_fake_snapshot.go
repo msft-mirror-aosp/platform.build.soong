@@ -75,7 +75,7 @@ type hostSnapshotFakeJsonFlags struct {
 }
 
 func registerHostSnapshotComponents(ctx android.RegistrationContext) {
-	ctx.RegisterSingletonType("host-fake-snapshot", HostToolsFakeAndroidSingleton)
+	ctx.RegisterParallelSingletonType("host-fake-snapshot", HostToolsFakeAndroidSingleton)
 }
 
 type hostFakeSingleton struct {
@@ -116,10 +116,10 @@ func (c *hostFakeSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 			prebuilts[android.RemoveOptionalPrebuiltPrefix(module.Name())] = true
 			return
 		}
-		if !module.Enabled() || module.IsHideFromMake() {
+		if !module.Enabled(ctx) || module.IsHideFromMake() {
 			return
 		}
-		apexInfo := ctx.ModuleProvider(module, android.ApexInfoProvider).(android.ApexInfo)
+		apexInfo, _ := android.SingletonModuleProvider(ctx, module, android.ApexInfoProvider)
 		if !apexInfo.IsForPlatform() {
 			return
 		}

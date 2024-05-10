@@ -52,7 +52,8 @@ var DexpreoptRunningInSoong = false
 // GenerateDexpreoptRule generates a set of commands that will preopt a module based on a GlobalConfig and a
 // ModuleConfig.  The produced files and their install locations will be available through rule.Installs().
 func GenerateDexpreoptRule(ctx android.BuilderContext, globalSoong *GlobalSoongConfig,
-	global *GlobalConfig, module *ModuleConfig) (rule *android.RuleBuilder, err error) {
+	global *GlobalConfig, module *ModuleConfig, productPackages android.Path, copyApexSystemServerJarDex bool) (
+	rule *android.RuleBuilder, err error) {
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -92,7 +93,8 @@ func GenerateDexpreoptRule(ctx android.BuilderContext, globalSoong *GlobalSoongC
 			generateDM := shouldGenerateDM(module, global)
 
 			for archIdx, _ := range module.Archs {
-				dexpreoptCommand(ctx, globalSoong, global, module, rule, archIdx, profile, appImage, generateDM)
+				dexpreoptCommand(ctx, globalSoong, global, module, rule, archIdx, profile, appImage,
+					generateDM, productPackages, copyApexSystemServerJarDex)
 			}
 		}
 	}
@@ -100,8 +102,16 @@ func GenerateDexpreoptRule(ctx android.BuilderContext, globalSoong *GlobalSoongC
 	return rule, nil
 }
 
+// If dexpreopt is applicable to the module, returns whether dexpreopt is disabled. Otherwise, the
+// behavior is undefined.
+// When it returns true, dexpreopt artifacts will not be generated, but profile will still be
+// generated if profile-guided compilation is requested.
 func dexpreoptDisabled(ctx android.PathContext, global *GlobalConfig, module *ModuleConfig) bool {
 	if ctx.Config().UnbundledBuild() {
+		return true
+	}
+
+	if global.DisablePreopt {
 		return true
 	}
 
@@ -114,12 +124,7 @@ func dexpreoptDisabled(ctx android.PathContext, global *GlobalConfig, module *Mo
 		return true
 	}
 
-	// If OnlyPreoptBootImageAndSystemServer=true and module is not in boot class path skip
-	// Also preopt system server jars since selinux prevents system server from loading anything from
-	// /data. If we don't do this they will need to be extracted which is not favorable for RAM usage
-	// or performance. If PreoptExtractedApk is true, we ignore the only preopt boot image options.
-	if global.OnlyPreoptBootImageAndSystemServer && !global.BootJars.ContainsJar(module.Name) &&
-		!global.AllSystemServerJars(ctx).ContainsJar(module.Name) && !module.PreoptExtractedApk {
+	if global.OnlyPreoptArtBootImage {
 		return true
 	}
 
@@ -224,9 +229,9 @@ func ToOdexPath(path string, arch android.ArchType) string {
 		pathtools.ReplaceExtension(filepath.Base(path), "odex"))
 }
 
-func dexpreoptCommand(ctx android.PathContext, globalSoong *GlobalSoongConfig, global *GlobalConfig,
-	module *ModuleConfig, rule *android.RuleBuilder, archIdx int, profile android.WritablePath,
-	appImage bool, generateDM bool) {
+func dexpreoptCommand(ctx android.BuilderContext, globalSoong *GlobalSoongConfig,
+	global *GlobalConfig, module *ModuleConfig, rule *android.RuleBuilder, archIdx int,
+	profile android.WritablePath, appImage bool, generateDM bool, productPackages android.Path, copyApexSystemServerJarDex bool) {
 
 	arch := module.Archs[archIdx]
 
@@ -272,7 +277,7 @@ func dexpreoptCommand(ctx android.PathContext, globalSoong *GlobalSoongConfig, g
 			clcTarget = append(clcTarget, GetSystemServerDexLocation(ctx, global, lib))
 		}
 
-		if DexpreoptRunningInSoong {
+		if DexpreoptRunningInSoong && copyApexSystemServerJarDex {
 			// Copy the system server jar to a predefined location where dex2oat will find it.
 			dexPathHost := SystemServerDexJarHostPath(ctx, module.Name)
 			rule.Command().Text("mkdir -p").Flag(filepath.Dir(dexPathHost.String()))
@@ -343,11 +348,13 @@ func dexpreoptCommand(ctx android.PathContext, globalSoong *GlobalSoongConfig, g
 		}
 
 		// Generate command that saves host and target class loader context in shell variables.
-		clc, paths := ComputeClassLoaderContext(module.ClassLoaderContexts)
+		_, paths := ComputeClassLoaderContextDependencies(module.ClassLoaderContexts)
 		rule.Command().
 			Text(`eval "$(`).Tool(globalSoong.ConstructContext).
 			Text(` --target-sdk-version ${target_sdk_version}`).
-			Text(clc).Implicits(paths).
+			FlagWithArg("--context-json=", module.ClassLoaderContexts.DumpForFlag()).
+			FlagWithInput("--product-packages=", productPackages).
+			Implicits(paths).
 			Text(`)"`)
 	}
 
@@ -383,7 +390,8 @@ func dexpreoptCommand(ctx android.PathContext, globalSoong *GlobalSoongConfig, g
 		Flag("--generate-build-id").
 		Flag("--abort-on-hard-verifier-error").
 		Flag("--force-determinism").
-		FlagWithArg("--no-inline-from=", "core-oj.jar")
+		FlagWithArg("--no-inline-from=", "core-oj.jar").
+		Text("$(cat").Input(globalSoong.UffdGcFlag).Text(")")
 
 	var preoptFlags []string
 	if len(module.PreoptFlags) > 0 {
@@ -497,10 +505,6 @@ func dexpreoptCommand(ctx android.PathContext, globalSoong *GlobalSoongConfig, g
 
 	if profile != nil {
 		cmd.FlagWithInput("--profile-file=", profile)
-	}
-
-	if global.EnableUffdGc {
-		cmd.Flag("--runtime-arg").Flag("-Xgc:CMC")
 	}
 
 	rule.Install(odexPath, odexInstallPath)
@@ -618,5 +622,3 @@ func contains(l []string, s string) bool {
 	}
 	return false
 }
-
-var copyOf = android.CopyOf

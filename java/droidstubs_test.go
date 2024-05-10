@@ -22,6 +22,8 @@ import (
 	"testing"
 
 	"android/soong/android"
+
+	"github.com/google/blueprint/proptools"
 )
 
 func TestDroidstubs(t *testing.T) {
@@ -82,7 +84,7 @@ func TestDroidstubs(t *testing.T) {
 	for _, c := range testcases {
 		m := ctx.ModuleForTests(c.moduleName, "android_common")
 		manifest := m.Output("metalava.sbox.textproto")
-		sboxProto := android.RuleBuilderSboxProtoForTests(t, manifest)
+		sboxProto := android.RuleBuilderSboxProtoForTests(t, ctx, manifest)
 		cmdline := String(sboxProto.Commands[0].Command)
 		android.AssertStringContainsEquals(t, "api-versions generation flag", cmdline, "--generate-api-levels", c.generate_xml)
 		if c.expectedJarFilename != "" {
@@ -131,7 +133,7 @@ func getAndroidJarPatternsForDroidstubs(t *testing.T, sdkType string) []string {
 
 	m := ctx.ModuleForTests("foo-stubs", "android_common")
 	manifest := m.Output("metalava.sbox.textproto")
-	cmd := String(android.RuleBuilderSboxProtoForTests(t, manifest).Commands[0].Command)
+	cmd := String(android.RuleBuilderSboxProtoForTests(t, ctx, manifest).Commands[0].Command)
 	r := regexp.MustCompile(`--android-jar-pattern [^ ]+/android.jar`)
 	return r.FindAllString(cmd, -1)
 }
@@ -210,8 +212,8 @@ func TestDroidstubsSandbox(t *testing.T) {
 		t.Errorf("Expected inputs %q, got %q", w, g)
 	}
 
-	manifest := android.RuleBuilderSboxProtoForTests(t, m.Output("metalava.sbox.textproto"))
-	if g, w := manifest.Commands[0].GetCommand(), "reference __SBOX_SANDBOX_DIR__/out/.intermediates/foo/gen/foo.txt"; !strings.Contains(g, w) {
+	manifest := android.RuleBuilderSboxProtoForTests(t, ctx, m.Output("metalava.sbox.textproto"))
+	if g, w := manifest.Commands[0].GetCommand(), "reference __SBOX_SANDBOX_DIR__/out/soong/.intermediates/foo/gen/foo.txt"; !strings.Contains(g, w) {
 		t.Errorf("Expected command to contain %q, got %q", w, g)
 	}
 }
@@ -300,51 +302,9 @@ func TestDroidstubsWithSdkExtensions(t *testing.T) {
 		})
 	m := ctx.ModuleForTests("baz-stubs", "android_common")
 	manifest := m.Output("metalava.sbox.textproto")
-	cmdline := String(android.RuleBuilderSboxProtoForTests(t, manifest).Commands[0].Command)
+	cmdline := String(android.RuleBuilderSboxProtoForTests(t, ctx, manifest).Commands[0].Command)
 	android.AssertStringDoesContain(t, "sdk-extensions-root present", cmdline, "--sdk-extensions-root sdk/extensions")
 	android.AssertStringDoesContain(t, "sdk-extensions-info present", cmdline, "--sdk-extensions-info sdk/extensions/info.txt")
-}
-
-func TestApiSurfaceFromDroidStubsName(t *testing.T) {
-	testCases := []struct {
-		desc               string
-		name               string
-		expectedApiSurface string
-	}{
-		{
-			desc:               "Default is publicapi",
-			name:               "mydroidstubs",
-			expectedApiSurface: "publicapi",
-		},
-		{
-			desc:               "name contains system substring",
-			name:               "mydroidstubs.system.suffix",
-			expectedApiSurface: "systemapi",
-		},
-		{
-			desc:               "name contains system_server substring",
-			name:               "mydroidstubs.system_server.suffix",
-			expectedApiSurface: "system-serverapi",
-		},
-		{
-			desc:               "name contains module_lib substring",
-			name:               "mydroidstubs.module_lib.suffix",
-			expectedApiSurface: "module-libapi",
-		},
-		{
-			desc:               "name contains test substring",
-			name:               "mydroidstubs.test.suffix",
-			expectedApiSurface: "testapi",
-		},
-		{
-			desc:               "name contains intra.core substring",
-			name:               "mydroidstubs.intra.core.suffix",
-			expectedApiSurface: "intracoreapi",
-		},
-	}
-	for _, tc := range testCases {
-		android.AssertStringEquals(t, tc.desc, tc.expectedApiSurface, bazelApiSurfaceName(tc.name))
-	}
 }
 
 func TestDroidStubsApiContributionGeneration(t *testing.T) {
@@ -377,6 +337,7 @@ func TestGeneratedApiContributionVisibilityTest(t *testing.T) {
 			name: "bar",
 			api_surface: "public",
 			api_contributions: ["foo.api.contribution"],
+			stubs_type: "everything",
 		}
 	`
 	ctx, _ := testJavaWithFS(t, `
@@ -390,7 +351,7 @@ func TestGeneratedApiContributionVisibilityTest(t *testing.T) {
 						removed_api_file: "A/removed.txt",
 					}
 				},
-				visibility: ["//a"],
+				visibility: ["//a", "//b"],
 			}
 		`,
 		map[string][]byte{
@@ -402,4 +363,102 @@ func TestGeneratedApiContributionVisibilityTest(t *testing.T) {
 	)
 
 	ctx.ModuleForTests("bar", "android_common")
+}
+
+func TestAconfigDeclarations(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+		}),
+		android.FixtureMergeMockFs(map[string][]byte{
+			"a/A.java":      nil,
+			"a/current.txt": nil,
+			"a/removed.txt": nil,
+		}),
+	).RunTestWithBp(t, `
+	aconfig_declarations {
+		name: "bar",
+		package: "com.example.package",
+		container: "com.android.foo",
+		srcs: [
+			"bar.aconfig",
+		],
+	}
+	droidstubs {
+		name: "foo",
+		srcs: ["a/A.java"],
+		api_surface: "public",
+		check_api: {
+			current: {
+				api_file: "a/current.txt",
+				removed_api_file: "a/removed.txt",
+			}
+		},
+		aconfig_declarations: [
+			"bar",
+		],
+	}
+	`)
+
+	// Check that droidstubs depend on aconfig_declarations
+	android.AssertBoolEquals(t, "foo expected to depend on bar",
+		CheckModuleHasDependency(t, result.TestContext, "foo", "android_common", "bar"), true)
+
+	m := result.ModuleForTests("foo", "android_common")
+	android.AssertStringDoesContain(t, "foo generates revert annotations file",
+		strings.Join(m.AllOutputs(), ""), "revert-annotations-exportable.txt")
+
+	// revert-annotations.txt passed to exportable stubs generation metalava command
+	manifest := m.Output("metalava_exportable.sbox.textproto")
+	cmdline := String(android.RuleBuilderSboxProtoForTests(t, result.TestContext, manifest).Commands[0].Command)
+	android.AssertStringDoesContain(t, "flagged api hide command not included", cmdline, "revert-annotations-exportable.txt")
+
+	android.AssertStringDoesContain(t, "foo generates exportable stubs jar",
+		strings.Join(m.AllOutputs(), ""), "exportable/foo-stubs.srcjar")
+}
+
+func TestReleaseExportRuntimeApis(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.BuildFlags = map[string]string{
+				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+			}
+			variables.ExportRuntimeApis = proptools.BoolPtr(true)
+		}),
+		android.FixtureMergeMockFs(map[string][]byte{
+			"a/A.java":      nil,
+			"a/current.txt": nil,
+			"a/removed.txt": nil,
+		}),
+	).RunTestWithBp(t, `
+	aconfig_declarations {
+		name: "bar",
+		package: "com.example.package",
+		container: "com.android.foo",
+		srcs: [
+			"bar.aconfig",
+		],
+	}
+	droidstubs {
+		name: "foo",
+		srcs: ["a/A.java"],
+		api_surface: "public",
+		check_api: {
+			current: {
+				api_file: "a/current.txt",
+				removed_api_file: "a/removed.txt",
+			}
+		},
+		aconfig_declarations: [
+			"bar",
+		],
+	}
+	`)
+
+	m := result.ModuleForTests("foo", "android_common")
+
+	rule := m.Output("released-flagged-apis-exportable.txt")
+	exposeWritableApisFilter := "--filter='state:ENABLED+permission:READ_ONLY' --filter='permission:READ_WRITE'"
+	android.AssertStringEquals(t, "Filter argument expected to contain READ_WRITE permissions", exposeWritableApisFilter, rule.Args["filter_args"])
 }

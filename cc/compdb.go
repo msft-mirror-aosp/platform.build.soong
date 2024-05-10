@@ -32,7 +32,7 @@ import (
 // make SOONG_GEN_COMPDB=1 nothing to get all targets.
 
 func init() {
-	android.RegisterSingletonType("compdb_generator", compDBGeneratorSingleton)
+	android.RegisterParallelSingletonType("compdb_generator", compDBGeneratorSingleton)
 }
 
 func compDBGeneratorSingleton() android.Singleton {
@@ -164,6 +164,7 @@ func getArguments(src android.Path, ctx android.SingletonContext, ccModule *Modu
 		args = append(args, expandAllVars(ctx, ccModule.flags.Local.ConlyFlags)...)
 	}
 	args = append(args, expandAllVars(ctx, ccModule.flags.SystemIncludeFlags)...)
+	args = append(args, expandAllVars(ctx, ccModule.flags.NoOverrideFlags)...)
 	args = append(args, src.String())
 	return args
 }

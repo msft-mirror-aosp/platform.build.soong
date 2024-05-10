@@ -122,6 +122,10 @@ func (r *RuntimeResourceOverlay) DepsMutator(ctx android.BottomUpMutatorContext)
 
 	ctx.AddVariationDependencies(nil, staticLibTag, r.properties.Static_libs...)
 	ctx.AddVariationDependencies(nil, libTag, r.properties.Resource_libs...)
+
+	for _, aconfig_declaration := range r.aaptProperties.Flags_packages {
+		ctx.AddDependency(ctx.Module(), aconfigDeclarationTag, aconfig_declaration)
+	}
 }
 
 func (r *RuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -146,7 +150,14 @@ func (r *RuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleC
 		aaptLinkFlags = append(aaptLinkFlags,
 			"--rename-overlay-category "+*r.overridableProperties.Category)
 	}
-	r.aapt.buildActions(ctx, r, nil, nil, false, aaptLinkFlags...)
+	r.aapt.buildActions(ctx,
+		aaptBuildActionOptions{
+			sdkContext:                     r,
+			enforceDefaultTargetSdkVersion: false,
+			extraLinkFlags:                 aaptLinkFlags,
+			aconfigTextFiles:               getAconfigFilePaths(ctx),
+		},
+	)
 
 	// Sign the built package
 	_, _, certificates := collectAppDeps(ctx, r, false, false)
@@ -175,19 +186,19 @@ func (r *RuntimeResourceOverlay) SystemModules() string {
 	return ""
 }
 
-func (r *RuntimeResourceOverlay) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
+func (r *RuntimeResourceOverlay) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
 	if r.properties.Min_sdk_version != nil {
-		return android.SdkSpecFrom(ctx, *r.properties.Min_sdk_version)
+		return android.ApiLevelFrom(ctx, *r.properties.Min_sdk_version)
 	}
-	return r.SdkVersion(ctx)
+	return r.SdkVersion(ctx).ApiLevel
 }
 
-func (r *RuntimeResourceOverlay) ReplaceMaxSdkVersionPlaceholder(ctx android.EarlyModuleContext) android.SdkSpec {
-	return android.SdkSpecFrom(ctx, "")
+func (r *RuntimeResourceOverlay) ReplaceMaxSdkVersionPlaceholder(ctx android.EarlyModuleContext) android.ApiLevel {
+	return android.SdkSpecPrivate.ApiLevel
 }
 
-func (r *RuntimeResourceOverlay) TargetSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
-	return r.SdkVersion(ctx)
+func (r *RuntimeResourceOverlay) TargetSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
+	return r.SdkVersion(ctx).ApiLevel
 }
 
 func (r *RuntimeResourceOverlay) Certificate() Certificate {

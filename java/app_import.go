@@ -17,8 +17,11 @@ package java
 // This file contains the module implementations for android_app_import and android_test_import.
 
 import (
-	"github.com/google/blueprint"
+	"fmt"
 	"reflect"
+	"strings"
+
+	"github.com/google/blueprint"
 
 	"github.com/google/blueprint/proptools"
 
@@ -48,6 +51,12 @@ var (
 		CommandDeps: []string{"${config.Zip2ZipCmd}"},
 		Description: "Uncompress dex files",
 	})
+
+	checkPresignedApkRule = pctx.AndroidStaticRule("check-presigned-apk", blueprint.RuleParams{
+		Command:     "build/soong/scripts/check_prebuilt_presigned_apk.py --aapt2 ${config.Aapt2Cmd} --zipalign ${config.ZipAlign} $extraArgs $in $out",
+		CommandDeps: []string{"build/soong/scripts/check_prebuilt_presigned_apk.py", "${config.Aapt2Cmd}", "${config.ZipAlign}"},
+		Description: "Check presigned apk",
+	}, "extraArgs")
 )
 
 func RegisterAppImportBuildComponents(ctx android.RegistrationContext) {
@@ -61,9 +70,10 @@ type AndroidAppImport struct {
 	android.ApexModuleBase
 	prebuilt android.Prebuilt
 
-	properties   AndroidAppImportProperties
-	dpiVariants  interface{}
-	archVariants interface{}
+	properties       AndroidAppImportProperties
+	dpiVariants      interface{}
+	archVariants     interface{}
+	arch_dpiVariants interface{}
 
 	outputFile  android.Path
 	certificate Certificate
@@ -72,13 +82,14 @@ type AndroidAppImport struct {
 
 	usesLibrary usesLibrary
 
-	preprocessed bool
-
 	installPath android.InstallPath
 
 	hideApexVariantFromMake bool
 
 	provenanceMetaDataFile android.OutputPath
+
+	// Single aconfig "cache file" merged from this module and all dependencies.
+	mergedAconfigFiles map[string]android.Paths
 }
 
 type AndroidAppImportProperties struct {
@@ -127,6 +138,23 @@ type AndroidAppImportProperties struct {
 
 	// Optional. Install to a subdirectory of the default install path for the module
 	Relative_install_path *string
+
+	// Whether the prebuilt apk can be installed without additional processing. Default is false.
+	Preprocessed *bool
+
+	// Whether or not to skip checking the preprocessed apk for proper alignment and uncompressed
+	// JNI libs and dex files. Default is false
+	Skip_preprocessed_apk_checks *bool
+
+	// Name of the source soong module that gets shadowed by this prebuilt
+	// If unspecified, follows the naming convention that the source module of
+	// the prebuilt is Name() without "prebuilt_" prefix
+	Source_module_name *string
+
+	// Path to the .prebuilt_info file of the prebuilt app.
+	// In case of mainline modules, the .prebuilt_info file contains the build_id that was used
+	// to generate the prebuilt.
+	Prebuilt_info *string `android:"path"`
 }
 
 func (a *AndroidAppImport) IsInstallable() bool {
@@ -134,10 +162,12 @@ func (a *AndroidAppImport) IsInstallable() bool {
 }
 
 // Updates properties with variant-specific values.
-func (a *AndroidAppImport) processVariants(ctx android.LoadHookContext) {
+// This happens as a DefaultableHook instead of a LoadHook because we want to run it after
+// soong config variables are applied.
+func (a *AndroidAppImport) processVariants(ctx android.DefaultableHookContext) {
 	config := ctx.Config()
+	dpiProps := reflect.ValueOf(a.dpiVariants).Elem().FieldByName(DpiGroupName)
 
-	dpiProps := reflect.ValueOf(a.dpiVariants).Elem().FieldByName("Dpi_variants")
 	// Try DPI variant matches in the reverse-priority order so that the highest priority match
 	// overwrites everything else.
 	// TODO(jungjw): Can we optimize this by making it priority order?
@@ -147,10 +177,26 @@ func (a *AndroidAppImport) processVariants(ctx android.LoadHookContext) {
 	if config.ProductAAPTPreferredConfig() != "" {
 		MergePropertiesFromVariant(ctx, &a.properties, dpiProps, config.ProductAAPTPreferredConfig())
 	}
-
-	archProps := reflect.ValueOf(a.archVariants).Elem().FieldByName("Arch")
+	archProps := reflect.ValueOf(a.archVariants).Elem().FieldByName(ArchGroupName)
 	archType := ctx.Config().AndroidFirstDeviceTarget.Arch.ArchType
 	MergePropertiesFromVariant(ctx, &a.properties, archProps, archType.Name)
+
+	// Process "arch" includes "dpi_variants"
+	archStructPtr := reflect.ValueOf(a.arch_dpiVariants).Elem().FieldByName(ArchGroupName)
+	if archStruct := archStructPtr.Elem(); archStruct.IsValid() {
+		archPartPropsPtr := archStruct.FieldByName(proptools.FieldNameForProperty(archType.Name))
+		if archPartProps := archPartPropsPtr.Elem(); archPartProps.IsValid() {
+			archDpiPropsPtr := archPartProps.FieldByName(DpiGroupName)
+			if archDpiProps := archDpiPropsPtr.Elem(); archDpiProps.IsValid() {
+				for i := len(config.ProductAAPTPrebuiltDPI()) - 1; i >= 0; i-- {
+					MergePropertiesFromVariant(ctx, &a.properties, archDpiProps, config.ProductAAPTPrebuiltDPI()[i])
+				}
+				if config.ProductAAPTPreferredConfig() != "" {
+					MergePropertiesFromVariant(ctx, &a.properties, archDpiProps, config.ProductAAPTPreferredConfig())
+				}
+			}
+		}
+	}
 
 	if String(a.properties.Apk) == "" {
 		// Disable this module since the apk property is still empty after processing all matching
@@ -177,10 +223,6 @@ func MergePropertiesFromVariant(ctx android.EarlyModuleContext,
 	}
 }
 
-func (a *AndroidAppImport) isPrebuiltFrameworkRes() bool {
-	return a.Name() == "prebuilt_framework-res"
-}
-
 func (a *AndroidAppImport) DepsMutator(ctx android.BottomUpMutatorContext) {
 	cert := android.SrcIsModule(String(a.properties.Certificate))
 	if cert != "" {
@@ -197,14 +239,14 @@ func (a *AndroidAppImport) DepsMutator(ctx android.BottomUpMutatorContext) {
 		}
 	}
 
-	a.usesLibrary.deps(ctx, !a.isPrebuiltFrameworkRes())
+	a.usesLibrary.deps(ctx, true)
 }
 
 func (a *AndroidAppImport) uncompressEmbeddedJniLibs(
 	ctx android.ModuleContext, inputPath android.Path, outputPath android.OutputPath) {
 	// Test apps don't need their JNI libraries stored uncompressed. As a matter of fact, messing
 	// with them may invalidate pre-existing signature data.
-	if ctx.InstallInTestcases() && (Bool(a.properties.Presigned) || a.preprocessed) {
+	if ctx.InstallInTestcases() && (Bool(a.properties.Presigned) || Bool(a.properties.Preprocessed)) {
 		ctx.Build(pctx, android.BuildParams{
 			Rule:   android.Cp,
 			Output: outputPath,
@@ -222,7 +264,7 @@ func (a *AndroidAppImport) uncompressEmbeddedJniLibs(
 
 // Returns whether this module should have the dex file stored uncompressed in the APK.
 func (a *AndroidAppImport) shouldUncompressDex(ctx android.ModuleContext) bool {
-	if ctx.Config().UnbundledBuild() || a.preprocessed {
+	if ctx.Config().UnbundledBuild() || proptools.Bool(a.properties.Preprocessed) {
 		return false
 	}
 
@@ -231,7 +273,7 @@ func (a *AndroidAppImport) shouldUncompressDex(ctx android.ModuleContext) bool {
 		return ctx.Config().UncompressPrivAppDex()
 	}
 
-	return shouldUncompressDex(ctx, &a.dexpreopter)
+	return shouldUncompressDex(ctx, android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName()), &a.dexpreopter)
 }
 
 func (a *AndroidAppImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -242,10 +284,26 @@ func (a *AndroidAppImport) InstallApkName() string {
 	return a.BaseModuleName()
 }
 
+func (a *AndroidAppImport) BaseModuleName() string {
+	return proptools.StringDefault(a.properties.Source_module_name, a.ModuleBase.Name())
+}
+
 func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext) {
-	apexInfo := ctx.Provider(android.ApexInfoProvider).(android.ApexInfo)
+	if a.Name() == "prebuilt_framework-res" {
+		ctx.ModuleErrorf("prebuilt_framework-res found. This used to have special handling in soong, but was removed due to prebuilt_framework-res no longer existing. This check is to ensure it doesn't come back without readding the special handling.")
+	}
+
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 	if !apexInfo.IsForPlatform() {
 		a.hideApexVariantFromMake = true
+	}
+
+	if Bool(a.properties.Preprocessed) {
+		if a.properties.Presigned != nil && !*a.properties.Presigned {
+			ctx.ModuleErrorf("Setting preprocessed: true implies presigned: true, so you cannot set presigned to false")
+		}
+		t := true
+		a.properties.Presigned = &t
 	}
 
 	numCertPropsSet := 0
@@ -259,10 +317,8 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 		numCertPropsSet++
 	}
 	if numCertPropsSet != 1 {
-		ctx.ModuleErrorf("One and only one of certficate, presigned, and default_dev_cert properties must be set")
+		ctx.ModuleErrorf("One and only one of certficate, presigned (implied by preprocessed), and default_dev_cert properties must be set")
 	}
-
-	_, _, certificates := collectAppDeps(ctx, a, false, false)
 
 	// TODO: LOCAL_EXTRACT_APK/LOCAL_EXTRACT_DPI_APK
 	// TODO: LOCAL_PACKAGE_SPLITS
@@ -278,14 +334,7 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 	var pathFragments []string
 	relInstallPath := String(a.properties.Relative_install_path)
 
-	if a.isPrebuiltFrameworkRes() {
-		// framework-res.apk is installed as system/framework/framework-res.apk
-		if relInstallPath != "" {
-			ctx.PropertyErrorf("relative_install_path", "Relative_install_path cannot be set for framework-res")
-		}
-		pathFragments = []string{"framework"}
-		a.preprocessed = true
-	} else if Bool(a.properties.Privileged) {
+	if Bool(a.properties.Privileged) {
 		pathFragments = []string{"priv-app", relInstallPath, a.BaseModuleName()}
 	} else if ctx.InstallInTestcases() {
 		pathFragments = []string{relInstallPath, a.BaseModuleName(), ctx.DeviceConfig().DeviceArch()}
@@ -301,12 +350,15 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 
 	a.dexpreopter.enforceUsesLibs = a.usesLibrary.enforceUsesLibraries()
 	a.dexpreopter.classLoaderContexts = a.usesLibrary.classLoaderContextForUsesLibDeps(ctx)
-
-	if a.usesLibrary.enforceUsesLibraries() {
-		srcApk = a.usesLibrary.verifyUsesLibrariesAPK(ctx, srcApk)
+	if a.usesLibrary.shouldDisableDexpreopt {
+		a.dexpreopter.disableDexpreopt()
 	}
 
-	a.dexpreopter.dexpreopt(ctx, jnisUncompressed)
+	if a.usesLibrary.enforceUsesLibraries() {
+		a.usesLibrary.verifyUsesLibrariesAPK(ctx, srcApk, &a.dexpreopter.classLoaderContexts)
+	}
+
+	a.dexpreopter.dexpreopt(ctx, android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName()), jnisUncompressed)
 	if a.dexpreopter.uncompressedDex {
 		dexUncompressed := android.PathForModuleOut(ctx, "dex-uncompressed", ctx.ModuleName()+".apk")
 		ctx.Build(pctx, android.BuildParams{
@@ -323,18 +375,21 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 
 	// Sign or align the package if package has not been preprocessed
 
-	if a.isPrebuiltFrameworkRes() {
-		a.outputFile = srcApk
-		a.certificate, certificates = processMainCert(a.ModuleBase, String(a.properties.Certificate), certificates, ctx)
-		if len(certificates) != 1 {
-			ctx.ModuleErrorf("Unexpected number of certificates were extracted: %q", certificates)
-		}
-	} else if a.preprocessed {
-		a.outputFile = srcApk
+	if proptools.Bool(a.properties.Preprocessed) {
+		validationStamp := a.validatePresignedApk(ctx, srcApk)
+		output := android.PathForModuleOut(ctx, apkFilename)
+		ctx.Build(pctx, android.BuildParams{
+			Rule:       android.Cp,
+			Input:      srcApk,
+			Output:     output,
+			Validation: validationStamp,
+		})
+		a.outputFile = output
 		a.certificate = PresignedCertificate
 	} else if !Bool(a.properties.Presigned) {
 		// If the certificate property is empty at this point, default_dev_cert must be set to true.
 		// Which makes processMainCert's behavior for the empty cert string WAI.
+		_, _, certificates := collectAppDeps(ctx, a, false, false)
 		a.certificate, certificates = processMainCert(a.ModuleBase, String(a.properties.Certificate), certificates, ctx)
 		signed := android.PathForModuleOut(ctx, "signed", apkFilename)
 		var lineageFile android.Path
@@ -347,8 +402,9 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 		SignAppPackage(ctx, signed, jnisUncompressed, certificates, nil, lineageFile, rotationMinSdkVersion)
 		a.outputFile = signed
 	} else {
+		validationStamp := a.validatePresignedApk(ctx, srcApk)
 		alignedApk := android.PathForModuleOut(ctx, "zip-aligned", apkFilename)
-		TransformZipAlign(ctx, alignedApk, jnisUncompressed)
+		TransformZipAlign(ctx, alignedApk, jnisUncompressed, []android.Path{validationStamp})
 		a.outputFile = alignedApk
 		a.certificate = PresignedCertificate
 	}
@@ -360,8 +416,41 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 		artifactPath := android.PathForModuleSrc(ctx, *a.properties.Apk)
 		a.provenanceMetaDataFile = provenance.GenerateArtifactProvenanceMetaData(ctx, artifactPath, a.installPath)
 	}
+	android.CollectDependencyAconfigFiles(ctx, &a.mergedAconfigFiles)
+
+	providePrebuiltInfo(ctx,
+		prebuiltInfoProps{
+			baseModuleName: a.BaseModuleName(),
+			isPrebuilt:     true,
+			prebuiltInfo:   a.properties.Prebuilt_info,
+		},
+	)
 
 	// TODO: androidmk converter jni libs
+}
+
+func (a *AndroidAppImport) validatePresignedApk(ctx android.ModuleContext, srcApk android.Path) android.Path {
+	stamp := android.PathForModuleOut(ctx, "validated-prebuilt", "check.stamp")
+	var extraArgs []string
+	if a.Privileged() {
+		extraArgs = append(extraArgs, "--privileged")
+	}
+	if proptools.Bool(a.properties.Skip_preprocessed_apk_checks) {
+		extraArgs = append(extraArgs, "--skip-preprocessed-apk-checks")
+	}
+	if proptools.Bool(a.properties.Preprocessed) {
+		extraArgs = append(extraArgs, "--preprocessed")
+	}
+
+	ctx.Build(pctx, android.BuildParams{
+		Rule:   checkPresignedApkRule,
+		Input:  srcApk,
+		Output: stamp,
+		Args: map[string]string{
+			"extraArgs": strings.Join(extraArgs, " "),
+		},
+	})
+	return stamp
 }
 
 func (a *AndroidAppImport) Prebuilt() *android.Prebuilt {
@@ -376,6 +465,15 @@ func (a *AndroidAppImport) OutputFile() android.Path {
 	return a.outputFile
 }
 
+func (a *AndroidAppImport) OutputFiles(tag string) (android.Paths, error) {
+	switch tag {
+	case "":
+		return []android.Path{a.outputFile}, nil
+	default:
+		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
+	}
+}
+
 func (a *AndroidAppImport) JacocoReportClassesFile() android.Path {
 	return nil
 }
@@ -388,18 +486,29 @@ func (a *AndroidAppImport) ProvenanceMetaDataFile() android.OutputPath {
 	return a.provenanceMetaDataFile
 }
 
+func (a *AndroidAppImport) PrivAppAllowlist() android.OptionalPath {
+	return android.OptionalPath{}
+}
+
+const (
+	ArchGroupName = "Arch"
+	DpiGroupName  = "Dpi_variants"
+)
+
 var dpiVariantGroupType reflect.Type
 var archVariantGroupType reflect.Type
+var archdpiVariantGroupType reflect.Type
 var supportedDpis = []string{"ldpi", "mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"}
 
 func initAndroidAppImportVariantGroupTypes() {
-	dpiVariantGroupType = createVariantGroupType(supportedDpis, "Dpi_variants")
+	dpiVariantGroupType = createVariantGroupType(supportedDpis, DpiGroupName)
 
 	archNames := make([]string, len(android.ArchTypeList()))
 	for i, archType := range android.ArchTypeList() {
 		archNames[i] = archType.Name
 	}
-	archVariantGroupType = createVariantGroupType(archNames, "Arch")
+	archVariantGroupType = createVariantGroupType(archNames, ArchGroupName)
+	archdpiVariantGroupType = createArchDpiVariantGroupType(archNames, supportedDpis)
 }
 
 // Populates all variant struct properties at creation time.
@@ -409,6 +518,9 @@ func (a *AndroidAppImport) populateAllVariantStructs() {
 
 	a.archVariants = reflect.New(archVariantGroupType).Interface()
 	a.AddProperties(a.archVariants)
+
+	a.arch_dpiVariants = reflect.New(archdpiVariantGroupType).Interface()
+	a.AddProperties(a.arch_dpiVariants)
 }
 
 func (a *AndroidAppImport) Privileged() bool {
@@ -426,8 +538,8 @@ func (a *AndroidAppImport) SdkVersion(ctx android.EarlyModuleContext) android.Sd
 	return android.SdkSpecPrivate
 }
 
-func (a *AndroidAppImport) MinSdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
-	return android.SdkSpecPrivate
+func (a *AndroidAppImport) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
+	return android.SdkSpecPrivate.ApiLevel
 }
 
 func (a *AndroidAppImport) LintDepSets() LintDepSets {
@@ -463,6 +575,48 @@ func createVariantGroupType(variants []string, variantGroupName string) reflect.
 	})
 }
 
+func createArchDpiVariantGroupType(archNames []string, dpiNames []string) reflect.Type {
+	props := reflect.TypeOf((*AndroidAppImportProperties)(nil))
+
+	dpiVariantFields := make([]reflect.StructField, len(dpiNames))
+	for i, variant_dpi := range dpiNames {
+		dpiVariantFields[i] = reflect.StructField{
+			Name: proptools.FieldNameForProperty(variant_dpi),
+			Type: props,
+		}
+	}
+	dpiVariantGroupStruct := reflect.StructOf(dpiVariantFields)
+	dpi_struct := reflect.StructOf([]reflect.StructField{
+		{
+			Name: DpiGroupName,
+			Type: reflect.PointerTo(dpiVariantGroupStruct),
+		},
+	})
+
+	archVariantFields := make([]reflect.StructField, len(archNames))
+	for i, variant_arch := range archNames {
+		archVariantFields[i] = reflect.StructField{
+			Name: proptools.FieldNameForProperty(variant_arch),
+			Type: reflect.PointerTo(dpi_struct),
+		}
+	}
+	archVariantGroupStruct := reflect.StructOf(archVariantFields)
+
+	return_struct := reflect.StructOf([]reflect.StructField{
+		{
+			Name: ArchGroupName,
+			Type: reflect.PointerTo(archVariantGroupStruct),
+		},
+	})
+	return return_struct
+}
+
+func (a *AndroidAppImport) UsesLibrary() *usesLibrary {
+	return &a.usesLibrary
+}
+
+var _ ModuleWithUsesLibrary = (*AndroidAppImport)(nil)
+
 // android_app_import imports a prebuilt apk with additional processing specified in the module.
 // DPI-specific apk source files can be specified using dpi_variants. Example:
 //
@@ -485,7 +639,7 @@ func AndroidAppImportFactory() android.Module {
 	module.AddProperties(&module.dexpreoptProperties)
 	module.AddProperties(&module.usesLibrary.usesLibraryProperties)
 	module.populateAllVariantStructs()
-	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
+	module.SetDefaultableHook(func(ctx android.DefaultableHookContext) {
 		module.processVariants(ctx)
 	})
 
@@ -497,11 +651,6 @@ func AndroidAppImportFactory() android.Module {
 	module.usesLibrary.enforce = true
 
 	return module
-}
-
-type androidTestImportProperties struct {
-	// Whether the prebuilt apk can be installed without additional processing. Default is false.
-	Preprocessed *bool
 }
 
 type AndroidTestImport struct {
@@ -520,14 +669,10 @@ type AndroidTestImport struct {
 		Per_testcase_directory *bool
 	}
 
-	testImportProperties androidTestImportProperties
-
 	data android.Paths
 }
 
 func (a *AndroidTestImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	a.preprocessed = Bool(a.testImportProperties.Preprocessed)
-
 	a.generateAndroidBuildActions(ctx)
 
 	a.data = android.PathsForModuleSrc(ctx, a.testProperties.Data)
@@ -544,9 +689,8 @@ func AndroidTestImportFactory() android.Module {
 	module.AddProperties(&module.properties)
 	module.AddProperties(&module.dexpreoptProperties)
 	module.AddProperties(&module.testProperties)
-	module.AddProperties(&module.testImportProperties)
 	module.populateAllVariantStructs()
-	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
+	module.SetDefaultableHook(func(ctx android.DefaultableHookContext) {
 		module.processVariants(ctx)
 	})
 

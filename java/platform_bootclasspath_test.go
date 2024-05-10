@@ -18,14 +18,12 @@ import (
 	"testing"
 
 	"android/soong/android"
-	"android/soong/dexpreopt"
 )
 
 // Contains some simple tests for platform_bootclasspath.
 
 var prepareForTestWithPlatformBootclasspath = android.GroupFixturePreparers(
 	PrepareForTestWithJavaDefaultModules,
-	dexpreopt.PrepareForTestByEnablingDexpreopt,
 )
 
 func TestPlatformBootclasspath(t *testing.T) {
@@ -83,6 +81,15 @@ func TestPlatformBootclasspath(t *testing.T) {
 			RunTest(t)
 	})
 
+	fooSourceSrc := "source/a.java"
+	barSrc := "a.java"
+
+	checkSrcJarInputs := func(t *testing.T, result *android.TestResult, name string, expected []string) {
+		t.Helper()
+		srcjar := result.ModuleForTests(name, "android_common").Output(name + "-transitive.srcjar")
+		android.AssertStringDoesContain(t, "srcjar arg", srcjar.Args["jarArgs"], "-srcjar")
+		android.AssertArrayString(t, "srcjar inputs", expected, srcjar.Implicits.Strings())
+	}
 	t.Run("source", func(t *testing.T) {
 		result := android.GroupFixturePreparers(
 			preparer,
@@ -92,6 +99,10 @@ func TestPlatformBootclasspath(t *testing.T) {
 		CheckPlatformBootclasspathModules(t, result, "platform-bootclasspath", []string{
 			"platform:foo",
 			"platform:bar",
+		})
+		checkSrcJarInputs(t, result, "platform-bootclasspath", []string{
+			fooSourceSrc,
+			barSrc,
 		})
 	})
 
@@ -104,6 +115,10 @@ func TestPlatformBootclasspath(t *testing.T) {
 		CheckPlatformBootclasspathModules(t, result, "platform-bootclasspath", []string{
 			"platform:prebuilt_foo",
 			"platform:bar",
+		})
+		checkSrcJarInputs(t, result, "platform-bootclasspath", []string{
+			// TODO(b/151360309): This should also have the srcs for prebuilt_foo
+			barSrc,
 		})
 	})
 
@@ -118,6 +133,10 @@ func TestPlatformBootclasspath(t *testing.T) {
 			"platform:foo",
 			"platform:bar",
 		})
+		checkSrcJarInputs(t, result, "platform-bootclasspath", []string{
+			fooSourceSrc,
+			barSrc,
+		})
 	})
 
 	t.Run("source+prebuilt - prebuilt preferred", func(t *testing.T) {
@@ -130,6 +149,10 @@ func TestPlatformBootclasspath(t *testing.T) {
 		CheckPlatformBootclasspathModules(t, result, "platform-bootclasspath", []string{
 			"platform:prebuilt_foo",
 			"platform:bar",
+		})
+		checkSrcJarInputs(t, result, "platform-bootclasspath", []string{
+			// TODO(b/151360309): This should also have the srcs for prebuilt_foo
+			barSrc,
 		})
 	})
 
@@ -147,6 +170,10 @@ func TestPlatformBootclasspath(t *testing.T) {
 		CheckPlatformBootclasspathModules(t, result, "platform-bootclasspath", []string{
 			"platform:prebuilt_foo",
 			"platform:bar",
+		})
+		checkSrcJarInputs(t, result, "platform-bootclasspath", []string{
+			// TODO(b/151360309): This should also have the srcs for prebuilt_foo
+			barSrc,
 		})
 	})
 }
@@ -326,7 +353,7 @@ func TestPlatformBootclasspath_HiddenAPIMonolithicFiles(t *testing.T) {
 
 	// All the intermediate rules use the same inputs.
 	expectedIntermediateInputs := `
-		out/soong/.intermediates/bar/android_common/javac/bar.jar
+		out/soong/.intermediates/bar.impl/android_common/javac/bar.jar
 		out/soong/.intermediates/foo-hiddenapi-annotations/android_common/javac/foo-hiddenapi-annotations.jar
 		out/soong/.intermediates/foo/android_common/javac/foo.jar
 	`

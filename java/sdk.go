@@ -17,8 +17,6 @@ package java
 import (
 	"fmt"
 	"path/filepath"
-	"sort"
-	"strconv"
 
 	"android/soong/android"
 	"android/soong/java/config"
@@ -27,23 +25,33 @@ import (
 )
 
 func init() {
-	android.RegisterPreSingletonType("sdk_versions", sdkPreSingletonFactory)
-	android.RegisterSingletonType("sdk", sdkSingletonFactory)
+	android.RegisterParallelSingletonType("sdk", sdkSingletonFactory)
 	android.RegisterMakeVarsProvider(pctx, sdkMakeVars)
 }
 
-var sdkVersionsKey = android.NewOnceKey("sdkVersionsKey")
 var sdkFrameworkAidlPathKey = android.NewOnceKey("sdkFrameworkAidlPathKey")
 var nonUpdatableFrameworkAidlPathKey = android.NewOnceKey("nonUpdatableFrameworkAidlPathKey")
-var apiFingerprintPathKey = android.NewOnceKey("apiFingerprintPathKey")
 
-func UseApiFingerprint(ctx android.BaseModuleContext) bool {
-	if ctx.Config().UnbundledBuild() &&
-		!ctx.Config().AlwaysUsePrebuiltSdks() &&
-		ctx.Config().IsEnvTrue("UNBUNDLED_BUILD_TARGET_SDK_WITH_API_FINGERPRINT") {
-		return true
+func UseApiFingerprint(ctx android.BaseModuleContext) (useApiFingerprint bool, fingerprintSdkVersion string, fingerprintDeps android.OutputPath) {
+	if ctx.Config().UnbundledBuild() && !ctx.Config().AlwaysUsePrebuiltSdks() {
+		apiFingerprintTrue := ctx.Config().IsEnvTrue("UNBUNDLED_BUILD_TARGET_SDK_WITH_API_FINGERPRINT")
+		dessertShaIsSet := ctx.Config().Getenv("UNBUNDLED_BUILD_TARGET_SDK_WITH_DESSERT_SHA") != ""
+
+		// Error when both UNBUNDLED_BUILD_TARGET_SDK_WITH_API_FINGERPRINT and UNBUNDLED_BUILD_TARGET_SDK_WITH_DESSERT_SHA are set
+		if apiFingerprintTrue && dessertShaIsSet {
+			ctx.ModuleErrorf("UNBUNDLED_BUILD_TARGET_SDK_WITH_API_FINGERPRINT=true cannot be set alongside with UNBUNDLED_BUILD_TARGET_SDK_WITH_DESSERT_SHA")
+		}
+
+		useApiFingerprint = apiFingerprintTrue || dessertShaIsSet
+		if apiFingerprintTrue {
+			fingerprintSdkVersion = ctx.Config().PlatformSdkCodename() + fmt.Sprintf(".$$(cat %s)", android.ApiFingerprintPath(ctx).String())
+			fingerprintDeps = android.ApiFingerprintPath(ctx)
+		}
+		if dessertShaIsSet {
+			fingerprintSdkVersion = ctx.Config().Getenv("UNBUNDLED_BUILD_TARGET_SDK_WITH_DESSERT_SHA")
+		}
 	}
-	return false
+	return useApiFingerprint, fingerprintSdkVersion, fingerprintDeps
 }
 
 func defaultJavaLanguageVersion(ctx android.EarlyModuleContext, s android.SdkSpec) javaVersion {
@@ -51,13 +59,11 @@ func defaultJavaLanguageVersion(ctx android.EarlyModuleContext, s android.SdkSpe
 	if err != nil {
 		ctx.PropertyErrorf("sdk_version", "%s", err)
 	}
-	if sdk.FinalOrFutureInt() <= 23 {
-		return JAVA_VERSION_7
-	} else if sdk.FinalOrFutureInt() <= 29 {
+	if sdk.FinalOrFutureInt() <= 29 {
 		return JAVA_VERSION_8
 	} else if sdk.FinalOrFutureInt() <= 31 {
 		return JAVA_VERSION_9
-	} else if sdk.FinalOrFutureInt() <= 32 {
+	} else if sdk.FinalOrFutureInt() <= 33 {
 		return JAVA_VERSION_11
 	} else {
 		return JAVA_VERSION_17
@@ -76,7 +82,8 @@ func systemModuleKind(sdkKind android.SdkKind, apiLevel android.ApiLevel) androi
 		// Core is by definition what is included in the system module for the public API so should
 		// just use its system modules.
 		systemModuleKind = android.SdkPublic
-	} else if systemModuleKind == android.SdkSystem || systemModuleKind == android.SdkTest {
+	} else if systemModuleKind == android.SdkSystem || systemModuleKind == android.SdkTest ||
+		systemModuleKind == android.SdkTestFrameworksCore {
 		// The core system and test APIs are currently the same as the public API so they should use
 		// its system modules.
 		systemModuleKind = android.SdkPublic
@@ -148,10 +155,11 @@ func decodeSdkDep(ctx android.EarlyModuleContext, sdkContext android.SdkContext)
 	toModule := func(module string, aidl android.Path) sdkDep {
 		// Select the kind of system modules needed for the sdk version.
 		systemModulesKind := systemModuleKind(sdkVersion.Kind, android.FutureApiLevel)
+		systemModules := fmt.Sprintf("core-%s-stubs-system-modules", systemModulesKind)
 		return sdkDep{
 			useModule:          true,
 			bootclasspath:      []string{module, config.DefaultLambdaStubsLibrary},
-			systemModules:      fmt.Sprintf("core-%s-stubs-system-modules", systemModulesKind),
+			systemModules:      systemModules,
 			java9Classpath:     []string{module},
 			frameworkResModule: "framework-res",
 			aidl:               android.OptionalPathForPath(aidl),
@@ -191,66 +199,24 @@ func decodeSdkDep(ctx android.EarlyModuleContext, sdkContext android.SdkContext)
 			bootclasspath:    corePlatformBootclasspathLibraries(ctx),
 			noFrameworksLibs: true,
 		}
-	case android.SdkPublic:
-		return toModule("android_stubs_current", sdkFrameworkAidlPath(ctx))
-	case android.SdkSystem:
-		return toModule("android_system_stubs_current", sdkFrameworkAidlPath(ctx))
-	case android.SdkTest:
-		return toModule("android_test_stubs_current", sdkFrameworkAidlPath(ctx))
+	case android.SdkPublic, android.SdkSystem, android.SdkTest, android.SdkTestFrameworksCore:
+		return toModule(sdkVersion.Kind.DefaultJavaLibraryName(), sdkFrameworkAidlPath(ctx))
 	case android.SdkCore:
 		return sdkDep{
 			useModule:        true,
-			bootclasspath:    []string{"core.current.stubs", config.DefaultLambdaStubsLibrary},
+			bootclasspath:    []string{android.SdkCore.DefaultJavaLibraryName(), config.DefaultLambdaStubsLibrary},
 			systemModules:    "core-public-stubs-system-modules",
 			noFrameworksLibs: true,
 		}
 	case android.SdkModule:
 		// TODO(146757305): provide .apk and .aidl that have more APIs for modules
-		return toModule("android_module_lib_stubs_current", nonUpdatableFrameworkAidlPath(ctx))
+		return toModule(sdkVersion.Kind.DefaultJavaLibraryName(), nonUpdatableFrameworkAidlPath(ctx))
 	case android.SdkSystemServer:
 		// TODO(146757305): provide .apk and .aidl that have more APIs for modules
-		return toModule("android_system_server_stubs_current", sdkFrameworkAidlPath(ctx))
+		return toModule(sdkVersion.Kind.DefaultJavaLibraryName(), sdkFrameworkAidlPath(ctx))
 	default:
 		panic(fmt.Errorf("invalid sdk %q", sdkVersion.Raw))
 	}
-}
-
-func sdkPreSingletonFactory() android.Singleton {
-	return sdkPreSingleton{}
-}
-
-type sdkPreSingleton struct{}
-
-func (sdkPreSingleton) GenerateBuildActions(ctx android.SingletonContext) {
-	sdkJars, err := ctx.GlobWithDeps("prebuilts/sdk/*/public/android.jar", nil)
-	if err != nil {
-		ctx.Errorf("failed to glob prebuilts/sdk/*/public/android.jar: %s", err.Error())
-	}
-
-	var sdkVersions []int
-	for _, sdkJar := range sdkJars {
-		dir := filepath.Base(filepath.Dir(filepath.Dir(sdkJar)))
-		v, err := strconv.Atoi(dir)
-		if scerr, ok := err.(*strconv.NumError); ok && scerr.Err == strconv.ErrSyntax {
-			continue
-		} else if err != nil {
-			ctx.Errorf("invalid sdk jar %q, %s, %v", sdkJar, err.Error())
-		}
-		sdkVersions = append(sdkVersions, v)
-	}
-
-	sort.Ints(sdkVersions)
-
-	ctx.Config().Once(sdkVersionsKey, func() interface{} { return sdkVersions })
-}
-
-func LatestSdkVersionInt(ctx android.EarlyModuleContext) int {
-	sdkVersions := ctx.Config().Get(sdkVersionsKey).([]int)
-	latestSdkVersion := 0
-	if len(sdkVersions) > 0 {
-		latestSdkVersion = sdkVersions[len(sdkVersions)-1]
-	}
-	return latestSdkVersion
 }
 
 func sdkSingletonFactory() android.Singleton {
@@ -272,9 +238,9 @@ func (sdkSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 // Create framework.aidl by extracting anything that implements android.os.Parcelable from the SDK stubs modules.
 func createSdkFrameworkAidl(ctx android.SingletonContext) {
 	stubsModules := []string{
-		"android_stubs_current",
-		"android_test_stubs_current",
-		"android_system_stubs_current",
+		android.SdkPublic.DefaultJavaLibraryName(),
+		android.SdkTest.DefaultJavaLibraryName(),
+		android.SdkSystem.DefaultJavaLibraryName(),
 	}
 
 	combinedAidl := sdkFrameworkAidlPath(ctx)
@@ -289,7 +255,7 @@ func createSdkFrameworkAidl(ctx android.SingletonContext) {
 
 // Creates a version of framework.aidl for the non-updatable part of the platform.
 func createNonUpdatableFrameworkAidl(ctx android.SingletonContext) {
-	stubsModules := []string{"android_module_lib_stubs_current"}
+	stubsModules := []string{android.SdkModule.DefaultJavaLibraryName()}
 
 	combinedAidl := nonUpdatableFrameworkAidlPath(ctx)
 	tempPath := tempPathForRestat(ctx, combinedAidl)
@@ -306,8 +272,7 @@ func createFrameworkAidl(stubsModules []string, path android.WritablePath, ctx a
 
 	ctx.VisitAllModules(func(module android.Module) {
 		// Collect dex jar paths for the modules listed above.
-		if ctx.ModuleHasProvider(module, JavaInfoProvider) {
-			j := ctx.ModuleProvider(module, JavaInfoProvider).(JavaInfo)
+		if j, ok := android.SingletonModuleProvider(ctx, module, JavaInfoProvider); ok {
 			name := ctx.ModuleName(module)
 			if i := android.IndexList(name, stubsModules); i != -1 {
 				stubsJars[i] = j.HeaderJars
@@ -371,7 +336,7 @@ func nonUpdatableFrameworkAidlPath(ctx android.PathContext) android.OutputPath {
 
 // Create api_fingerprint.txt
 func createAPIFingerprint(ctx android.SingletonContext) {
-	out := ApiFingerprintPath(ctx)
+	out := android.ApiFingerprintPath(ctx)
 
 	rule := android.NewRuleBuilder(pctx, ctx)
 
@@ -384,10 +349,7 @@ func createAPIFingerprint(ctx android.SingletonContext) {
 	} else if ctx.Config().FrameworksBaseDirExists(ctx) && !ctx.Config().AlwaysUsePrebuiltSdks() {
 		cmd.Text("cat")
 		apiTxtFileModules := []string{
-			"frameworks-base-api-current.txt",
-			"frameworks-base-api-system-current.txt",
-			"frameworks-base-api-module-lib-current.txt",
-			"frameworks-base-api-system-server-current.txt",
+			"api_fingerprint",
 		}
 		count := 0
 		ctx.VisitAllModules(func(module android.Module) {
@@ -398,10 +360,10 @@ func createAPIFingerprint(ctx android.SingletonContext) {
 			}
 		})
 		if count != len(apiTxtFileModules) {
-			ctx.Errorf("Could not find all the expected API modules %v, found %d\n", apiTxtFileModules, count)
+			ctx.Errorf("Could not find expected API module %v, found %d\n", apiTxtFileModules, count)
 			return
 		}
-		cmd.Text("| md5sum | cut -d' ' -f1 >").
+		cmd.Text(">").
 			Output(out)
 	} else {
 		// Unbundled build
@@ -415,17 +377,11 @@ func createAPIFingerprint(ctx android.SingletonContext) {
 	rule.Build("api_fingerprint", "generate api_fingerprint.txt")
 }
 
-func ApiFingerprintPath(ctx android.PathContext) android.OutputPath {
-	return ctx.Config().Once(apiFingerprintPathKey, func() interface{} {
-		return android.PathForOutput(ctx, "api_fingerprint.txt")
-	}).(android.OutputPath)
-}
-
 func sdkMakeVars(ctx android.MakeVarsContext) {
 	if ctx.Config().AlwaysUsePrebuiltSdks() {
 		return
 	}
 
 	ctx.Strict("FRAMEWORK_AIDL", sdkFrameworkAidlPath(ctx).String())
-	ctx.Strict("API_FINGERPRINT", ApiFingerprintPath(ctx).String())
+	ctx.Strict("API_FINGERPRINT", android.ApiFingerprintPath(ctx).String())
 }

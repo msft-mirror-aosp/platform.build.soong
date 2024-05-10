@@ -71,7 +71,17 @@ var prepareForTestWithFrameworkDeps = android.GroupFixturePreparers(
 		// Needed for framework
 		defaultJavaDir + "/framework/aidl": nil,
 		// Needed for various deps defined in GatherRequiredDepsForTest()
-		defaultJavaDir + "/a.java": nil,
+		defaultJavaDir + "/a.java":                        nil,
+		defaultJavaDir + "/api/current.txt":               nil,
+		defaultJavaDir + "/api/removed.txt":               nil,
+		defaultJavaDir + "/api/system-current.txt":        nil,
+		defaultJavaDir + "/api/system-removed.txt":        nil,
+		defaultJavaDir + "/api/test-current.txt":          nil,
+		defaultJavaDir + "/api/test-removed.txt":          nil,
+		defaultJavaDir + "/api/module-lib-current.txt":    nil,
+		defaultJavaDir + "/api/module-lib-removed.txt":    nil,
+		defaultJavaDir + "/api/system-server-current.txt": nil,
+		defaultJavaDir + "/api/system-server-removed.txt": nil,
 
 		// Needed for R8 rules on apps
 		"build/make/core/proguard.flags":             nil,
@@ -80,9 +90,7 @@ var prepareForTestWithFrameworkDeps = android.GroupFixturePreparers(
 	}.AddToFixture(),
 )
 
-// Test fixture preparer that will define all default java modules except the
-// fake_tool_binary for dex2oatd.
-var PrepareForTestWithJavaDefaultModulesWithoutFakeDex2oatd = android.GroupFixturePreparers(
+var prepareForTestWithJavaDefaultModulesBase = android.GroupFixturePreparers(
 	// Make sure that all the module types used in the defaults are registered.
 	PrepareForTestWithJavaBuildComponents,
 	prepareForTestWithFrameworkDeps,
@@ -92,17 +100,23 @@ var PrepareForTestWithJavaDefaultModulesWithoutFakeDex2oatd = android.GroupFixtu
 
 // Test fixture preparer that will define default java modules, e.g. standard prebuilt modules.
 var PrepareForTestWithJavaDefaultModules = android.GroupFixturePreparers(
-	PrepareForTestWithJavaDefaultModulesWithoutFakeDex2oatd,
-	dexpreopt.PrepareForTestWithFakeDex2oatd,
+	prepareForTestWithJavaDefaultModulesBase,
+	dexpreopt.FixtureDisableDexpreoptBootImages(true),
+	dexpreopt.FixtureDisableDexpreopt(true),
 )
 
 // Provides everything needed by dexpreopt.
 var PrepareForTestWithDexpreopt = android.GroupFixturePreparers(
-	PrepareForTestWithJavaDefaultModules,
+	prepareForTestWithJavaDefaultModulesBase,
+	dexpreopt.PrepareForTestWithFakeDex2oatd,
 	dexpreopt.PrepareForTestByEnablingDexpreopt,
 )
 
-var PrepareForTestWithOverlayBuildComponents = android.FixtureRegisterWithContext(registerOverlayBuildComponents)
+// Provides everything needed by dexpreopt except the fake_tool_binary for dex2oatd.
+var PrepareForTestWithDexpreoptWithoutFakeDex2oatd = android.GroupFixturePreparers(
+	prepareForTestWithJavaDefaultModulesBase,
+	dexpreopt.PrepareForTestByEnablingDexpreopt,
+)
 
 // Prepare a fixture to use all java module types, mutators and singletons fully.
 //
@@ -207,6 +221,29 @@ func FixtureWithPrebuiltApisAndExtensions(apiLevel2Modules map[string][]string, 
 		for release, modules := range extensionLevel2Modules {
 			mockFS.Merge(prebuiltExtensionApiFiles([]string{release}, modules))
 		}
+	}
+	return android.GroupFixturePreparers(
+		android.FixtureAddTextFile(path, bp),
+		android.FixtureMergeMockFs(mockFS),
+	)
+}
+
+func FixtureWithPrebuiltIncrementalApis(apiLevel2Modules map[string][]string) android.FixturePreparer {
+	mockFS := android.MockFS{}
+	path := "prebuilts/sdk/Android.bp"
+
+	bp := fmt.Sprintf(`
+			prebuilt_apis {
+				name: "sdk",
+				api_dirs: ["%s"],
+				allow_incremental_platform_api: true,
+				imports_sdk_version: "none",
+				imports_compile_dex: true,
+			}
+		`, strings.Join(android.SortedKeys(apiLevel2Modules), `", "`))
+
+	for release, modules := range apiLevel2Modules {
+		mockFS.Merge(prebuiltApisFilesForModules([]string{release}, modules))
 	}
 	return android.GroupFixturePreparers(
 		android.FixtureAddTextFile(path, bp),
@@ -346,6 +383,7 @@ func registerRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 	RegisterSystemModulesBuildComponents(ctx)
 	registerSystemserverClasspathBuildComponents(ctx)
 	registerLintBuildComponents(ctx)
+	android.RegisterApexContributionsBuildComponents(ctx)
 }
 
 // gatherRequiredDepsForTest gathers the module definitions used by
@@ -368,11 +406,23 @@ func gatherRequiredDepsForTest() string {
 		"core.current.stubs",
 		"legacy.core.platform.api.stubs",
 		"stable.core.platform.api.stubs",
+
+		"android_stubs_current_exportable",
+		"android_system_stubs_current_exportable",
+		"android_test_stubs_current_exportable",
+		"android_module_lib_stubs_current_exportable",
+		"android_system_server_stubs_current_exportable",
+		"core.current.stubs.exportable",
+		"legacy.core.platform.api.stubs.exportable",
+
 		"kotlin-stdlib",
 		"kotlin-stdlib-jdk7",
 		"kotlin-stdlib-jdk8",
 		"kotlin-annotations",
 		"stub-annotations",
+
+		"aconfig-annotations-lib",
+		"unsupportedappusage",
 	}
 
 	for _, extra := range extraModules {
@@ -385,6 +435,100 @@ func gatherRequiredDepsForTest() string {
 				compile_dex: true,
 			}
 		`, extra)
+	}
+
+	type droidstubsStruct struct {
+		name        string
+		apiSurface  string
+		apiFile     string
+		removedFile string
+	}
+
+	var publicDroidstubs = droidstubsStruct{
+		name:        "api-stubs-docs-non-updatable",
+		apiSurface:  "public",
+		apiFile:     "api/current.txt",
+		removedFile: "api/removed.txt",
+	}
+	var systemDroidstubs = droidstubsStruct{
+		name:        "system-api-stubs-docs-non-updatable",
+		apiSurface:  "system",
+		apiFile:     "api/system-current.txt",
+		removedFile: "api/system-removed.txt",
+	}
+	var testDroidstubs = droidstubsStruct{
+		name:        "test-api-stubs-docs-non-updatable",
+		apiSurface:  "test",
+		apiFile:     "api/test-current.txt",
+		removedFile: "api/test-removed.txt",
+	}
+	var moduleLibDroidstubs = droidstubsStruct{
+		name:        "module-lib-api-stubs-docs-non-updatable",
+		apiSurface:  "module-lib",
+		apiFile:     "api/module-lib-current.txt",
+		removedFile: "api/module-lib-removed.txt",
+	}
+	var systemServerDroidstubs = droidstubsStruct{
+		// This module does not exist but is named this way for consistency
+		name:        "system-server-api-stubs-docs-non-updatable",
+		apiSurface:  "system-server",
+		apiFile:     "api/system-server-current.txt",
+		removedFile: "api/system-server-removed.txt",
+	}
+	var droidstubsStructs = []droidstubsStruct{
+		publicDroidstubs,
+		systemDroidstubs,
+		testDroidstubs,
+		moduleLibDroidstubs,
+		systemServerDroidstubs,
+	}
+
+	extraApiLibraryModules := map[string]droidstubsStruct{
+		"android_stubs_current.from-text":                  publicDroidstubs,
+		"android_system_stubs_current.from-text":           systemDroidstubs,
+		"android_test_stubs_current.from-text":             testDroidstubs,
+		"android_module_lib_stubs_current.from-text":       moduleLibDroidstubs,
+		"android_module_lib_stubs_current_full.from-text":  moduleLibDroidstubs,
+		"android_system_server_stubs_current.from-text":    systemServerDroidstubs,
+		"core.current.stubs.from-text":                     publicDroidstubs,
+		"legacy.core.platform.api.stubs.from-text":         publicDroidstubs,
+		"stable.core.platform.api.stubs.from-text":         publicDroidstubs,
+		"core-lambda-stubs.from-text":                      publicDroidstubs,
+		"android-non-updatable.stubs.from-text":            publicDroidstubs,
+		"android-non-updatable.stubs.system.from-text":     systemDroidstubs,
+		"android-non-updatable.stubs.test.from-text":       testDroidstubs,
+		"android-non-updatable.stubs.module_lib.from-text": moduleLibDroidstubs,
+		"android-non-updatable.stubs.test_module_lib":      moduleLibDroidstubs,
+	}
+
+	for _, droidstubs := range droidstubsStructs {
+		bp += fmt.Sprintf(`
+			droidstubs {
+				name: "%s",
+				api_surface: "%s",
+				check_api: {
+					current: {
+						api_file: "%s",
+						removed_api_file: "%s",
+					}
+				}
+			}
+		`,
+			droidstubs.name,
+			droidstubs.apiSurface,
+			droidstubs.apiFile,
+			droidstubs.removedFile,
+		)
+	}
+
+	for libName, droidstubs := range extraApiLibraryModules {
+		bp += fmt.Sprintf(`
+		java_api_library {
+			name: "%s",
+			api_contributions: ["%s"],
+			stubs_type: "everything",
+		}
+        `, libName, droidstubs.name+".api.contribution")
 	}
 
 	bp += `
@@ -409,6 +553,10 @@ func gatherRequiredDepsForTest() string {
 		"core-module-lib-stubs-system-modules",
 		"legacy-core-platform-api-stubs-system-modules",
 		"stable-core-platform-api-stubs-system-modules",
+		"core-public-stubs-system-modules.from-text",
+		"core-module-lib-stubs-system-modules.from-text",
+		"legacy-core-platform-api-stubs-system-modules.from-text",
+		"stable-core-platform-api-stubs-system-modules.from-text",
 	}
 
 	for _, extra := range systemModules {
@@ -432,10 +580,15 @@ func gatherRequiredDepsForTest() string {
 		}
 `
 
+	bp += `
+		all_apex_contributions {
+			name: "all_apex_contributions",
+		}
+`
 	return bp
 }
 
-func CheckModuleDependencies(t *testing.T, ctx *android.TestContext, name, variant string, expected []string) {
+func getModuleDependencies(t *testing.T, ctx *android.TestContext, name, variant string) []string {
 	t.Helper()
 	module := ctx.ModuleForTests(name, variant).Module()
 	deps := []string{}
@@ -444,9 +597,27 @@ func CheckModuleDependencies(t *testing.T, ctx *android.TestContext, name, varia
 	})
 	sort.Strings(deps)
 
+	return deps
+}
+
+// CheckModuleDependencies checks if the expected dependencies of the module are
+// identical to the actual dependencies.
+func CheckModuleDependencies(t *testing.T, ctx *android.TestContext, name, variant string, expected []string) {
+	deps := getModuleDependencies(t, ctx, name, variant)
+
 	if actual := deps; !reflect.DeepEqual(expected, actual) {
 		t.Errorf("expected %#q, found %#q", expected, actual)
 	}
+}
+
+// CheckModuleHasDependency returns true if the module depends on the expected dependency.
+func CheckModuleHasDependency(t *testing.T, ctx *android.TestContext, name, variant string, expected string) bool {
+	for _, dep := range getModuleDependencies(t, ctx, name, variant) {
+		if dep == expected {
+			return true
+		}
+	}
+	return false
 }
 
 // CheckPlatformBootclasspathModules returns the apex:module pair for the modules depended upon by
@@ -461,7 +632,7 @@ func CheckPlatformBootclasspathModules(t *testing.T, result *android.TestResult,
 func CheckClasspathFragmentProtoContentInfoProvider(t *testing.T, result *android.TestResult, generated bool, contents, outputFilename, installDir string) {
 	t.Helper()
 	p := result.Module("platform-bootclasspath", "android_common").(*platformBootclasspathModule)
-	info := result.ModuleProvider(p, ClasspathFragmentProtoContentInfoProvider).(ClasspathFragmentProtoContentInfo)
+	info, _ := android.SingletonModuleProvider(result, p, ClasspathFragmentProtoContentInfoProvider)
 
 	android.AssertBoolEquals(t, "classpath proto generated", generated, info.ClasspathFragmentProtoGenerated)
 	android.AssertStringEquals(t, "classpath proto contents", contents, info.ClasspathFragmentProtoContents.String())
@@ -481,7 +652,7 @@ func ApexNamePairsFromModules(ctx *android.TestContext, modules []android.Module
 func apexNamePairFromModule(ctx *android.TestContext, module android.Module) string {
 	name := module.Name()
 	var apex string
-	apexInfo := ctx.ModuleProvider(module, android.ApexInfoProvider).(android.ApexInfo)
+	apexInfo, _ := android.SingletonModuleProvider(ctx, module, android.ApexInfoProvider)
 	if apexInfo.IsForPlatform() {
 		apex = "platform"
 	} else {
@@ -540,7 +711,7 @@ var PrepareForTestWithFakeApexMutator = android.GroupFixturePreparers(
 
 func registerFakeApexMutator(ctx android.RegistrationContext) {
 	ctx.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("apex", fakeApexMutator).Parallel()
+		ctx.Transition("apex", &fakeApexMutator{})
 	})
 }
 
@@ -555,16 +726,30 @@ var _ apexModuleBase = (*SdkLibrary)(nil)
 // `apex_available`. It helps us avoid a dependency on the real mutator defined in "soong-apex",
 // which will cause a cyclic dependency, and it provides an easy way to create an APEX variant for
 // testing without dealing with all the complexities in the real mutator.
-func fakeApexMutator(mctx android.BottomUpMutatorContext) {
-	switch mctx.Module().(type) {
+type fakeApexMutator struct{}
+
+func (f *fakeApexMutator) Split(ctx android.BaseModuleContext) []string {
+	switch ctx.Module().(type) {
 	case *Library, *SdkLibrary:
-		if len(mctx.Module().(apexModuleBase).ApexAvailable()) > 0 {
-			modules := mctx.CreateVariations("", "apex1000")
-			apexInfo := android.ApexInfo{
-				ApexVariationName: "apex1000",
-			}
-			mctx.SetVariationProvider(modules[1], android.ApexInfoProvider, apexInfo)
+		return []string{"", "apex1000"}
+	}
+	return []string{""}
+}
+
+func (f *fakeApexMutator) OutgoingTransition(ctx android.OutgoingTransitionContext, sourceVariation string) string {
+	return sourceVariation
+}
+
+func (f *fakeApexMutator) IncomingTransition(ctx android.IncomingTransitionContext, incomingVariation string) string {
+	return incomingVariation
+}
+
+func (f *fakeApexMutator) Mutate(ctx android.BottomUpMutatorContext, variation string) {
+	if variation != "" {
+		apexInfo := android.ApexInfo{
+			ApexVariationName: "apex1000",
 		}
+		android.SetProvider(ctx, android.ApexInfoProvider, apexInfo)
 	}
 }
 
@@ -577,9 +762,9 @@ func FixtureModifyBootImageConfig(name string, configModifier func(*bootImageCon
 	})
 }
 
-// Sets the value of `installDirOnDevice` of the boot image config with the given name.
+// Sets the value of `installDir` of the boot image config with the given name.
 func FixtureSetBootImageInstallDirOnDevice(name string, installDir string) android.FixturePreparer {
 	return FixtureModifyBootImageConfig(name, func(config *bootImageConfig) {
-		config.installDirOnDevice = installDir
+		config.installDir = installDir
 	})
 }

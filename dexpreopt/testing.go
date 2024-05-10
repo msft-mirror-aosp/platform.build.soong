@@ -88,6 +88,15 @@ var PrepareForTestByEnablingDexpreopt = android.GroupFixturePreparers(
 	FixtureModifyGlobalConfig(func(android.PathContext, *GlobalConfig) {}),
 )
 
+var PrepareForTestWithDexpreoptConfig = android.GroupFixturePreparers(
+	android.PrepareForTestWithAndroidBuildComponents,
+	android.FixtureModifyContext(func(ctx *android.TestContext) {
+		ctx.RegisterParallelSingletonType("dexpreopt-soong-config", func() android.Singleton {
+			return &globalSoongConfigSingleton{}
+		})
+	}),
+)
+
 // FixtureModifyGlobalConfig enables dexpreopt (unless modified by the mutator) and modifies the
 // configuration.
 func FixtureModifyGlobalConfig(configModifier func(ctx android.PathContext, dexpreoptConfig *GlobalConfig)) android.FixturePreparer {
@@ -108,6 +117,13 @@ func FixtureModifyGlobalConfig(configModifier func(ctx android.PathContext, dexp
 func FixtureSetArtBootJars(bootJars ...string) android.FixturePreparer {
 	return FixtureModifyGlobalConfig(func(_ android.PathContext, dexpreoptConfig *GlobalConfig) {
 		dexpreoptConfig.ArtApexJars = android.CreateTestConfiguredJarList(bootJars)
+	})
+}
+
+// FixtureSetTestOnlyArtBootImageJars enables dexpreopt and sets the TestOnlyArtBootImageJars property.
+func FixtureSetTestOnlyArtBootImageJars(bootJars ...string) android.FixturePreparer {
+	return FixtureModifyGlobalConfig(func(_ android.PathContext, dexpreoptConfig *GlobalConfig) {
+		dexpreoptConfig.TestOnlyArtBootImageJars = android.CreateTestConfiguredJarList(bootJars)
 	})
 }
 
@@ -172,5 +188,26 @@ func FixtureSetBootImageProfiles(profiles ...string) android.FixturePreparer {
 func FixtureDisableGenerateProfile(disable bool) android.FixturePreparer {
 	return FixtureModifyGlobalConfig(func(_ android.PathContext, dexpreoptConfig *GlobalConfig) {
 		dexpreoptConfig.DisableGenerateProfile = disable
+	})
+}
+
+// FixtureDisableDexpreoptBootImages sets the DisablePreoptBootImages property in the global config.
+func FixtureDisableDexpreoptBootImages(disable bool) android.FixturePreparer {
+	return FixtureModifyGlobalConfig(func(_ android.PathContext, dexpreoptConfig *GlobalConfig) {
+		dexpreoptConfig.DisablePreoptBootImages = disable
+	})
+}
+
+// FixtureDisableDexpreopt sets the DisablePreopt property in the global config.
+func FixtureDisableDexpreopt(disable bool) android.FixturePreparer {
+	return FixtureModifyGlobalConfig(func(_ android.PathContext, dexpreoptConfig *GlobalConfig) {
+		dexpreoptConfig.DisablePreopt = disable
+	})
+}
+
+// FixtureSetEnableUffdGc sets the EnableUffdGc property in the global config.
+func FixtureSetEnableUffdGc(value string) android.FixturePreparer {
+	return FixtureModifyGlobalConfig(func(_ android.PathContext, dexpreoptConfig *GlobalConfig) {
+		dexpreoptConfig.EnableUffdGc = value
 	})
 }

@@ -28,7 +28,7 @@ func init() {
 
 // Register the gen_notice module type.
 func RegisterGenNoticeBuildComponents(ctx RegistrationContext) {
-	ctx.RegisterSingletonType("gen_notice_build_rules", GenNoticeBuildRulesFactory)
+	ctx.RegisterParallelSingletonType("gen_notice_build_rules", GenNoticeBuildRulesFactory)
 	ctx.RegisterModuleType("gen_notice", GenNoticeFactory)
 }
 
@@ -62,7 +62,7 @@ func (s *genNoticeBuildRules) GenerateBuildActions(ctx SingletonContext) {
 				if mod == nil {
 					continue
 				}
-				if !mod.Enabled() { // don't depend on variants without build rules
+				if !mod.Enabled(ctx) { // don't depend on variants without build rules
 					continue
 				}
 				modules = append(modules, mod)

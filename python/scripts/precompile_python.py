@@ -13,9 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import print_function
 import argparse
 import py_compile
 import os
+import sys
 import shutil
 import tempfile
 import zipfile
@@ -23,22 +25,35 @@ import zipfile
 # This file needs to support both python 2 and 3.
 
 
-def process_one_file(name, inf, outzip):
-    if not name.endswith('.py'):
-        outzip.writestr(name, inf.read())
+def process_one_file(name, infile, outzip):
+    # Create a ZipInfo instance with a fixed date to ensure a deterministic output.
+    # Date was chosen to be the same as
+    # https://cs.android.com/android/platform/superproject/main/+/main:build/soong/jar/jar.go;l=36;drc=2863e4535eb65e15f955dc8ed48fa99b1d2a1db5
+    info = zipfile.ZipInfo(filename=name, date_time=(2008, 1, 1, 0, 0, 0))
+    info.compress_type = zipfile.ZIP_DEFLATED
+
+    if not info.filename.endswith('.py'):
+        outzip.writestr(info, infile.read())
         return
 
     # Unfortunately py_compile requires the input/output files to be written
     # out to disk.
     with tempfile.NamedTemporaryFile(prefix="Soong_precompile_", delete=False) as tmp:
-        shutil.copyfileobj(inf, tmp)
+        shutil.copyfileobj(infile, tmp)
         in_name = tmp.name
     with tempfile.NamedTemporaryFile(prefix="Soong_precompile_", delete=False) as tmp:
         out_name = tmp.name
     try:
-        py_compile.compile(in_name, out_name, name, doraise=True)
+        # Ensure a deterministic .pyc output by using the hash rather than the timestamp.
+        # Only works on Python 3.7+
+        # See https://docs.python.org/3/library/py_compile.html#py_compile.PycInvalidationMode
+        if sys.version_info >= (3, 7):
+            py_compile.compile(in_name, out_name, info.filename, doraise=True, invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH)
+        else:
+            py_compile.compile(in_name, out_name, info.filename, doraise=True)
         with open(out_name, 'rb') as f:
-            outzip.writestr(name + 'c', f.read())
+            info.filename = info.filename + 'c'
+            outzip.writestr(info, f.read())
     finally:
         os.remove(in_name)
         os.remove(out_name)
@@ -50,11 +65,23 @@ def main():
     parser.add_argument('dst_zip')
     args = parser.parse_args()
 
+    errors = []
     with open(args.dst_zip, 'wb') as outf, open(args.src_zip, 'rb') as inf:
         with zipfile.ZipFile(outf, mode='w') as outzip, zipfile.ZipFile(inf, mode='r') as inzip:
             for name in inzip.namelist():
                 with inzip.open(name, mode='r') as inzipf:
-                    process_one_file(name, inzipf, outzip)
+                    try:
+                        process_one_file(name, inzipf, outzip)
+                    except py_compile.PyCompileError as e:
+                        errors.append(e)
+
+    if errors:
+        for i, error in enumerate(errors):
+            # Print an empty line in between each error
+            if i > 0:
+                print(file=sys.stderr)
+            print(str(error).strip(), file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

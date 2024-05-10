@@ -19,8 +19,8 @@ import (
 )
 
 func init() {
-	android.RegisterSingletonType("ndk_abi_dump", NdkAbiDumpSingleton)
-	android.RegisterSingletonType("ndk_abi_diff", NdkAbiDiffSingleton)
+	android.RegisterParallelSingletonType("ndk_abi_dump", NdkAbiDumpSingleton)
+	android.RegisterParallelSingletonType("ndk_abi_diff", NdkAbiDiffSingleton)
 }
 
 func getNdkAbiDumpInstallBase(ctx android.PathContext) android.OutputPath {
@@ -40,7 +40,7 @@ type ndkAbiDumpSingleton struct{}
 func (n *ndkAbiDumpSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 	var depPaths android.Paths
 	ctx.VisitAllModules(func(module android.Module) {
-		if !module.Enabled() {
+		if !module.Enabled(ctx) {
 			return
 		}
 
@@ -78,7 +78,7 @@ type ndkAbiDiffSingleton struct{}
 func (n *ndkAbiDiffSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 	var depPaths android.Paths
 	ctx.VisitAllModules(func(module android.Module) {
-		if m, ok := module.(android.Module); ok && !m.Enabled() {
+		if m, ok := module.(android.Module); ok && !m.Enabled(ctx) {
 			return
 		}
 

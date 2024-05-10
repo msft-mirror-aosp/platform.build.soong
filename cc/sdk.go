@@ -47,42 +47,21 @@ func sdkMutator(ctx android.BottomUpMutatorContext) {
 
 			// Mark the SDK variant.
 			modules[1].(*Module).Properties.IsSdkVariant = true
-			// SDK variant is not supposed to be installed
-			modules[1].(*Module).Properties.PreventInstall = true
 
 			if ctx.Config().UnbundledBuildApps() {
-				// For an unbundled apps build, hide the platform variant from Make.
+				// For an unbundled apps build, hide the platform variant from Make
+				// so that other Make modules don't link against it, but against the
+				// SDK variant.
 				modules[0].(*Module).Properties.HideFromMake = true
 			} else {
 				// For a platform build, mark the SDK variant so that it gets a ".sdk" suffix when
 				// exposed to Make.
 				modules[1].(*Module).Properties.SdkAndPlatformVariantVisibleToMake = true
 			}
+			// SDK variant never gets installed because the variant is to be embedded in
+			// APKs, not to be installed to the platform.
+			modules[1].(*Module).Properties.PreventInstall = true
 			ctx.AliasVariation("")
-		} else if isCcModule && ccModule.isImportedApiLibrary() {
-			apiLibrary, _ := ccModule.linker.(*apiLibraryDecorator)
-			if apiLibrary.hasNDKStubs() && ccModule.canUseSdk() {
-				// Handle cc_api_library module with NDK stubs and variants only which can use SDK
-				modules := ctx.CreateVariations("", "sdk")
-
-				// Mark the SDK variant.
-				modules[1].(*Module).Properties.IsSdkVariant = true
-				// SDK variant is not supposed to be installed
-				modules[1].(*Module).Properties.PreventInstall = true
-
-				if ctx.Config().UnbundledBuildApps() {
-					// For an unbundled apps build, hide the platform variant from Make.
-					modules[0].(*Module).Properties.HideFromMake = true
-				} else {
-					// For a platform build, mark the SDK variant so that it gets a ".sdk" suffix when
-					// exposed to Make.
-					modules[1].(*Module).Properties.SdkAndPlatformVariantVisibleToMake = true
-				}
-			} else {
-				ccModule.Properties.Sdk_version = nil
-				ctx.CreateVariations("")
-				ctx.AliasVariation("")
-			}
 		} else {
 			if isCcModule {
 				// Clear the sdk_version property for modules that don't have an SDK variant so
@@ -101,8 +80,6 @@ func sdkMutator(ctx android.BottomUpMutatorContext) {
 			}
 			ctx.AliasVariation("")
 		}
-	case *snapshotModule:
-		ctx.CreateVariations("")
 	case *CcApiVariant:
 		ccApiVariant, _ := ctx.Module().(*CcApiVariant)
 		if String(ccApiVariant.properties.Variant) == "ndk" {

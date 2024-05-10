@@ -118,6 +118,16 @@ func TestSnapshotVisibility(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: [
+        "prebuilt_myjavalib",
+        "prebuilt_mypublicjavalib",
+        "prebuilt_mydefaultedjavalib",
+        "prebuilt_myprivatejavalib",
+    ],
+}
+
 java_import {
     name: "myjavalib",
     prefer: false,
@@ -398,6 +408,11 @@ func TestSnapshot_EnvConfiguration(t *testing.T) {
 			checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_myjavalib"],
+}
+
 java_import {
     name: "myjavalib",
     prefer: false,
@@ -442,11 +457,21 @@ java_import {
 			android.FixtureMergeEnv(map[string]string{
 				"SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE": "S",
 			}),
+			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+				variables.BuildFlags = map[string]string{
+					"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
+				}
+			}),
 		).RunTest(t)
 
 		CheckSnapshot(t, result, "mysdk", "",
 			checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_mysdklibrary"],
+}
 
 prebuilt_bootclasspath_fragment {
     name: "mybootclasspathfragment",
@@ -487,9 +512,9 @@ java_sdk_library_import {
 .intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/index.csv -> hiddenapi/index.csv
 .intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/stub-flags.csv -> hiddenapi/stub-flags.csv
 .intermediates/mybootclasspathfragment/android_common/modular-hiddenapi/all-flags.csv -> hiddenapi/all-flags.csv
-.intermediates/mysdklibrary.stubs/android_common/javac/mysdklibrary.stubs.jar -> sdk_library/public/mysdklibrary-stubs.jar
-.intermediates/mysdklibrary.stubs.source/android_common/metalava/mysdklibrary.stubs.source_api.txt -> sdk_library/public/mysdklibrary.txt
-.intermediates/mysdklibrary.stubs.source/android_common/metalava/mysdklibrary.stubs.source_removed.txt -> sdk_library/public/mysdklibrary-removed.txt
+.intermediates/mysdklibrary.stubs.exportable/android_common/combined/mysdklibrary.stubs.exportable.jar -> sdk_library/public/mysdklibrary-stubs.jar
+.intermediates/mysdklibrary.stubs.source/android_common/exportable/mysdklibrary.stubs.source_api.txt -> sdk_library/public/mysdklibrary.txt
+.intermediates/mysdklibrary.stubs.source/android_common/exportable/mysdklibrary.stubs.source_removed.txt -> sdk_library/public/mysdklibrary-removed.txt
 `),
 		)
 	})

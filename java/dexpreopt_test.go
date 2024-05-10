@@ -212,7 +212,7 @@ func TestDexpreoptEnabled(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			preparers := android.GroupFixturePreparers(
-				PrepareForTestWithJavaDefaultModules,
+				PrepareForTestWithDexpreopt,
 				PrepareForTestWithFakeApexMutator,
 				dexpreopt.FixtureSetApexSystemServerJars("com.android.apex1:service-foo"),
 			)
@@ -257,7 +257,7 @@ func TestDex2oatToolDeps(t *testing.T) {
 
 	preparers := android.GroupFixturePreparers(
 		cc.PrepareForTestWithCcDefaultModules,
-		PrepareForTestWithJavaDefaultModulesWithoutFakeDex2oatd,
+		PrepareForTestWithDexpreoptWithoutFakeDex2oatd,
 		dexpreopt.PrepareForTestByEnablingDexpreopt)
 
 	testDex2oatToolDep := func(sourceEnabled, prebuiltEnabled, prebuiltPreferred bool,
@@ -299,7 +299,7 @@ func TestDex2oatToolDeps(t *testing.T) {
 
 func TestDexpreoptBuiltInstalledForApex(t *testing.T) {
 	preparers := android.GroupFixturePreparers(
-		PrepareForTestWithJavaDefaultModules,
+		PrepareForTestWithDexpreopt,
 		PrepareForTestWithFakeApexMutator,
 		dexpreopt.FixtureSetApexSystemServerJars("com.android.apex1:service-foo"),
 	)
@@ -386,7 +386,7 @@ func verifyEntries(t *testing.T, message string, expectedModule string,
 
 func TestAndroidMkEntriesForApex(t *testing.T) {
 	preparers := android.GroupFixturePreparers(
-		PrepareForTestWithJavaDefaultModules,
+		PrepareForTestWithDexpreopt,
 		PrepareForTestWithFakeApexMutator,
 		dexpreopt.FixtureSetApexSystemServerJars("com.android.apex1:service-foo"),
 	)
@@ -410,7 +410,7 @@ func TestAndroidMkEntriesForApex(t *testing.T) {
 	verifyEntries(t,
 		"entriesList[0]",
 		"service-foo-dexpreopt-arm64-apex@com.android.apex1@javalib@service-foo.jar@classes.odex",
-		"/dexpreopt/oat/arm64/javalib.odex",
+		"/dexpreopt/service-foo/oat/arm64/javalib.odex",
 		"/system/framework/oat/arm64",
 		"apex@com.android.apex1@javalib@service-foo.jar@classes.odex",
 		entriesList[0])
@@ -418,7 +418,7 @@ func TestAndroidMkEntriesForApex(t *testing.T) {
 	verifyEntries(t,
 		"entriesList[1]",
 		"service-foo-dexpreopt-arm64-apex@com.android.apex1@javalib@service-foo.jar@classes.vdex",
-		"/dexpreopt/oat/arm64/javalib.vdex",
+		"/dexpreopt/service-foo/oat/arm64/javalib.vdex",
 		"/system/framework/oat/arm64",
 		"apex@com.android.apex1@javalib@service-foo.jar@classes.vdex",
 		entriesList[1])
@@ -437,4 +437,29 @@ func TestAndroidMkEntriesForApex(t *testing.T) {
 	entriesList = filterDexpreoptEntriesList(entriesList)
 
 	android.AssertIntEquals(t, "entries count", 0, len(entriesList))
+}
+
+func TestGenerateProfileEvenIfDexpreoptIsDisabled(t *testing.T) {
+	preparers := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+		PrepareForTestWithFakeApexMutator,
+		dexpreopt.FixtureDisableDexpreopt(true),
+	)
+
+	result := preparers.RunTestWithBp(t, `
+		java_library {
+			name: "foo",
+			installable: true,
+			dex_preopt: {
+				profile: "art-profile",
+			},
+			srcs: ["a.java"],
+		}`)
+
+	ctx := result.TestContext
+	dexpreopt := ctx.ModuleForTests("foo", "android_common").MaybeRule("dexpreopt")
+
+	expected := []string{"out/soong/.intermediates/foo/android_common/dexpreopt/foo/profile.prof"}
+
+	android.AssertArrayString(t, "outputs", expected, dexpreopt.AllOutputs())
 }

@@ -55,12 +55,14 @@ func rbeCommand(ctx Context, config Config, rbeCmd string) string {
 
 func getRBEVars(ctx Context, config Config) map[string]string {
 	vars := map[string]string{
-		"RBE_log_dir":       config.rbeProxyLogsDir(),
-		"RBE_re_proxy":      config.rbeReproxy(),
-		"RBE_exec_root":     config.rbeExecRoot(),
-		"RBE_output_dir":    config.rbeProxyLogsDir(),
-		"RBE_proxy_log_dir": config.rbeProxyLogsDir(),
-		"RBE_platform":      "container-image=" + remoteexec.DefaultImage,
+		"RBE_log_dir":          config.rbeProxyLogsDir(),
+		"RBE_re_proxy":         config.rbeReproxy(),
+		"RBE_exec_root":        config.rbeExecRoot(),
+		"RBE_output_dir":       config.rbeProxyLogsDir(),
+		"RBE_proxy_log_dir":    config.rbeProxyLogsDir(),
+		"RBE_cache_dir":        config.rbeCacheDir(),
+		"RBE_download_tmp_dir": config.rbeDownloadTmpDir(),
+		"RBE_platform":         "container-image=" + remoteexec.DefaultImage,
 	}
 	if config.StartRBE() {
 		name, err := config.rbeSockAddr(absPath(ctx, config.TempDir()))
@@ -93,14 +95,10 @@ func cleanupRBELogsDir(ctx Context, config Config) {
 	}
 }
 
-func startRBE(ctx Context, config Config) {
+func checkRBERequirements(ctx Context, config Config) {
 	if !config.GoogleProdCredsExist() && prodCredsAuthType(config) {
 		ctx.Fatalf("Unable to start RBE reproxy\nFAILED: Missing LOAS credentials.")
 	}
-	ctx.BeginTrace(metrics.RunSetupTool, "rbe_bootstrap")
-	defer ctx.EndTrace()
-
-	ctx.Status.Status("Starting rbe...")
 
 	if u := ulimitOrFatal(ctx, config, "-u"); u < rbeLeastNProcs {
 		ctx.Fatalf("max user processes is insufficient: %d; want >= %d.\n", u, rbeLeastNProcs)
@@ -113,6 +111,13 @@ func startRBE(ctx Context, config Config) {
 			ctx.Fatalf("Unable to create logs dir (%v) for RBE: %v", config.rbeProxyLogsDir, err)
 		}
 	}
+}
+
+func startRBE(ctx Context, config Config) {
+	ctx.BeginTrace(metrics.RunSetupTool, "rbe_bootstrap")
+	defer ctx.EndTrace()
+
+	ctx.Status.Status("Starting rbe...")
 
 	cmd := Command(ctx, config, "startRBE bootstrap", rbeCommand(ctx, config, bootstrapCmd))
 
@@ -154,12 +159,6 @@ func CheckProdCreds(ctx Context, config Config) {
 		fmt.Fprintln(ctx.Writer, "")
 		return
 	}
-	if config.GoogleProdCredsExist() {
-		return
-	}
-	fmt.Fprintln(ctx.Writer, "")
-	fmt.Fprintln(ctx.Writer, "\033[33mWARNING: Missing LOAS credentials, please run `gcert`. This will result in failing builds in the future, see go/rbe-android-default-announcement.\033[0m")
-	fmt.Fprintln(ctx.Writer, "")
 }
 
 // DumpRBEMetrics creates a metrics protobuf file containing RBE related metrics.
@@ -181,8 +180,6 @@ func DumpRBEMetrics(ctx Context, config Config, filename string) {
 	if !config.StartRBE() {
 		return
 	}
-
-	ctx.Status.Status("Dumping rbe metrics...")
 
 	outputDir := config.rbeProxyLogsDir()
 	if outputDir == "" {
