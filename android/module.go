@@ -1470,15 +1470,27 @@ func (m *ModuleBase) computeInstallDeps(ctx ModuleContext) ([]*DepSet[InstallPat
 	var installDeps []*DepSet[InstallPath]
 	var packagingSpecs []*DepSet[PackagingSpec]
 	ctx.VisitDirectDeps(func(dep Module) {
-		if isInstallDepNeeded(dep, ctx.OtherModuleDependencyTag(dep)) {
+		depTag := ctx.OtherModuleDependencyTag(dep)
+		// If this is true, the direct outputs from the module is not gathered, but its
+		// transitive deps are still gathered.
+		skipToTransitive := IsSkipToTransitiveDepsTag(depTag)
+		if isInstallDepNeeded(dep, depTag) || skipToTransitive {
 			// Installation is still handled by Make, so anything hidden from Make is not
 			// installable.
 			if !dep.IsHideFromMake() && !dep.IsSkipInstall() {
-				installDeps = append(installDeps, dep.base().installFilesDepSet)
+				if skipToTransitive {
+					installDeps = append(installDeps, dep.base().installFilesDepSet.transitive...)
+				} else {
+					installDeps = append(installDeps, dep.base().installFilesDepSet)
+				}
 			}
 			// Add packaging deps even when the dependency is not installed so that uninstallable
 			// modules can still be packaged.  Often the package will be installed instead.
-			packagingSpecs = append(packagingSpecs, dep.base().packagingSpecsDepSet)
+			if skipToTransitive {
+				packagingSpecs = append(packagingSpecs, dep.base().packagingSpecsDepSet.transitive...)
+			} else {
+				packagingSpecs = append(packagingSpecs, dep.base().packagingSpecsDepSet)
+			}
 		}
 	})
 
@@ -1892,12 +1904,14 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			}
 		}
 
-		m.module.GenerateAndroidBuildActions(ctx)
+		// Call aconfigUpdateAndroidBuildActions to collect merged aconfig files before being used
+		// in m.module.GenerateAndroidBuildActions
+		aconfigUpdateAndroidBuildActions(ctx)
 		if ctx.Failed() {
 			return
 		}
 
-		aconfigUpdateAndroidBuildActions(ctx)
+		m.module.GenerateAndroidBuildActions(ctx)
 		if ctx.Failed() {
 			return
 		}
@@ -2145,9 +2159,9 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 	ctx := e.ctx
 	m := e.m
 	switch condition.FunctionName() {
-	case "release_variable":
+	case "release_flag":
 		if condition.NumArgs() != 1 {
-			ctx.OtherModulePropertyErrorf(m, property, "release_variable requires 1 argument, found %d", condition.NumArgs())
+			ctx.OtherModulePropertyErrorf(m, property, "release_flag requires 1 argument, found %d", condition.NumArgs())
 			return proptools.ConfigurableValueUndefined()
 		}
 		if v, ok := ctx.Config().productVariables.BuildFlags[condition.Arg(0)]; ok {
