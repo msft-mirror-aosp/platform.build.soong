@@ -902,6 +902,9 @@ type ModuleBase struct {
 	installedInitRcPaths         InstallPaths
 	installedVintfFragmentsPaths InstallPaths
 
+	// Merged Aconfig files for all transitive deps.
+	aconfigFilePaths Paths
+
 	// set of dependency module:location mappings used to populate the license metadata for
 	// apex containers.
 	licenseInstallMap []string
@@ -1066,7 +1069,8 @@ func addRequiredDeps(ctx BottomUpMutatorContext) {
 		// TODO(jiyong): the Make-side does this only when the required module is a shared
 		// library or a native test.
 		bothInAndroid := ctx.Device() && target.Os.Class == Device
-		nativeArch := InList(ctx.Arch().ArchType.Multilib, []string{"lib32", "lib64"})
+		nativeArch := InList(ctx.Arch().ArchType.Multilib, []string{"lib32", "lib64"}) &&
+			InList(target.Arch.ArchType.Multilib, []string{"lib32", "lib64"})
 		sameBitness := ctx.Arch().ArchType.Multilib == target.Arch.ArchType.Multilib
 		if bothInAndroid && nativeArch && !sameBitness {
 			return
@@ -1892,12 +1896,14 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			}
 		}
 
-		m.module.GenerateAndroidBuildActions(ctx)
+		// Call aconfigUpdateAndroidBuildActions to collect merged aconfig files before being used
+		// in m.module.GenerateAndroidBuildActions
+		aconfigUpdateAndroidBuildActions(ctx)
 		if ctx.Failed() {
 			return
 		}
 
-		aconfigUpdateAndroidBuildActions(ctx)
+		m.module.GenerateAndroidBuildActions(ctx)
 		if ctx.Failed() {
 			return
 		}
@@ -2145,9 +2151,9 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 	ctx := e.ctx
 	m := e.m
 	switch condition.FunctionName() {
-	case "release_variable":
+	case "release_flag":
 		if condition.NumArgs() != 1 {
-			ctx.OtherModulePropertyErrorf(m, property, "release_variable requires 1 argument, found %d", condition.NumArgs())
+			ctx.OtherModulePropertyErrorf(m, property, "release_flag requires 1 argument, found %d", condition.NumArgs())
 			return proptools.ConfigurableValueUndefined()
 		}
 		if v, ok := ctx.Config().productVariables.BuildFlags[condition.Arg(0)]; ok {
