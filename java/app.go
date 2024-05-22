@@ -274,16 +274,37 @@ func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 		variation := append(jniTarget.Variations(),
 			blueprint.Variation{Mutator: "link", Variation: "shared"})
 
-		// If the app builds against an Android SDK use the SDK variant of JNI dependencies
-		// unless jni_uses_platform_apis is set.
-		// Don't require the SDK variant for apps that are shipped on vendor, etc., as they already
-		// have stable APIs through the VNDK.
-		if (usesSDK && !a.RequiresStableAPIs(ctx) &&
-			!Bool(a.appProperties.Jni_uses_platform_apis)) ||
-			Bool(a.appProperties.Jni_uses_sdk_apis) {
+		// Test whether to use the SDK variant or the non-SDK variant of JNI dependencies.
+		// Many factors are considered here.
+		// 1. Basically, the selection follows whether the app has sdk_version set or not.
+		jniUsesSdkVariant := usesSDK
+		// 2. However, jni_uses_platform_apis and jni_uses_sdk_apis can override it
+		if Bool(a.appProperties.Jni_uses_sdk_apis) {
+			jniUsesSdkVariant = true
+		}
+		if Bool(a.appProperties.Jni_uses_platform_apis) {
+			jniUsesSdkVariant = false
+		}
+		// 3. Then the use of SDK variant is again prohibited for the following cases:
+		// 3.1. the app is shipped on unbundled partitions like vendor. Since the entire
+		// partition (not only the app) is considered unbudled, there's no need to use the
+		// SDK variant.
+		// 3.2. the app doesn't support embedding the JNI libs
+		if a.RequiresStableAPIs(ctx) || !a.shouldEmbedJnis(ctx) {
+			jniUsesSdkVariant = false
+		}
+		if jniUsesSdkVariant {
 			variation = append(variation, blueprint.Variation{Mutator: "sdk", Variation: "sdk"})
 		}
-		ctx.AddFarVariationDependencies(variation, jniLibTag, a.appProperties.Jni_libs...)
+
+		// Use the installable dep tag when the JNIs are not embedded
+		var tag dependencyTag
+		if a.shouldEmbedJnis(ctx) {
+			tag = jniLibTag
+		} else {
+			tag = jniInstallTag
+		}
+		ctx.AddFarVariationDependencies(variation, tag, a.appProperties.Jni_libs...)
 	}
 	for _, aconfig_declaration := range a.aaptProperties.Flags_packages {
 		ctx.AddDependency(ctx.Module(), aconfigDeclarationTag, aconfig_declaration)
@@ -334,19 +355,9 @@ func (a *AndroidTestHelperApp) GenerateAndroidBuildActions(ctx android.ModuleCon
 
 func (a *AndroidApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.checkAppSdkVersions(ctx)
+	a.checkEmbedJnis(ctx)
 	a.generateAndroidBuildActions(ctx)
 	a.generateJavaUsedByApex(ctx)
-}
-
-func (a *AndroidApp) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
-	defaultMinSdkVersion := a.Module.MinSdkVersion(ctx)
-	if proptools.Bool(a.appProperties.Updatable) {
-		overrideApiLevel := android.MinSdkVersionFromValue(ctx, ctx.DeviceConfig().ApexGlobalMinSdkVersionOverride())
-		if !overrideApiLevel.IsNone() && overrideApiLevel.CompareTo(defaultMinSdkVersion) > 0 {
-			return overrideApiLevel
-		}
-	}
-	return defaultMinSdkVersion
 }
 
 func (a *AndroidApp) checkAppSdkVersions(ctx android.ModuleContext) {
@@ -354,7 +365,7 @@ func (a *AndroidApp) checkAppSdkVersions(ctx android.ModuleContext) {
 		if !a.SdkVersion(ctx).Stable() {
 			ctx.PropertyErrorf("sdk_version", "Updatable apps must use stable SDKs, found %v", a.SdkVersion(ctx))
 		}
-		if String(a.deviceProperties.Min_sdk_version) == "" {
+		if String(a.overridableProperties.Min_sdk_version) == "" {
 			ctx.PropertyErrorf("updatable", "updatable apps must set min_sdk_version.")
 		}
 
@@ -376,6 +387,17 @@ func (a *AndroidApp) checkAppSdkVersions(ctx android.ModuleContext) {
 
 	a.checkPlatformAPI(ctx)
 	a.checkSdkVersions(ctx)
+}
+
+// Ensures that use_embedded_native_libs are set for apk-in-apex
+func (a *AndroidApp) checkEmbedJnis(ctx android.BaseModuleContext) {
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
+	apkInApex := !apexInfo.IsForPlatform()
+	hasJnis := len(a.appProperties.Jni_libs) > 0
+
+	if apkInApex && hasJnis && !Bool(a.appProperties.Use_embedded_native_libs) {
+		ctx.ModuleErrorf("APK in APEX should have use_embedded_native_libs: true")
+	}
 }
 
 // If an updatable APK sets min_sdk_version, min_sdk_vesion of JNI libs should match with it.
@@ -433,9 +455,9 @@ func (a *AndroidApp) shouldUncompressDex(ctx android.ModuleContext) bool {
 }
 
 func (a *AndroidApp) shouldEmbedJnis(ctx android.BaseModuleContext) bool {
-	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 	return ctx.Config().UnbundledBuild() || Bool(a.appProperties.Use_embedded_native_libs) ||
-		!apexInfo.IsForPlatform() || a.appProperties.AlwaysPackageNativeLibs
+		Bool(a.appProperties.Updatable) ||
+		a.appProperties.AlwaysPackageNativeLibs
 }
 
 func generateAaptRenamePackageFlags(packageName string, renameResourcesPackage bool) []string {
@@ -521,7 +543,7 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 	}
 
 	// Use non final ids if we are doing optimized shrinking and are using R8.
-	nonFinalIds := Bool(a.dexProperties.Optimize.Optimized_shrink_resources) && a.dexer.effectiveOptimizeEnabled()
+	nonFinalIds := a.dexProperties.optimizedResourceShrinkingEnabled(ctx) && a.dexer.effectiveOptimizeEnabled()
 	a.aapt.buildActions(ctx,
 		aaptBuildActionOptions{
 			sdkContext:                     android.SdkContext(a),
@@ -552,7 +574,7 @@ func (a *AndroidApp) proguardBuildActions(ctx android.ModuleContext) {
 	staticLibProguardFlagFiles = android.FirstUniquePaths(staticLibProguardFlagFiles)
 
 	a.Module.extraProguardFlagsFiles = append(a.Module.extraProguardFlagsFiles, staticLibProguardFlagFiles...)
-	if !Bool(a.dexProperties.Optimize.Optimized_shrink_resources) {
+	if !(a.dexProperties.optimizedResourceShrinkingEnabled(ctx)) {
 		// When using the optimized shrinking the R8 enqueuer will traverse the xml files that become
 		// live for code references and (transitively) mark these as live.
 		// In this case we explicitly don't wan't the aapt2 generated keep files (which would keep the now
@@ -591,7 +613,7 @@ func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext) (android.Path, a
 	var packageResources = a.exportPackage
 
 	if ctx.ModuleName() != "framework-res" {
-		if a.dexProperties.resourceShrinkingEnabled() {
+		if a.dexProperties.resourceShrinkingEnabled(ctx) {
 			protoFile := android.PathForModuleOut(ctx, packageResources.Base()+".proto.apk")
 			aapt2Convert(ctx, protoFile, packageResources, "proto")
 			a.dexer.resourcesInput = android.OptionalPathForPath(protoFile)
@@ -614,7 +636,7 @@ func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext) (android.Path, a
 		}
 
 		a.Module.compile(ctx, extraSrcJars, extraClasspathJars, extraCombinedJars)
-		if a.dexProperties.resourceShrinkingEnabled() {
+		if a.dexProperties.resourceShrinkingEnabled(ctx) {
 			binaryResources := android.PathForModuleOut(ctx, packageResources.Base()+".binary.out.apk")
 			aapt2Convert(ctx, binaryResources, a.dexer.resourcesOutput.Path(), "binary")
 			packageResources = binaryResources
@@ -829,7 +851,9 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 
 	dexJarFile, packageResources := a.dexBuildActions(ctx)
 
-	jniLibs, prebuiltJniPackages, certificates := collectAppDeps(ctx, a, a.shouldEmbedJnis(ctx), !Bool(a.appProperties.Jni_uses_platform_apis))
+	// No need to check the SDK version of the JNI deps unless we embed them
+	checkNativeSdkVersion := a.shouldEmbedJnis(ctx) && !Bool(a.appProperties.Jni_uses_platform_apis)
+	jniLibs, prebuiltJniPackages, certificates := collectAppDeps(ctx, a, a.shouldEmbedJnis(ctx), checkNativeSdkVersion)
 	jniJarFile := a.jniBuildActions(jniLibs, prebuiltJniPackages, ctx)
 
 	if ctx.Failed() {
@@ -910,6 +934,22 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		for _, extra := range a.extraOutputFiles {
 			installed := ctx.InstallFile(a.installDir, extra.Base(), extra)
 			extraInstalledPaths = append(extraInstalledPaths, installed)
+		}
+		// If we don't embed jni libs, make sure that those are installed along with the
+		// app, and also place symlinks to the installed paths under the lib/<arch>
+		// directory of the app installation directory. ex:
+		// /system/app/MyApp/lib/arm64/libfoo.so -> /system/lib64/libfoo.so
+		if !a.embeddedJniLibs {
+			for _, jniLib := range jniLibs {
+				archStr := jniLib.target.Arch.ArchType.String()
+				symlinkDir := a.installDir.Join(ctx, "lib", archStr)
+				for _, installedLib := range jniLib.installPaths {
+					// install the symlink itself
+					symlinkName := installedLib.Base()
+					symlinkTarget := android.InstallPathToOnDevicePath(ctx, installedLib)
+					ctx.InstallAbsoluteSymlink(symlinkDir, symlinkName, symlinkTarget)
+				}
+			}
 		}
 		ctx.InstallFile(a.installDir, a.outputFile.Base(), a.outputFile, extraInstalledPaths...)
 	}
@@ -998,6 +1038,7 @@ func collectJniDeps(ctx android.ModuleContext,
 						coverageFile:   dep.CoverageOutputFile(),
 						unstrippedFile: dep.UnstrippedOutputFile(),
 						partition:      dep.Partition(),
+						installPaths:   dep.FilesToInstall(),
 					})
 				} else if ctx.Config().AllowMissingDependencies() {
 					ctx.AddMissingDependencies([]string{otherName})

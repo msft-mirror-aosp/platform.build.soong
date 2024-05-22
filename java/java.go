@@ -366,14 +366,14 @@ type dependencyTag struct {
 	toolchain bool
 
 	static bool
+
+	installable bool
 }
 
-// installDependencyTag is a dependency tag that is annotated to cause the installed files of the
-// dependency to be installed when the parent module is installed.
-type installDependencyTag struct {
-	blueprint.BaseDependencyTag
-	android.InstallAlwaysNeededDependencyTag
-	name string
+var _ android.InstallNeededDependencyTag = (*dependencyTag)(nil)
+
+func (d dependencyTag) InstallDepNeeded() bool {
+	return d.installable
 }
 
 func (d dependencyTag) LicenseAnnotations() []android.LicenseAnnotation {
@@ -405,7 +405,7 @@ func makeUsesLibraryDependencyTag(sdkVersion int, optional bool) usesLibraryDepe
 }
 
 func IsJniDepTag(depTag blueprint.DependencyTag) bool {
-	return depTag == jniLibTag
+	return depTag == jniLibTag || depTag == jniInstallTag
 }
 
 var (
@@ -434,8 +434,8 @@ var (
 	javaApiContributionTag  = dependencyTag{name: "java-api-contribution"}
 	depApiSrcsTag           = dependencyTag{name: "dep-api-srcs"}
 	aconfigDeclarationTag   = dependencyTag{name: "aconfig-declaration"}
-	jniInstallTag           = installDependencyTag{name: "jni install"}
-	binaryInstallTag        = installDependencyTag{name: "binary install"}
+	jniInstallTag           = dependencyTag{name: "jni install", runtimeLinked: true, installable: true}
+	binaryInstallTag        = dependencyTag{name: "binary install", runtimeLinked: true, installable: true}
 	usesLibReqTag           = makeUsesLibraryDependencyTag(dexpreopt.AnySdkVersion, false)
 	usesLibOptTag           = makeUsesLibraryDependencyTag(dexpreopt.AnySdkVersion, true)
 	usesLibCompat28OptTag   = makeUsesLibraryDependencyTag(28, true)
@@ -491,6 +491,7 @@ type jniLib struct {
 	coverageFile   android.OptionalPath
 	unstrippedFile android.Path
 	partition      string
+	installPaths   android.InstallPaths
 }
 
 func sdkDeps(ctx android.BottomUpMutatorContext, sdkContext android.SdkContext, d dexer) {
@@ -673,6 +674,10 @@ type Library struct {
 }
 
 var _ android.ApexModule = (*Library)(nil)
+
+func (j *Library) CheckDepsMinSdkVersion(ctx android.ModuleContext) {
+	CheckMinSdkVersion(ctx, j)
+}
 
 // Provides access to the list of permitted packages from apex boot jars.
 type PermittedPackagesForUpdatableBootJars interface {
@@ -902,6 +907,12 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	j.minSdkVersion = j.MinSdkVersion(ctx)
 	j.maxSdkVersion = j.MaxSdkVersion(ctx)
 
+	// Check min_sdk_version of the transitive dependencies if this module is created from
+	// java_sdk_library.
+	if j.overridableProperties.Min_sdk_version != nil && j.SdkLibraryName() != nil {
+		j.CheckDepsMinSdkVersion(ctx)
+	}
+
 	// SdkLibrary.GenerateAndroidBuildActions(ctx) sets the stubsLinkType to Unknown.
 	// If the stubsLinkType has already been set to Unknown, the stubsLinkType should
 	// not be overridden.
@@ -932,8 +943,12 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	j.checkSdkVersions(ctx)
 	j.checkHeadersOnly(ctx)
 	if ctx.Device() {
+		libName := j.Name()
+		if j.SdkLibraryName() != nil && strings.HasSuffix(libName, ".impl") {
+			libName = proptools.String(j.SdkLibraryName())
+		}
 		j.dexpreopter.installPath = j.dexpreopter.getInstallPath(
-			ctx, j.Name(), android.PathForModuleInstall(ctx, "framework", j.Stem()+".jar"))
+			ctx, libName, android.PathForModuleInstall(ctx, "framework", j.Stem()+".jar"))
 		j.dexpreopter.isSDKLibrary = j.deviceProperties.IsSDKLibrary
 		setUncompressDex(ctx, &j.dexpreopter, &j.dexer)
 		j.dexpreopter.uncompressedDex = *j.dexProperties.Uncompress_dex
@@ -944,8 +959,24 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	j.compile(ctx, nil, nil, nil)
 
-	exclusivelyForApex := !apexInfo.IsForPlatform()
-	if (Bool(j.properties.Installable) || ctx.Host()) && !exclusivelyForApex {
+	// If this module is an impl library created from java_sdk_library,
+	// install the files under the java_sdk_library module outdir instead of this module outdir.
+	if j.SdkLibraryName() != nil && strings.HasSuffix(j.Name(), ".impl") {
+		j.setInstallRules(ctx, proptools.String(j.SdkLibraryName()))
+	} else {
+		j.setInstallRules(ctx, ctx.ModuleName())
+	}
+
+	android.SetProvider(ctx, android.TestOnlyProviderKey, android.TestModuleInformation{
+		TestOnly:       Bool(j.sourceProperties.Test_only),
+		TopLevelTarget: j.sourceProperties.Top_level_test_target,
+	})
+}
+
+func (j *Library) setInstallRules(ctx android.ModuleContext, installModuleName string) {
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
+
+	if (Bool(j.properties.Installable) || ctx.Host()) && apexInfo.IsForPlatform() {
 		var extraInstallDeps android.InstallPaths
 		if j.InstallMixin != nil {
 			extraInstallDeps = j.InstallMixin(ctx, j.outputFile)
@@ -962,22 +993,27 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			if !ctx.Host() {
 				archDir = ctx.DeviceConfig().DeviceArch()
 			}
-			installDir = android.PathForModuleInstall(ctx, ctx.ModuleName(), archDir)
+			installDir = android.PathForModuleInstall(ctx, installModuleName, archDir)
 		} else {
 			installDir = android.PathForModuleInstall(ctx, "framework")
 		}
 		j.installFile = ctx.InstallFile(installDir, j.Stem()+".jar", j.outputFile, extraInstallDeps...)
 	}
-
-	android.SetProvider(ctx, android.TestOnlyProviderKey, android.TestModuleInformation{
-		TestOnly:       Bool(j.sourceProperties.Test_only),
-		TopLevelTarget: j.sourceProperties.Top_level_test_target,
-	})
 }
 
 func (j *Library) DepsMutator(ctx android.BottomUpMutatorContext) {
 	j.usesLibrary.deps(ctx, false)
 	j.deps(ctx)
+
+	if j.SdkLibraryName() != nil && strings.HasSuffix(j.Name(), ".impl") {
+		if dexpreopt.IsDex2oatNeeded(ctx) {
+			dexpreopt.RegisterToolDeps(ctx)
+		}
+		prebuiltSdkLibExists := ctx.OtherModuleExists(android.PrebuiltNameFromSource(proptools.String(j.SdkLibraryName())))
+		if prebuiltSdkLibExists && ctx.OtherModuleExists("all_apex_contributions") {
+			ctx.AddDependency(ctx.Module(), android.AcDepTag, "all_apex_contributions")
+		}
+	}
 }
 
 const (
@@ -1061,7 +1097,7 @@ func (p *librarySdkMemberProperties) PopulateFromVariant(ctx android.SdkMemberCo
 
 	// If the min_sdk_version was set then add the canonical representation of the API level to the
 	// snapshot.
-	if j.deviceProperties.Min_sdk_version != nil {
+	if j.overridableProperties.Min_sdk_version != nil {
 		canonical, err := android.ReplaceFinalizedCodenames(ctx.SdkModuleContext().Config(), j.minSdkVersion.String())
 		if err != nil {
 			ctx.ModuleErrorf("%s", err)

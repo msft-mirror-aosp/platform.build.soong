@@ -67,6 +67,9 @@ type ReleaseConfigs struct {
 	// Map of directory to *ReleaseConfigMap
 	releaseConfigMapsMap map[string]*ReleaseConfigMap
 
+	// The files used by all release configs
+	FilesUsedMap map[string]bool
+
 	// The list of config directories used.
 	configDirs []string
 
@@ -102,8 +105,9 @@ func ReleaseConfigsFactory() (c *ReleaseConfigs) {
 		releaseConfigMapsMap: make(map[string]*ReleaseConfigMap),
 		configDirs:           []string{},
 		configDirIndexes:     make(ReleaseConfigDirMap),
+		FilesUsedMap:         make(map[string]bool),
 	}
-	workflowManual := rc_proto.Workflow(rc_proto.Workflow_MANUAL)
+	workflowManual := rc_proto.Workflow(rc_proto.Workflow_WorkflowManual)
 	releaseAconfigValueSets := FlagArtifact{
 		FlagDeclaration: &rc_proto.FlagDeclaration{
 			Name:        proto.String("RELEASE_ACONFIG_VALUE_SETS"),
@@ -120,6 +124,16 @@ func ReleaseConfigsFactory() (c *ReleaseConfigs) {
 	return &configs
 }
 
+func (configs *ReleaseConfigs) GetSortedReleaseConfigs() (ret []*ReleaseConfig) {
+	for _, config := range configs.ReleaseConfigs {
+		ret = append(ret, config)
+	}
+	slices.SortFunc(ret, func(a, b *ReleaseConfig) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
+	return ret
+}
+
 func ReleaseConfigMapFactory(protoPath string) (m *ReleaseConfigMap) {
 	m = &ReleaseConfigMap{
 		path:                       protoPath,
@@ -129,6 +143,32 @@ func ReleaseConfigMapFactory(protoPath string) (m *ReleaseConfigMap) {
 		LoadMessage(protoPath, &m.proto)
 	}
 	return m
+}
+
+// Find the top of the release config contribution directory.
+// Returns the parent of the flag_declarations and flag_values directories.
+func (configs *ReleaseConfigs) GetDirIndex(path string) (int, error) {
+	for p := path; p != "."; p = filepath.Dir(p) {
+		if idx, ok := configs.configDirIndexes[p]; ok {
+			return idx, nil
+		}
+	}
+	return -1, fmt.Errorf("Could not determine release config directory from %s", path)
+}
+
+// Determine the default directory for writing a flag value.
+//
+// Returns the path of the highest-Indexed one of:
+//   - Where the flag is declared
+//   - Where the release config is first declared
+//   - The last place the value is being written.
+func (configs *ReleaseConfigs) GetFlagValueDirectory(config *ReleaseConfig, flag *FlagArtifact) (string, error) {
+	current, err := configs.GetDirIndex(*flag.Traces[len(flag.Traces)-1].Source)
+	if err != nil {
+		return "", err
+	}
+	index := max(flag.DeclarationIndex, config.DeclarationIndex, current)
+	return configs.configDirs[index], nil
 }
 
 func (configs *ReleaseConfigs) LoadReleaseConfigMap(path string, ConfigDirIndex int) error {
@@ -144,6 +184,7 @@ func (configs *ReleaseConfigs) LoadReleaseConfigMap(path string, ConfigDirIndex 
 			return fmt.Errorf("Release config map %s has invalid container %s", path, container)
 		}
 	}
+	configs.FilesUsedMap[path] = true
 	dir := filepath.Dir(path)
 	// Record any aliases, checking for duplicates.
 	for _, alias := range m.proto.Aliases {
@@ -190,6 +231,7 @@ func (configs *ReleaseConfigs) LoadReleaseConfigMap(path string, ConfigDirIndex 
 			return fmt.Errorf("Duplicate definition of %s", *flagDeclaration.Name)
 		}
 		// Set the initial value in the flag artifact.
+		configs.FilesUsedMap[path] = true
 		configs.FlagArtifacts[name].UpdateValue(
 			FlagValue{path: path, proto: rc_proto.FlagValue{
 				Name: proto.String(name), Value: flagDeclaration.Value}})
@@ -213,6 +255,7 @@ func (configs *ReleaseConfigs) LoadReleaseConfigMap(path string, ConfigDirIndex 
 			configs.ReleaseConfigs[name] = ReleaseConfigFactory(name, ConfigDirIndex)
 		}
 		config := configs.ReleaseConfigs[name]
+		config.FilesUsedMap[path] = true
 		config.InheritNames = append(config.InheritNames, releaseConfigContribution.proto.Inherits...)
 
 		// Only walk flag_values/{RELEASE} for defined releases.
@@ -224,6 +267,7 @@ func (configs *ReleaseConfigs) LoadReleaseConfigMap(path string, ConfigDirIndex 
 			if *flagValue.proto.Name == "RELEASE_ACONFIG_VALUE_SETS" {
 				return fmt.Errorf("%s: %s is a reserved build flag", path, *flagValue.proto.Name)
 			}
+			config.FilesUsedMap[path] = true
 			releaseConfigContribution.FlagValues = append(releaseConfigContribution.FlagValues, flagValue)
 			return nil
 		})
@@ -257,14 +301,21 @@ func (configs *ReleaseConfigs) GetReleaseConfig(name string) (*ReleaseConfig, er
 	return nil, fmt.Errorf("Missing config %s.  Trace=%v", name, trace)
 }
 
-// Write the makefile for this targetRelease.
-func (configs *ReleaseConfigs) WriteMakefile(outFile, targetRelease string) error {
-	makeVars := make(map[string]string)
+func (configs *ReleaseConfigs) GetAllReleaseNames() []string {
 	var allReleaseNames []string
 	for _, v := range configs.ReleaseConfigs {
 		allReleaseNames = append(allReleaseNames, v.Name)
 		allReleaseNames = append(allReleaseNames, v.OtherNames...)
 	}
+	slices.SortFunc(allReleaseNames, func(a, b string) int {
+		return cmp.Compare(a, b)
+	})
+	return allReleaseNames
+}
+
+// Write the makefile for this targetRelease.
+func (configs *ReleaseConfigs) WriteMakefile(outFile, targetRelease string) error {
+	makeVars := make(map[string]string)
 	config, err := configs.GetReleaseConfig(targetRelease)
 	if err != nil {
 		return err
@@ -327,7 +378,8 @@ func (configs *ReleaseConfigs) WriteMakefile(outFile, targetRelease string) erro
 		data += fmt.Sprintf("# User specified TARGET_RELEASE=%s\n", targetRelease)
 	}
 	// The variable _all_release_configs will get deleted during processing, so do not mark it read-only.
-	data += fmt.Sprintf("_all_release_configs := %s\n", strings.Join(allReleaseNames, " "))
+	data += fmt.Sprintf("_all_release_configs := %s\n", strings.Join(configs.GetAllReleaseNames(), " "))
+	data += fmt.Sprintf("_used_files := %s\n", strings.Join(config.GetSortedFileList(), " "))
 	data += fmt.Sprintf("_ALL_RELEASE_FLAGS :=$= %s\n", strings.Join(names, " "))
 	for _, pName := range pNames {
 		data += fmt.Sprintf("_ALL_RELEASE_FLAGS.PARTITIONS.%s :=$= %s\n", pName, strings.Join(partitions[pName], " "))
@@ -359,8 +411,9 @@ func (configs *ReleaseConfigs) GenerateReleaseConfigs(targetRelease string) erro
 		configs.ReleaseConfigs[name].OtherNames = aliases
 	}
 
-	for _, config := range configs.ReleaseConfigs {
-		err := config.GenerateReleaseConfig(configs)
+	sortedReleaseConfigs := configs.GetSortedReleaseConfigs()
+	for _, c := range sortedReleaseConfigs {
+		err := c.GenerateReleaseConfig(configs)
 		if err != nil {
 			return err
 		}
@@ -370,17 +423,16 @@ func (configs *ReleaseConfigs) GenerateReleaseConfigs(targetRelease string) erro
 	if err != nil {
 		return err
 	}
+	orc := []*rc_proto.ReleaseConfigArtifact{}
+	for _, c := range sortedReleaseConfigs {
+		if c.Name != releaseConfig.Name {
+			orc = append(orc, c.ReleaseConfigArtifact)
+		}
+	}
+
 	configs.Artifact = rc_proto.ReleaseConfigsArtifact{
-		ReleaseConfig: releaseConfig.ReleaseConfigArtifact,
-		OtherReleaseConfigs: func() []*rc_proto.ReleaseConfigArtifact {
-			orc := []*rc_proto.ReleaseConfigArtifact{}
-			for name, config := range configs.ReleaseConfigs {
-				if name != releaseConfig.Name {
-					orc = append(orc, config.ReleaseConfigArtifact)
-				}
-			}
-			return orc
-		}(),
+		ReleaseConfig:       releaseConfig.ReleaseConfigArtifact,
+		OtherReleaseConfigs: orc,
 		ReleaseConfigMapsMap: func() map[string]*rc_proto.ReleaseConfigMap {
 			ret := make(map[string]*rc_proto.ReleaseConfigMap)
 			for k, v := range configs.releaseConfigMapsMap {
@@ -410,7 +462,8 @@ func ReadReleaseConfigMaps(releaseConfigMapPaths StringList, targetRelease strin
 
 	configs := ReleaseConfigsFactory()
 	mapsRead := make(map[string]bool)
-	for idx, releaseConfigMapPath := range releaseConfigMapPaths {
+	var idx int
+	for _, releaseConfigMapPath := range releaseConfigMapPaths {
 		// Maintain an ordered list of release config directories.
 		configDir := filepath.Dir(releaseConfigMapPath)
 		if mapsRead[configDir] {
@@ -425,6 +478,7 @@ func ReadReleaseConfigMaps(releaseConfigMapPaths StringList, targetRelease strin
 		if err != nil {
 			return nil, err
 		}
+		idx += 1
 	}
 
 	// Now that we have all of the release config maps, can meld them and generate the artifacts.
