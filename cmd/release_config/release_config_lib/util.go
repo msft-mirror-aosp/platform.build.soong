@@ -149,9 +149,12 @@ func DisableWarnings() {
 	disableWarnings = true
 }
 
+// warnf will log to stdout if warnings are enabled. In make code,
+// stdout is redirected to a file, so the warnings will not be shown
+// in the terminal.
 func warnf(format string, args ...any) (n int, err error) {
 	if !disableWarnings {
-		return fmt.Fprintf(os.Stderr, format, args...)
+		return fmt.Printf(format, args...)
 	}
 	return 0, nil
 }
@@ -216,6 +219,7 @@ func GetDefaultMapPaths(queryMaps bool) (defaultMapPaths StringList, err error) 
 		var stdout strings.Builder
 		getBuildVar.Stdin = strings.NewReader("")
 		getBuildVar.Stdout = &stdout
+		getBuildVar.Stderr = os.Stderr
 		err = getBuildVar.Run()
 		if err != nil {
 			return
