@@ -52,6 +52,9 @@ func UnmarshalValue(str string) *rc_proto.Value {
 }
 
 func MarshalValue(value *rc_proto.Value) string {
+	if value == nil {
+		return ""
+	}
 	switch val := value.Val.(type) {
 	case *rc_proto.Value_UnspecifiedValue:
 		// Value was never set.
@@ -69,5 +72,24 @@ func MarshalValue(value *rc_proto.Value) string {
 	default:
 		// Flagged as error elsewhere, so return empty string here.
 		return ""
+	}
+}
+
+// Returns a string representation of the type of the value for make
+func ValueType(value *rc_proto.Value) string {
+	if value == nil || value.Val == nil {
+		return "unspecified"
+	}
+	switch value.Val.(type) {
+	case *rc_proto.Value_UnspecifiedValue:
+		return "unspecified"
+	case *rc_proto.Value_StringValue:
+		return "string"
+	case *rc_proto.Value_BoolValue:
+		return "bool"
+	case *rc_proto.Value_Obsolete:
+		return "obsolete"
+	default:
+		panic("Unhandled type")
 	}
 }

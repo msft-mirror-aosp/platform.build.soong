@@ -106,9 +106,6 @@ type Droidstubs struct {
 	everythingArtifacts stubsArtifacts
 	exportableArtifacts stubsArtifacts
 
-	// Single aconfig "cache file" merged from this module and all dependencies.
-	mergedAconfigFiles map[string]android.Paths
-
 	exportableApiFile        android.WritablePath
 	exportableRemovedApiFile android.WritablePath
 }
@@ -626,7 +623,8 @@ func (d *Droidstubs) apiLevelsGenerationFlags(ctx android.ModuleContext, cmd *an
 	// privileged apps that are only defined since API level 21 (Lollipop), fallback to public stubs
 	// for older releases. Similarly, module-lib falls back to system API.
 	var sdkDirs []string
-	switch proptools.StringDefault(d.properties.Api_levels_sdk_type, "public") {
+	apiLevelsSdkType := proptools.StringDefault(d.properties.Api_levels_sdk_type, "public")
+	switch apiLevelsSdkType {
 	case "system-server":
 		sdkDirs = []string{"system-server", "module-lib", "system", "public"}
 	case "module-lib":
@@ -640,9 +638,22 @@ func (d *Droidstubs) apiLevelsGenerationFlags(ctx android.ModuleContext, cmd *an
 		return
 	}
 
+	// Construct a pattern to match the appropriate extensions that should be included in the
+	// generated api-versions.xml file.
+	//
 	// Use the first item in the sdkDirs array as that is the sdk type for the target API levels
 	// being generated but has the advantage over `Api_levels_sdk_type` as it has been validated.
-	extensionsPattern := fmt.Sprintf(`/extensions/[0-9]+/%s/.*\.jar`, sdkDirs[0])
+	// The exception is for system-server which needs to include module-lib and system-server. That
+	// is because while system-server extends module-lib the system-server extension directory only
+	// contains service-* modules which provide system-server APIs it does not list the modules which
+	// only provide a module-lib, so they have to be included separately.
+	extensionSurfacesPattern := sdkDirs[0]
+	if apiLevelsSdkType == "system-server" {
+		// Take the first two items in sdkDirs, which are system-server and module-lib, and construct
+		// a pattern that will match either.
+		extensionSurfacesPattern = strings.Join(sdkDirs[0:2], "|")
+	}
+	extensionsPattern := fmt.Sprintf(`/extensions/[0-9]+/(%s)/.*\.jar`, extensionSurfacesPattern)
 
 	var dirs []string
 	var extensions_dir string
@@ -1328,7 +1339,6 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 		rule.Build("nullabilityWarningsCheck", "nullability warnings check")
 	}
-	android.CollectDependencyAconfigFiles(ctx, &d.mergedAconfigFiles)
 }
 
 func (d *Droidstubs) createApiContribution(ctx android.DefaultableHookContext) {

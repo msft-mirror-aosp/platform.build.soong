@@ -21,6 +21,7 @@ var (
 	manualFlagNamePrefixes []string = []string{
 		"RELEASE_ACONFIG_",
 		"RELEASE_PLATFORM_",
+		"RELEASE_BUILD_FLAGS_",
 	}
 
 	// Set `aconfig_flags_only: true` in these release configs.
@@ -136,7 +137,9 @@ func ProcessBuildFlags(dir string, namespaceMap map[string]string) error {
 		workflow := rc_proto.Workflow(rc_proto.Workflow_PREBUILT)
 		switch {
 		case declName == "RELEASE_ACONFIG_VALUE_SETS":
-			rootAconfigModule = declValue[1 : len(declValue)-1]
+			if strings.HasPrefix(declValue, "\"") {
+				rootAconfigModule = declValue[1 : len(declValue)-1]
+			}
 			continue
 		case strings.HasPrefix(declValue, "\""):
 			// String values mean that the flag workflow is (most likely) either MANUAL or PREBUILT.

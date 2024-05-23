@@ -35,6 +35,7 @@ func main() {
 	var product string
 	var allMake bool
 	var useBuildVar bool
+	var guard bool
 
 	defaultRelease := os.Getenv("TARGET_RELEASE")
 	if defaultRelease == "" {
@@ -50,8 +51,9 @@ func main() {
 	flag.BoolVar(&textproto, "textproto", true, "write artifacts as text protobuf")
 	flag.BoolVar(&json, "json", true, "write artifacts as json")
 	flag.BoolVar(&pb, "pb", true, "write artifacts as binary protobuf")
-	flag.BoolVar(&allMake, "all_make", true, "write makefiles for all release configs")
+	flag.BoolVar(&allMake, "all_make", false, "write makefiles for all release configs")
 	flag.BoolVar(&useBuildVar, "use_get_build_var", false, "use get_build_var PRODUCT_RELEASE_CONFIG_MAPS")
+	flag.BoolVar(&guard, "guard", true, "whether to guard with RELEASE_BUILD_FLAGS_IN_PROTOBUF")
 
 	flag.Parse()
 
@@ -70,29 +72,34 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	releaseName := config.Name
 	err = os.MkdirAll(outputDir, 0775)
 	if err != nil {
 		panic(err)
 	}
 
-	if err = config.WritePartitionBuildFlags(outputDir, product, targetRelease); err != nil {
+	makefilePath := filepath.Join(outputDir, fmt.Sprintf("release_config-%s-%s.varmk", product, targetRelease))
+	useProto, ok := config.FlagArtifacts["RELEASE_BUILD_FLAGS_IN_PROTOBUF"]
+	if guard && (!ok || rc_lib.MarshalValue(useProto.Value) == "") {
+		// We were told to guard operation and either we have no build flag, or it is False.
+		// Write an empty file so that release_config.mk will use the old process.
+		os.WriteFile(makefilePath, []byte{}, 0644)
+		return
+	}
+	// Write the makefile where release_config.mk is going to look for it.
+	err = configs.WriteMakefile(makefilePath, targetRelease)
+	if err != nil {
 		panic(err)
 	}
-
 	if allMake {
-		for k, _ := range configs.ReleaseConfigs {
-			makefilePath := filepath.Join(outputDir, fmt.Sprintf("release_config-%s-%s.mk", product, k))
-			err = configs.WriteMakefile(makefilePath, k)
-			if err != nil {
-				panic(err)
+		// Write one makefile per release config, using the canonical release name.
+		for _, c := range configs.GetSortedReleaseConfigs() {
+			if c.Name != targetRelease {
+				makefilePath = filepath.Join(outputDir, fmt.Sprintf("release_config-%s-%s.varmk", product, c.Name))
+				err = configs.WriteMakefile(makefilePath, c.Name)
+				if err != nil {
+					panic(err)
+				}
 			}
-		}
-	} else {
-		makefilePath := filepath.Join(outputDir, fmt.Sprintf("release_config-%s-%s.mk", product, releaseName))
-		err = configs.WriteMakefile(makefilePath, targetRelease)
-		if err != nil {
-			panic(err)
 		}
 	}
 	if json {
@@ -113,4 +120,8 @@ func main() {
 			panic(err)
 		}
 	}
+	if err = config.WritePartitionBuildFlags(outputDir, product, targetRelease); err != nil {
+		panic(err)
+	}
+
 }

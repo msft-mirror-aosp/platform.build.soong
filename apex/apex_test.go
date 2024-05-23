@@ -5049,6 +5049,20 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		// Make sure that the frameworks/base/Android.bp file exists as otherwise hidden API encoding
 		// is disabled.
 		android.FixtureAddTextFile("frameworks/base/Android.bp", ""),
+
+		// Make sure that we have atleast one platform library so that we can check the monolithic hiddenapi
+		// file creation.
+		java.FixtureConfigureBootJars("platform:foo"),
+		android.FixtureModifyMockFS(func(fs android.MockFS) {
+			fs["platform/Android.bp"] = []byte(`
+		java_library {
+			name: "foo",
+			srcs: ["Test.java"],
+			compile_dex: true,
+		}
+		`)
+			fs["platform/Test.java"] = nil
+		}),
 	)
 
 	checkBootDexJarPath := func(t *testing.T, ctx *android.TestContext, stem string, bootDexJarPath string) {
@@ -5143,7 +5157,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkBootDexJarPath(t, ctx, "libbar", "out/soong/.intermediates/prebuilt_myapex.deapexer/android_common/deapexer/javalib/libbar.jar")
 
 		// Verify the correct module jars contribute to the hiddenapi index file.
-		checkHiddenAPIIndexFromClassesInputs(t, ctx, ``)
+		checkHiddenAPIIndexFromClassesInputs(t, ctx, `out/soong/.intermediates/platform/foo/android_common/javac/foo.jar`)
 		checkHiddenAPIIndexFromFlagsInputs(t, ctx, `
 			my-bootclasspath-fragment/index.csv
 			out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
@@ -5221,7 +5235,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkBootDexJarPath(t, ctx, "libbar", "out/soong/.intermediates/prebuilt_myapex.deapexer/android_common/deapexer/javalib/libbar.jar")
 
 		// Verify the correct module jars contribute to the hiddenapi index file.
-		checkHiddenAPIIndexFromClassesInputs(t, ctx, ``)
+		checkHiddenAPIIndexFromClassesInputs(t, ctx, `out/soong/.intermediates/platform/foo/android_common/javac/foo.jar`)
 		checkHiddenAPIIndexFromFlagsInputs(t, ctx, `
 			my-bootclasspath-fragment/index.csv
 			out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
@@ -5410,7 +5424,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkBootDexJarPath(t, ctx, "libbar", "out/soong/.intermediates/prebuilt_myapex.deapexer/android_common/deapexer/javalib/libbar.jar")
 
 		// Verify the correct module jars contribute to the hiddenapi index file.
-		checkHiddenAPIIndexFromClassesInputs(t, ctx, ``)
+		checkHiddenAPIIndexFromClassesInputs(t, ctx, `out/soong/.intermediates/platform/foo/android_common/javac/foo.jar`)
 		checkHiddenAPIIndexFromFlagsInputs(t, ctx, `
 			my-bootclasspath-fragment/index.csv
 			out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
@@ -5507,7 +5521,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkBootDexJarPath(t, ctx, "libbar", "out/soong/.intermediates/my-bootclasspath-fragment/android_common_myapex/hiddenapi-modular/encoded/libbar.jar")
 
 		// Verify the correct module jars contribute to the hiddenapi index file.
-		checkHiddenAPIIndexFromClassesInputs(t, ctx, ``)
+		checkHiddenAPIIndexFromClassesInputs(t, ctx, `out/soong/.intermediates/platform/foo/android_common/javac/foo.jar`)
 		checkHiddenAPIIndexFromFlagsInputs(t, ctx, `
 			out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
 			out/soong/.intermediates/my-bootclasspath-fragment/android_common_myapex/modular-hiddenapi/index.csv
@@ -5601,13 +5615,26 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 			compile_dex: true,
 		}
 	`
+		// This test disables libbar, which causes the ComponentDepsMutator to add
+		// deps on libbar.stubs and other sub-modules that don't exist. We can
+		// enable AllowMissingDependencies to work around that, but enabling that
+		// causes extra checks for missing source files to dex_bootjars, so add those
+		// to the mock fs as well.
+		preparer2 := android.GroupFixturePreparers(
+			preparer,
+			android.PrepareForTestWithAllowMissingDependencies,
+			android.FixtureMergeMockFs(map[string][]byte{
+				"build/soong/scripts/check_boot_jars/package_allowed_list.txt": nil,
+				"frameworks/base/config/boot-profile.txt":                      nil,
+			}),
+		)
 
-		ctx := testDexpreoptWithApexes(t, bp, "", preparer, fragment)
+		ctx := testDexpreoptWithApexes(t, bp, "", preparer2, fragment)
 		checkBootDexJarPath(t, ctx, "libfoo", "out/soong/.intermediates/prebuilt_myapex.deapexer/android_common/deapexer/javalib/libfoo.jar")
 		checkBootDexJarPath(t, ctx, "libbar", "out/soong/.intermediates/prebuilt_myapex.deapexer/android_common/deapexer/javalib/libbar.jar")
 
 		// Verify the correct module jars contribute to the hiddenapi index file.
-		checkHiddenAPIIndexFromClassesInputs(t, ctx, ``)
+		checkHiddenAPIIndexFromClassesInputs(t, ctx, `out/soong/.intermediates/platform/foo/android_common/javac/foo.jar`)
 		checkHiddenAPIIndexFromFlagsInputs(t, ctx, `
 			my-bootclasspath-fragment/index.csv
 			out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
@@ -5895,6 +5922,7 @@ func TestApexWithApps(t *testing.T) {
 			srcs: ["foo/bar/MyClass.java"],
 			sdk_version: "current",
 			system_modules: "none",
+			use_embedded_native_libs: true,
 			jni_libs: ["libjni"],
 			stl: "none",
 			apex_available: [ "myapex" ],
@@ -6449,7 +6477,7 @@ func TestApexAvailable_ApexAvailableNameWithVersionCode(t *testing.T) {
 		t.Errorf("expected to find defaultVersion %q; got %q", barExpectedDefaultVersion, barActualDefaultVersion)
 	}
 
-	overrideBarManifestRule := result.ModuleForTests("bar", "android_common_myoverrideapex_bar").Rule("apexManifestRule")
+	overrideBarManifestRule := result.ModuleForTests("bar", "android_common_myoverrideapex_myoverrideapex").Rule("apexManifestRule")
 	overrideBarActualDefaultVersion := overrideBarManifestRule.Args["default_version"]
 	if overrideBarActualDefaultVersion != barExpectedDefaultVersion {
 		t.Errorf("expected to find defaultVersion %q; got %q", barExpectedDefaultVersion, barActualDefaultVersion)
@@ -6829,7 +6857,7 @@ func TestOverrideApex(t *testing.T) {
 	`, withManifestPackageNameOverrides([]string{"myapex:com.android.myapex"}))
 
 	originalVariant := ctx.ModuleForTests("myapex", "android_common_myapex").Module().(android.OverridableModule)
-	overriddenVariant := ctx.ModuleForTests("myapex", "android_common_override_myapex_myapex").Module().(android.OverridableModule)
+	overriddenVariant := ctx.ModuleForTests("myapex", "android_common_override_myapex_override_myapex").Module().(android.OverridableModule)
 	if originalVariant.GetOverriddenBy() != "" {
 		t.Errorf("GetOverriddenBy should be empty, but was %q", originalVariant.GetOverriddenBy())
 	}
@@ -6837,7 +6865,7 @@ func TestOverrideApex(t *testing.T) {
 		t.Errorf("GetOverriddenBy should be \"override_myapex\", but was %q", overriddenVariant.GetOverriddenBy())
 	}
 
-	module := ctx.ModuleForTests("myapex", "android_common_override_myapex_myapex")
+	module := ctx.ModuleForTests("myapex", "android_common_override_myapex_override_myapex")
 	apexRule := module.Rule("apexRule")
 	copyCmds := apexRule.Args["copy_commands"]
 
@@ -7146,7 +7174,7 @@ func TestJavaSDKLibrary_WithinApex(t *testing.T) {
 
 	// The bar library should depend on the implementation jar.
 	barLibrary := ctx.ModuleForTests("bar", "android_common_myapex").Rule("javac")
-	if expected, actual := `^-classpath [^:]*/turbine-combined/foo\.impl\.jar$`, barLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
+	if expected, actual := `^-classpath [^:]*/turbine-combined/foo\.jar$`, barLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
 		t.Errorf("expected %q, found %#q", expected, actual)
 	}
 }
@@ -7287,7 +7315,7 @@ func TestJavaSDKLibrary_ImportPreferred(t *testing.T) {
 
 	// The bar library should depend on the implementation jar.
 	barLibrary := ctx.ModuleForTests("bar", "android_common_myapex").Rule("javac")
-	if expected, actual := `^-classpath [^:]*/turbine-combined/foo\.impl\.jar$`, barLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
+	if expected, actual := `^-classpath [^:]*/turbine-combined/foo\.jar$`, barLibrary.Args["classpath"]; !regexp.MustCompile(expected).MatchString(actual) {
 		t.Errorf("expected %q, found %#q", expected, actual)
 	}
 }
@@ -8929,7 +8957,7 @@ func TestAllowedFiles(t *testing.T) {
 		t.Errorf("allowed_files_file: expected %q but got %q", expected, actual)
 	}
 
-	rule2 := ctx.ModuleForTests("myapex", "android_common_override_myapex_myapex").Rule("diffApexContentRule")
+	rule2 := ctx.ModuleForTests("myapex", "android_common_override_myapex_override_myapex").Rule("diffApexContentRule")
 	if expected, actual := "sub/allowed.txt", rule2.Args["allowed_files_file"]; expected != actual {
 		t.Errorf("allowed_files_file: expected %q but got %q", expected, actual)
 	}
@@ -9220,7 +9248,7 @@ func TestPrebuiltStubLibDep(t *testing.T) {
 								continue
 							}
 							mod := ctx.ModuleForTests(modName, variant).Module().(*cc.Module)
-							if !mod.Enabled() || mod.IsHideFromMake() {
+							if !mod.Enabled(android.PanickingConfigAndErrorContext(ctx)) || mod.IsHideFromMake() {
 								continue
 							}
 							for _, ent := range android.AndroidMkEntriesForTest(t, ctx, mod) {
@@ -11225,6 +11253,20 @@ func TestBootDexJarsMultipleApexPrebuilts(t *testing.T) {
 			android.FixtureMergeMockFs(map[string][]byte{
 				"system/sepolicy/apex/com.android.foo-file_contexts": nil,
 			}),
+			// Make sure that we have atleast one platform library so that we can check the monolithic hiddenapi
+			// file creation.
+			java.FixtureConfigureBootJars("platform:foo"),
+			android.FixtureModifyMockFS(func(fs android.MockFS) {
+				fs["platform/Android.bp"] = []byte(`
+		java_library {
+			name: "foo",
+			srcs: ["Test.java"],
+			compile_dex: true,
+		}
+		`)
+				fs["platform/Test.java"] = nil
+			}),
+
 			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
 				variables.BuildFlags = map[string]string{
 					"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": tc.selectedApexContributions,
@@ -11253,7 +11295,7 @@ func TestInstallationRulesForMultipleApexPrebuilts(t *testing.T) {
 		variation := func(moduleName string) string {
 			ret := "android_common_com.android.foo"
 			if moduleName == "com.google.android.foo" {
-				ret = "android_common_com.google.android.foo_com.android.foo"
+				ret = "android_common_com.google.android.foo_com.google.android.foo"
 			}
 			return ret
 		}
@@ -11407,6 +11449,7 @@ func TestAconfifDeclarationsValidation(t *testing.T) {
 			aconfig_declarations {
 				name: "%[1]s",
 				package: "com.example.package",
+				container: "system",
 				srcs: [
 					"%[1]s.aconfig",
 				],
@@ -11516,4 +11559,119 @@ func TestAconfifDeclarationsValidation(t *testing.T) {
 	android.AssertStringDoesNotContain(t, "cache file of a lib that does not statically "+
 		"depend on java_aconfig_library not passed as an input",
 		aconfigFlagArgs, fmt.Sprintf("%s/%s/intermediate.pb", outDir, "quux"))
+}
+
+func TestMultiplePrebuiltsWithSameBase(t *testing.T) {
+	ctx := testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			prebuilts: ["myetc", "myetc2"],
+			min_sdk_version: "29",
+		}
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		prebuilt_etc {
+			name: "myetc",
+			src: "myprebuilt",
+			filename: "myfilename",
+		}
+		prebuilt_etc {
+			name: "myetc2",
+			sub_dir: "mysubdir",
+			src: "myprebuilt",
+			filename: "myfilename",
+		}
+	`, withFiles(android.MockFS{
+		"packages/modules/common/build/allowed_deps.txt": nil,
+	}))
+
+	ab := ctx.ModuleForTests("myapex", "android_common_myapex").Module().(*apexBundle)
+	data := android.AndroidMkDataForTest(t, ctx, ab)
+	var builder strings.Builder
+	data.Custom(&builder, ab.BaseModuleName(), "TARGET_", "", data)
+	androidMk := builder.String()
+
+	android.AssertStringDoesContain(t, "not found", androidMk, "LOCAL_MODULE := etc_myfilename.myapex")
+	android.AssertStringDoesContain(t, "not found", androidMk, "LOCAL_MODULE := etc_mysubdir_myfilename.myapex")
+}
+
+func TestApexMinSdkVersionOverride(t *testing.T) {
+	checkMinSdkVersion := func(t *testing.T, module android.TestingModule, expectedMinSdkVersion string) {
+		args := module.Rule("apexRule").Args
+		optFlags := args["opt_flags"]
+		if !strings.Contains(optFlags, "--min_sdk_version "+expectedMinSdkVersion) {
+			t.Errorf("%s: Expected min_sdk_version=%s, got: %s", module.Module(), expectedMinSdkVersion, optFlags)
+		}
+	}
+
+	checkHasDep := func(t *testing.T, ctx *android.TestContext, m android.Module, wantDep android.Module) {
+		t.Helper()
+		found := false
+		ctx.VisitDirectDeps(m, func(dep blueprint.Module) {
+			if dep == wantDep {
+				found = true
+			}
+		})
+		if !found {
+			t.Errorf("Could not find a dependency from %v to %v\n", m, wantDep)
+		}
+	}
+
+	ctx := testApex(t, `
+		apex {
+			name: "com.android.apex30",
+			min_sdk_version: "30",
+			key: "apex30.key",
+			java_libs: ["javalib"],
+		}
+
+		java_library {
+			name: "javalib",
+			srcs: ["A.java"],
+			apex_available: ["com.android.apex30"],
+			min_sdk_version: "30",
+			sdk_version: "current",
+		}
+
+		override_apex {
+			name: "com.mycompany.android.apex30",
+			base: "com.android.apex30",
+		}
+
+		override_apex {
+			name: "com.mycompany.android.apex31",
+			base: "com.android.apex30",
+			min_sdk_version: "31",
+		}
+
+		apex_key {
+			name: "apex30.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+	`, android.FixtureMergeMockFs(android.MockFS{
+		"system/sepolicy/apex/com.android.apex30-file_contexts": nil,
+	}),
+	)
+
+	baseModule := ctx.ModuleForTests("com.android.apex30", "android_common_com.android.apex30")
+	checkMinSdkVersion(t, baseModule, "30")
+
+	// Override module, but uses same min_sdk_version
+	overridingModuleSameMinSdkVersion := ctx.ModuleForTests("com.android.apex30", "android_common_com.mycompany.android.apex30_com.mycompany.android.apex30")
+	javalibApex30Variant := ctx.ModuleForTests("javalib", "android_common_apex30")
+	checkMinSdkVersion(t, overridingModuleSameMinSdkVersion, "30")
+	checkHasDep(t, ctx, overridingModuleSameMinSdkVersion.Module(), javalibApex30Variant.Module())
+
+	// Override module, uses different min_sdk_version
+	overridingModuleDifferentMinSdkVersion := ctx.ModuleForTests("com.android.apex30", "android_common_com.mycompany.android.apex31_com.mycompany.android.apex31")
+	javalibApex31Variant := ctx.ModuleForTests("javalib", "android_common_apex31")
+	checkMinSdkVersion(t, overridingModuleDifferentMinSdkVersion, "31")
+	checkHasDep(t, ctx, overridingModuleDifferentMinSdkVersion.Module(), javalibApex31Variant.Module())
 }

@@ -281,6 +281,19 @@ func testSnapshotWithBootClasspathFragment_Contents(t *testing.T, sdk string, co
 				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
 			}
 		}),
+		// Make sure that we have atleast one platform library so that we can check the monolithic hiddenapi
+		// file creation.
+		java.FixtureConfigureBootJars("platform:foo"),
+		android.FixtureModifyMockFS(func(fs android.MockFS) {
+			fs["platform/Android.bp"] = []byte(`
+		java_library {
+			name: "foo",
+			srcs: ["Test.java"],
+			compile_dex: true,
+		}
+		`)
+			fs["platform/Test.java"] = nil
+		}),
 
 		android.FixtureWithRootAndroidBp(sdk+`
 			apex {
@@ -1095,7 +1108,7 @@ func testSnapshotWithBootClasspathFragment_MinSdkVersion(t *testing.T, targetBui
 
 	bcpf := result.ModuleForTests("mybootclasspathfragment", "android_common")
 	rule := bcpf.Output("out/soong/.intermediates/mybootclasspathfragment/android_common/modular-hiddenapi" + suffix + "/stub-flags.csv")
-	android.AssertPathsRelativeToTopEquals(t, "stub flags inputs", expectedStubFlagsInputs, rule.Implicits)
+	android.AssertPathsRelativeToTopEquals(t, "stub flags inputs", android.SortedUniqueStrings(expectedStubFlagsInputs), android.SortedUniquePaths(rule.Implicits))
 
 	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(expectedSdkSnapshot),
@@ -1153,7 +1166,7 @@ java_sdk_library_import {
 		// of the snapshot.
 		expectedStubFlagsInputs := []string{
 			"out/soong/.intermediates/mysdklibrary.stubs.exportable/android_common/dex/mysdklibrary.stubs.exportable.jar",
-			"out/soong/.intermediates/mysdklibrary/android_common/aligned/mysdklibrary.jar",
+			"out/soong/.intermediates/mysdklibrary.impl/android_common/aligned/mysdklibrary.jar",
 		}
 
 		testSnapshotWithBootClasspathFragment_MinSdkVersion(t, "S",
@@ -1234,9 +1247,9 @@ java_sdk_library_import {
 		// they are both part of the snapshot.
 		expectedStubFlagsInputs := []string{
 			"out/soong/.intermediates/mynewsdklibrary.stubs.exportable/android_common/dex/mynewsdklibrary.stubs.exportable.jar",
-			"out/soong/.intermediates/mynewsdklibrary/android_common/aligned/mynewsdklibrary.jar",
+			"out/soong/.intermediates/mynewsdklibrary.impl/android_common/aligned/mynewsdklibrary.jar",
 			"out/soong/.intermediates/mysdklibrary.stubs.exportable/android_common/dex/mysdklibrary.stubs.exportable.jar",
-			"out/soong/.intermediates/mysdklibrary/android_common/aligned/mysdklibrary.jar",
+			"out/soong/.intermediates/mysdklibrary.impl/android_common/aligned/mysdklibrary.jar",
 		}
 
 		testSnapshotWithBootClasspathFragment_MinSdkVersion(t, "Tiramisu",

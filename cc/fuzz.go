@@ -433,7 +433,7 @@ func (s *ccRustFuzzPackager) GenerateBuildActions(ctx android.SingletonContext) 
 			return
 		}
 		// Discard non-fuzz targets.
-		if ok := fuzz.IsValid(ccModule.FuzzModuleStruct()); !ok {
+		if ok := fuzz.IsValid(ctx, ccModule.FuzzModuleStruct()); !ok {
 			return
 		}
 
@@ -597,7 +597,7 @@ func CollectAllSharedDependencies(ctx android.ModuleContext) (android.RuleBuilde
 	ctx.WalkDeps(func(child, parent android.Module) bool {
 
 		// If this is a Rust module which is not rust_ffi_shared, we still want to bundle any transitive
-		// shared dependencies (even for rust_ffi_static)
+		// shared dependencies (even for rust_ffi_rlib or rust_ffi_static)
 		if rustmod, ok := child.(LinkableInterface); ok && rustmod.RustLibraryInterface() && !rustmod.Shared() {
 			if recursed[ctx.OtherModuleName(child)] {
 				return false
