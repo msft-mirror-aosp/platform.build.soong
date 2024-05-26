@@ -120,6 +120,10 @@ type BaseCompilerProperties struct {
 	// ban targeting bpf in cc rules instead use bpf_rules. (b/323415017)
 	Bpf_target *bool
 
+	// Add "-Xclang -verify" to the cflags and appends "touch $out" to
+	// the clang command line.
+	Clang_verify bool
+
 	Yacc *YaccProperties
 	Lex  *LexProperties
 
@@ -146,6 +150,9 @@ type BaseCompilerProperties struct {
 	AidlInterface struct {
 		// list of aidl_interface sources
 		Sources []string `blueprint:"mutated"`
+
+		// root directory of AIDL sources
+		AidlRoot string `blueprint:"mutated"`
 
 		// AIDL backend language (e.g. "cpp", "ndk")
 		Lang string `blueprint:"mutated"`
@@ -278,6 +285,10 @@ func (compiler *baseCompiler) compilerProps() []interface{} {
 	return []interface{}{&compiler.Properties, &compiler.Proto}
 }
 
+func (compiler *baseCompiler) baseCompilerProps() BaseCompilerProperties {
+	return compiler.Properties
+}
+
 func includeBuildDirectory(prop *bool) bool {
 	return proptools.BoolDefault(prop, true)
 }
@@ -382,6 +393,11 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 
 	flags.Yacc = compiler.Properties.Yacc
 	flags.Lex = compiler.Properties.Lex
+
+	flags.ClangVerify = compiler.Properties.Clang_verify
+	if compiler.Properties.Clang_verify {
+		flags.Local.CFlags = append(flags.Local.CFlags, "-Xclang", "-verify")
+	}
 
 	// Include dir cflags
 	localIncludeDirs := android.PathsForModuleSrc(ctx, compiler.Properties.Local_include_dirs)
@@ -784,6 +800,9 @@ type RustBindgenClangProperties struct {
 	// list of directories relative to the Blueprints file that will
 	// be added to the include path using -I
 	Local_include_dirs []string `android:"arch_variant,variant_prepend"`
+
+	// list of Rust static libraries.
+	Static_rlibs []string `android:"arch_variant,variant_prepend"`
 
 	// list of static libraries that provide headers for this binding.
 	Static_libs []string `android:"arch_variant,variant_prepend"`

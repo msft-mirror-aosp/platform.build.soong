@@ -274,11 +274,12 @@ func LibraryHostSharedFactory() android.Module {
 type flagExporter struct {
 	Properties FlagExporterProperties
 
-	dirs       android.Paths // Include directories to be included with -I
-	systemDirs android.Paths // System include directories to be included with -isystem
-	flags      []string      // Exported raw flags.
-	deps       android.Paths
-	headers    android.Paths
+	dirs         android.Paths // Include directories to be included with -I
+	systemDirs   android.Paths // System include directories to be included with -isystem
+	flags        []string      // Exported raw flags.
+	deps         android.Paths
+	headers      android.Paths
+	rustRlibDeps []RustRlibDep
 }
 
 // exportedIncludes returns the effective include paths for this module and
@@ -339,6 +340,10 @@ func (f *flagExporter) reexportDeps(deps ...android.Path) {
 	f.deps = append(f.deps, deps...)
 }
 
+func (f *flagExporter) reexportRustStaticDeps(deps ...RustRlibDep) {
+	f.rustRlibDeps = append(f.rustRlibDeps, deps...)
+}
+
 // addExportedGeneratedHeaders does nothing but collects generated header files.
 // This can be differ to exportedDeps which may contain phony files to minimize ninja.
 func (f *flagExporter) addExportedGeneratedHeaders(headers ...android.Path) {
@@ -356,6 +361,8 @@ func (f *flagExporter) setProvider(ctx android.ModuleContext) {
 		// Used sparingly, for extra files that need to be explicitly exported to dependers,
 		// or for phony files to minimize ninja.
 		Deps: f.deps,
+		// Used for exporting rlib deps of static libraries to dependents.
+		RustRlibDeps: f.rustRlibDeps,
 		// For exported generated headers, such as exported aidl headers, proto headers, or
 		// sysprop headers.
 		GeneratedHeaders: f.headers,
@@ -1132,9 +1139,14 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 	linkerDeps = append(linkerDeps, deps.EarlySharedLibsDeps...)
 	linkerDeps = append(linkerDeps, deps.SharedLibsDeps...)
 	linkerDeps = append(linkerDeps, deps.LateSharedLibsDeps...)
+
+	if generatedLib := generateRustStaticlib(ctx, deps.RustRlibDeps); generatedLib != nil {
+		deps.StaticLibs = append(deps.StaticLibs, generatedLib)
+	}
+
 	transformObjToDynamicBinary(ctx, objs.objFiles, sharedLibs,
-		deps.StaticLibs, deps.LateStaticLibs, deps.WholeStaticLibs,
-		linkerDeps, deps.CrtBegin, deps.CrtEnd, false, builderFlags, outputFile, implicitOutputs, objs.tidyDepFiles)
+		deps.StaticLibs, deps.LateStaticLibs, deps.WholeStaticLibs, linkerDeps, deps.CrtBegin,
+		deps.CrtEnd, false, builderFlags, outputFile, implicitOutputs, objs.tidyDepFiles)
 
 	objs.coverageFiles = append(objs.coverageFiles, deps.StaticLibObjs.coverageFiles...)
 	objs.coverageFiles = append(objs.coverageFiles, deps.WholeStaticLibObjs.coverageFiles...)
@@ -1350,20 +1362,25 @@ func (library *libraryDecorator) sourceAbiDiff(ctx android.ModuleContext,
 
 func (library *libraryDecorator) crossVersionAbiDiff(ctx android.ModuleContext,
 	sourceDump, referenceDump android.Path,
-	baseName string, isLlndk bool, sourceVersion, prevVersion string) {
+	baseName, nameExt string, isLlndk bool, sourceVersion, prevDumpDir string) {
 
-	errorMessage := "error: Please follow https://android.googlesource.com/platform/development/+/main/vndk/tools/header-checker/README.md#configure-cross_version-abi-check to resolve the ABI difference between your source code and version " + prevVersion + "."
+	errorMessage := "error: Please follow https://android.googlesource.com/platform/development/+/main/vndk/tools/header-checker/README.md#configure-cross_version-abi-check to resolve the difference between your source code and the ABI dumps in " + prevDumpDir
 
-	library.sourceAbiDiff(ctx, sourceDump, referenceDump, baseName, prevVersion,
+	library.sourceAbiDiff(ctx, sourceDump, referenceDump, baseName, nameExt,
 		isLlndk, true /* allowExtensions */, sourceVersion, errorMessage)
 }
 
 func (library *libraryDecorator) sameVersionAbiDiff(ctx android.ModuleContext,
 	sourceDump, referenceDump android.Path,
-	baseName, nameExt string, isLlndk bool) {
+	baseName, nameExt string, isLlndk bool, lsdumpTagName string) {
 
 	libName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
-	errorMessage := "error: Please update ABI references with: $$ANDROID_BUILD_TOP/development/vndk/tools/header-checker/utils/create_reference_dumps.py -l " + libName
+	errorMessage := "error: Please update ABI references with: $$ANDROID_BUILD_TOP/development/vndk/tools/header-checker/utils/create_reference_dumps.py --lib " + libName + " --lib-variant " + lsdumpTagName
+
+	targetRelease := ctx.Config().Getenv("TARGET_RELEASE")
+	if targetRelease != "" {
+		errorMessage += " --release " + targetRelease
+	}
 
 	library.sourceAbiDiff(ctx, sourceDump, referenceDump, baseName, nameExt,
 		isLlndk, false /* allowExtensions */, "current", errorMessage)
@@ -1371,13 +1388,19 @@ func (library *libraryDecorator) sameVersionAbiDiff(ctx android.ModuleContext,
 
 func (library *libraryDecorator) optInAbiDiff(ctx android.ModuleContext,
 	sourceDump, referenceDump android.Path,
-	baseName, nameExt string, refDumpDir string) {
+	baseName, nameExt string, refDumpDir string, lsdumpTagName string) {
 
 	libName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
-	errorMessage := "error: Please update ABI references with: $$ANDROID_BUILD_TOP/development/vndk/tools/header-checker/utils/create_reference_dumps.py -l " + libName + " -ref-dump-dir $$ANDROID_BUILD_TOP/" + refDumpDir
+	errorMessage := "error: Please update ABI references with: $$ANDROID_BUILD_TOP/development/vndk/tools/header-checker/utils/create_reference_dumps.py --lib " + libName + " --lib-variant " + lsdumpTagName + " --ref-dump-dir $$ANDROID_BUILD_TOP/" + refDumpDir
+
+	targetRelease := ctx.Config().Getenv("TARGET_RELEASE")
+	if targetRelease != "" {
+		errorMessage += " --release " + targetRelease
+	}
+
 	// Most opt-in libraries do not have dumps for all default architectures.
 	if ctx.Config().HasDeviceProduct() {
-		errorMessage += " -products " + ctx.Config().DeviceProduct()
+		errorMessage += " --product " + ctx.Config().DeviceProduct()
 	}
 
 	library.sourceAbiDiff(ctx, sourceDump, referenceDump, baseName, nameExt,
@@ -1402,6 +1425,7 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, deps PathD
 
 		var llndkDump, apexVariantDump android.Path
 		tags := classifySourceAbiDump(ctx)
+		optInTags := []lsdumpTag{}
 		for _, tag := range tags {
 			if tag == llndkLsdumpTag && currVendorVersion != "" {
 				if llndkDump == nil {
@@ -1423,6 +1447,9 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, deps PathD
 				}
 				addLsdumpPath(string(tag) + ":" + apexVariantDump.String())
 			} else {
+				if tag.dirName() == "" {
+					optInTags = append(optInTags, tag)
+				}
 				addLsdumpPath(string(tag) + ":" + implDump.String())
 			}
 		}
@@ -1467,7 +1494,7 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, deps PathD
 			prevDumpFile := getRefAbiDumpFile(ctx, prevDumpDir, fileName)
 			if prevDumpFile.Valid() {
 				library.crossVersionAbiDiff(ctx, sourceDump, prevDumpFile.Path(),
-					fileName, isLlndk, currVersion, nameExt+prevVersion)
+					fileName, nameExt+prevVersion, isLlndk, currVersion, prevDumpDir)
 			}
 			// Check against the current version.
 			sourceDump = implDump
@@ -1487,8 +1514,19 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, deps PathD
 			currDumpFile := getRefAbiDumpFile(ctx, currDumpDir, fileName)
 			if currDumpFile.Valid() {
 				library.sameVersionAbiDiff(ctx, sourceDump, currDumpFile.Path(),
-					fileName, nameExt, isLlndk)
+					fileName, nameExt, isLlndk, string(tag))
 			}
+		}
+
+		// Assert that a module is tagged with at most one of platformLsdumpTag, productLsdumpTag, or vendorLsdumpTag.
+		if len(headerAbiChecker.Ref_dump_dirs) > 0 && len(optInTags) != 1 {
+			ctx.ModuleErrorf("Expect exactly one opt-in lsdump tag when ref_dump_dirs are specified: %s", optInTags)
+			return
+		}
+		// Ensure that a module tagged with only platformLsdumpTag has ref_dump_dirs.
+		// Android.bp in vendor projects should be cleaned up before this is enforced for vendorLsdumpTag and productLsdumpTag.
+		if len(headerAbiChecker.Ref_dump_dirs) == 0 && len(tags) == 1 && tags[0] == platformLsdumpTag {
+			ctx.ModuleErrorf("header_abi_checker is explicitly enabled, but no ref_dump_dirs are specified.")
 		}
 		// Check against the opt-in reference dumps.
 		for i, optInDumpDir := range headerAbiChecker.Ref_dump_dirs {
@@ -1501,7 +1539,7 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, deps PathD
 			}
 			library.optInAbiDiff(ctx,
 				implDump, optInDumpFile.Path(),
-				fileName, "opt"+strconv.Itoa(i), optInDumpDirPath.String())
+				fileName, "opt"+strconv.Itoa(i), optInDumpDirPath.String(), string(optInTags[0]))
 		}
 	}
 }
@@ -1592,6 +1630,10 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 	library.reexportFlags(deps.ReexportedFlags...)
 	library.reexportDeps(deps.ReexportedDeps...)
 	library.addExportedGeneratedHeaders(deps.ReexportedGeneratedHeaders...)
+
+	if library.static() && len(deps.ReexportedRustRlibDeps) > 0 {
+		library.reexportRustStaticDeps(deps.ReexportedRustRlibDeps...)
+	}
 
 	// Optionally export aidl headers.
 	if Bool(library.Properties.Aidl.Export_aidl_headers) {
@@ -2120,14 +2162,12 @@ func LinkageMutator(mctx android.BottomUpMutatorContext) {
 			// Header only
 		}
 
-	} else if library, ok := mctx.Module().(LinkableInterface); ok && library.CcLibraryInterface() {
-
+	} else if library, ok := mctx.Module().(LinkableInterface); ok && (library.CcLibraryInterface() || library.RustLibraryInterface()) {
 		// Non-cc.Modules may need an empty variant for their mutators.
 		variations := []string{}
 		if library.NonCcVariants() {
 			variations = append(variations, "")
 		}
-
 		isLLNDK := false
 		if m, ok := mctx.Module().(*Module); ok {
 			isLLNDK = m.IsLlndk()

@@ -1504,6 +1504,12 @@ func IsXmlPermissionsFileDepTag(depTag blueprint.DependencyTag) bool {
 
 var implLibraryTag = sdkLibraryComponentTag{name: "impl-library"}
 
+var _ android.InstallNeededDependencyTag = sdkLibraryComponentTag{}
+
+func (t sdkLibraryComponentTag) InstallDepNeeded() bool {
+	return t.name == "xml-permissions-file" || t.name == "impl-library"
+}
+
 // Add the dependencies on the child modules in the component deps mutator.
 func (module *SdkLibrary) ComponentDepsMutator(ctx android.BottomUpMutatorContext) {
 	for _, apiScope := range module.getGeneratedApiScopes(ctx) {
@@ -1649,6 +1655,14 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		module.builtInstalledForApex = module.implLibraryModule.builtInstalledForApex
 		module.dexpreopter.configPath = module.implLibraryModule.dexpreopter.configPath
 		module.dexpreopter.outputProfilePathOnHost = module.implLibraryModule.dexpreopter.outputProfilePathOnHost
+
+		// Properties required for Library.AndroidMkEntries
+		module.logtagsSrcs = module.implLibraryModule.logtagsSrcs
+		module.dexpreopter.builtInstalled = module.implLibraryModule.dexpreopter.builtInstalled
+		module.jacocoReportClassesFile = module.implLibraryModule.jacocoReportClassesFile
+		module.dexer.proguardDictionary = module.implLibraryModule.dexer.proguardDictionary
+		module.dexer.proguardUsageZip = module.implLibraryModule.dexer.proguardUsageZip
+		module.linter.reports = module.implLibraryModule.linter.reports
 
 		if !module.Host() {
 			module.hostdexInstallFile = module.implLibraryModule.hostdexInstallFile
@@ -1814,7 +1828,6 @@ func (module *SdkLibrary) createImplLibrary(mctx android.DefaultableHookContext)
 	props := struct {
 		Name           *string
 		Visibility     []string
-		Instrument     bool
 		Libs           []string
 		Static_libs    []string
 		Apex_available []string
@@ -1822,8 +1835,6 @@ func (module *SdkLibrary) createImplLibrary(mctx android.DefaultableHookContext)
 	}{
 		Name:       proptools.StringPtr(module.implLibraryModuleName()),
 		Visibility: visibility,
-		// Set the instrument property to ensure it is instrumented when instrumentation is required.
-		Instrument: true,
 
 		Libs: append(module.properties.Libs, module.sdkLibraryProperties.Impl_only_libs...),
 
@@ -1842,6 +1853,7 @@ func (module *SdkLibrary) createImplLibrary(mctx android.DefaultableHookContext)
 		&module.dexProperties,
 		&module.dexpreoptProperties,
 		&module.linter.properties,
+		&module.overridableProperties,
 		&props,
 		module.sdkComponentPropertiesForChildLibrary(),
 	}

@@ -902,6 +902,9 @@ type ModuleBase struct {
 	installedInitRcPaths         InstallPaths
 	installedVintfFragmentsPaths InstallPaths
 
+	// Merged Aconfig files for all transitive deps.
+	aconfigFilePaths Paths
+
 	// set of dependency module:location mappings used to populate the license metadata for
 	// apex containers.
 	licenseInstallMap []string
@@ -1066,7 +1069,8 @@ func addRequiredDeps(ctx BottomUpMutatorContext) {
 		// TODO(jiyong): the Make-side does this only when the required module is a shared
 		// library or a native test.
 		bothInAndroid := ctx.Device() && target.Os.Class == Device
-		nativeArch := InList(ctx.Arch().ArchType.Multilib, []string{"lib32", "lib64"})
+		nativeArch := InList(ctx.Arch().ArchType.Multilib, []string{"lib32", "lib64"}) &&
+			InList(target.Arch.ArchType.Multilib, []string{"lib32", "lib64"})
 		sameBitness := ctx.Arch().ArchType.Multilib == target.Arch.ArchType.Multilib
 		if bothInAndroid && nativeArch && !sameBitness {
 			return
@@ -1892,12 +1896,14 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			}
 		}
 
-		m.module.GenerateAndroidBuildActions(ctx)
+		// Call aconfigUpdateAndroidBuildActions to collect merged aconfig files before being used
+		// in m.module.GenerateAndroidBuildActions
+		aconfigUpdateAndroidBuildActions(ctx)
 		if ctx.Failed() {
 			return
 		}
 
-		aconfigUpdateAndroidBuildActions(ctx)
+		m.module.GenerateAndroidBuildActions(ctx)
 		if ctx.Failed() {
 			return
 		}
@@ -1976,6 +1982,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			TargetDependencies: targetRequired,
 			HostDependencies:   hostRequired,
 			Data:               data,
+			Required:           m.RequiredModuleNames(),
 		}
 		SetProvider(ctx, ModuleInfoJSONProvider, m.moduleInfoJSON)
 	}
@@ -2145,19 +2152,39 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 	ctx := e.ctx
 	m := e.m
 	switch condition.FunctionName() {
-	case "release_variable":
+	case "release_flag":
 		if condition.NumArgs() != 1 {
-			ctx.OtherModulePropertyErrorf(m, property, "release_variable requires 1 argument, found %d", condition.NumArgs())
+			ctx.OtherModulePropertyErrorf(m, property, "release_flag requires 1 argument, found %d", condition.NumArgs())
 			return proptools.ConfigurableValueUndefined()
 		}
-		if v, ok := ctx.Config().productVariables.BuildFlags[condition.Arg(0)]; ok {
-			return proptools.ConfigurableValueString(v)
+		if ty, ok := ctx.Config().productVariables.BuildFlagTypes[condition.Arg(0)]; ok {
+			v := ctx.Config().productVariables.BuildFlags[condition.Arg(0)]
+			switch ty {
+			case "unspecified", "obsolete":
+				return proptools.ConfigurableValueUndefined()
+			case "string":
+				return proptools.ConfigurableValueString(v)
+			case "bool":
+				return proptools.ConfigurableValueBool(v == "true")
+			default:
+				panic("unhandled release flag type: " + ty)
+			}
 		}
 		return proptools.ConfigurableValueUndefined()
 	case "product_variable":
-		// TODO(b/323382414): Might add these on a case-by-case basis
-		ctx.OtherModulePropertyErrorf(m, property, "TODO(b/323382414): Product variables are not yet supported in selects")
-		return proptools.ConfigurableValueUndefined()
+		if condition.NumArgs() != 1 {
+			ctx.OtherModulePropertyErrorf(m, property, "product_variable requires 1 argument, found %d", condition.NumArgs())
+			return proptools.ConfigurableValueUndefined()
+		}
+		variable := condition.Arg(0)
+		switch variable {
+		case "debuggable":
+			return proptools.ConfigurableValueBool(ctx.Config().Debuggable())
+		default:
+			// TODO(b/323382414): Might add these on a case-by-case basis
+			ctx.OtherModulePropertyErrorf(m, property, fmt.Sprintf("TODO(b/323382414): Product variable %q is not yet supported in selects", variable))
+			return proptools.ConfigurableValueUndefined()
+		}
 	case "soong_config_variable":
 		if condition.NumArgs() != 2 {
 			ctx.OtherModulePropertyErrorf(m, property, "soong_config_variable requires 2 arguments, found %d", condition.NumArgs())
