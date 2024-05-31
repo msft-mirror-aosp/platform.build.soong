@@ -10717,10 +10717,6 @@ func TestAconfigFilesJavaAndCcDeps(t *testing.T) {
 			name: "libaconfig_storage_read_api_cc",
 			srcs: ["libaconfig_storage_read_api_cc.cc"],
 		}
-		cc_library {
-			name: "libaconfig_storage_protos_cc",
-			srcs: ["libaconfig_storage_protos_cc.cc"],
-		}
 	`)
 
 	mod := ctx.ModuleForTests("myapex", "android_common_myapex")
@@ -11682,4 +11678,39 @@ func TestApexMinSdkVersionOverride(t *testing.T) {
 	javalibApex31Variant := ctx.ModuleForTests("javalib", "android_common_apex31")
 	checkMinSdkVersion(t, overridingModuleDifferentMinSdkVersion, "31")
 	checkHasDep(t, ctx, overridingModuleDifferentMinSdkVersion.Module(), javalibApex31Variant.Module())
+}
+
+func TestOverrideApexWithPrebuiltApexPreferred(t *testing.T) {
+	context := android.GroupFixturePreparers(
+		android.PrepareForIntegrationTestWithAndroid,
+		PrepareForTestWithApexBuildComponents,
+		android.FixtureMergeMockFs(android.MockFS{
+			"system/sepolicy/apex/foo-file_contexts": nil,
+		}),
+	)
+	res := context.RunTestWithBp(t, `
+		apex {
+			name: "foo",
+			key: "myapex.key",
+			apex_available_name: "com.android.foo",
+			variant_version: "0",
+			updatable: false,
+		}
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+		prebuilt_apex {
+			name: "foo",
+			src: "foo.apex",
+			prefer: true,
+		}
+		override_apex {
+			name: "myoverrideapex",
+			base: "foo",
+		}
+	`)
+
+	java.CheckModuleHasDependency(t, res.TestContext, "myoverrideapex", "android_common_myoverrideapex_myoverrideapex", "foo")
 }

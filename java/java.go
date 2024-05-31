@@ -567,6 +567,12 @@ func getJavaVersion(ctx android.ModuleContext, javaVersion string, sdkContext an
 		return normalizeJavaVersion(ctx, javaVersion)
 	} else if ctx.Device() {
 		return defaultJavaLanguageVersion(ctx, sdkContext.SdkVersion(ctx))
+	} else if ctx.Config().TargetsJava21() {
+		// Temporary experimental flag to be able to try and build with
+		// java version 21 options.  The flag, if used, just sets Java
+		// 21 as the default version, leaving any components that
+		// target an older version intact.
+		return JAVA_VERSION_21
 	} else {
 		return JAVA_VERSION_17
 	}
@@ -2333,7 +2339,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		classesJar:    al.stubsJar,
 		jarName:       ctx.ModuleName() + ".jar",
 	}
-	dexOutputFile := al.dexer.compileDex(ctx, dexParams)
+	dexOutputFile, _ := al.dexer.compileDex(ctx, dexParams)
 	uncompressed := true
 	al.initHiddenAPI(ctx, makeDexJarPathFromPath(dexOutputFile), al.stubsJar, &uncompressed)
 	dexOutputFile = al.hiddenAPIEncodeDex(ctx, dexOutputFile)
@@ -2717,7 +2723,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				jarName:       jarName,
 			}
 
-			dexOutputFile = j.dexer.compileDex(ctx, dexParams)
+			dexOutputFile, _ = j.dexer.compileDex(ctx, dexParams)
 			if ctx.Failed() {
 				return
 			}
