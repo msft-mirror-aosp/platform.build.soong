@@ -181,8 +181,10 @@ type variableProperties struct {
 		// release_aidl_use_unfrozen is "true" when a device can
 		// use the unfrozen versions of AIDL interfaces.
 		Release_aidl_use_unfrozen struct {
-			Cflags []string
-			Cmd    *string
+			Cflags          []string
+			Cmd             *string
+			Required        []string
+			Vintf_fragments []string
 		}
 	} `android:"arch_variant"`
 }
@@ -362,7 +364,6 @@ type ProductVariables struct {
 
 	PgoAdditionalProfileDirs []string `json:",omitempty"`
 
-	VndkUseCoreVariant         *bool `json:",omitempty"`
 	VndkSnapshotBuildArtifacts *bool `json:",omitempty"`
 
 	DirectedVendorSnapshot bool            `json:",omitempty"`
