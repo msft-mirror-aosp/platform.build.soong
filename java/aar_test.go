@@ -15,8 +15,9 @@
 package java
 
 import (
-	"android/soong/android"
 	"testing"
+
+	"android/soong/android"
 )
 
 func TestAarImportProducesJniPackages(t *testing.T) {
@@ -98,6 +99,7 @@ func TestLibraryFlagsPackages(t *testing.T) {
 		aconfig_declarations {
 			name: "bar",
 			package: "com.example.package.bar",
+			container: "com.android.foo",
 			srcs: [
 				"bar.aconfig",
 			],
@@ -105,6 +107,7 @@ func TestLibraryFlagsPackages(t *testing.T) {
 		aconfig_declarations {
 			name: "baz",
 			package: "com.example.package.baz",
+			container: "com.android.foo",
 			srcs: [
 				"baz.aconfig",
 			],
@@ -127,4 +130,50 @@ func TestLibraryFlagsPackages(t *testing.T) {
 		linkInFlags,
 		"--feature-flags @out/soong/.intermediates/bar/intermediate.txt --feature-flags @out/soong/.intermediates/baz/intermediate.txt",
 	)
+}
+
+func TestAndroidLibraryOutputFilesRel(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+	).RunTestWithBp(t, `
+		android_library {
+			name: "foo",
+			srcs: ["a.java"],
+			java_resources: ["foo.txt"],
+		}
+
+		android_library_import {
+			name: "bar",
+			aars: ["bar_prebuilt.aar"],
+
+		}
+
+		android_library_import {
+			name: "baz",
+			aars: ["baz_prebuilt.aar"],
+			static_libs: ["foo", "bar"],
+		}
+	`)
+
+	foo := result.ModuleForTests("foo", "android_common")
+	bar := result.ModuleForTests("bar", "android_common")
+	baz := result.ModuleForTests("baz", "android_common")
+
+	fooOutputPath := android.OutputFileForModule(android.PathContext(nil), foo.Module(), "")
+	barOutputPath := android.OutputFileForModule(android.PathContext(nil), bar.Module(), "")
+	bazOutputPath := android.OutputFileForModule(android.PathContext(nil), baz.Module(), "")
+
+	android.AssertPathRelativeToTopEquals(t, "foo output path",
+		"out/soong/.intermediates/foo/android_common/withres/foo.jar", fooOutputPath)
+	android.AssertPathRelativeToTopEquals(t, "bar output path",
+		"out/soong/.intermediates/bar/android_common/aar/bar.jar", barOutputPath)
+	android.AssertPathRelativeToTopEquals(t, "baz output path",
+		"out/soong/.intermediates/baz/android_common/withres/baz.jar", bazOutputPath)
+
+	android.AssertStringEquals(t, "foo relative output path",
+		"foo.jar", fooOutputPath.Rel())
+	android.AssertStringEquals(t, "bar relative output path",
+		"bar.jar", barOutputPath.Rel())
+	android.AssertStringEquals(t, "baz relative output path",
+		"baz.jar", bazOutputPath.Rel())
 }

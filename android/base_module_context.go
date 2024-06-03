@@ -20,7 +20,7 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
-	"github.com/google/blueprint/parser"
+	"github.com/google/blueprint/proptools"
 )
 
 // BaseModuleContext is the same as blueprint.BaseModuleContext except that Config() returns
@@ -219,7 +219,7 @@ type BaseModuleContext interface {
 
 	// EvaluateConfiguration makes ModuleContext a valid proptools.ConfigurableEvaluator, so this context
 	// can be used to evaluate the final value of Configurable properties.
-	EvaluateConfiguration(parser.SelectType, string) (string, bool)
+	EvaluateConfiguration(condition proptools.ConfigurableCondition, property string) proptools.ConfigurableValue
 }
 
 type baseModuleContext struct {
@@ -305,6 +305,12 @@ type AllowDisabledModuleDependency interface {
 	AllowDisabledModuleDependency(target Module) bool
 }
 
+type AlwaysAllowDisabledModuleDependencyTag struct{}
+
+func (t AlwaysAllowDisabledModuleDependencyTag) AllowDisabledModuleDependency(Module) bool {
+	return true
+}
+
 func (b *baseModuleContext) validateAndroidModule(module blueprint.Module, tag blueprint.DependencyTag, strict bool, ignoreBlueprint bool) Module {
 	aModule, _ := module.(Module)
 
@@ -319,7 +325,7 @@ func (b *baseModuleContext) validateAndroidModule(module blueprint.Module, tag b
 		return nil
 	}
 
-	if !aModule.Enabled() {
+	if !aModule.Enabled(b) {
 		if t, ok := tag.(AllowDisabledModuleDependency); !ok || !t.AllowDisabledModuleDependency(aModule) {
 			if b.Config().AllowMissingDependencies() {
 				b.AddMissingDependencies([]string{b.OtherModuleName(aModule)})
@@ -530,7 +536,7 @@ func IsMetaDependencyTag(tag blueprint.DependencyTag) bool {
 		return true
 	} else if tag == licensesTag {
 		return true
-	} else if tag == acDepTag {
+	} else if tag == AcDepTag {
 		return true
 	}
 	return false
@@ -571,31 +577,6 @@ func (b *baseModuleContext) GetPathString(skipFirst bool) string {
 	return sb.String()
 }
 
-func (m *baseModuleContext) EvaluateConfiguration(ty parser.SelectType, condition string) (string, bool) {
-	switch ty {
-	case parser.SelectTypeReleaseVariable:
-		if v, ok := m.Config().productVariables.BuildFlags[condition]; ok {
-			return v, true
-		}
-		return "", false
-	case parser.SelectTypeProductVariable:
-		// TODO(b/323382414): Might add these on a case-by-case basis
-		m.ModuleErrorf("TODO(b/323382414): Product variables are not yet supported in selects")
-		return "", false
-	case parser.SelectTypeSoongConfigVariable:
-		parts := strings.Split(condition, ":")
-		namespace := parts[0]
-		variable := parts[1]
-		if n, ok := m.Config().productVariables.VendorVars[namespace]; ok {
-			if v, ok := n[variable]; ok {
-				return v, true
-			}
-		}
-		return "", false
-	case parser.SelectTypeVariant:
-		m.ModuleErrorf("TODO(b/323382414): Variants are not yet supported in selects")
-		return "", false
-	default:
-		panic("Should be unreachable")
-	}
+func (m *baseModuleContext) EvaluateConfiguration(condition proptools.ConfigurableCondition, property string) proptools.ConfigurableValue {
+	return m.Module().ConfigurableEvaluator(m).EvaluateConfiguration(condition, property)
 }

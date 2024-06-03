@@ -120,6 +120,10 @@ type BaseCompilerProperties struct {
 	// ban targeting bpf in cc rules instead use bpf_rules. (b/323415017)
 	Bpf_target *bool
 
+	// Add "-Xclang -verify" to the cflags and appends "touch $out" to
+	// the clang command line.
+	Clang_verify bool
+
 	Yacc *YaccProperties
 	Lex  *LexProperties
 
@@ -140,6 +144,22 @@ type BaseCompilerProperties struct {
 		// list of flags that will be passed to the AIDL compiler
 		Flags []string
 	}
+
+	// Populated by aidl_interface CPP backend to let other modules (e.g. cc_cmake_snapshot)
+	// access actual source files and not generated cpp intermediary sources.
+	AidlInterface struct {
+		// list of aidl_interface sources
+		Sources []string `blueprint:"mutated"`
+
+		// root directory of AIDL sources
+		AidlRoot string `blueprint:"mutated"`
+
+		// AIDL backend language (e.g. "cpp", "ndk")
+		Lang string `blueprint:"mutated"`
+
+		// list of flags passed to AIDL generator
+		Flags []string `blueprint:"mutated"`
+	} `blueprint:"mutated"`
 
 	Renderscript struct {
 		// list of directories that will be added to the llvm-rs-cc include paths
@@ -265,6 +285,10 @@ func (compiler *baseCompiler) compilerProps() []interface{} {
 	return []interface{}{&compiler.Properties, &compiler.Proto}
 }
 
+func (compiler *baseCompiler) baseCompilerProps() BaseCompilerProperties {
+	return compiler.Properties
+}
+
 func includeBuildDirectory(prop *bool) bool {
 	return proptools.BoolDefault(prop, true)
 }
@@ -369,6 +393,11 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 
 	flags.Yacc = compiler.Properties.Yacc
 	flags.Lex = compiler.Properties.Lex
+
+	flags.ClangVerify = compiler.Properties.Clang_verify
+	if compiler.Properties.Clang_verify {
+		flags.Local.CFlags = append(flags.Local.CFlags, "-Xclang", "-verify")
+	}
 
 	// Include dir cflags
 	localIncludeDirs := android.PathsForModuleSrc(ctx, compiler.Properties.Local_include_dirs)
@@ -539,7 +568,6 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		flags.Global.CommonFlags = append(flags.Global.CommonFlags, tc.ToolchainCflags())
 	}
 
-
 	cStd := parseCStd(compiler.Properties.C_std)
 	cppStd := parseCppStd(compiler.Properties.Cpp_std)
 
@@ -671,6 +699,16 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		flags.Local.CFlags = append(flags.Local.CFlags, "-DDO_NOT_CHECK_MANUAL_BINDER_INTERFACES")
 	}
 
+	flags.NoOverrideFlags = append(flags.NoOverrideFlags, "${config.NoOverrideGlobalCflags}")
+
+	if flags.Toolchain.Is64Bit() {
+		flags.NoOverrideFlags = append(flags.NoOverrideFlags, "${config.NoOverride64GlobalCflags}")
+	}
+
+	if android.IsThirdPartyPath(ctx.ModuleDir()) {
+		flags.NoOverrideFlags = append(flags.NoOverrideFlags, "${config.NoOverrideExternalGlobalCflags}")
+	}
+
 	return flags
 }
 
@@ -762,6 +800,9 @@ type RustBindgenClangProperties struct {
 	// list of directories relative to the Blueprints file that will
 	// be added to the include path using -I
 	Local_include_dirs []string `android:"arch_variant,variant_prepend"`
+
+	// list of Rust static libraries.
+	Static_rlibs []string `android:"arch_variant,variant_prepend"`
 
 	// list of static libraries that provide headers for this binding.
 	Static_libs []string `android:"arch_variant,variant_prepend"`

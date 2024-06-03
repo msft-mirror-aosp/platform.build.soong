@@ -71,6 +71,9 @@ type UserSuppliedPrebuiltProperties struct {
 	//
 	// If specified then the prefer property is ignored in favor of the value of the Soong config
 	// variable.
+	//
+	// DEPRECATED: This property is being deprecated b/308188211.
+	// Use RELEASE_APEX_CONTRIBUTIONS build flags to select prebuilts of mainline modules.
 	Use_source_config_var *ConfigVarProperties
 }
 
@@ -272,7 +275,7 @@ func InitSingleSourcePrebuiltModule(module PrebuiltInterface, srcProps interface
 	srcPropertyName := proptools.PropertyNameForField(srcField)
 
 	srcsSupplier := func(ctx BaseModuleContext, _ Module) []string {
-		if !module.Enabled() {
+		if !module.Enabled(ctx) {
 			return nil
 		}
 		value := srcPropsValue.FieldByIndex(srcFieldIndex)
@@ -422,7 +425,7 @@ func PrebuiltSourceDepsMutator(ctx BottomUpMutatorContext) {
 	m := ctx.Module()
 	// If this module is a prebuilt, is enabled and has not been renamed to source then add a
 	// dependency onto the source if it is present.
-	if p := GetEmbeddedPrebuilt(m); p != nil && m.Enabled() && !p.properties.PrebuiltRenamedToSource {
+	if p := GetEmbeddedPrebuilt(m); p != nil && m.Enabled(ctx) && !p.properties.PrebuiltRenamedToSource {
 		bmn, _ := m.(baseModuleName)
 		name := bmn.BaseModuleName()
 		if ctx.OtherModuleReverseDependencyVariantExists(name) {
@@ -434,7 +437,7 @@ func PrebuiltSourceDepsMutator(ctx BottomUpMutatorContext) {
 		// TODO: When all branches contain this singleton module, make this strict
 		// TODO: Add this dependency only for mainline prebuilts and not every prebuilt module
 		if ctx.OtherModuleExists("all_apex_contributions") {
-			ctx.AddDependency(m, acDepTag, "all_apex_contributions")
+			ctx.AddDependency(m, AcDepTag, "all_apex_contributions")
 		}
 
 	}
@@ -471,7 +474,7 @@ func PrebuiltSelectModuleMutator(ctx BottomUpMutatorContext) {
 		}
 		// Propagate the provider received from `all_apex_contributions`
 		// to the source module
-		ctx.VisitDirectDepsWithTag(acDepTag, func(am Module) {
+		ctx.VisitDirectDepsWithTag(AcDepTag, func(am Module) {
 			psi, _ := OtherModuleProvider(ctx, am, PrebuiltSelectionInfoProvider)
 			SetProvider(ctx, PrebuiltSelectionInfoProvider, psi)
 		})
@@ -577,7 +580,7 @@ func PrebuiltPostDepsMutator(ctx BottomUpMutatorContext) {
 		bmn, _ := m.(baseModuleName)
 		name := bmn.BaseModuleName()
 		psi := PrebuiltSelectionInfoMap{}
-		ctx.VisitDirectDepsWithTag(acDepTag, func(am Module) {
+		ctx.VisitDirectDepsWithTag(AcDepTag, func(am Module) {
 			psi, _ = OtherModuleProvider(ctx, am, PrebuiltSelectionInfoProvider)
 		})
 
@@ -699,13 +702,8 @@ func (p *Prebuilt) usePrebuilt(ctx BaseMutatorContext, source Module, prebuilt M
 	}
 
 	// If source is not available or is disabled then always use the prebuilt.
-	if source == nil || !source.Enabled() {
+	if source == nil || !source.Enabled(ctx) {
 		return true
-	}
-
-	// If the use_source_config_var property is set then it overrides the prefer property setting.
-	if configVar := p.properties.Use_source_config_var; configVar != nil {
-		return !ctx.Config().VendorConfig(proptools.String(configVar.Config_namespace)).Bool(proptools.String(configVar.Var_name))
 	}
 
 	// TODO: use p.Properties.Name and ctx.ModuleDir to override preference
