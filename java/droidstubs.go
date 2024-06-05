@@ -152,6 +152,10 @@ type DroidstubsProperties struct {
 	// API surface of this module. If set, the module contributes to an API surface.
 	// For the full list of available API surfaces, refer to soong/android/sdk_version.go
 	Api_surface *string
+
+	// a list of aconfig_declarations module names that the stubs generated in this module
+	// depend on.
+	Aconfig_declarations []string
 }
 
 // Used by xsd_config
@@ -606,11 +610,10 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	if BoolDefault(d.properties.Check_api.Api_lint.Enabled, false) {
 		doApiLint = true
 
+		cmd.Flag("--api-lint")
 		newSince := android.OptionalPathForModuleSrc(ctx, d.properties.Check_api.Api_lint.New_since)
 		if newSince.Valid() {
-			cmd.FlagWithInput("--api-lint ", newSince.Path())
-		} else {
-			cmd.Flag("--api-lint")
+			cmd.FlagWithInput("--api-lint-previous-api ", newSince.Path())
 		}
 		d.apiLintReport = android.PathForModuleOut(ctx, "metalava", "api_lint_report.txt")
 		cmd.FlagWithOutput("--report-even-if-suppressed ", d.apiLintReport) // TODO:  Change to ":api-lint"
