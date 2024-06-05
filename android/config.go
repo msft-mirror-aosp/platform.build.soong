@@ -1400,10 +1400,6 @@ func (c *config) PrebuiltHiddenApiDir(_ PathContext) string {
 	return String(c.productVariables.PrebuiltHiddenApiDir)
 }
 
-func (c *config) IsVndkDeprecated() bool {
-	return !Bool(c.productVariables.KeepVndk)
-}
-
 func (c *config) VendorApiLevel() string {
 	return String(c.productVariables.VendorApiLevel)
 }
@@ -1469,10 +1465,6 @@ func (c *deviceConfig) CurrentApiLevelForVendorModules() string {
 
 func (c *deviceConfig) ExtraVndkVersions() []string {
 	return c.config.productVariables.ExtraVndkVersions
-}
-
-func (c *deviceConfig) VndkUseCoreVariant() bool {
-	return Bool(c.config.productVariables.VndkUseCoreVariant) && Bool(c.config.productVariables.KeepVndk)
 }
 
 func (c *deviceConfig) SystemSdkVersions() []string {
@@ -1921,10 +1913,10 @@ func (c *deviceConfig) HostFakeSnapshotEnabled() bool {
 }
 
 func (c *deviceConfig) ShippingApiLevel() ApiLevel {
-	if c.config.productVariables.ShippingApiLevel == nil {
+	if c.config.productVariables.Shipping_api_level == nil {
 		return NoneApiLevel
 	}
-	apiLevel, _ := strconv.Atoi(*c.config.productVariables.ShippingApiLevel)
+	apiLevel, _ := strconv.Atoi(*c.config.productVariables.Shipping_api_level)
 	return uncheckedFinalApiLevel(apiLevel)
 }
 
@@ -2125,6 +2117,7 @@ var (
 		"RELEASE_APEX_CONTRIBUTIONS_SDKEXTENSIONS",
 		"RELEASE_APEX_CONTRIBUTIONS_SWCODEC",
 		"RELEASE_APEX_CONTRIBUTIONS_STATSD",
+		"RELEASE_APEX_CONTRIBUTIONS_TELEMETRY_TVP",
 		"RELEASE_APEX_CONTRIBUTIONS_TZDATA",
 		"RELEASE_APEX_CONTRIBUTIONS_UWB",
 		"RELEASE_APEX_CONTRIBUTIONS_WIFI",
