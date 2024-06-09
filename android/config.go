@@ -1912,10 +1912,10 @@ func (c *deviceConfig) HostFakeSnapshotEnabled() bool {
 }
 
 func (c *deviceConfig) ShippingApiLevel() ApiLevel {
-	if c.config.productVariables.ShippingApiLevel == nil {
+	if c.config.productVariables.Shipping_api_level == nil {
 		return NoneApiLevel
 	}
-	apiLevel, _ := strconv.Atoi(*c.config.productVariables.ShippingApiLevel)
+	apiLevel, _ := strconv.Atoi(*c.config.productVariables.Shipping_api_level)
 	return uncheckedFinalApiLevel(apiLevel)
 }
 
@@ -2116,6 +2116,7 @@ var (
 		"RELEASE_APEX_CONTRIBUTIONS_SDKEXTENSIONS",
 		"RELEASE_APEX_CONTRIBUTIONS_SWCODEC",
 		"RELEASE_APEX_CONTRIBUTIONS_STATSD",
+		"RELEASE_APEX_CONTRIBUTIONS_TELEMETRY_TVP",
 		"RELEASE_APEX_CONTRIBUTIONS_TZDATA",
 		"RELEASE_APEX_CONTRIBUTIONS_UWB",
 		"RELEASE_APEX_CONTRIBUTIONS_WIFI",
