@@ -55,6 +55,10 @@ type variableProperties struct {
 			Base_dir *string
 		}
 
+		Shipping_api_level struct {
+			Cflags []string
+		}
+
 		// unbundled_build is a catch-all property to annotate modules that don't build in one or
 		// more unbundled branches, usually due to dependencies missing from the manifest.
 		Unbundled_build struct {
@@ -181,8 +185,10 @@ type variableProperties struct {
 		// release_aidl_use_unfrozen is "true" when a device can
 		// use the unfrozen versions of AIDL interfaces.
 		Release_aidl_use_unfrozen struct {
-			Cflags []string
-			Cmd    *string
+			Cflags          []string
+			Cmd             *string
+			Required        []string
+			Vintf_fragments []string
 		}
 	} `android:"arch_variant"`
 }
@@ -362,7 +368,6 @@ type ProductVariables struct {
 
 	PgoAdditionalProfileDirs []string `json:",omitempty"`
 
-	VndkUseCoreVariant         *bool `json:",omitempty"`
 	VndkSnapshotBuildArtifacts *bool `json:",omitempty"`
 
 	DirectedVendorSnapshot bool            `json:",omitempty"`
@@ -439,7 +444,7 @@ type ProductVariables struct {
 
 	PrebuiltHiddenApiDir *string `json:",omitempty"`
 
-	ShippingApiLevel *string `json:",omitempty"`
+	Shipping_api_level *string `json:",omitempty"`
 
 	BuildBrokenPluginValidation         []string `json:",omitempty"`
 	BuildBrokenClangAsFlags             bool     `json:",omitempty"`
@@ -471,7 +476,6 @@ type ProductVariables struct {
 
 	IgnorePrefer32OnDevice bool `json:",omitempty"`
 
-	IncludeTags    []string `json:",omitempty"`
 	SourceRootDirs []string `json:",omitempty"`
 
 	AfdoProfiles []string `json:",omitempty"`
