@@ -375,6 +375,7 @@ func loadFromConfigFile(configurable *ProductVariables, filename string) error {
 	} else {
 		// Make a decoder for it
 		jsonDecoder := json.NewDecoder(configFileReader)
+		jsonDecoder.DisallowUnknownFields()
 		err = jsonDecoder.Decode(configurable)
 		if err != nil {
 			return fmt.Errorf("config file: %s did not parse correctly: %s", filename, err.Error())
@@ -1338,10 +1339,6 @@ func (c *config) SourceRootDirs() []string {
 	return c.productVariables.SourceRootDirs
 }
 
-func (c *config) IncludeTags() []string {
-	return c.productVariables.IncludeTags
-}
-
 func (c *config) HostStaticBinaries() bool {
 	return Bool(c.productVariables.HostStaticBinaries)
 }
@@ -1398,10 +1395,6 @@ func (c *config) HasMultilibConflict(arch ArchType) bool {
 
 func (c *config) PrebuiltHiddenApiDir(_ PathContext) string {
 	return String(c.productVariables.PrebuiltHiddenApiDir)
-}
-
-func (c *config) IsVndkDeprecated() bool {
-	return !Bool(c.productVariables.KeepVndk)
 }
 
 func (c *config) VendorApiLevel() string {
@@ -1917,10 +1910,10 @@ func (c *deviceConfig) HostFakeSnapshotEnabled() bool {
 }
 
 func (c *deviceConfig) ShippingApiLevel() ApiLevel {
-	if c.config.productVariables.ShippingApiLevel == nil {
+	if c.config.productVariables.Shipping_api_level == nil {
 		return NoneApiLevel
 	}
-	apiLevel, _ := strconv.Atoi(*c.config.productVariables.ShippingApiLevel)
+	apiLevel, _ := strconv.Atoi(*c.config.productVariables.Shipping_api_level)
 	return uncheckedFinalApiLevel(apiLevel)
 }
 
