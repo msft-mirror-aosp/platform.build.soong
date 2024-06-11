@@ -341,25 +341,8 @@ func (mod *Module) Bootstrap() bool {
 	return Bool(mod.Properties.Bootstrap)
 }
 
-func (mod *Module) MustUseVendorVariant() bool {
-	return true
-}
-
 func (mod *Module) SubName() string {
 	return mod.Properties.SubName
-}
-
-func (mod *Module) IsVndk() bool {
-	// TODO(b/165791368)
-	return false
-}
-
-func (mod *Module) IsVndkExt() bool {
-	return false
-}
-
-func (mod *Module) IsVndkSp() bool {
-	return false
 }
 
 func (mod *Module) IsVndkPrebuiltLibrary() bool {
@@ -381,10 +364,6 @@ func (c *Module) IsVndkPrivate() bool {
 }
 
 func (c *Module) IsLlndk() bool {
-	return false
-}
-
-func (c *Module) IsLlndkPublic() bool {
 	return false
 }
 
