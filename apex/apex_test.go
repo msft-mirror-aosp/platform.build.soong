@@ -3785,32 +3785,31 @@ func TestVndkApexNameRule(t *testing.T) {
 }
 
 func TestVndkApexDoesntSupportNativeBridgeSupported(t *testing.T) {
-	testApexError(t, `module "com.android.vndk.current" .*: native_bridge_supported: .* doesn't support native bridge binary`, `
+	testApexError(t, `module "com.android.vndk.v30" .*: native_bridge_supported: .* doesn't support native bridge binary`, `
 		apex_vndk {
-			name: "com.android.vndk.current",
-			key: "com.android.vndk.current.key",
+			name: "com.android.vndk.v30",
+			key: "com.android.vndk.v30.key",
 			file_contexts: ":myapex-file_contexts",
 			native_bridge_supported: true,
 		}
 
 		apex_key {
-			name: "com.android.vndk.current.key",
+			name: "com.android.vndk.v30.key",
 			public_key: "testkey.avbpubkey",
 			private_key: "testkey.pem",
 		}
 
-		cc_library {
+		vndk_prebuilt_shared {
 			name: "libvndk",
+			version: "30",
+			target_arch: "arm",
 			srcs: ["mylib.cpp"],
 			vendor_available: true,
 			product_available: true,
 			native_bridge_supported: true,
-			host_supported: true,
 			vndk: {
 				enabled: true,
 			},
-			system_shared_libs: [],
-			stl: "none",
 		}
 	`)
 }
@@ -11678,4 +11677,39 @@ func TestApexMinSdkVersionOverride(t *testing.T) {
 	javalibApex31Variant := ctx.ModuleForTests("javalib", "android_common_apex31")
 	checkMinSdkVersion(t, overridingModuleDifferentMinSdkVersion, "31")
 	checkHasDep(t, ctx, overridingModuleDifferentMinSdkVersion.Module(), javalibApex31Variant.Module())
+}
+
+func TestOverrideApexWithPrebuiltApexPreferred(t *testing.T) {
+	context := android.GroupFixturePreparers(
+		android.PrepareForIntegrationTestWithAndroid,
+		PrepareForTestWithApexBuildComponents,
+		android.FixtureMergeMockFs(android.MockFS{
+			"system/sepolicy/apex/foo-file_contexts": nil,
+		}),
+	)
+	res := context.RunTestWithBp(t, `
+		apex {
+			name: "foo",
+			key: "myapex.key",
+			apex_available_name: "com.android.foo",
+			variant_version: "0",
+			updatable: false,
+		}
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+		prebuilt_apex {
+			name: "foo",
+			src: "foo.apex",
+			prefer: true,
+		}
+		override_apex {
+			name: "myoverrideapex",
+			base: "foo",
+		}
+	`)
+
+	java.CheckModuleHasDependency(t, res.TestContext, "myoverrideapex", "android_common_myoverrideapex_myoverrideapex", "foo")
 }
