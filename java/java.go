@@ -1504,6 +1504,8 @@ func (j *TestHost) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		RequiredModuleNames: j.RequiredModuleNames(),
 		TestSuites:          j.testProperties.Test_suites,
 		IsHost:              true,
+		LocalSdkVersion:     j.sdkVersion.String(),
+		IsUnitTest:          Bool(j.testProperties.Test_options.Unit_test),
 	})
 }
 
@@ -2178,7 +2180,7 @@ func (al *ApiLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 // Map where key is the api scope name and value is the int value
 // representing the order of the api scope, narrowest to the widest
-var scopeOrderMap = allApiScopes.MapToIndex(
+var scopeOrderMap = AllApiScopes.MapToIndex(
 	func(s *apiScope) string { return s.name })
 
 func (al *ApiLibrary) sortApiFilesByApiScope(ctx android.ModuleContext, srcFilesInfo []JavaApiImportInfo) []JavaApiImportInfo {
@@ -2339,7 +2341,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		classesJar:    al.stubsJar,
 		jarName:       ctx.ModuleName() + ".jar",
 	}
-	dexOutputFile := al.dexer.compileDex(ctx, dexParams)
+	dexOutputFile, _ := al.dexer.compileDex(ctx, dexParams)
 	uncompressed := true
 	al.initHiddenAPI(ctx, makeDexJarPathFromPath(dexOutputFile), al.stubsJar, &uncompressed)
 	dexOutputFile = al.hiddenAPIEncodeDex(ctx, dexOutputFile)
@@ -2723,7 +2725,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				jarName:       jarName,
 			}
 
-			dexOutputFile = j.dexer.compileDex(ctx, dexParams)
+			dexOutputFile, _ = j.dexer.compileDex(ctx, dexParams)
 			if ctx.Failed() {
 				return
 			}
