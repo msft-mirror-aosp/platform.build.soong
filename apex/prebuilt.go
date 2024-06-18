@@ -197,6 +197,7 @@ func (p *prebuiltCommon) initApexFilesForAndroidMk(ctx android.ModuleContext) {
 	// If this apex contains a system server jar, then the dexpreopt artifacts should be added as required
 	for _, install := range p.Dexpreopter.DexpreoptBuiltInstalledForApex() {
 		p.requiredModuleNames = append(p.requiredModuleNames, install.FullModuleName())
+		install.PackageFile(ctx)
 	}
 }
 
@@ -587,15 +588,6 @@ func (a *Prebuilt) hasSanitizedSource(sanitizer string) bool {
 	return false
 }
 
-func (p *Prebuilt) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return android.Paths{p.outputApex}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
-}
-
 // prebuilt_apex imports an `.apex` file into the build graph as if it was built with apex.
 func PrebuiltFactory() android.Module {
 	module := &Prebuilt{}
@@ -894,6 +886,8 @@ func (p *Prebuilt) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		p.installedFile = ctx.InstallFile(p.installDir, p.installFilename, p.inputApex, p.compatSymlinks...)
 		p.provenanceMetaDataFile = provenance.GenerateArtifactProvenanceMetaData(ctx, p.inputApex, p.installedFile)
 	}
+
+	ctx.SetOutputFiles(android.Paths{p.outputApex}, "")
 }
 
 func (p *Prebuilt) ProvenanceMetaDataFile() android.OutputPath {
@@ -1009,15 +1003,6 @@ func (a *ApexSet) hasSanitizedSource(sanitizer string) bool {
 	return false
 }
 
-func (a *ApexSet) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return android.Paths{a.outputApex}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
-}
-
 // prebuilt_apex imports an `.apex` file into the build graph as if it was built with apex.
 func apexSetFactory() android.Module {
 	module := &ApexSet{}
@@ -1121,6 +1106,8 @@ func (a *ApexSet) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	for _, overridden := range a.prebuiltCommonProperties.Overrides {
 		a.compatSymlinks = append(a.compatSymlinks, makeCompatSymlinks(overridden, ctx)...)
 	}
+
+	ctx.SetOutputFiles(android.Paths{a.outputApex}, "")
 }
 
 type systemExtContext struct {

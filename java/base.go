@@ -94,6 +94,9 @@ type CommonProperties struct {
 	// if not blank, used as prefix to generate repackage rule
 	Jarjar_prefix *string
 
+	// if set to true, skip the jarjar repackaging
+	Skip_jarjar_repackage *bool
+
 	// If not blank, set the java version passed to javac as -source and -target
 	Java_version *string
 
@@ -1109,11 +1112,13 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	jarjarProviderData := j.collectJarJarRules(ctx)
 	if jarjarProviderData != nil {
 		android.SetProvider(ctx, JarJarProvider, *jarjarProviderData)
-		text := getJarJarRuleText(jarjarProviderData)
-		if text != "" {
-			ruleTextFile := android.PathForModuleOut(ctx, "repackaged-jarjar", "repackaging.txt")
-			android.WriteFileRule(ctx, ruleTextFile, text)
-			j.repackageJarjarRules = ruleTextFile
+		if !proptools.Bool(j.properties.Skip_jarjar_repackage) {
+			text := getJarJarRuleText(jarjarProviderData)
+			if text != "" {
+				ruleTextFile := android.PathForModuleOut(ctx, "repackaged-jarjar", "repackaging.txt")
+				android.WriteFileRule(ctx, ruleTextFile, text)
+				j.repackageJarjarRules = ruleTextFile
+			}
 		}
 	}
 
@@ -1852,7 +1857,7 @@ func (j *Module) compileJavaClasses(ctx android.ModuleContext, jarName string, i
 	classes := android.PathForModuleOut(ctx, "javac", jarName).OutputPath
 	TransformJavaToClasses(ctx, classes, idx, srcFiles, srcJars, annoSrcJar, flags, extraJarDeps)
 
-	if ctx.Config().EmitXrefRules() {
+	if ctx.Config().EmitXrefRules() && ctx.Module() == ctx.PrimaryModule() {
 		extractionFile := android.PathForModuleOut(ctx, kzipName)
 		emitXrefRule(ctx, extractionFile, idx, srcFiles, srcJars, flags, extraJarDeps)
 		j.kytheFiles = append(j.kytheFiles, extractionFile)
@@ -2544,7 +2549,7 @@ func collectDirectDepsProviders(ctx android.ModuleContext) (result *JarJarProvid
 				case Implementation:
 					return RenameUseInclude, "info"
 				default:
-					//fmt.Printf("LJ: %v -> %v StubsLinkType unknown\n", module, m)
+					//fmt.Printf("collectDirectDepsProviders: %v -> %v StubsLinkType unknown\n", module, m)
 					// Fall through to the heuristic logic.
 				}
 				switch reflect.TypeOf(m).String() {

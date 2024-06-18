@@ -104,6 +104,7 @@ cc_genrule {
 // Instantiate the dex_bootjars singleton module.
 dex_bootjars {
     name: "dex_bootjars",
+    no_full_install: true,
 }
 
 // Pseudo-test that's run on checkbuilds to ensure that get_clang_version can
@@ -127,6 +128,8 @@ buildinfo_prop {
     // not installable because this will be included to system/build.prop
     installable: false,
 
+    product_config: ":product_config",
+
     // Currently, only microdroid can refer to buildinfo.prop
     visibility: ["//packages/modules/Virtualization/microdroid"],
 }
@@ -134,4 +137,9 @@ buildinfo_prop {
 // container for apex_contributions selected using build flags
 all_apex_contributions {
     name: "all_apex_contributions",
+}
+
+product_config {
+    name: "product_config",
+    visibility: ["//visibility:private"],
 }
