@@ -953,7 +953,6 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 	// the non-system APEXes because the VNDK libraries won't be included (and duped) in the
 	// APEX, but shared across APEXes via the VNDK APEX.
 	useVndk := a.SocSpecific() || a.DeviceSpecific() || (a.ProductSpecific() && mctx.Config().EnforceProductPartitionInterface())
-	excludeVndkLibs := useVndk && a.useVndkAsStable(mctx)
 	if proptools.Bool(a.properties.Use_vndk_as_stable) {
 		if !useVndk {
 			mctx.PropertyErrorf("use_vndk_as_stable", "not supported for system/system_ext APEXes")
@@ -961,11 +960,6 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		if a.minSdkVersionValue(mctx) != "" {
 			mctx.PropertyErrorf("use_vndk_as_stable", "not supported when min_sdk_version is set")
 		}
-		mctx.VisitDirectDepsWithTag(sharedLibTag, func(dep android.Module) {
-			if c, ok := dep.(*cc.Module); ok && c.IsVndk() {
-				mctx.PropertyErrorf("use_vndk_as_stable", "Trying to include a VNDK library(%s) while use_vndk_as_stable is true.", dep.Name())
-			}
-		})
 		if mctx.Failed() {
 			return
 		}
@@ -987,13 +981,8 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		if !android.IsDepInSameApex(mctx, parent, child) {
 			return false
 		}
-		if excludeVndkLibs {
-			if c, ok := child.(*cc.Module); ok && c.IsVndk() {
-				return false
-			}
-		}
 
-		if useVndk && mctx.Config().IsVndkDeprecated() && child.Name() == "libbinder" {
+		if useVndk && child.Name() == "libbinder" {
 			mctx.ModuleErrorf("Module %s in the vendor APEX %s should not use libbinder. Use libbinder_ndk instead.", parent.Name(), a.Name())
 		}
 
@@ -1674,12 +1663,12 @@ var _ javaModule = (*java.DexImport)(nil)
 var _ javaModule = (*java.SdkLibraryImport)(nil)
 
 // apexFileForJavaModule creates an apexFile for a java module's dex implementation jar.
-func apexFileForJavaModule(ctx android.BaseModuleContext, module javaModule) apexFile {
+func apexFileForJavaModule(ctx android.ModuleContext, module javaModule) apexFile {
 	return apexFileForJavaModuleWithFile(ctx, module, module.DexJarBuildPath(ctx).PathOrNil())
 }
 
 // apexFileForJavaModuleWithFile creates an apexFile for a java module with the supplied file.
-func apexFileForJavaModuleWithFile(ctx android.BaseModuleContext, module javaModule, dexImplementationJar android.Path) apexFile {
+func apexFileForJavaModuleWithFile(ctx android.ModuleContext, module javaModule, dexImplementationJar android.Path) apexFile {
 	dirInApex := "javalib"
 	af := newApexFile(ctx, dexImplementationJar, module.BaseModuleName(), dirInApex, javaSharedLib, module)
 	af.jacocoReportClassesFile = module.JacocoReportClassesFile()
@@ -1690,10 +1679,12 @@ func apexFileForJavaModuleWithFile(ctx android.BaseModuleContext, module javaMod
 	if sdkLib, ok := module.(*java.SdkLibrary); ok {
 		for _, install := range sdkLib.BuiltInstalledForApex() {
 			af.requiredModuleNames = append(af.requiredModuleNames, install.FullModuleName())
+			install.PackageFile(ctx)
 		}
 	} else if dexpreopter, ok := module.(java.DexpreopterInterface); ok {
 		for _, install := range dexpreopter.DexpreoptBuiltInstalledForApex() {
 			af.requiredModuleNames = append(af.requiredModuleNames, install.FullModuleName())
+			install.PackageFile(ctx)
 		}
 	}
 	return af
@@ -2109,7 +2100,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			}
 		case bpfTag:
 			if bpfProgram, ok := child.(bpf.BpfModule); ok {
-				filesToCopy, _ := bpfProgram.OutputFiles("")
+				filesToCopy := android.OutputFilesForModule(ctx, bpfProgram, "")
 				apex_sub_dir := bpfProgram.SubDir()
 				for _, bpfFile := range filesToCopy {
 					vctx.filesInfo = append(vctx.filesInfo, apexFileForBpfProgram(ctx, bpfFile, apex_sub_dir, bpfProgram))
@@ -2125,7 +2116,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			}
 		case prebuiltTag:
 			if prebuilt, ok := child.(prebuilt_etc.PrebuiltEtcModule); ok {
-				filesToCopy, _ := prebuilt.OutputFiles("")
+				filesToCopy := android.OutputFilesForModule(ctx, prebuilt, "")
 				for _, etcFile := range filesToCopy {
 					vctx.filesInfo = append(vctx.filesInfo, apexFileForPrebuiltEtc(ctx, prebuilt, etcFile))
 				}
@@ -2190,11 +2181,6 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 	// tags used below are private (e.g. `cc.sharedDepTag`).
 	if cc.IsSharedDepTag(depTag) || cc.IsRuntimeDepTag(depTag) {
 		if ch, ok := child.(*cc.Module); ok {
-			if ch.UseVndk() && a.useVndkAsStable(ctx) && ch.IsVndk() {
-				vctx.requireNativeLibs = append(vctx.requireNativeLibs, ":vndk")
-				return false
-			}
-
 			af := apexFileForNativeLibrary(ctx, ch, vctx.handleSpecialLibs)
 			af.transitiveDep = true
 
@@ -2267,7 +2253,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 		// Because APK-in-APEX embeds jni_libs transitively, we don't need to track transitive deps
 	} else if java.IsXmlPermissionsFileDepTag(depTag) {
 		if prebuilt, ok := child.(prebuilt_etc.PrebuiltEtcModule); ok {
-			filesToCopy, _ := prebuilt.OutputFiles("")
+			filesToCopy := android.OutputFilesForModule(ctx, prebuilt, "")
 			for _, etcFile := range filesToCopy {
 				vctx.filesInfo = append(vctx.filesInfo, apexFileForPrebuiltEtc(ctx, prebuilt, etcFile))
 			}
@@ -3014,13 +3000,4 @@ func rBcpPackages() map[string][]string {
 
 func (a *apexBundle) IsTestApex() bool {
 	return a.testApex
-}
-
-func (a *apexBundle) useVndkAsStable(ctx android.BaseModuleContext) bool {
-	// VNDK cannot be linked if it is deprecated
-	if ctx.Config().IsVndkDeprecated() {
-		return false
-	}
-
-	return proptools.Bool(a.properties.Use_vndk_as_stable)
 }

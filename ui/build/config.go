@@ -1164,14 +1164,6 @@ func (c *configImpl) SetSourceRootDirs(i []string) {
 	c.sourceRootDirs = i
 }
 
-func (c *configImpl) GetIncludeTags() []string {
-	return c.includeTags
-}
-
-func (c *configImpl) SetIncludeTags(i []string) {
-	c.includeTags = i
-}
-
 func (c *configImpl) GetLogsPrefix() string {
 	return c.logsPrefix
 }
@@ -1493,6 +1485,15 @@ func (c *configImpl) SoongVarsFile() string {
 		return filepath.Join(c.SoongOutDir(), "soong.variables")
 	} else {
 		return filepath.Join(c.SoongOutDir(), "soong."+targetProduct+".variables")
+	}
+}
+
+func (c *configImpl) SoongExtraVarsFile() string {
+	targetProduct, err := c.TargetProductOrErr()
+	if err != nil {
+		return filepath.Join(c.SoongOutDir(), "soong.extra.variables")
+	} else {
+		return filepath.Join(c.SoongOutDir(), "soong."+targetProduct+".extra.variables")
 	}
 }
 
