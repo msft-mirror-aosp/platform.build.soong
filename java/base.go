@@ -1650,9 +1650,26 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 				classesJar:    implementationAndResourcesJar,
 				jarName:       jarName,
 			}
-			dexOutputFile = j.dexer.compileDex(ctx, params)
+			if j.GetProfileGuided() && j.optimizeOrObfuscateEnabled() && !j.EnableProfileRewriting() {
+				ctx.PropertyErrorf("enable_profile_rewriting",
+					"Enable_profile_rewriting must be true when profile_guided dexpreopt and R8 optimization/obfuscation is turned on. The attached profile should be sourced from an unoptimized/unobfuscated APK.",
+				)
+			}
+			if j.EnableProfileRewriting() {
+				profile := j.GetProfile()
+				if profile == "" || !j.GetProfileGuided() {
+					ctx.PropertyErrorf("enable_profile_rewriting", "Profile and Profile_guided must be set when enable_profile_rewriting is true")
+				}
+				params.artProfileInput = &profile
+			}
+			dexOutputFile, dexArtProfileOutput := j.dexer.compileDex(ctx, params)
 			if ctx.Failed() {
 				return
+			}
+
+			// If r8/d8 provides a profile that matches the optimized dex, use that for dexpreopt.
+			if dexArtProfileOutput != nil {
+				j.dexpreopter.SetRewrittenProfile(*dexArtProfileOutput)
 			}
 
 			// merge dex jar with resources if necessary
@@ -1835,7 +1852,7 @@ func (j *Module) compileJavaClasses(ctx android.ModuleContext, jarName string, i
 	classes := android.PathForModuleOut(ctx, "javac", jarName).OutputPath
 	TransformJavaToClasses(ctx, classes, idx, srcFiles, srcJars, annoSrcJar, flags, extraJarDeps)
 
-	if ctx.Config().EmitXrefRules() {
+	if ctx.Config().EmitXrefRules() && ctx.Module() == ctx.PrimaryModule() {
 		extractionFile := android.PathForModuleOut(ctx, kzipName)
 		emitXrefRule(ctx, extractionFile, idx, srcFiles, srcJars, flags, extraJarDeps)
 		j.kytheFiles = append(j.kytheFiles, extractionFile)
@@ -2527,7 +2544,7 @@ func collectDirectDepsProviders(ctx android.ModuleContext) (result *JarJarProvid
 				case Implementation:
 					return RenameUseInclude, "info"
 				default:
-					//fmt.Printf("LJ: %v -> %v StubsLinkType unknown\n", module, m)
+					//fmt.Printf("collectDirectDepsProviders: %v -> %v StubsLinkType unknown\n", module, m)
 					// Fall through to the heuristic logic.
 				}
 				switch reflect.TypeOf(m).String() {

@@ -266,7 +266,7 @@ func (p *platformCompatConfigSingleton) GenerateBuildActions(ctx android.Singlet
 
 func (p *platformCompatConfigSingleton) MakeVars(ctx android.MakeVarsContext) {
 	if p.metadata != nil {
-		ctx.Strict("INTERNAL_PLATFORM_MERGED_COMPAT_CONFIG", p.metadata.String())
+		ctx.DistForGoal("droidcore", p.metadata)
 	}
 }
 

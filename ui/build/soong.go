@@ -401,7 +401,6 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	}
 
 	blueprintCtx := blueprint.NewContext()
-	blueprintCtx.AddIncludeTags(config.GetIncludeTags()...)
 	blueprintCtx.AddSourceRootDirs(config.GetSourceRootDirs()...)
 	blueprintCtx.SetIgnoreUnknownModuleTypes(true)
 	blueprintConfig := BlueprintConfig{
@@ -695,6 +694,7 @@ func runSoong(ctx Context, config Config) {
 		}
 	}
 	distFile(ctx, config, config.SoongVarsFile(), "soong")
+	distFile(ctx, config, config.SoongExtraVarsFile(), "soong")
 
 	if !config.SkipKati() {
 		distGzipFile(ctx, config, config.SoongAndroidMk(), "soong")
