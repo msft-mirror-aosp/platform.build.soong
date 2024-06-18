@@ -282,13 +282,13 @@ func (config *ReleaseConfig) GenerateReleaseConfig(configs *ReleaseConfigs) erro
 			if _, ok := config.PartitionBuildFlags[container]; !ok {
 				config.PartitionBuildFlags[container] = &rc_proto.FlagArtifacts{}
 			}
-			config.PartitionBuildFlags[container].FlagArtifacts = append(config.PartitionBuildFlags[container].FlagArtifacts, artifact)
+			config.PartitionBuildFlags[container].Flags = append(config.PartitionBuildFlags[container].Flags, artifact)
 		}
 	}
 	config.ReleaseConfigArtifact = &rc_proto.ReleaseConfigArtifact{
 		Name:       proto.String(config.Name),
 		OtherNames: config.OtherNames,
-		FlagArtifacts: func() []*rc_proto.FlagArtifact {
+		Flags: func() []*rc_proto.FlagArtifact {
 			ret := []*rc_proto.FlagArtifact{}
 			flagNames := []string{}
 			for k := range config.FlagArtifacts {
@@ -386,7 +386,7 @@ func (config *ReleaseConfig) WriteMakefile(outFile, targetRelease string, config
 func (config *ReleaseConfig) WritePartitionBuildFlags(outDir string) error {
 	var err error
 	for partition, flags := range config.PartitionBuildFlags {
-		slices.SortFunc(flags.FlagArtifacts, func(a, b *rc_proto.FlagArtifact) int {
+		slices.SortFunc(flags.Flags, func(a, b *rc_proto.FlagArtifact) int {
 			return cmp.Compare(*a.FlagDeclaration.Name, *b.FlagDeclaration.Name)
 		})
 		// The json file name must not be modified as this is read from
