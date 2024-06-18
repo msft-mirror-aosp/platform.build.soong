@@ -149,7 +149,7 @@ type StaticOrSharedProperties struct {
 
 	Sanitized Sanitized `android:"arch_variant"`
 
-	Cflags []string `android:"arch_variant"`
+	Cflags proptools.Configurable[[]string] `android:"arch_variant"`
 
 	Enabled            *bool    `android:"arch_variant"`
 	Whole_static_libs  []string `android:"arch_variant"`
@@ -464,9 +464,9 @@ func (library *libraryDecorator) linkerFlags(ctx ModuleContext, flags Flags) Fla
 	}
 
 	if library.static() {
-		flags.Local.CFlags = append(flags.Local.CFlags, library.StaticProperties.Static.Cflags...)
+		flags.Local.CFlags = append(flags.Local.CFlags, library.StaticProperties.Static.Cflags.GetOrDefault(ctx, nil)...)
 	} else if library.shared() {
-		flags.Local.CFlags = append(flags.Local.CFlags, library.SharedProperties.Shared.Cflags...)
+		flags.Local.CFlags = append(flags.Local.CFlags, library.SharedProperties.Shared.Cflags.GetOrDefault(ctx, nil)...)
 	}
 
 	if library.shared() {
@@ -1762,22 +1762,7 @@ func (library *libraryDecorator) installSymlinkToRuntimeApex(ctx ModuleContext, 
 
 func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 	if library.shared() {
-		if ctx.Device() && ctx.useVndk() {
-			// set subDir for VNDK extensions
-			if ctx.IsVndkExt() {
-				if ctx.isVndkSp() {
-					library.baseInstaller.subDir = "vndk-sp"
-				} else {
-					library.baseInstaller.subDir = "vndk"
-				}
-			}
-
-			// do not install vndk libs
-			// vndk libs are packaged into VNDK APEX
-			if ctx.isVndk() && !ctx.IsVndkExt() && !ctx.Config().IsVndkDeprecated() && !ctx.inProduct() {
-				return
-			}
-		} else if library.hasStubsVariants() && !ctx.Host() && ctx.directlyInAnyApex() {
+		if library.hasStubsVariants() && !ctx.Host() && ctx.directlyInAnyApex() {
 			// Bionic libraries (e.g. libc.so) is installed to the bootstrap subdirectory.
 			// The original path becomes a symlink to the corresponding file in the
 			// runtime APEX.
@@ -2081,8 +2066,8 @@ func reuseStaticLibrary(mctx android.BottomUpMutatorContext, static, shared *Mod
 
 		// Check libraries in addition to cflags, since libraries may be exporting different
 		// include directories.
-		if len(staticCompiler.StaticProperties.Static.Cflags) == 0 &&
-			len(sharedCompiler.SharedProperties.Shared.Cflags) == 0 &&
+		if len(staticCompiler.StaticProperties.Static.Cflags.GetOrDefault(mctx, nil)) == 0 &&
+			len(sharedCompiler.SharedProperties.Shared.Cflags.GetOrDefault(mctx, nil)) == 0 &&
 			len(staticCompiler.StaticProperties.Static.Whole_static_libs) == 0 &&
 			len(sharedCompiler.SharedProperties.Shared.Whole_static_libs) == 0 &&
 			len(staticCompiler.StaticProperties.Static.Static_libs) == 0 &&

@@ -17,6 +17,7 @@ package release_config_lib
 import (
 	"cmp"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -169,8 +170,12 @@ func (config *ReleaseConfig) GenerateReleaseConfig(configs *ReleaseConfigs) erro
 		if err != nil {
 			return err
 		}
-		iConfig.GenerateReleaseConfig(configs)
-		if err := config.InheritConfig(iConfig); err != nil {
+		err = iConfig.GenerateReleaseConfig(configs)
+		if err != nil {
+			return err
+		}
+		err = config.InheritConfig(iConfig)
+		if err != nil {
 			return err
 		}
 	}
@@ -277,13 +282,13 @@ func (config *ReleaseConfig) GenerateReleaseConfig(configs *ReleaseConfigs) erro
 			if _, ok := config.PartitionBuildFlags[container]; !ok {
 				config.PartitionBuildFlags[container] = &rc_proto.FlagArtifacts{}
 			}
-			config.PartitionBuildFlags[container].FlagArtifacts = append(config.PartitionBuildFlags[container].FlagArtifacts, artifact)
+			config.PartitionBuildFlags[container].Flags = append(config.PartitionBuildFlags[container].Flags, artifact)
 		}
 	}
 	config.ReleaseConfigArtifact = &rc_proto.ReleaseConfigArtifact{
 		Name:       proto.String(config.Name),
 		OtherNames: config.OtherNames,
-		FlagArtifacts: func() []*rc_proto.FlagArtifact {
+		Flags: func() []*rc_proto.FlagArtifact {
 			ret := []*rc_proto.FlagArtifact{}
 			flagNames := []string{}
 			for k := range config.FlagArtifacts {
@@ -310,10 +315,78 @@ func (config *ReleaseConfig) GenerateReleaseConfig(configs *ReleaseConfigs) erro
 	return nil
 }
 
+// Write the makefile for this targetRelease.
+func (config *ReleaseConfig) WriteMakefile(outFile, targetRelease string, configs *ReleaseConfigs) error {
+	makeVars := make(map[string]string)
+
+	myFlagArtifacts := config.FlagArtifacts.Clone()
+	// Sort the flags by name first.
+	names := myFlagArtifacts.SortedFlagNames()
+	partitions := make(map[string][]string)
+
+	vNames := []string{}
+	addVar := func(name, suffix, value string) {
+		fullName := fmt.Sprintf("_ALL_RELEASE_FLAGS.%s.%s", name, suffix)
+		vNames = append(vNames, fullName)
+		makeVars[fullName] = value
+	}
+
+	for _, name := range names {
+		flag := myFlagArtifacts[name]
+		decl := flag.FlagDeclaration
+
+		for _, container := range decl.Containers {
+			partitions[container] = append(partitions[container], name)
+		}
+		value := MarshalValue(flag.Value)
+		makeVars[name] = value
+		addVar(name, "TYPE", ValueType(flag.Value))
+		addVar(name, "PARTITIONS", strings.Join(decl.Containers, " "))
+		addVar(name, "DEFAULT", MarshalValue(decl.Value))
+		addVar(name, "VALUE", value)
+		addVar(name, "DECLARED_IN", *flag.Traces[0].Source)
+		addVar(name, "SET_IN", *flag.Traces[len(flag.Traces)-1].Source)
+		addVar(name, "NAMESPACE", *decl.Namespace)
+	}
+	pNames := []string{}
+	for k := range partitions {
+		pNames = append(pNames, k)
+	}
+	slices.Sort(pNames)
+
+	// Now sort the make variables, and output them.
+	slices.Sort(vNames)
+
+	// Write the flags as:
+	//   _ALL_RELELASE_FLAGS
+	//   _ALL_RELEASE_FLAGS.PARTITIONS.*
+	//   all _ALL_RELEASE_FLAGS.*, sorted by name
+	//   Final flag values, sorted by name.
+	data := fmt.Sprintf("# TARGET_RELEASE=%s\n", config.Name)
+	if targetRelease != config.Name {
+		data += fmt.Sprintf("# User specified TARGET_RELEASE=%s\n", targetRelease)
+	}
+	// As it stands this list is not per-product, but conceptually it is, and will be.
+	data += fmt.Sprintf("ALL_RELEASE_CONFIGS_FOR_PRODUCT :=$= %s\n", strings.Join(configs.GetAllReleaseNames(), " "))
+	data += fmt.Sprintf("_used_files := %s\n", strings.Join(config.GetSortedFileList(), " "))
+	data += fmt.Sprintf("_ALL_RELEASE_FLAGS :=$= %s\n", strings.Join(names, " "))
+	for _, pName := range pNames {
+		data += fmt.Sprintf("_ALL_RELEASE_FLAGS.PARTITIONS.%s :=$= %s\n", pName, strings.Join(partitions[pName], " "))
+	}
+	for _, vName := range vNames {
+		data += fmt.Sprintf("%s :=$= %s\n", vName, makeVars[vName])
+	}
+	data += "\n\n# Values for all build flags\n"
+	for _, name := range names {
+		data += fmt.Sprintf("%s :=$= %s\n", name, makeVars[name])
+	}
+	return os.WriteFile(outFile, []byte(data), 0644)
+}
+
 func (config *ReleaseConfig) WritePartitionBuildFlags(outDir string) error {
 	var err error
 	for partition, flags := range config.PartitionBuildFlags {
-		slices.SortFunc(flags.FlagArtifacts, func(a, b *rc_proto.FlagArtifact) int {
+		slices.SortFunc(flags.Flags, func(a, b *rc_proto.FlagArtifact) int {
 			return cmp.Compare(*a.FlagDeclaration.Name, *b.FlagDeclaration.Name)
 		})
 		// The json file name must not be modified as this is read from
