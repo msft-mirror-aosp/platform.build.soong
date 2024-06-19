@@ -198,6 +198,33 @@ func (c Config) ReleaseAconfigValueSets() []string {
 	return c.config.productVariables.ReleaseAconfigValueSets
 }
 
+func (c Config) ReleaseAconfigExtraReleaseConfigs() []string {
+	result := []string{}
+	if val, ok := c.config.productVariables.BuildFlags["RELEASE_ACONFIG_EXTRA_RELEASE_CONFIGS"]; ok {
+		if len(val) > 0 {
+			// Remove any duplicates from the list.
+			found := make(map[string]bool)
+			for _, k := range strings.Split(val, " ") {
+				if !found[k] {
+					found[k] = true
+					result = append(result, k)
+				}
+			}
+		}
+	}
+	return result
+}
+
+func (c Config) ReleaseAconfigExtraReleaseConfigsValueSets() map[string][]string {
+	result := make(map[string][]string)
+	for _, rcName := range c.ReleaseAconfigExtraReleaseConfigs() {
+		if value, ok := c.config.productVariables.BuildFlags["RELEASE_ACONFIG_VALUE_SETS_"+rcName]; ok {
+			result[rcName] = strings.Split(value, " ")
+		}
+	}
+	return result
+}
+
 // The flag default permission value passed to aconfig
 // derived from RELEASE_ACONFIG_FLAG_DEFAULT_PERMISSION
 func (c Config) ReleaseAconfigFlagDefaultPermission() string {
