@@ -831,13 +831,12 @@ func (a *AndroidLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 	if a.usesLibrary.shouldDisableDexpreopt {
 		a.dexpreopter.disableDexpreopt()
 	}
-	aconfigTextFilePaths := getAconfigFilePaths(ctx)
 	a.aapt.buildActions(ctx,
 		aaptBuildActionOptions{
 			sdkContext:                     android.SdkContext(a),
 			classLoaderContexts:            a.classLoaderContexts,
 			enforceDefaultTargetSdkVersion: false,
-			aconfigTextFiles:               aconfigTextFilePaths,
+			aconfigTextFiles:               getAconfigFilePaths(ctx),
 			usesLibrary:                    &a.usesLibrary,
 		},
 	)
@@ -907,10 +906,6 @@ func (a *AndroidLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 			JniPackages: prebuiltJniPackages,
 		})
 	}
-
-	android.SetProvider(ctx, FlagsPackagesProvider, FlagsPackages{
-		AconfigTextFiles: aconfigTextFilePaths,
-	})
 }
 
 func (a *AndroidLibrary) IDEInfo(dpInfo *android.IdeInfo) {

@@ -58,8 +58,7 @@ message flag_artifact {
 
 message flag_artifacts {
   // The artifacts
-  repeated flag_artifact flags = 1;
-  reserved "flag_artifacts";
+  repeated flag_artifact flag_artifacts = 1;
 }
 
 message release_config_artifact {
@@ -72,8 +71,7 @@ message release_config_artifact {
 
   // The complete set of build flags in this release config, after all
   // inheritance and other processing is complete.
-  repeated flag_artifact flags = 3;
-  reserved "flag_artifacts";
+  repeated flag_artifact flag_artifacts = 3;
 
   // The (complete) list of aconfig_value_sets Soong modules to use.
   repeated string aconfig_value_sets = 4;

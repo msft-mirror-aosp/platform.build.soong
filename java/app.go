@@ -47,13 +47,6 @@ var (
 		}, "packageName")
 )
 
-type FlagsPackages struct {
-	// Paths to the aconfig dump output text files that are consumed by aapt2
-	AconfigTextFiles android.Paths
-}
-
-var FlagsPackagesProvider = blueprint.NewProvider[FlagsPackages]()
-
 func RegisterAppBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("android_app", AndroidAppFactory)
 	ctx.RegisterModuleType("android_test", AndroidTestFactory)
@@ -485,27 +478,18 @@ func (a *AndroidApp) renameResourcesPackage() bool {
 }
 
 func getAconfigFilePaths(ctx android.ModuleContext) (aconfigTextFilePaths android.Paths) {
-	ctx.VisitDirectDeps(func(dep android.Module) {
-		tag := ctx.OtherModuleDependencyTag(dep)
-		switch tag {
-		case staticLibTag:
-			if flagPackages, ok := android.OtherModuleProvider(ctx, dep, FlagsPackagesProvider); ok {
-				aconfigTextFilePaths = append(aconfigTextFilePaths, flagPackages.AconfigTextFiles...)
-			}
-
-		case aconfigDeclarationTag:
-			if provider, ok := android.OtherModuleProvider(ctx, dep, android.AconfigDeclarationsProviderKey); ok {
-				aconfigTextFilePaths = append(aconfigTextFilePaths, provider.IntermediateDumpOutputPath)
-			} else {
-				ctx.ModuleErrorf("Only aconfig_declarations module type is allowed for "+
-					"flags_packages property, but %s is not aconfig_declarations module type",
-					dep.Name(),
-				)
-			}
+	ctx.VisitDirectDepsWithTag(aconfigDeclarationTag, func(dep android.Module) {
+		if provider, ok := android.OtherModuleProvider(ctx, dep, android.AconfigDeclarationsProviderKey); ok {
+			aconfigTextFilePaths = append(aconfigTextFilePaths, provider.IntermediateDumpOutputPath)
+		} else {
+			ctx.ModuleErrorf("Only aconfig_declarations module type is allowed for "+
+				"flags_packages property, but %s is not aconfig_declarations module type",
+				dep.Name(),
+			)
 		}
 	})
 
-	return android.FirstUniquePaths(aconfigTextFilePaths)
+	return aconfigTextFilePaths
 }
 
 func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
@@ -560,9 +544,6 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 
 	// Use non final ids if we are doing optimized shrinking and are using R8.
 	nonFinalIds := a.dexProperties.optimizedResourceShrinkingEnabled(ctx) && a.dexer.effectiveOptimizeEnabled()
-
-	aconfigTextFilePaths := getAconfigFilePaths(ctx)
-
 	a.aapt.buildActions(ctx,
 		aaptBuildActionOptions{
 			sdkContext:                     android.SdkContext(a),
@@ -571,17 +552,13 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 			enforceDefaultTargetSdkVersion: a.enforceDefaultTargetSdkVersion(),
 			forceNonFinalResourceIDs:       nonFinalIds,
 			extraLinkFlags:                 aaptLinkFlags,
-			aconfigTextFiles:               aconfigTextFilePaths,
+			aconfigTextFiles:               getAconfigFilePaths(ctx),
 			usesLibrary:                    &a.usesLibrary,
 		},
 	)
 
 	// apps manifests are handled by aapt, don't let Module see them
 	a.properties.Manifest = nil
-
-	android.SetProvider(ctx, FlagsPackagesProvider, FlagsPackages{
-		AconfigTextFiles: aconfigTextFilePaths,
-	})
 }
 
 func (a *AndroidApp) proguardBuildActions(ctx android.ModuleContext) {

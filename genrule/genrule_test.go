@@ -1254,6 +1254,12 @@ func (t *testOutputProducer) GenerateAndroidBuildActions(ctx android.ModuleConte
 	t.outputFile = ctx.InstallFile(android.PathForModuleInstall(ctx, "bin"), ctx.ModuleName(), android.PathForOutput(ctx, ctx.ModuleName()))
 }
 
+func (t *testOutputProducer) OutputFiles(tag string) (android.Paths, error) {
+	return android.Paths{t.outputFile}, nil
+}
+
+var _ android.OutputFileProducer = (*testOutputProducer)(nil)
+
 type useSource struct {
 	android.ModuleBase
 	props struct {

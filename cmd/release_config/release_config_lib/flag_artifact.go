@@ -67,7 +67,7 @@ func FlagArtifactsFactory(artifactsPath string) *FlagArtifacts {
 	if artifactsPath != "" {
 		fas := &rc_proto.FlagArtifacts{}
 		LoadMessage(artifactsPath, fas)
-		for _, fa_pb := range fas.Flags {
+		for _, fa_pb := range fas.FlagArtifacts {
 			fa := &FlagArtifact{}
 			fa.FlagDeclaration = fa_pb.GetFlagDeclaration()
 			if val := fa_pb.GetValue(); val != nil {
