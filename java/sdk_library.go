@@ -3279,7 +3279,7 @@ func (module *sdkLibraryXml) implPath(ctx android.ModuleContext) string {
 		// TODO(b/146468504): ApexVariationName() is only a soong module name, not apex name.
 		// In most cases, this works fine. But when apex_name is set or override_apex is used
 		// this can be wrong.
-		return fmt.Sprintf("/apex/%s/javalib/%s.jar", apexInfo.ApexVariationName, implName)
+		return fmt.Sprintf("/apex/%s/javalib/%s.jar", apexInfo.BaseApexName, implName)
 	}
 	partition := "system"
 	if module.SocSpecific() {

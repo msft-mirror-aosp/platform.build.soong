@@ -1913,9 +1913,54 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			return
 		}
 
-		m.module.GenerateAndroidBuildActions(ctx)
-		if ctx.Failed() {
-			return
+		incrementalAnalysis := false
+		incrementalEnabled := false
+		var cacheKey *blueprint.BuildActionCacheKey = nil
+		var incrementalModule *blueprint.Incremental = nil
+		if ctx.bp.GetIncrementalEnabled() {
+			if im, ok := m.module.(blueprint.Incremental); ok {
+				incrementalModule = &im
+				incrementalEnabled = im.IncrementalSupported()
+				incrementalAnalysis = ctx.bp.GetIncrementalAnalysis() && incrementalEnabled
+			}
+		}
+		if incrementalEnabled {
+			hash, err := proptools.CalculateHash(m.GetProperties())
+			if err != nil {
+				ctx.ModuleErrorf("failed to calculate properties hash: %s", err)
+				return
+			}
+			cacheInput := new(blueprint.BuildActionCacheInput)
+			cacheInput.PropertiesHash = hash
+			ctx.VisitDirectDeps(func(module Module) {
+				cacheInput.ProvidersHash =
+					append(cacheInput.ProvidersHash, ctx.bp.OtherModuleProviderInitialValueHashes(module))
+			})
+			hash, err = proptools.CalculateHash(&cacheInput)
+			if err != nil {
+				ctx.ModuleErrorf("failed to calculate cache input hash: %s", err)
+				return
+			}
+			cacheKey = &blueprint.BuildActionCacheKey{
+				Id:        ctx.bp.ModuleId(),
+				InputHash: hash,
+			}
+		}
+
+		restored := false
+		if incrementalAnalysis && cacheKey != nil {
+			restored = ctx.bp.RestoreBuildActions(cacheKey, incrementalModule)
+		}
+
+		if !restored {
+			m.module.GenerateAndroidBuildActions(ctx)
+			if ctx.Failed() {
+				return
+			}
+		}
+
+		if incrementalEnabled && cacheKey != nil {
+			ctx.bp.CacheBuildActions(cacheKey, incrementalModule)
 		}
 
 		// Create the set of tagged dist files after calling GenerateAndroidBuildActions
