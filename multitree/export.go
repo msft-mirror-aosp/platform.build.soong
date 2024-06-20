@@ -50,7 +50,6 @@ type Exportable interface {
 
 type ExportableModule interface {
 	android.Module
-	android.OutputFileProducer
 	Exportable
 }
 

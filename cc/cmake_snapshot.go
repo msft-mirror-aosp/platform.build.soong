@@ -15,7 +15,6 @@
 package cc
 
 import (
-	"android/soong/android"
 	"bytes"
 	_ "embed"
 	"fmt"
@@ -24,6 +23,8 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+
+	"android/soong/android"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -462,15 +463,8 @@ func (m *CmakeSnapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Finish generating the final zip file
 	zipRule.Build(m.zipPath.String(), "archiving "+ctx.ModuleName())
-}
 
-func (m *CmakeSnapshot) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return android.Paths{m.zipPath}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
+	ctx.SetOutputFiles(android.Paths{m.zipPath}, "")
 }
 
 func (m *CmakeSnapshot) AndroidMkEntries() []android.AndroidMkEntries {
