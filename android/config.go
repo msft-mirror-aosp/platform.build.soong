@@ -198,6 +198,33 @@ func (c Config) ReleaseAconfigValueSets() []string {
 	return c.config.productVariables.ReleaseAconfigValueSets
 }
 
+func (c Config) ReleaseAconfigExtraReleaseConfigs() []string {
+	result := []string{}
+	if val, ok := c.config.productVariables.BuildFlags["RELEASE_ACONFIG_EXTRA_RELEASE_CONFIGS"]; ok {
+		if len(val) > 0 {
+			// Remove any duplicates from the list.
+			found := make(map[string]bool)
+			for _, k := range strings.Split(val, " ") {
+				if !found[k] {
+					found[k] = true
+					result = append(result, k)
+				}
+			}
+		}
+	}
+	return result
+}
+
+func (c Config) ReleaseAconfigExtraReleaseConfigsValueSets() map[string][]string {
+	result := make(map[string][]string)
+	for _, rcName := range c.ReleaseAconfigExtraReleaseConfigs() {
+		if value, ok := c.config.productVariables.BuildFlags["RELEASE_ACONFIG_VALUE_SETS_"+rcName]; ok {
+			result[rcName] = strings.Split(value, " ")
+		}
+	}
+	return result
+}
+
 // The flag default permission value passed to aconfig
 // derived from RELEASE_ACONFIG_FLAG_DEFAULT_PERMISSION
 func (c Config) ReleaseAconfigFlagDefaultPermission() string {
@@ -782,6 +809,17 @@ func (c *config) BuildId() string {
 
 func (c *config) DisplayBuildNumber() bool {
 	return Bool(c.productVariables.DisplayBuildNumber)
+}
+
+// BuildFingerprintFile returns the path to a text file containing metadata
+// representing the current build's fingerprint.
+//
+// Rules that want to reference the build fingerprint should read from this file
+// without depending on it. They will run whenever their other dependencies
+// require them to run and get the current build fingerprint. This ensures they
+// don't rebuild on every incremental build when the build number changes.
+func (c *config) BuildFingerprintFile(ctx PathContext) Path {
+	return PathForArbitraryOutput(ctx, "target", "product", c.DeviceName(), String(c.productVariables.BuildFingerprintFile))
 }
 
 // BuildNumberFile returns the path to a text file containing metadata
@@ -1881,6 +1919,10 @@ func (c *deviceConfig) BuildBrokenInputDir(name string) bool {
 
 func (c *deviceConfig) BuildBrokenDontCheckSystemSdk() bool {
 	return c.config.productVariables.BuildBrokenDontCheckSystemSdk
+}
+
+func (c *deviceConfig) BuildBrokenDupSysprop() bool {
+	return c.config.productVariables.BuildBrokenDupSysprop
 }
 
 func (c *config) BuildWarningBadOptionalUsesLibsAllowlist() []string {
