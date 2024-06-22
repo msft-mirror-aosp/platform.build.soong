@@ -62,8 +62,13 @@ var defaultUnportableFlags []string = []string{
 }
 
 var ignoredSystemLibs []string = []string{
+	"crtbegin_dynamic",
+	"crtend_android",
+	"libc",
 	"libc++",
 	"libc++_static",
+	"libdl",
+	"libm",
 	"prebuilt_libclang_rt.builtins",
 	"prebuilt_libclang_rt.ubsan_minimal",
 }
@@ -272,7 +277,11 @@ func (m *CmakeSnapshot) DepsMutator(ctx android.BottomUpMutatorContext) {
 		{"arch", "x86_64"},
 	}
 	ctx.AddVariationDependencies(variations, cmakeSnapshotModuleTag, m.Properties.Modules...)
-	ctx.AddVariationDependencies(variations, cmakeSnapshotPrebuiltTag, m.Properties.Prebuilts...)
+
+	if len(m.Properties.Prebuilts) > 0 {
+		prebuilts := append(m.Properties.Prebuilts, "libc++")
+		ctx.AddVariationDependencies(variations, cmakeSnapshotPrebuiltTag, prebuilts...)
+	}
 }
 
 func (m *CmakeSnapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {

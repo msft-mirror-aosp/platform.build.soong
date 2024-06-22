@@ -748,9 +748,9 @@ func (a *apexBundle) getImageVariationPair() (string, string) {
 
 	prefix := android.CoreVariation
 	if a.SocSpecific() || a.DeviceSpecific() {
-		prefix = cc.VendorVariation
+		prefix = android.VendorVariation
 	} else if a.ProductSpecific() {
-		prefix = cc.ProductVariation
+		prefix = android.ProductVariation
 	}
 
 	return prefix, ""
