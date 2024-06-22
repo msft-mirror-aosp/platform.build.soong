@@ -315,6 +315,9 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	if config.ensureAllowlistIntegrity {
 		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--ensure-allowlist-integrity")
 	}
+	if config.incrementalBuildActions {
+		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--incremental-build-actions")
+	}
 
 	queryviewDir := filepath.Join(config.SoongOutDir(), "queryview")
 
@@ -694,6 +697,7 @@ func runSoong(ctx Context, config Config) {
 		}
 	}
 	distFile(ctx, config, config.SoongVarsFile(), "soong")
+	distFile(ctx, config, config.SoongExtraVarsFile(), "soong")
 
 	if !config.SkipKati() {
 		distGzipFile(ctx, config, config.SoongAndroidMk(), "soong")
