@@ -2253,7 +2253,20 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 		variable := condition.Arg(1)
 		if n, ok := ctx.Config().productVariables.VendorVars[namespace]; ok {
 			if v, ok := n[variable]; ok {
-				return proptools.ConfigurableValueString(v)
+				ty := ""
+				if namespaces, ok := ctx.Config().productVariables.VendorVarTypes[namespace]; ok {
+					ty = namespaces[variable]
+				}
+				switch ty {
+				case "":
+					// strings are the default, we don't bother writing them to the soong variables json file
+					return proptools.ConfigurableValueString(v)
+				case "bool":
+					return proptools.ConfigurableValueBool(v == "true")
+				default:
+					panic("unhandled soong config variable type: " + ty)
+				}
+
 			}
 		}
 		return proptools.ConfigurableValueUndefined()
@@ -2524,8 +2537,7 @@ func outputFilesForModule(ctx PathContext, module blueprint.Module, tag string) 
 // *inter-module-communication*.
 // If mctx module is the same as the param module the output files are obtained
 // from outputFiles property of module base, to avoid both setting and
-// reading OutputFilesProvider before  GenerateBuildActions is finished. Also
-// only empty-string-tag is supported in this case.
+// reading OutputFilesProvider before GenerateBuildActions is finished.
 // If a module doesn't have the OutputFilesProvider, nil is returned.
 func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, tag string) (Paths, error) {
 	// TODO: support OutputFilesProvider for singletons
@@ -2546,6 +2558,8 @@ func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, 
 	} else {
 		if tag == "" {
 			return mctx.Module().base().outputFiles.DefaultOutputFiles, nil
+		} else if taggedOutputFiles, hasTag := mctx.Module().base().outputFiles.TaggedOutputFiles[tag]; hasTag {
+			return taggedOutputFiles, nil
 		} else {
 			return nil, fmt.Errorf("unsupported tag %q for module getting its own output files", tag)
 		}
