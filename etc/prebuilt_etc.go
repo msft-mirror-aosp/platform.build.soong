@@ -216,6 +216,14 @@ var _ android.ImageInterface = (*PrebuiltEtc)(nil)
 
 func (p *PrebuiltEtc) ImageMutatorBegin(ctx android.BaseModuleContext) {}
 
+func (p *PrebuiltEtc) VendorVariantNeeded(ctx android.BaseModuleContext) bool {
+	return false
+}
+
+func (p *PrebuiltEtc) ProductVariantNeeded(ctx android.BaseModuleContext) bool {
+	return false
+}
+
 func (p *PrebuiltEtc) CoreVariantNeeded(ctx android.BaseModuleContext) bool {
 	return !p.ModuleBase.InstallInRecovery() && !p.ModuleBase.InstallInRamdisk() &&
 		!p.ModuleBase.InstallInVendorRamdisk() && !p.ModuleBase.InstallInDebugRamdisk()

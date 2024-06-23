@@ -4369,6 +4369,82 @@ func TestAppFlagsPackages(t *testing.T) {
 	)
 }
 
+func TestAppFlagsPackagesPropagation(t *testing.T) {
+	ctx := testApp(t, `
+		aconfig_declarations {
+			name: "foo",
+			package: "com.example.package.foo",
+			container: "com.android.foo",
+			srcs: [
+				"foo.aconfig",
+			],
+		}
+		aconfig_declarations {
+			name: "bar",
+			package: "com.example.package.bar",
+			container: "com.android.bar",
+			srcs: [
+				"bar.aconfig",
+			],
+		}
+		aconfig_declarations {
+			name: "baz",
+			package: "com.example.package.baz",
+			container: "com.android.baz",
+			srcs: [
+				"baz.aconfig",
+			],
+		}
+		android_library {
+			name: "foo_lib",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			flags_packages: [
+				"foo",
+			],
+		}
+		android_library {
+			name: "bar_lib",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			flags_packages: [
+				"bar",
+			],
+		}
+		android_app {
+			name: "baz_app",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			flags_packages: [
+				"baz",
+			],
+			static_libs: [
+				"bar_lib",
+			],
+			libs: [
+				"foo_lib",
+			],
+		}
+	`)
+
+	bazApp := ctx.ModuleForTests("baz_app", "android_common")
+
+	// android_app module depends on aconfig_declarations listed in flags_packages
+	// and that of static libs, but not libs
+	aapt2LinkRule := bazApp.Rule("android/soong/java.aapt2Link")
+	linkInFlags := aapt2LinkRule.Args["inFlags"]
+	android.AssertStringDoesContain(t,
+		"aapt2 link command expected to pass feature flags arguments of flags_packages and that of its static libs",
+		linkInFlags,
+		"--feature-flags @out/soong/.intermediates/bar/intermediate.txt --feature-flags @out/soong/.intermediates/baz/intermediate.txt",
+	)
+	android.AssertStringDoesNotContain(t,
+		"aapt2 link command expected to not pass feature flags arguments of flags_packages of its libs",
+		linkInFlags,
+		"--feature-flags @out/soong/.intermediates/foo/intermediate.txt",
+	)
+}
+
 // Test that dexpreopt is disabled if an optional_uses_libs exists, but does not provide an implementation.
 func TestNoDexpreoptOptionalUsesLibDoesNotHaveImpl(t *testing.T) {
 	bp := `
