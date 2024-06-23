@@ -15,7 +15,6 @@
 package cc
 
 import (
-	"android/soong/android"
 	"bytes"
 	_ "embed"
 	"fmt"
@@ -24,6 +23,8 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+
+	"android/soong/android"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -61,8 +62,13 @@ var defaultUnportableFlags []string = []string{
 }
 
 var ignoredSystemLibs []string = []string{
+	"crtbegin_dynamic",
+	"crtend_android",
+	"libc",
 	"libc++",
 	"libc++_static",
+	"libdl",
+	"libm",
 	"prebuilt_libclang_rt.builtins",
 	"prebuilt_libclang_rt.ubsan_minimal",
 }
@@ -271,7 +277,11 @@ func (m *CmakeSnapshot) DepsMutator(ctx android.BottomUpMutatorContext) {
 		{"arch", "x86_64"},
 	}
 	ctx.AddVariationDependencies(variations, cmakeSnapshotModuleTag, m.Properties.Modules...)
-	ctx.AddVariationDependencies(variations, cmakeSnapshotPrebuiltTag, m.Properties.Prebuilts...)
+
+	if len(m.Properties.Prebuilts) > 0 {
+		prebuilts := append(m.Properties.Prebuilts, "libc++")
+		ctx.AddVariationDependencies(variations, cmakeSnapshotPrebuiltTag, prebuilts...)
+	}
 }
 
 func (m *CmakeSnapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -462,15 +472,8 @@ func (m *CmakeSnapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Finish generating the final zip file
 	zipRule.Build(m.zipPath.String(), "archiving "+ctx.ModuleName())
-}
 
-func (m *CmakeSnapshot) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return android.Paths{m.zipPath}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
+	ctx.SetOutputFiles(android.Paths{m.zipPath}, "")
 }
 
 func (m *CmakeSnapshot) AndroidMkEntries() []android.AndroidMkEntries {

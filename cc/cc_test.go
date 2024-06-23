@@ -2908,8 +2908,6 @@ func TestIncludeDirectoryOrdering(t *testing.T) {
 				PrepareForIntegrationTestWithCc,
 				android.FixtureAddTextFile("external/foo/Android.bp", bp),
 			).RunTest(t)
-			// Use the arm variant instead of the arm64 variant so that it gets headers from
-			// ndk_libandroid_support to test LateStaticLibs.
 			cflags := ctx.ModuleForTests("libfoo", "android_arm_armv7-a-neon_sdk_static").Output("obj/external/foo/foo.o").Args["cFlags"]
 
 			var includes []string

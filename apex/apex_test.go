@@ -7125,6 +7125,46 @@ func TestJavaSDKLibrary(t *testing.T) {
 	ensureMatches(t, contents, "<library\\n\\s+name=\\\"foo\\\"\\n\\s+file=\\\"/apex/myapex/javalib/foo.jar\\\"")
 }
 
+func TestJavaSDKLibraryOverrideApexes(t *testing.T) {
+	ctx := testApex(t, `
+		override_apex {
+			name: "mycompanyapex",
+			base: "myapex",
+		}
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			java_libs: ["foo"],
+			updatable: false,
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java"],
+			api_packages: ["foo"],
+			apex_available: [ "myapex" ],
+		}
+
+		prebuilt_apis {
+			name: "sdk",
+			api_dirs: ["100"],
+		}
+	`, withFiles(filesForSdkLibrary))
+
+	// Permission XML should point to the activated path of impl jar of java_sdk_library.
+	// Since override variants (com.mycompany.android.foo) are installed in the same package as the overridden variant
+	// (com.android.foo), the filepath should not contain override apex name.
+	sdkLibrary := ctx.ModuleForTests("foo.xml", "android_common_mycompanyapex").Output("foo.xml")
+	contents := android.ContentFromFileRuleForTests(t, ctx, sdkLibrary)
+	ensureMatches(t, contents, "<library\\n\\s+name=\\\"foo\\\"\\n\\s+file=\\\"/apex/myapex/javalib/foo.jar\\\"")
+}
+
 func TestJavaSDKLibrary_WithinApex(t *testing.T) {
 	ctx := testApex(t, `
 		apex {

@@ -80,6 +80,8 @@ type BaseProperties struct {
 	RustSubName string `blueprint:"mutated"`
 
 	// Set by imageMutator
+	ProductVariantNeeded       bool     `blueprint:"mutated"`
+	VendorVariantNeeded        bool     `blueprint:"mutated"`
 	CoreVariantNeeded          bool     `blueprint:"mutated"`
 	VendorRamdiskVariantNeeded bool     `blueprint:"mutated"`
 	RamdiskVariantNeeded       bool     `blueprint:"mutated"`
