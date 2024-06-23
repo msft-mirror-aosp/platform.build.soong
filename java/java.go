@@ -1501,7 +1501,7 @@ func (j *TestHost) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		InstalledFiles:      j.data,
 		OutputFile:          j.outputFile,
 		TestConfig:          j.testConfig,
-		RequiredModuleNames: j.RequiredModuleNames(),
+		RequiredModuleNames: j.RequiredModuleNames(ctx),
 		TestSuites:          j.testProperties.Test_suites,
 		IsHost:              true,
 		LocalSdkVersion:     j.sdkVersion.String(),
@@ -2285,10 +2285,10 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	al.stubsFlags(ctx, cmd, stubsDir)
 
-	migratingNullability := String(al.properties.Previous_api) != ""
-	if migratingNullability {
-		previousApi := android.PathForModuleSrc(ctx, String(al.properties.Previous_api))
-		cmd.FlagWithInput("--migrate-nullness ", previousApi)
+	previousApi := String(al.properties.Previous_api)
+	if previousApi != "" {
+		previousApiFiles := android.PathsForModuleSrc(ctx, []string{previousApi})
+		cmd.FlagForEachInput("--migrate-nullness ", previousApiFiles)
 	}
 
 	al.addValidation(ctx, cmd, al.validationPaths)
