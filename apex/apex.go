@@ -748,9 +748,9 @@ func (a *apexBundle) getImageVariationPair() (string, string) {
 
 	prefix := android.CoreVariation
 	if a.SocSpecific() || a.DeviceSpecific() {
-		prefix = cc.VendorVariation
+		prefix = android.VendorVariation
 	} else if a.ProductSpecific() {
-		prefix = cc.ProductVariation
+		prefix = android.ProductVariation
 	}
 
 	return prefix, ""
@@ -1368,25 +1368,6 @@ func (a *apexBundle) DepIsInSameApex(_ android.BaseModuleContext, _ android.Modu
 	// direct deps of an APEX bundle are all part of the APEX bundle
 	// TODO(jiyong): shouldn't we look into the payload field of the dependencyTag?
 	return true
-}
-
-var _ android.OutputFileProducer = (*apexBundle)(nil)
-
-// Implements android.OutputFileProducer
-func (a *apexBundle) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "", android.DefaultDistTag:
-		// This is the default dist path.
-		return android.Paths{a.outputFile}, nil
-	case imageApexSuffix:
-		// uncompressed one
-		if a.outputApexFile != nil {
-			return android.Paths{a.outputApexFile}, nil
-		}
-		fallthrough
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
 }
 
 var _ multitree.Exportable = (*apexBundle)(nil)
@@ -2432,6 +2413,8 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.providePrebuiltInfo(ctx)
 
 	a.required = a.RequiredModuleNames(ctx)
+
+	a.setOutputFiles(ctx)
 }
 
 // Set prebuiltInfoProvider. This will be used by `apex_prebuiltinfo_singleton` to print out a metadata file
@@ -2458,6 +2441,18 @@ func (a *apexBundle) provideApexExportsInfo(ctx android.ModuleContext) {
 			android.SetProvider(ctx, android.ApexExportsInfoProvider, exports)
 		}
 	})
+}
+
+// Set output files to outputFiles property, which is later used to set the
+// OutputFilesProvider
+func (a *apexBundle) setOutputFiles(ctx android.ModuleContext) {
+	// default dist path
+	ctx.SetOutputFiles(android.Paths{a.outputFile}, "")
+	ctx.SetOutputFiles(android.Paths{a.outputFile}, android.DefaultDistTag)
+	// uncompressed one
+	if a.outputApexFile != nil {
+		ctx.SetOutputFiles(android.Paths{a.outputApexFile}, imageApexSuffix)
+	}
 }
 
 // apexBootclasspathFragmentFiles returns the list of apexFile structures defining the files that

@@ -494,6 +494,12 @@ func BuildApiVariantName(baseName string, variant string, version string) string
 
 // Implement ImageInterface to generate image variants
 func (v *CcApiVariant) ImageMutatorBegin(ctx android.BaseModuleContext) {}
+func (v *CcApiVariant) VendorVariantNeeded(ctx android.BaseModuleContext) bool {
+	return String(v.properties.Variant) == "llndk"
+}
+func (v *CcApiVariant) ProductVariantNeeded(ctx android.BaseModuleContext) bool {
+	return String(v.properties.Variant) == "llndk"
+}
 func (v *CcApiVariant) CoreVariantNeeded(ctx android.BaseModuleContext) bool {
 	return inList(String(v.properties.Variant), []string{"ndk", "apex"})
 }
@@ -501,15 +507,6 @@ func (v *CcApiVariant) RamdiskVariantNeeded(ctx android.BaseModuleContext) bool 
 func (v *CcApiVariant) VendorRamdiskVariantNeeded(ctx android.BaseModuleContext) bool { return false }
 func (v *CcApiVariant) DebugRamdiskVariantNeeded(ctx android.BaseModuleContext) bool  { return false }
 func (v *CcApiVariant) RecoveryVariantNeeded(ctx android.BaseModuleContext) bool      { return false }
-func (v *CcApiVariant) ExtraImageVariations(ctx android.BaseModuleContext) []string {
-	var variations []string
-
-	if String(v.properties.Variant) == "llndk" {
-		variations = append(variations, VendorVariation)
-		variations = append(variations, ProductVariation)
-	}
-
-	return variations
-}
+func (v *CcApiVariant) ExtraImageVariations(ctx android.BaseModuleContext) []string   { return nil }
 func (v *CcApiVariant) SetImageVariation(ctx android.BaseModuleContext, variation string) {
 }
