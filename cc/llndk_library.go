@@ -15,6 +15,7 @@
 package cc
 
 import (
+	"fmt"
 	"strings"
 
 	"android/soong/android"
@@ -122,6 +123,16 @@ func (txt *llndkLibrariesTxtModule) GenerateAndroidBuildActions(ctx android.Modu
 	ctx.SetOutputFiles(android.Paths{txt.outputFile}, "")
 }
 
+func getVndkFileName(m *Module) (string, error) {
+	if library, ok := m.linker.(*libraryDecorator); ok {
+		return library.getLibNameHelper(m.BaseModuleName(), true, false) + ".so", nil
+	}
+	if prebuilt, ok := m.linker.(*prebuiltLibraryLinker); ok {
+		return prebuilt.libraryDecorator.getLibNameHelper(m.BaseModuleName(), true, false) + ".so", nil
+	}
+	return "", fmt.Errorf("VNDK library should have libraryDecorator or prebuiltLibraryLinker as linker: %T", m.linker)
+}
+
 func (txt *llndkLibrariesTxtModule) GenerateSingletonBuildActions(ctx android.SingletonContext) {
 	if txt.outputFile.String() == "" {
 		// Skip if target file path is empty
@@ -197,8 +208,10 @@ func llndkMutator(mctx android.BottomUpMutatorContext) {
 		m.VendorProperties.IsLLNDK = true
 	}
 
-	if m.IsVndkPrebuiltLibrary() && !m.IsVndk() {
-		m.VendorProperties.IsLLNDK = true
+	if vndkprebuilt, ok := m.linker.(*vndkPrebuiltLibraryDecorator); ok {
+		if !Bool(vndkprebuilt.properties.Vndk.Enabled) {
+			m.VendorProperties.IsLLNDK = true
+		}
 	}
 }
 
