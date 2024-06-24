@@ -315,6 +315,9 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	if config.ensureAllowlistIntegrity {
 		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--ensure-allowlist-integrity")
 	}
+	if config.incrementalBuildActions {
+		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--incremental-build-actions")
+	}
 
 	queryviewDir := filepath.Join(config.SoongOutDir(), "queryview")
 

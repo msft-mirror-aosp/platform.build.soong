@@ -2285,10 +2285,10 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	al.stubsFlags(ctx, cmd, stubsDir)
 
-	migratingNullability := String(al.properties.Previous_api) != ""
-	if migratingNullability {
-		previousApi := android.PathForModuleSrc(ctx, String(al.properties.Previous_api))
-		cmd.FlagWithInput("--migrate-nullness ", previousApi)
+	previousApi := String(al.properties.Previous_api)
+	if previousApi != "" {
+		previousApiFiles := android.PathsForModuleSrc(ctx, []string{previousApi})
+		cmd.FlagForEachInput("--migrate-nullness ", previousApiFiles)
 	}
 
 	al.addValidation(ctx, cmd, al.validationPaths)

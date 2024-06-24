@@ -361,6 +361,8 @@ type BaseProperties struct {
 	Recovery_available *bool
 
 	// Used by imageMutator, set by ImageMutatorBegin()
+	VendorVariantNeeded        bool `blueprint:"mutated"`
+	ProductVariantNeeded       bool `blueprint:"mutated"`
 	CoreVariantNeeded          bool `blueprint:"mutated"`
 	RamdiskVariantNeeded       bool `blueprint:"mutated"`
 	VendorRamdiskVariantNeeded bool `blueprint:"mutated"`
@@ -2509,7 +2511,7 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	if c.ImageVariation().Variation == android.CoreVariation && c.Device() &&
 		c.Target().NativeBridge == android.NativeBridgeDisabled {
 		actx.AddVariationDependencies(
-			[]blueprint.Variation{{Mutator: "image", Variation: VendorVariation}},
+			[]blueprint.Variation{{Mutator: "image", Variation: android.VendorVariation}},
 			llndkHeaderLibTag,
 			deps.LlndkHeaderLibs...)
 	}

@@ -1913,9 +1913,54 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			return
 		}
 
-		m.module.GenerateAndroidBuildActions(ctx)
-		if ctx.Failed() {
-			return
+		incrementalAnalysis := false
+		incrementalEnabled := false
+		var cacheKey *blueprint.BuildActionCacheKey = nil
+		var incrementalModule *blueprint.Incremental = nil
+		if ctx.bp.GetIncrementalEnabled() {
+			if im, ok := m.module.(blueprint.Incremental); ok {
+				incrementalModule = &im
+				incrementalEnabled = im.IncrementalSupported()
+				incrementalAnalysis = ctx.bp.GetIncrementalAnalysis() && incrementalEnabled
+			}
+		}
+		if incrementalEnabled {
+			hash, err := proptools.CalculateHash(m.GetProperties())
+			if err != nil {
+				ctx.ModuleErrorf("failed to calculate properties hash: %s", err)
+				return
+			}
+			cacheInput := new(blueprint.BuildActionCacheInput)
+			cacheInput.PropertiesHash = hash
+			ctx.VisitDirectDeps(func(module Module) {
+				cacheInput.ProvidersHash =
+					append(cacheInput.ProvidersHash, ctx.bp.OtherModuleProviderInitialValueHashes(module))
+			})
+			hash, err = proptools.CalculateHash(&cacheInput)
+			if err != nil {
+				ctx.ModuleErrorf("failed to calculate cache input hash: %s", err)
+				return
+			}
+			cacheKey = &blueprint.BuildActionCacheKey{
+				Id:        ctx.bp.ModuleId(),
+				InputHash: hash,
+			}
+		}
+
+		restored := false
+		if incrementalAnalysis && cacheKey != nil {
+			restored = ctx.bp.RestoreBuildActions(cacheKey, incrementalModule)
+		}
+
+		if !restored {
+			m.module.GenerateAndroidBuildActions(ctx)
+			if ctx.Failed() {
+				return
+			}
+		}
+
+		if incrementalEnabled && cacheKey != nil {
+			ctx.bp.CacheBuildActions(cacheKey, incrementalModule)
 		}
 
 		// Create the set of tagged dist files after calling GenerateAndroidBuildActions
@@ -2208,7 +2253,20 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 		variable := condition.Arg(1)
 		if n, ok := ctx.Config().productVariables.VendorVars[namespace]; ok {
 			if v, ok := n[variable]; ok {
-				return proptools.ConfigurableValueString(v)
+				ty := ""
+				if namespaces, ok := ctx.Config().productVariables.VendorVarTypes[namespace]; ok {
+					ty = namespaces[variable]
+				}
+				switch ty {
+				case "":
+					// strings are the default, we don't bother writing them to the soong variables json file
+					return proptools.ConfigurableValueString(v)
+				case "bool":
+					return proptools.ConfigurableValueBool(v == "true")
+				default:
+					panic("unhandled soong config variable type: " + ty)
+				}
+
 			}
 		}
 		return proptools.ConfigurableValueUndefined()
@@ -2479,8 +2537,7 @@ func outputFilesForModule(ctx PathContext, module blueprint.Module, tag string) 
 // *inter-module-communication*.
 // If mctx module is the same as the param module the output files are obtained
 // from outputFiles property of module base, to avoid both setting and
-// reading OutputFilesProvider before  GenerateBuildActions is finished. Also
-// only empty-string-tag is supported in this case.
+// reading OutputFilesProvider before GenerateBuildActions is finished.
 // If a module doesn't have the OutputFilesProvider, nil is returned.
 func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, tag string) (Paths, error) {
 	// TODO: support OutputFilesProvider for singletons
@@ -2501,6 +2558,8 @@ func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, 
 	} else {
 		if tag == "" {
 			return mctx.Module().base().outputFiles.DefaultOutputFiles, nil
+		} else if taggedOutputFiles, hasTag := mctx.Module().base().outputFiles.TaggedOutputFiles[tag]; hasTag {
+			return taggedOutputFiles, nil
 		} else {
 			return nil, fmt.Errorf("unsupported tag %q for module getting its own output files", tag)
 		}

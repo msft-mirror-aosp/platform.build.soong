@@ -85,6 +85,7 @@ type configImpl struct {
 	skipMetricsUpload        bool
 	buildStartedTime         int64 // For metrics-upload-only - manually specify a build-started time
 	buildFromSourceStub      bool
+	incrementalBuildActions  bool
 	ensureAllowlistIntegrity bool // For CI builds - make sure modules are mixed-built
 
 	// From the product config
@@ -811,6 +812,8 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			}
 		} else if arg == "--build-from-source-stub" {
 			c.buildFromSourceStub = true
+		} else if arg == "--incremental-build-actions" {
+			c.incrementalBuildActions = true
 		} else if strings.HasPrefix(arg, "--build-command=") {
 			buildCmd := strings.TrimPrefix(arg, "--build-command=")
 			// remove quotations
