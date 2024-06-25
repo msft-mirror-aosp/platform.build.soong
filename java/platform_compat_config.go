@@ -109,23 +109,13 @@ func (p *platformCompatConfig) GenerateAndroidBuildActions(ctx android.ModuleCon
 	p.installDirPath = android.PathForModuleInstall(ctx, "etc", "compatconfig")
 	p.installConfigFile = android.PathForModuleInstall(ctx, "etc", "compatconfig", p.configFile.Base())
 	rule.Build(configFileName, "Extract compat/compat_config.xml and install it")
-}
-
-func (p *platformCompatConfig) FilesToInstall() android.InstallPaths {
-	return android.InstallPaths{p.installConfigFile}
+	ctx.InstallFile(p.installDirPath, p.configFile.Base(), p.configFile)
 }
 
 func (p *platformCompatConfig) AndroidMkEntries() []android.AndroidMkEntries {
 	return []android.AndroidMkEntries{android.AndroidMkEntries{
 		Class:      "ETC",
 		OutputFile: android.OptionalPathForPath(p.configFile),
-		Include:    "$(BUILD_PREBUILT)",
-		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
-			func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
-				entries.SetString("LOCAL_MODULE_PATH", p.installDirPath.String())
-				entries.SetString("LOCAL_INSTALLED_MODULE_STEM", p.configFile.Base())
-			},
-		},
 	}}
 }
 

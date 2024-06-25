@@ -16,6 +16,7 @@ package rust
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"android/soong/bloaty"
@@ -206,27 +207,6 @@ func (mod *Module) IsPrebuilt() bool {
 		return true
 	}
 	return false
-}
-
-func (mod *Module) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		if mod.sourceProvider != nil && (mod.compiler == nil || mod.compiler.Disabled()) {
-			return mod.sourceProvider.Srcs(), nil
-		} else {
-			if mod.OutputFile().Valid() {
-				return android.Paths{mod.OutputFile().Path()}, nil
-			}
-			return android.Paths{}, nil
-		}
-	case "unstripped":
-		if mod.compiler != nil {
-			return android.PathsIfNonNil(mod.compiler.unstrippedOutputFilePath()), nil
-		}
-		return nil, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
 }
 
 func (mod *Module) SelectedStl() string {
@@ -988,6 +968,61 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	if mod.testModule {
 		android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 	}
+
+	mod.setOutputFiles(ctx)
+
+	buildComplianceMetadataInfo(ctx, mod, deps)
+}
+
+func (mod *Module) setOutputFiles(ctx ModuleContext) {
+	if mod.sourceProvider != nil && (mod.compiler == nil || mod.compiler.Disabled()) {
+		ctx.SetOutputFiles(mod.sourceProvider.Srcs(), "")
+	} else if mod.OutputFile().Valid() {
+		ctx.SetOutputFiles(android.Paths{mod.OutputFile().Path()}, "")
+	} else {
+		ctx.SetOutputFiles(android.Paths{}, "")
+	}
+	if mod.compiler != nil {
+		ctx.SetOutputFiles(android.PathsIfNonNil(mod.compiler.unstrippedOutputFilePath()), "unstripped")
+	}
+}
+
+func buildComplianceMetadataInfo(ctx *moduleContext, mod *Module, deps PathDeps) {
+	// Dump metadata that can not be done in android/compliance-metadata.go
+	metadataInfo := ctx.ComplianceMetadataInfo()
+	metadataInfo.SetStringValue(android.ComplianceMetadataProp.IS_STATIC_LIB, strconv.FormatBool(mod.Static()))
+	metadataInfo.SetStringValue(android.ComplianceMetadataProp.BUILT_FILES, mod.outputFile.String())
+
+	// Static libs
+	staticDeps := ctx.GetDirectDepsWithTag(rlibDepTag)
+	staticDepNames := make([]string, 0, len(staticDeps))
+	for _, dep := range staticDeps {
+		staticDepNames = append(staticDepNames, dep.Name())
+	}
+	ccStaticDeps := ctx.GetDirectDepsWithTag(cc.StaticDepTag(false))
+	for _, dep := range ccStaticDeps {
+		staticDepNames = append(staticDepNames, dep.Name())
+	}
+
+	staticDepPaths := make([]string, 0, len(deps.StaticLibs)+len(deps.RLibs))
+	// C static libraries
+	for _, dep := range deps.StaticLibs {
+		staticDepPaths = append(staticDepPaths, dep.String())
+	}
+	// Rust static libraries
+	for _, dep := range deps.RLibs {
+		staticDepPaths = append(staticDepPaths, dep.Path.String())
+	}
+	metadataInfo.SetListValue(android.ComplianceMetadataProp.STATIC_DEPS, android.FirstUniqueStrings(staticDepNames))
+	metadataInfo.SetListValue(android.ComplianceMetadataProp.STATIC_DEP_FILES, android.FirstUniqueStrings(staticDepPaths))
+
+	// C Whole static libs
+	ccWholeStaticDeps := ctx.GetDirectDepsWithTag(cc.StaticDepTag(true))
+	wholeStaticDepNames := make([]string, 0, len(ccWholeStaticDeps))
+	for _, dep := range ccStaticDeps {
+		wholeStaticDepNames = append(wholeStaticDepNames, dep.Name())
+	}
+	metadataInfo.SetListValue(android.ComplianceMetadataProp.STATIC_DEPS, android.FirstUniqueStrings(staticDepNames))
 }
 
 func (mod *Module) deps(ctx DepsContext) Deps {
@@ -1471,7 +1506,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 	var srcProviderDepFiles android.Paths
 	for _, dep := range directSrcProvidersDeps {
-		srcs, _ := dep.OutputFiles("")
+		srcs := android.OutputFilesForModule(ctx, dep, "")
 		srcProviderDepFiles = append(srcProviderDepFiles, srcs...)
 	}
 	for _, dep := range directSrcDeps {
@@ -1858,5 +1893,3 @@ var Bool = proptools.Bool
 var BoolDefault = proptools.BoolDefault
 var String = proptools.String
 var StringPtr = proptools.StringPtr
-
-var _ android.OutputFileProducer = (*Module)(nil)

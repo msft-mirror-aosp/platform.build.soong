@@ -26,8 +26,6 @@ import (
 	"sort"
 	"strings"
 
-	"android/soong/bazel"
-
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 )
@@ -849,9 +847,6 @@ type ModuleBase struct {
 	// archPropRoot that is filled with arch specific values by the arch mutator.
 	archProperties [][]interface{}
 
-	// Properties specific to the Blueprint to BUILD migration.
-	bazelTargetModuleProperties bazel.BazelTargetModuleProperties
-
 	// Information about all the properties on the module that contains visibility rules that need
 	// checking.
 	visibilityPropertyInfo []visibilityProperty
@@ -919,6 +914,10 @@ type ModuleBase struct {
 	// outputFiles stores the output of a module by tag and is used to set
 	// the OutputFilesProvider in GenerateBuildActions
 	outputFiles OutputFilesInfo
+
+	// complianceMetadataInfo is for different module types to dump metadata.
+	// See android.ModuleContext interface.
+	complianceMetadataInfo *ComplianceMetadataInfo
 }
 
 func (m *ModuleBase) AddJSONData(d *map[string]interface{}) {
@@ -2049,6 +2048,8 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	if m.outputFiles.DefaultOutputFiles != nil || m.outputFiles.TaggedOutputFiles != nil {
 		SetProvider(ctx, OutputFilesProvider, m.outputFiles)
 	}
+
+	buildComplianceMetadataProvider(ctx, m)
 }
 
 func SetJarJarPrefixHandler(handler func(ModuleContext)) {
@@ -2540,32 +2541,42 @@ func outputFilesForModule(ctx PathContext, module blueprint.Module, tag string) 
 // reading OutputFilesProvider before GenerateBuildActions is finished.
 // If a module doesn't have the OutputFilesProvider, nil is returned.
 func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, tag string) (Paths, error) {
-	// TODO: support OutputFilesProvider for singletons
-	mctx, ok := ctx.(ModuleContext)
-	if !ok {
-		return nil, nil
-	}
-	if mctx.Module() != module {
-		if outputFilesProvider, ok := OtherModuleProvider(mctx, module, OutputFilesProvider); ok {
+	var outputFilesProvider OutputFilesInfo
+
+	if mctx, isMctx := ctx.(ModuleContext); isMctx {
+		if mctx.Module() != module {
+			outputFilesProvider, _ = OtherModuleProvider(mctx, module, OutputFilesProvider)
+		} else {
 			if tag == "" {
-				return outputFilesProvider.DefaultOutputFiles, nil
-			} else if taggedOutputFiles, hasTag := outputFilesProvider.TaggedOutputFiles[tag]; hasTag {
+				return mctx.Module().base().outputFiles.DefaultOutputFiles, nil
+			} else if taggedOutputFiles, hasTag := mctx.Module().base().outputFiles.TaggedOutputFiles[tag]; hasTag {
 				return taggedOutputFiles, nil
 			} else {
-				return nil, fmt.Errorf("unsupported module reference tag %q", tag)
+				return nil, fmt.Errorf("unsupported tag %q for module getting its own output files", tag)
 			}
 		}
-	} else {
+	} else if cta, isCta := ctx.(*singletonContextAdaptor); isCta {
+		providerData, _ := cta.moduleProvider(module, OutputFilesProvider)
+		outputFilesProvider, _ = providerData.(OutputFilesInfo)
+	}
+	// TODO: Add a check for skipped context
+
+	if !outputFilesProvider.isEmpty() {
 		if tag == "" {
-			return mctx.Module().base().outputFiles.DefaultOutputFiles, nil
-		} else if taggedOutputFiles, hasTag := mctx.Module().base().outputFiles.TaggedOutputFiles[tag]; hasTag {
+			return outputFilesProvider.DefaultOutputFiles, nil
+		} else if taggedOutputFiles, hasTag := outputFilesProvider.TaggedOutputFiles[tag]; hasTag {
 			return taggedOutputFiles, nil
 		} else {
-			return nil, fmt.Errorf("unsupported tag %q for module getting its own output files", tag)
+			return nil, fmt.Errorf("unsupported module reference tag %q", tag)
 		}
 	}
+
 	// TODO: Add a check for param module not having OutputFilesProvider set
 	return nil, nil
+}
+
+func (o OutputFilesInfo) isEmpty() bool {
+	return o.DefaultOutputFiles == nil && o.TaggedOutputFiles == nil
 }
 
 type OutputFilesInfo struct {
