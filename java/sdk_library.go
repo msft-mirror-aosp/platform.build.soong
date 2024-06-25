@@ -1679,6 +1679,7 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		module.dexer.proguardDictionary = module.implLibraryModule.dexer.proguardDictionary
 		module.dexer.proguardUsageZip = module.implLibraryModule.dexer.proguardUsageZip
 		module.linter.reports = module.implLibraryModule.linter.reports
+		module.linter.outputs.depSets = module.implLibraryModule.LintDepSets()
 
 		if !module.Host() {
 			module.hostdexInstallFile = module.implLibraryModule.hostdexInstallFile
