@@ -208,27 +208,6 @@ func (mod *Module) IsPrebuilt() bool {
 	return false
 }
 
-func (mod *Module) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		if mod.sourceProvider != nil && (mod.compiler == nil || mod.compiler.Disabled()) {
-			return mod.sourceProvider.Srcs(), nil
-		} else {
-			if mod.OutputFile().Valid() {
-				return android.Paths{mod.OutputFile().Path()}, nil
-			}
-			return android.Paths{}, nil
-		}
-	case "unstripped":
-		if mod.compiler != nil {
-			return android.PathsIfNonNil(mod.compiler.unstrippedOutputFilePath()), nil
-		}
-		return nil, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
-}
-
 func (mod *Module) SelectedStl() string {
 	return ""
 }
@@ -988,6 +967,20 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	if mod.testModule {
 		android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 	}
+	mod.setOutputFiles(ctx)
+}
+
+func (mod *Module) setOutputFiles(ctx ModuleContext) {
+	if mod.sourceProvider != nil && (mod.compiler == nil || mod.compiler.Disabled()) {
+		ctx.SetOutputFiles(mod.sourceProvider.Srcs(), "")
+	} else if mod.OutputFile().Valid() {
+		ctx.SetOutputFiles(android.Paths{mod.OutputFile().Path()}, "")
+	} else {
+		ctx.SetOutputFiles(android.Paths{}, "")
+	}
+	if mod.compiler != nil {
+		ctx.SetOutputFiles(android.PathsIfNonNil(mod.compiler.unstrippedOutputFilePath()), "unstripped")
+	}
 }
 
 func (mod *Module) deps(ctx DepsContext) Deps {
@@ -1471,7 +1464,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 	var srcProviderDepFiles android.Paths
 	for _, dep := range directSrcProvidersDeps {
-		srcs, _ := dep.OutputFiles("")
+		srcs := android.OutputFilesForModule(ctx, dep, "")
 		srcProviderDepFiles = append(srcProviderDepFiles, srcs...)
 	}
 	for _, dep := range directSrcDeps {
@@ -1858,5 +1851,3 @@ var Bool = proptools.Bool
 var BoolDefault = proptools.BoolDefault
 var String = proptools.String
 var StringPtr = proptools.StringPtr
-
-var _ android.OutputFileProducer = (*Module)(nil)
