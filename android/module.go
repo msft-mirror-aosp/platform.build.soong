@@ -26,8 +26,6 @@ import (
 	"sort"
 	"strings"
 
-	"android/soong/bazel"
-
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 )
@@ -849,9 +847,6 @@ type ModuleBase struct {
 	// archPropRoot that is filled with arch specific values by the arch mutator.
 	archProperties [][]interface{}
 
-	// Properties specific to the Blueprint to BUILD migration.
-	bazelTargetModuleProperties bazel.BazelTargetModuleProperties
-
 	// Information about all the properties on the module that contains visibility rules that need
 	// checking.
 	visibilityPropertyInfo []visibilityProperty
@@ -919,6 +914,10 @@ type ModuleBase struct {
 	// outputFiles stores the output of a module by tag and is used to set
 	// the OutputFilesProvider in GenerateBuildActions
 	outputFiles OutputFilesInfo
+
+	// complianceMetadataInfo is for different module types to dump metadata.
+	// See android.ModuleContext interface.
+	complianceMetadataInfo *ComplianceMetadataInfo
 }
 
 func (m *ModuleBase) AddJSONData(d *map[string]interface{}) {
@@ -2049,6 +2048,8 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	if m.outputFiles.DefaultOutputFiles != nil || m.outputFiles.TaggedOutputFiles != nil {
 		SetProvider(ctx, OutputFilesProvider, m.outputFiles)
 	}
+
+	buildComplianceMetadataProvider(ctx, m)
 }
 
 func SetJarJarPrefixHandler(handler func(ModuleContext)) {
