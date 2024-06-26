@@ -147,11 +147,7 @@ func parseTemplate(templateContents string) *template.Template {
 			return list.String()
 		},
 		"toStrings": func(files android.Paths) []string {
-			strings := make([]string, len(files))
-			for idx, file := range files {
-				strings[idx] = file.String()
-			}
-			return strings
+			return files.Strings()
 		},
 		"concat5": func(list1 []string, list2 []string, list3 []string, list4 []string, list5 []string) []string {
 			return append(append(append(append(list1, list2...), list3...), list4...), list5...)
@@ -399,7 +395,8 @@ func (m *CmakeSnapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Merging CMakeLists.txt contents for every module directory
 	var makefilesList android.Paths
-	for moduleDir, fragments := range moduleDirs {
+	for _, moduleDir := range android.SortedKeys(moduleDirs) {
+		fragments := moduleDirs[moduleDir]
 		moduleCmakePath := android.PathForModuleGen(ctx, moduleDir, "CMakeLists.txt")
 		makefilesList = append(makefilesList, moduleCmakePath)
 		sort.Strings(fragments)
@@ -439,8 +436,9 @@ func (m *CmakeSnapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// Packaging all sources into the zip file
 	if m.Properties.Include_sources {
 		var sourcesList android.Paths
-		for _, file := range sourceFiles {
-			sourcesList = append(sourcesList, file)
+		for _, file := range android.SortedKeys(sourceFiles) {
+			path := sourceFiles[file]
+			sourcesList = append(sourcesList, path)
 		}
 
 		sourcesRspFile := android.PathForModuleObj(ctx, ctx.ModuleName()+"_sources.rsp")
