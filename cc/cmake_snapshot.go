@@ -15,7 +15,6 @@
 package cc
 
 import (
-	"android/soong/android"
 	"bytes"
 	_ "embed"
 	"fmt"
@@ -24,6 +23,8 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+
+	"android/soong/android"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -61,8 +62,13 @@ var defaultUnportableFlags []string = []string{
 }
 
 var ignoredSystemLibs []string = []string{
+	"crtbegin_dynamic",
+	"crtend_android",
+	"libc",
 	"libc++",
 	"libc++_static",
+	"libdl",
+	"libm",
 	"prebuilt_libclang_rt.builtins",
 	"prebuilt_libclang_rt.ubsan_minimal",
 }
@@ -141,11 +147,7 @@ func parseTemplate(templateContents string) *template.Template {
 			return list.String()
 		},
 		"toStrings": func(files android.Paths) []string {
-			strings := make([]string, len(files))
-			for idx, file := range files {
-				strings[idx] = file.String()
-			}
-			return strings
+			return files.Strings()
 		},
 		"concat5": func(list1 []string, list2 []string, list3 []string, list4 []string, list5 []string) []string {
 			return append(append(append(append(list1, list2...), list3...), list4...), list5...)
@@ -186,6 +188,10 @@ func parseTemplate(templateContents string) *template.Template {
 		"getModuleType": getModuleType,
 		"getCompilerProperties": func(m *Module) BaseCompilerProperties {
 			return m.compiler.baseCompilerProps()
+		},
+		"getCflagsProperty": func(ctx android.ModuleContext, m *Module) []string {
+			cflags := m.compiler.baseCompilerProps().Cflags
+			return cflags.GetOrDefault(ctx, nil)
 		},
 		"getLinkerProperties": func(m *Module) BaseLinkerProperties {
 			return m.linker.baseLinkerProps()
@@ -267,7 +273,11 @@ func (m *CmakeSnapshot) DepsMutator(ctx android.BottomUpMutatorContext) {
 		{"arch", "x86_64"},
 	}
 	ctx.AddVariationDependencies(variations, cmakeSnapshotModuleTag, m.Properties.Modules...)
-	ctx.AddVariationDependencies(variations, cmakeSnapshotPrebuiltTag, m.Properties.Prebuilts...)
+
+	if len(m.Properties.Prebuilts) > 0 {
+		prebuilts := append(m.Properties.Prebuilts, "libc++")
+		ctx.AddVariationDependencies(variations, cmakeSnapshotPrebuiltTag, prebuilts...)
+	}
 }
 
 func (m *CmakeSnapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -385,7 +395,8 @@ func (m *CmakeSnapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Merging CMakeLists.txt contents for every module directory
 	var makefilesList android.Paths
-	for moduleDir, fragments := range moduleDirs {
+	for _, moduleDir := range android.SortedKeys(moduleDirs) {
+		fragments := moduleDirs[moduleDir]
 		moduleCmakePath := android.PathForModuleGen(ctx, moduleDir, "CMakeLists.txt")
 		makefilesList = append(makefilesList, moduleCmakePath)
 		sort.Strings(fragments)
@@ -425,8 +436,9 @@ func (m *CmakeSnapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// Packaging all sources into the zip file
 	if m.Properties.Include_sources {
 		var sourcesList android.Paths
-		for _, file := range sourceFiles {
-			sourcesList = append(sourcesList, file)
+		for _, file := range android.SortedKeys(sourceFiles) {
+			path := sourceFiles[file]
+			sourcesList = append(sourcesList, path)
 		}
 
 		sourcesRspFile := android.PathForModuleObj(ctx, ctx.ModuleName()+"_sources.rsp")
@@ -458,15 +470,8 @@ func (m *CmakeSnapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Finish generating the final zip file
 	zipRule.Build(m.zipPath.String(), "archiving "+ctx.ModuleName())
-}
 
-func (m *CmakeSnapshot) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return android.Paths{m.zipPath}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
+	ctx.SetOutputFiles(android.Paths{m.zipPath}, "")
 }
 
 func (m *CmakeSnapshot) AndroidMkEntries() []android.AndroidMkEntries {
@@ -488,17 +493,24 @@ func getModuleType(m *Module) string {
 	case *libraryDecorator:
 		return "library"
 	case *testBinary:
-		return "executable"
+		return "test"
+	case *benchmarkDecorator:
+		return "test"
 	}
-	panic(fmt.Sprintf("Unexpected module type: %T", m.compiler))
+	panic(fmt.Sprintf("Unexpected module type: %T", m.linker))
 }
 
 func getExtraLibs(m *Module) []string {
 	switch decorator := m.linker.(type) {
 	case *testBinary:
 		if decorator.testDecorator.gtest() {
-			return []string{"libgtest"}
+			return []string{
+				"libgtest",
+				"libgtest_main",
+			}
 		}
+	case *benchmarkDecorator:
+		return []string{"libgoogle-benchmark"}
 	}
 	return nil
 }
@@ -507,7 +519,7 @@ func getIncludeDirs(ctx android.ModuleContext, m *Module) []string {
 	moduleDir := ctx.OtherModuleDir(m) + string(filepath.Separator)
 	switch decorator := m.compiler.(type) {
 	case *libraryDecorator:
-		return sliceWithPrefix(moduleDir, decorator.flagExporter.Properties.Export_include_dirs)
+		return sliceWithPrefix(moduleDir, decorator.flagExporter.Properties.Export_include_dirs.GetOrDefault(ctx, nil))
 	}
 	return nil
 }

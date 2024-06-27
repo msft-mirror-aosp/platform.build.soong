@@ -64,7 +64,8 @@ func testForDanglingRules(ctx Context, config Config) {
 	outDir := config.OutDir()
 	modulePathsDir := filepath.Join(outDir, ".module_paths")
 	rawFilesDir := filepath.Join(outDir, "soong", "raw")
-	variablesFilePath := filepath.Join(outDir, "soong", "soong.variables")
+	variablesFilePath := config.SoongVarsFile()
+	extraVariablesFilePath := config.SoongExtraVarsFile()
 
 	// dexpreopt.config is an input to the soong_docs action, which runs the
 	// soong_build primary builder. However, this file is created from $(shell)
@@ -79,6 +80,10 @@ func testForDanglingRules(ctx Context, config Config) {
 	// bpglob is built explicitly using Microfactory
 	bpglob := filepath.Join(config.SoongOutDir(), "bpglob")
 
+	// release-config files are generated from the initial lunch or Kati phase
+	// before running soong and ninja.
+	releaseConfigDir := filepath.Join(outDir, "soong", "release-config")
+
 	danglingRules := make(map[string]bool)
 
 	scanner := bufio.NewScanner(stdout)
@@ -91,9 +96,11 @@ func testForDanglingRules(ctx Context, config Config) {
 		if strings.HasPrefix(line, modulePathsDir) ||
 			strings.HasPrefix(line, rawFilesDir) ||
 			line == variablesFilePath ||
+			line == extraVariablesFilePath ||
 			line == dexpreoptConfigFilePath ||
 			line == buildDatetimeFilePath ||
-			line == bpglob {
+			line == bpglob ||
+			strings.HasPrefix(line, releaseConfigDir) {
 			// Leaf node is in one of Soong's bootstrap directories, which do not have
 			// full build rules in the primary build.ninja file.
 			continue

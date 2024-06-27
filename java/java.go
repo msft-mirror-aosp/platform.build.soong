@@ -1501,7 +1501,7 @@ func (j *TestHost) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		InstalledFiles:      j.data,
 		OutputFile:          j.outputFile,
 		TestConfig:          j.testConfig,
-		RequiredModuleNames: j.RequiredModuleNames(),
+		RequiredModuleNames: j.RequiredModuleNames(ctx),
 		TestSuites:          j.testProperties.Test_suites,
 		IsHost:              true,
 		LocalSdkVersion:     j.sdkVersion.String(),
@@ -1510,6 +1510,7 @@ func (j *TestHost) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 }
 
 func (j *Test) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	checkMinSdkVersionMts(ctx, j.MinSdkVersion(ctx))
 	j.generateAndroidBuildActionsWithConfig(ctx, nil)
 	android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 }
@@ -2180,7 +2181,7 @@ func (al *ApiLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 // Map where key is the api scope name and value is the int value
 // representing the order of the api scope, narrowest to the widest
-var scopeOrderMap = allApiScopes.MapToIndex(
+var scopeOrderMap = AllApiScopes.MapToIndex(
 	func(s *apiScope) string { return s.name })
 
 func (al *ApiLibrary) sortApiFilesByApiScope(ctx android.ModuleContext, srcFilesInfo []JavaApiImportInfo) []JavaApiImportInfo {
@@ -2285,10 +2286,10 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	al.stubsFlags(ctx, cmd, stubsDir)
 
-	migratingNullability := String(al.properties.Previous_api) != ""
-	if migratingNullability {
-		previousApi := android.PathForModuleSrc(ctx, String(al.properties.Previous_api))
-		cmd.FlagWithInput("--migrate-nullness ", previousApi)
+	previousApi := String(al.properties.Previous_api)
+	if previousApi != "" {
+		previousApiFiles := android.PathsForModuleSrc(ctx, []string{previousApi})
+		cmd.FlagForEachInput("--migrate-nullness ", previousApiFiles)
 	}
 
 	al.addValidation(ctx, cmd, al.validationPaths)
