@@ -85,6 +85,7 @@ type configImpl struct {
 	skipMetricsUpload        bool
 	buildStartedTime         int64 // For metrics-upload-only - manually specify a build-started time
 	buildFromSourceStub      bool
+	incrementalBuildActions  bool
 	ensureAllowlistIntegrity bool // For CI builds - make sure modules are mixed-built
 
 	// From the product config
@@ -811,6 +812,8 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			}
 		} else if arg == "--build-from-source-stub" {
 			c.buildFromSourceStub = true
+		} else if arg == "--incremental-build-actions" {
+			c.incrementalBuildActions = true
 		} else if strings.HasPrefix(arg, "--build-command=") {
 			buildCmd := strings.TrimPrefix(arg, "--build-command=")
 			// remove quotations
@@ -1164,14 +1167,6 @@ func (c *configImpl) SetSourceRootDirs(i []string) {
 	c.sourceRootDirs = i
 }
 
-func (c *configImpl) GetIncludeTags() []string {
-	return c.includeTags
-}
-
-func (c *configImpl) SetIncludeTags(i []string) {
-	c.includeTags = i
-}
-
 func (c *configImpl) GetLogsPrefix() string {
 	return c.logsPrefix
 }
@@ -1251,6 +1246,11 @@ func (c *configImpl) StartGoma() bool {
 }
 
 func (c *configImpl) canSupportRBE() bool {
+	// Only supported on linux
+	if runtime.GOOS != "linux" {
+		return false
+	}
+
 	// Do not use RBE with prod credentials in scenarios when stubby doesn't exist, since
 	// its unlikely that we will be able to obtain necessary creds without stubby.
 	authType, _ := c.rbeAuth()
@@ -1493,6 +1493,15 @@ func (c *configImpl) SoongVarsFile() string {
 		return filepath.Join(c.SoongOutDir(), "soong.variables")
 	} else {
 		return filepath.Join(c.SoongOutDir(), "soong."+targetProduct+".variables")
+	}
+}
+
+func (c *configImpl) SoongExtraVarsFile() string {
+	targetProduct, err := c.TargetProductOrErr()
+	if err != nil {
+		return filepath.Join(c.SoongOutDir(), "soong.extra.variables")
+	} else {
+		return filepath.Join(c.SoongOutDir(), "soong."+targetProduct+".extra.variables")
 	}
 }
 

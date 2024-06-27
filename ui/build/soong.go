@@ -27,7 +27,6 @@ import (
 
 	"android/soong/ui/tracer"
 
-	"android/soong/bazel"
 	"android/soong/ui/metrics"
 	"android/soong/ui/metrics/metrics_proto"
 	"android/soong/ui/status"
@@ -315,6 +314,9 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	if config.ensureAllowlistIntegrity {
 		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--ensure-allowlist-integrity")
 	}
+	if config.incrementalBuildActions {
+		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--incremental-build-actions")
+	}
 
 	queryviewDir := filepath.Join(config.SoongOutDir(), "queryview")
 
@@ -401,7 +403,6 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	}
 
 	blueprintCtx := blueprint.NewContext()
-	blueprintCtx.AddIncludeTags(config.GetIncludeTags()...)
 	blueprintCtx.AddSourceRootDirs(config.GetSourceRootDirs()...)
 	blueprintCtx.SetIgnoreUnknownModuleTypes(true)
 	blueprintConfig := BlueprintConfig{
@@ -601,10 +602,6 @@ func runSoong(ctx Context, config Config) {
 
 		checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(soongBuildTag))
 
-		// Remove bazel files in the event that bazel is disabled for the build.
-		// These files may have been left over from a previous bazel-enabled build.
-		cleanBazelFiles(config)
-
 		if config.JsonModuleGraph() {
 			checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(jsonModuleGraphTag))
 		}
@@ -695,6 +692,7 @@ func runSoong(ctx Context, config Config) {
 		}
 	}
 	distFile(ctx, config, config.SoongVarsFile(), "soong")
+	distFile(ctx, config, config.SoongExtraVarsFile(), "soong")
 
 	if !config.SkipKati() {
 		distGzipFile(ctx, config, config.SoongAndroidMk(), "soong")
@@ -752,18 +750,6 @@ func loadSoongBuildMetrics(ctx Context, config Config, oldTimestamp time.Time) {
 			}
 			ctx.Tracer.CountersAtTime(group.GetName(), ctx.Thread, timestamp, counters)
 		}
-	}
-}
-
-func cleanBazelFiles(config Config) {
-	files := []string{
-		shared.JoinPath(config.SoongOutDir(), "bp2build"),
-		shared.JoinPath(config.SoongOutDir(), "workspace"),
-		shared.JoinPath(config.SoongOutDir(), bazel.SoongInjectionDirName),
-		shared.JoinPath(config.OutDir(), "bazel")}
-
-	for _, f := range files {
-		os.RemoveAll(f)
 	}
 }
 
