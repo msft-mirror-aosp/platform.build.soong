@@ -345,7 +345,35 @@ func (a *AndroidApp) OverridablePropertiesDepsMutator(ctx android.BottomUpMutato
 	}
 }
 
+// TODO(b/156476221): Remove this allowlist
+var (
+	missingMinSdkVersionMtsAllowlist = []string{
+		"CellBroadcastReceiverGoogleUnitTests",
+		"CellBroadcastReceiverUnitTests",
+		"CtsBatterySavingTestCases",
+		"CtsDeviceAndProfileOwnerApp23",
+		"CtsDeviceAndProfileOwnerApp30",
+		"CtsIntentSenderApp",
+		"CtsJobSchedulerTestCases",
+		"CtsMimeMapTestCases",
+		"CtsTareTestCases",
+		"LibStatsPullTests",
+		"MediaProviderClientTests",
+		"TeleServiceTests",
+		"TestExternalImsServiceApp",
+		"TestSmsRetrieverApp",
+		"TetheringPrivilegedTests",
+	}
+)
+
+func checkMinSdkVersionMts(ctx android.ModuleContext, minSdkVersion android.ApiLevel) {
+	if includedInMts(ctx.Module()) && !minSdkVersion.Specified() && !android.InList(ctx.ModuleName(), missingMinSdkVersionMtsAllowlist) {
+		ctx.PropertyErrorf("min_sdk_version", "min_sdk_version is a required property for tests included in MTS")
+	}
+}
+
 func (a *AndroidTestHelperApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	checkMinSdkVersionMts(ctx, a.MinSdkVersion(ctx))
 	applicationId := a.appTestHelperAppProperties.Manifest_values.ApplicationId
 	if applicationId != nil {
 		if a.overridableAppProperties.Package_name != nil {
@@ -1366,6 +1394,7 @@ func (a *AndroidTestHelperApp) includedInTestSuite(searchPrefix string) bool {
 }
 
 func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	checkMinSdkVersionMts(ctx, a.MinSdkVersion(ctx))
 	var configs []tradefed.Config
 	if a.appTestProperties.Instrumentation_target_package != nil {
 		a.additionalAaptFlags = append(a.additionalAaptFlags,
