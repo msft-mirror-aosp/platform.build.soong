@@ -183,12 +183,11 @@ type ModuleContext interface {
 	InstallInVendor() bool
 	InstallForceOS() (*OsType, *ArchType)
 
-	RequiredModuleNames() []string
+	RequiredModuleNames(ctx ConfigAndErrorContext) []string
 	HostRequiredModuleNames() []string
 	TargetRequiredModuleNames() []string
 
 	ModuleSubDir() string
-	SoongConfigTraceHash() string
 
 	Variable(pctx PackageContext, name, value string)
 	Rule(pctx PackageContext, name string, params blueprint.RuleParams, argNames ...string) blueprint.Rule
@@ -216,6 +215,11 @@ type ModuleContext interface {
 	// SetOutputFiles stores the outputFiles to outputFiles property, which is used
 	// to set the OutputFilesProvider later.
 	SetOutputFiles(outputFiles Paths, tag string)
+
+	// ComplianceMetadataInfo returns a ComplianceMetadataInfo instance for different module types to dump metadata,
+	// which usually happens in GenerateAndroidBuildActions() of a module type.
+	// See android.ModuleBase.complianceMetadataInfo
+	ComplianceMetadataInfo() *ComplianceMetadataInfo
 }
 
 type moduleContext struct {
@@ -375,10 +379,6 @@ func (m *moduleContext) GetDirectDepWithTag(name string, tag blueprint.Dependenc
 
 func (m *moduleContext) ModuleSubDir() string {
 	return m.bp.ModuleSubDir()
-}
-
-func (m *moduleContext) SoongConfigTraceHash() string {
-	return m.module.base().commonProperties.SoongConfigTraceHash
 }
 
 func (m *moduleContext) InstallInData() bool {
@@ -718,12 +718,24 @@ func (m *moduleContext) SetOutputFiles(outputFiles Paths, tag string) {
 		}
 		m.module.base().outputFiles.DefaultOutputFiles = outputFiles
 	} else {
+		if m.module.base().outputFiles.TaggedOutputFiles == nil {
+			m.module.base().outputFiles.TaggedOutputFiles = make(map[string]Paths)
+		}
 		if _, exists := m.module.base().outputFiles.TaggedOutputFiles[tag]; exists {
 			m.ModuleErrorf("Module %s OutputFiles at tag %s cannot be overwritten", m.ModuleName(), tag)
 		} else {
 			m.module.base().outputFiles.TaggedOutputFiles[tag] = outputFiles
 		}
 	}
+}
+
+func (m *moduleContext) ComplianceMetadataInfo() *ComplianceMetadataInfo {
+	if complianceMetadataInfo := m.module.base().complianceMetadataInfo; complianceMetadataInfo != nil {
+		return complianceMetadataInfo
+	}
+	complianceMetadataInfo := NewComplianceMetadataInfo()
+	m.module.base().complianceMetadataInfo = complianceMetadataInfo
+	return complianceMetadataInfo
 }
 
 // Returns a list of paths expanded from globs and modules referenced using ":module" syntax.  The property must
@@ -752,8 +764,8 @@ func (m *moduleContext) ExpandOptionalSource(srcFile *string, _ string) Optional
 	return OptionalPath{}
 }
 
-func (m *moduleContext) RequiredModuleNames() []string {
-	return m.module.RequiredModuleNames()
+func (m *moduleContext) RequiredModuleNames(ctx ConfigAndErrorContext) []string {
+	return m.module.RequiredModuleNames(ctx)
 }
 
 func (m *moduleContext) HostRequiredModuleNames() []string {

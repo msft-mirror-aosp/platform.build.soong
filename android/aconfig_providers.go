@@ -43,6 +43,10 @@ type AconfigDeclarationsProviderData struct {
 
 var AconfigDeclarationsProviderKey = blueprint.NewProvider[AconfigDeclarationsProviderData]()
 
+type AconfigReleaseDeclarationsProviderData map[string]AconfigDeclarationsProviderData
+
+var AconfigReleaseDeclarationsProviderKey = blueprint.NewProvider[AconfigReleaseDeclarationsProviderData]()
+
 type ModeInfo struct {
 	Container string
 	Mode      string
@@ -112,6 +116,8 @@ func aconfigUpdateAndroidBuildActions(ctx ModuleContext) {
 		if dep, ok := OtherModuleProvider(ctx, module, AconfigDeclarationsProviderKey); ok {
 			mergedAconfigFiles[dep.Container] = append(mergedAconfigFiles[dep.Container], dep.IntermediateCacheOutputPath)
 		}
+		// If we were generating on-device artifacts for other release configs, we would need to add code here to propagate
+		// those artifacts as well.  See also b/298444886.
 		if dep, ok := OtherModuleProvider(ctx, module, AconfigPropagatingProviderKey); ok {
 			for container, v := range dep.AconfigFiles {
 				mergedAconfigFiles[container] = append(mergedAconfigFiles[container], v...)
@@ -205,7 +211,6 @@ func mergeAconfigFiles(ctx ModuleContext, container string, inputs Paths, genera
 }
 
 func getAconfigFilePaths(m *ModuleBase, aconfigFiles map[string]Paths) (paths Paths) {
-	// TODO(b/311155208): The default container here should be system.
 	container := "system"
 
 	if m.SocSpecific() {
@@ -217,17 +222,5 @@ func getAconfigFilePaths(m *ModuleBase, aconfigFiles map[string]Paths) (paths Pa
 	}
 
 	paths = append(paths, aconfigFiles[container]...)
-	if container == "system" {
-		// TODO(b/311155208): Once the default container is system, we can drop this.
-		paths = append(paths, aconfigFiles[""]...)
-	}
-	if container != "system" {
-		if len(aconfigFiles[container]) == 0 && len(aconfigFiles[""]) > 0 {
-			// TODO(b/308625757): Either we guessed the container wrong, or the flag is misdeclared.
-			// For now, just include the system (aka "") container if we get here.
-			//fmt.Printf("container_mismatch: module=%v container=%v files=%v\n", m, container, aconfigFiles)
-		}
-		paths = append(paths, aconfigFiles[""]...)
-	}
 	return
 }

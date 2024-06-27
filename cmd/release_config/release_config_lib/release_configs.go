@@ -87,16 +87,15 @@ func (configs *ReleaseConfigs) WriteInheritanceGraph(outFile string) error {
 	data := []string{}
 	usedAliases := make(map[string]bool)
 	priorStages := make(map[string][]string)
-	rankedStageNames := make(map[string]bool)
 	for _, config := range configs.ReleaseConfigs {
+		if config.Name == "root" {
+			continue
+		}
 		var fillColor string
 		inherits := []string{}
 		for _, inherit := range config.InheritNames {
 			if inherit == "root" {
-				// Only show "root" if we have no other inheritance.
-				if len(config.InheritNames) > 1 {
-					continue
-				}
+				continue
 			}
 			data = append(data, fmt.Sprintf(`"%s" -> "%s"`, config.Name, inherit))
 			inherits = append(inherits, inherit)
@@ -113,14 +112,9 @@ func (configs *ReleaseConfigs) WriteInheritanceGraph(outFile string) error {
 		}
 		// Add links for all of the advancement progressions.
 		for priorStage := range config.PriorStagesMap {
-			stageName := config.Name
-			if len(config.OtherNames) > 0 {
-				stageName = config.OtherNames[0]
-			}
 			data = append(data, fmt.Sprintf(`"%s" -> "%s" [ style=dashed color="#81c995" ]`,
-				priorStage, stageName))
-			priorStages[stageName] = append(priorStages[stageName], priorStage)
-			rankedStageNames[stageName] = true
+				priorStage, config.Name))
+			priorStages[config.Name] = append(priorStages[config.Name], priorStage)
 		}
 		label := config.Name
 		if len(inherits) > 0 {
@@ -129,15 +123,23 @@ func (configs *ReleaseConfigs) WriteInheritanceGraph(outFile string) error {
 		if len(config.OtherNames) > 0 {
 			label += "\\nother names: " + strings.Join(config.OtherNames, " ")
 		}
-		// The active release config has a light blue fill.
-		if config.Name == *configs.Artifact.ReleaseConfig.Name {
+		switch config.Name {
+		case *configs.Artifact.ReleaseConfig.Name:
+			// The active release config has a light blue fill.
 			fillColor = `fillcolor="#d2e3fc" `
+		case "trunk", "trunk_staging":
+			// Certain workflow stages have a light green fill.
+			fillColor = `fillcolor="#ceead6" `
+		default:
+			// Look for "next" and "*_next", make them light green as well.
+			for _, n := range config.OtherNames {
+				if n == "next" || strings.HasSuffix(n, "_next") {
+					fillColor = `fillcolor="#ceead6" `
+				}
+			}
 		}
 		data = append(data,
 			fmt.Sprintf(`"%s" [ label="%s" %s]`, config.Name, label, fillColor))
-	}
-	if len(rankedStageNames) > 0 {
-		data = append(data, fmt.Sprintf("subgraph {rank=same %s}", strings.Join(SortedMapKeys(rankedStageNames), " ")))
 	}
 	slices.Sort(data)
 	data = append([]string{
@@ -393,92 +395,8 @@ func (configs *ReleaseConfigs) GetAllReleaseNames() []string {
 		allReleaseNames = append(allReleaseNames, v.Name)
 		allReleaseNames = append(allReleaseNames, v.OtherNames...)
 	}
-	slices.SortFunc(allReleaseNames, func(a, b string) int {
-		return cmp.Compare(a, b)
-	})
+	slices.Sort(allReleaseNames)
 	return allReleaseNames
-}
-
-// Write the makefile for this targetRelease.
-func (configs *ReleaseConfigs) WriteMakefile(outFile, targetRelease string) error {
-	makeVars := make(map[string]string)
-	config, err := configs.GetReleaseConfig(targetRelease)
-	if err != nil {
-		return err
-	}
-
-	myFlagArtifacts := config.FlagArtifacts.Clone()
-	// Sort the flags by name first.
-	names := []string{}
-	for k, _ := range myFlagArtifacts {
-		names = append(names, k)
-	}
-	slices.SortFunc(names, func(a, b string) int {
-		return cmp.Compare(a, b)
-	})
-	partitions := make(map[string][]string)
-
-	vNames := []string{}
-	addVar := func(name, suffix, value string) {
-		fullName := fmt.Sprintf("_ALL_RELEASE_FLAGS.%s.%s", name, suffix)
-		vNames = append(vNames, fullName)
-		makeVars[fullName] = value
-	}
-
-	for _, name := range names {
-		flag := myFlagArtifacts[name]
-		decl := flag.FlagDeclaration
-
-		for _, container := range decl.Containers {
-			partitions[container] = append(partitions[container], name)
-		}
-		value := MarshalValue(flag.Value)
-		makeVars[name] = value
-		addVar(name, "TYPE", ValueType(flag.Value))
-		addVar(name, "PARTITIONS", strings.Join(decl.Containers, " "))
-		addVar(name, "DEFAULT", MarshalValue(decl.Value))
-		addVar(name, "VALUE", value)
-		addVar(name, "DECLARED_IN", *flag.Traces[0].Source)
-		addVar(name, "SET_IN", *flag.Traces[len(flag.Traces)-1].Source)
-		addVar(name, "NAMESPACE", *decl.Namespace)
-	}
-	pNames := []string{}
-	for k := range partitions {
-		pNames = append(pNames, k)
-	}
-	slices.SortFunc(pNames, func(a, b string) int {
-		return cmp.Compare(a, b)
-	})
-
-	// Now sort the make variables, and output them.
-	slices.SortFunc(vNames, func(a, b string) int {
-		return cmp.Compare(a, b)
-	})
-
-	// Write the flags as:
-	//   _ALL_RELELASE_FLAGS
-	//   _ALL_RELEASE_FLAGS.PARTITIONS.*
-	//   all _ALL_RELEASE_FLAGS.*, sorted by name
-	//   Final flag values, sorted by name.
-	data := fmt.Sprintf("# TARGET_RELEASE=%s\n", config.Name)
-	if targetRelease != config.Name {
-		data += fmt.Sprintf("# User specified TARGET_RELEASE=%s\n", targetRelease)
-	}
-	// As it stands this list is not per-product, but conceptually it is, and will be.
-	data += fmt.Sprintf("ALL_RELEASE_CONFIGS_FOR_PRODUCT :=$= %s\n", strings.Join(configs.GetAllReleaseNames(), " "))
-	data += fmt.Sprintf("_used_files := %s\n", strings.Join(config.GetSortedFileList(), " "))
-	data += fmt.Sprintf("_ALL_RELEASE_FLAGS :=$= %s\n", strings.Join(names, " "))
-	for _, pName := range pNames {
-		data += fmt.Sprintf("_ALL_RELEASE_FLAGS.PARTITIONS.%s :=$= %s\n", pName, strings.Join(partitions[pName], " "))
-	}
-	for _, vName := range vNames {
-		data += fmt.Sprintf("%s :=$= %s\n", vName, makeVars[vName])
-	}
-	data += "\n\n# Values for all build flags\n"
-	for _, name := range names {
-		data += fmt.Sprintf("%s :=$= %s\n", name, makeVars[name])
-	}
-	return os.WriteFile(outFile, []byte(data), 0644)
 }
 
 func (configs *ReleaseConfigs) GenerateReleaseConfigs(targetRelease string) error {

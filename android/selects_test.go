@@ -25,12 +25,13 @@ import (
 
 func TestSelects(t *testing.T) {
 	testCases := []struct {
-		name          string
-		bp            string
-		provider      selectsTestProvider
-		providers     map[string]selectsTestProvider
-		vendorVars    map[string]map[string]string
-		expectedError string
+		name           string
+		bp             string
+		provider       selectsTestProvider
+		providers      map[string]selectsTestProvider
+		vendorVars     map[string]map[string]string
+		vendorVarTypes map[string]map[string]string
+		expectedError  string
 	}{
 		{
 			name: "basic string list",
@@ -97,6 +98,26 @@ func TestSelects(t *testing.T) {
 			},
 		},
 		{
+			name: "Expression in select",
+			bp: `
+			my_module_type {
+				name: "foo",
+				my_string: select(soong_config_variable("my_namespace", "my_variable"), {
+					"a": "foo" + "bar",
+					default: "baz",
+				}),
+			}
+			`,
+			provider: selectsTestProvider{
+				my_string: proptools.StringPtr("foobar"),
+			},
+			vendorVars: map[string]map[string]string{
+				"my_namespace": {
+					"my_variable": "a",
+				},
+			},
+		},
+		{
 			name: "paths with module references",
 			bp: `
 			my_module_type {
@@ -111,20 +132,6 @@ func TestSelects(t *testing.T) {
 			expectedError: `"foo" depends on undefined module "c"`,
 		},
 		{
-			name: "Differing types",
-			bp: `
-			my_module_type {
-				name: "foo",
-				my_string: select(soong_config_variable("my_namespace", "my_variable"), {
-					"a": "a.cpp",
-					"b": true,
-					default: "c.cpp",
-				}),
-			}
-			`,
-			expectedError: `Android.bp:8:5: Found select statement with differing types "string" and "bool" in its cases`,
-		},
-		{
 			name: "Select type doesn't match property type",
 			bp: `
 			my_module_type {
@@ -136,7 +143,7 @@ func TestSelects(t *testing.T) {
 				}),
 			}
 			`,
-			expectedError: `can't assign bool value to string property "my_string\[0\]"`,
+			expectedError: `can't assign bool value to string property`,
 		},
 		{
 			name: "String list non-default",
@@ -584,6 +591,31 @@ func TestSelects(t *testing.T) {
 			},
 		},
 		{
+			name: "Select on boolean soong config variable",
+			bp: `
+			my_module_type {
+				name: "foo",
+				my_string: select(soong_config_variable("my_namespace", "my_variable"), {
+					true: "t",
+					false: "f",
+				}),
+			}
+			`,
+			vendorVars: map[string]map[string]string{
+				"my_namespace": {
+					"my_variable": "true",
+				},
+			},
+			vendorVarTypes: map[string]map[string]string{
+				"my_namespace": {
+					"my_variable": "bool",
+				},
+			},
+			provider: selectsTestProvider{
+				my_string: proptools.StringPtr("t"),
+			},
+		},
+		{
 			name: "Select on boolean false",
 			bp: `
 			my_module_type {
@@ -778,6 +810,45 @@ func TestSelects(t *testing.T) {
 				my_string_list: &[]string{"a.cpp", "b.cpp", "c.cpp"},
 			},
 		},
+		{
+			name: "Test AppendSimpleValue",
+			bp: `
+			my_module_type {
+				name: "foo",
+				my_string_list: ["a.cpp"] + select(soong_config_variable("my_namespace", "my_variable"), {
+					"a": ["a.cpp"],
+					"b": ["b.cpp"],
+					default: ["c.cpp"],
+				}),
+			}
+			`,
+			vendorVars: map[string]map[string]string{
+				"selects_test": {
+					"append_to_string_list": "foo.cpp",
+				},
+			},
+			provider: selectsTestProvider{
+				my_string_list: &[]string{"a.cpp", "c.cpp", "foo.cpp"},
+			},
+		},
+		{
+			name: "Arch variant bool",
+			bp: `
+			my_variable = ["b.cpp"]
+			my_module_type {
+				name: "foo",
+				arch_variant_configurable_bool: false,
+				target: {
+					bionic_arm64: {
+						enabled: true,
+					},
+				},
+			}
+			`,
+			provider: selectsTestProvider{
+				arch_variant_configurable_bool: proptools.BoolPtr(false),
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -792,6 +863,7 @@ func TestSelects(t *testing.T) {
 				}),
 				FixtureModifyProductVariables(func(variables FixtureProductVariables) {
 					variables.VendorVars = tc.vendorVars
+					variables.VendorVarTypes = tc.vendorVarTypes
 				}),
 			)
 			if tc.expectedError != "" {
@@ -825,6 +897,7 @@ type selectsTestProvider struct {
 	my_string_list                 *[]string
 	my_paths                       *[]string
 	replacing_string_list          *[]string
+	arch_variant_configurable_bool *bool
 	my_nonconfigurable_bool        *bool
 	my_nonconfigurable_string      *string
 	my_nonconfigurable_string_list []string
@@ -849,6 +922,7 @@ func (p *selectsTestProvider) String() string {
     my_string_list: %s,
     my_paths: %s,
 	replacing_string_list %s,
+	arch_variant_configurable_bool %v
 	my_nonconfigurable_bool: %v,
 	my_nonconfigurable_string: %s,
 	my_nonconfigurable_string_list: %s,
@@ -858,6 +932,7 @@ func (p *selectsTestProvider) String() string {
 		p.my_string_list,
 		p.my_paths,
 		p.replacing_string_list,
+		p.arch_variant_configurable_bool,
 		p.my_nonconfigurable_bool,
 		myNonconfigurableStringStr,
 		p.my_nonconfigurable_string_list,
@@ -872,6 +947,7 @@ type selectsMockModuleProperties struct {
 	My_string_list                 proptools.Configurable[[]string]
 	My_paths                       proptools.Configurable[[]string] `android:"path"`
 	Replacing_string_list          proptools.Configurable[[]string] `android:"replace_instead_of_append,arch_variant"`
+	Arch_variant_configurable_bool proptools.Configurable[bool]     `android:"replace_instead_of_append,arch_variant"`
 	My_nonconfigurable_bool        *bool
 	My_nonconfigurable_string      *string
 	My_nonconfigurable_string_list []string
@@ -892,12 +968,17 @@ func optionalToPtr[T any](o proptools.ConfigurableOptional[T]) *T {
 }
 
 func (p *selectsMockModule) GenerateAndroidBuildActions(ctx ModuleContext) {
+	toAppend := ctx.Config().VendorConfig("selects_test").String("append_to_string_list")
+	if toAppend != "" {
+		p.properties.My_string_list.AppendSimpleValue([]string{toAppend})
+	}
 	SetProvider(ctx, selectsTestProviderKey, selectsTestProvider{
 		my_bool:                        optionalToPtr(p.properties.My_bool.Get(ctx)),
 		my_string:                      optionalToPtr(p.properties.My_string.Get(ctx)),
 		my_string_list:                 optionalToPtr(p.properties.My_string_list.Get(ctx)),
 		my_paths:                       optionalToPtr(p.properties.My_paths.Get(ctx)),
 		replacing_string_list:          optionalToPtr(p.properties.Replacing_string_list.Get(ctx)),
+		arch_variant_configurable_bool: optionalToPtr(p.properties.Arch_variant_configurable_bool.Get(ctx)),
 		my_nonconfigurable_bool:        p.properties.My_nonconfigurable_bool,
 		my_nonconfigurable_string:      p.properties.My_nonconfigurable_string,
 		my_nonconfigurable_string_list: p.properties.My_nonconfigurable_string_list,
