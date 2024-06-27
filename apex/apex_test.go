@@ -10037,6 +10037,56 @@ func TestApexStrictUpdtabilityLintBcpFragmentDeps(t *testing.T) {
 	}
 }
 
+func TestApexLintBcpFragmentSdkLibDeps(t *testing.T) {
+	bp := `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			bootclasspath_fragments: ["mybootclasspathfragment"],
+			min_sdk_version: "29",
+		}
+		apex_key {
+			name: "myapex.key",
+		}
+		bootclasspath_fragment {
+			name: "mybootclasspathfragment",
+			contents: ["foo"],
+			apex_available: ["myapex"],
+			hidden_api: {
+				split_packages: ["*"],
+			},
+		}
+		java_sdk_library {
+			name: "foo",
+			srcs: ["MyClass.java"],
+			apex_available: [ "myapex" ],
+			sdk_version: "current",
+			min_sdk_version: "29",
+			compile_dex: true,
+		}
+		`
+	fs := android.MockFS{
+		"lint-baseline.xml": nil,
+	}
+
+	result := android.GroupFixturePreparers(
+		prepareForApexTest,
+		java.PrepareForTestWithJavaSdkLibraryFiles,
+		java.PrepareForTestWithJacocoInstrumentation,
+		java.FixtureWithLastReleaseApis("foo"),
+		android.FixtureModifyConfig(func(config android.Config) {
+			config.SetApiLibraries([]string{"foo"})
+		}),
+		android.FixtureMergeMockFs(fs),
+	).RunTestWithBp(t, bp)
+
+	myapex := result.ModuleForTests("myapex", "android_common_myapex")
+	lintReportInputs := strings.Join(myapex.Output("lint-report-xml.zip").Inputs.Strings(), " ")
+	android.AssertStringDoesContain(t,
+		"myapex lint report expected to contain that of the sdk library impl lib as an input",
+		lintReportInputs, "foo.impl")
+}
+
 // updatable apexes should propagate updatable=true to its apps
 func TestUpdatableApexEnforcesAppUpdatability(t *testing.T) {
 	bp := `

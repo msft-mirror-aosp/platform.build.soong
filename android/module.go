@@ -1234,17 +1234,28 @@ func (m *ModuleBase) GenerateTaggedDistFiles(ctx BaseModuleContext) TaggedDistFi
 		// the special tag name which represents that.
 		tag := proptools.StringDefault(dist.Tag, DefaultDistTag)
 
+		distFileForTagFromProvider, err := outputFilesForModuleFromProvider(ctx, m.module, tag)
+		if err != OutputFilesProviderNotSet {
+			if err != nil && tag != DefaultDistTag {
+				ctx.PropertyErrorf("dist.tag", "%s", err.Error())
+			} else {
+				distFiles = distFiles.addPathsForTag(tag, distFileForTagFromProvider...)
+				continue
+			}
+		}
+
+		// if the tagged dist file cannot be obtained from OutputFilesProvider,
+		// fall back to use OutputFileProducer
+		// TODO: remove this part after OutputFilesProvider fully replaces OutputFileProducer
 		if outputFileProducer, ok := m.module.(OutputFileProducer); ok {
 			// Call the OutputFiles(tag) method to get the paths associated with the tag.
 			distFilesForTag, err := outputFileProducer.OutputFiles(tag)
-
 			// If the tag was not supported and is not DefaultDistTag then it is an error.
 			// Failing to find paths for DefaultDistTag is not an error. It just means
 			// that the module type requires the legacy behavior.
 			if err != nil && tag != DefaultDistTag {
 				ctx.PropertyErrorf("dist.tag", "%s", err.Error())
 			}
-
 			distFiles = distFiles.addPathsForTag(tag, distFilesForTag...)
 		} else if tag != DefaultDistTag {
 			// If the tag was specified then it is an error if the module does not
@@ -2513,7 +2524,7 @@ func OutputFileForModule(ctx PathContext, module blueprint.Module, tag string) P
 
 func outputFilesForModule(ctx PathContext, module blueprint.Module, tag string) (Paths, error) {
 	outputFilesFromProvider, err := outputFilesForModuleFromProvider(ctx, module, tag)
-	if outputFilesFromProvider != nil || err != nil {
+	if outputFilesFromProvider != nil || err != OutputFilesProviderNotSet {
 		return outputFilesFromProvider, err
 	}
 	if outputFileProducer, ok := module.(OutputFileProducer); ok {
@@ -2541,38 +2552,38 @@ func outputFilesForModule(ctx PathContext, module blueprint.Module, tag string) 
 // reading OutputFilesProvider before GenerateBuildActions is finished.
 // If a module doesn't have the OutputFilesProvider, nil is returned.
 func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, tag string) (Paths, error) {
-	var outputFilesProvider OutputFilesInfo
+	var outputFiles OutputFilesInfo
+	fromProperty := false
 
 	if mctx, isMctx := ctx.(ModuleContext); isMctx {
 		if mctx.Module() != module {
-			outputFilesProvider, _ = OtherModuleProvider(mctx, module, OutputFilesProvider)
+			outputFiles, _ = OtherModuleProvider(mctx, module, OutputFilesProvider)
 		} else {
-			if tag == "" {
-				return mctx.Module().base().outputFiles.DefaultOutputFiles, nil
-			} else if taggedOutputFiles, hasTag := mctx.Module().base().outputFiles.TaggedOutputFiles[tag]; hasTag {
-				return taggedOutputFiles, nil
-			} else {
-				return nil, fmt.Errorf("unsupported tag %q for module getting its own output files", tag)
-			}
+			outputFiles = mctx.Module().base().outputFiles
+			fromProperty = true
 		}
 	} else if cta, isCta := ctx.(*singletonContextAdaptor); isCta {
 		providerData, _ := cta.moduleProvider(module, OutputFilesProvider)
-		outputFilesProvider, _ = providerData.(OutputFilesInfo)
+		outputFiles, _ = providerData.(OutputFilesInfo)
 	}
 	// TODO: Add a check for skipped context
 
-	if !outputFilesProvider.isEmpty() {
-		if tag == "" {
-			return outputFilesProvider.DefaultOutputFiles, nil
-		} else if taggedOutputFiles, hasTag := outputFilesProvider.TaggedOutputFiles[tag]; hasTag {
-			return taggedOutputFiles, nil
+	if outputFiles.isEmpty() {
+		// TODO: Add a check for param module not having OutputFilesProvider set
+		return nil, OutputFilesProviderNotSet
+	}
+
+	if tag == "" {
+		return outputFiles.DefaultOutputFiles, nil
+	} else if taggedOutputFiles, hasTag := outputFiles.TaggedOutputFiles[tag]; hasTag {
+		return taggedOutputFiles, nil
+	} else {
+		if fromProperty {
+			return nil, fmt.Errorf("unsupported tag %q for module getting its own output files", tag)
 		} else {
 			return nil, fmt.Errorf("unsupported module reference tag %q", tag)
 		}
 	}
-
-	// TODO: Add a check for param module not having OutputFilesProvider set
-	return nil, nil
 }
 
 func (o OutputFilesInfo) isEmpty() bool {
@@ -2588,6 +2599,9 @@ type OutputFilesInfo struct {
 }
 
 var OutputFilesProvider = blueprint.NewProvider[OutputFilesInfo]()
+
+// This is used to mark the case where OutputFilesProvider is not set on some modules.
+var OutputFilesProviderNotSet = fmt.Errorf("No output files from provider")
 
 // Modules can implement HostToolProvider and return a valid OptionalPath from HostToolPath() to
 // specify that they can be used as a tool by a genrule module.
