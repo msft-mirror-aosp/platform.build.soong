@@ -188,7 +188,6 @@ type ModuleContext interface {
 	TargetRequiredModuleNames() []string
 
 	ModuleSubDir() string
-	SoongConfigTraceHash() string
 
 	Variable(pctx PackageContext, name, value string)
 	Rule(pctx PackageContext, name string, params blueprint.RuleParams, argNames ...string) blueprint.Rule
@@ -380,10 +379,6 @@ func (m *moduleContext) GetDirectDepWithTag(name string, tag blueprint.Dependenc
 
 func (m *moduleContext) ModuleSubDir() string {
 	return m.bp.ModuleSubDir()
-}
-
-func (m *moduleContext) SoongConfigTraceHash() string {
-	return m.module.base().commonProperties.SoongConfigTraceHash
 }
 
 func (m *moduleContext) InstallInData() bool {
