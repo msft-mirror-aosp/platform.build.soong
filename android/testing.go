@@ -224,6 +224,10 @@ func (ctx *TestContext) OtherModuleProviderAdaptor() OtherModuleProviderContext 
 	})
 }
 
+func (ctx *TestContext) OtherModulePropertyErrorf(module Module, property string, fmt_ string, args ...interface{}) {
+	panic(fmt.Sprintf(fmt_, args...))
+}
+
 // registeredComponentOrder defines the order in which a sortableComponent type is registered at
 // runtime and provides support for reordering the components registered for a test in the same
 // way.
@@ -1021,9 +1025,12 @@ func (m TestingModule) VariablesForTestsRelativeToTop() map[string]string {
 // otherwise returns the result of calling Paths.RelativeToTop
 // on the returned Paths.
 func (m TestingModule) OutputFiles(t *testing.T, tag string) Paths {
-	// TODO: add non-empty-string tag case and remove OutputFileProducer part
-	if tag == "" && m.module.base().outputFiles.DefaultOutputFiles != nil {
-		return m.module.base().outputFiles.DefaultOutputFiles.RelativeToTop()
+	// TODO: remove OutputFileProducer part
+	outputFiles := m.Module().base().outputFiles
+	if tag == "" && outputFiles.DefaultOutputFiles != nil {
+		return outputFiles.DefaultOutputFiles.RelativeToTop()
+	} else if taggedOutputFiles, hasTag := outputFiles.TaggedOutputFiles[tag]; hasTag {
+		return taggedOutputFiles
 	}
 
 	producer, ok := m.module.(OutputFileProducer)

@@ -643,6 +643,8 @@ func generatorFactory(taskGenerator taskFunc, props ...interface{}) *Module {
 type noopImageInterface struct{}
 
 func (x noopImageInterface) ImageMutatorBegin(android.BaseModuleContext)                 {}
+func (x noopImageInterface) VendorVariantNeeded(android.BaseModuleContext) bool          { return false }
+func (x noopImageInterface) ProductVariantNeeded(android.BaseModuleContext) bool         { return false }
 func (x noopImageInterface) CoreVariantNeeded(android.BaseModuleContext) bool            { return false }
 func (x noopImageInterface) RamdiskVariantNeeded(android.BaseModuleContext) bool         { return false }
 func (x noopImageInterface) VendorRamdiskVariantNeeded(android.BaseModuleContext) bool   { return false }
