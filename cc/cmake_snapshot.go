@@ -268,15 +268,12 @@ func executeTemplate(templ *template.Template, buffer *bytes.Buffer, data any) s
 }
 
 func (m *CmakeSnapshot) DepsMutator(ctx android.BottomUpMutatorContext) {
-	variations := []blueprint.Variation{
-		{"os", "linux_glibc"},
-		{"arch", "x86_64"},
-	}
-	ctx.AddVariationDependencies(variations, cmakeSnapshotModuleTag, m.Properties.Modules...)
+	hostVariations := ctx.Config().BuildOSTarget.Variations()
+	ctx.AddVariationDependencies(hostVariations, cmakeSnapshotModuleTag, m.Properties.Modules...)
 
 	if len(m.Properties.Prebuilts) > 0 {
 		prebuilts := append(m.Properties.Prebuilts, "libc++")
-		ctx.AddVariationDependencies(variations, cmakeSnapshotPrebuiltTag, prebuilts...)
+		ctx.AddVariationDependencies(hostVariations, cmakeSnapshotPrebuiltTag, prebuilts...)
 	}
 }
 
