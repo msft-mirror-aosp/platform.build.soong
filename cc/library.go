@@ -1135,8 +1135,12 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 	linkerDeps = append(linkerDeps, deps.SharedLibsDeps...)
 	linkerDeps = append(linkerDeps, deps.LateSharedLibsDeps...)
 
-	if generatedLib := generateRustStaticlib(ctx, deps.RustRlibDeps); generatedLib != nil {
-		deps.StaticLibs = append(deps.StaticLibs, generatedLib)
+	if generatedLib := generateRustStaticlib(ctx, deps.RustRlibDeps); generatedLib != nil && !library.buildStubs() {
+		if ctx.Module().(*Module).WholeRustStaticlib {
+			deps.WholeStaticLibs = append(deps.WholeStaticLibs, generatedLib)
+		} else {
+			deps.StaticLibs = append(deps.StaticLibs, generatedLib)
+		}
 	}
 
 	transformObjToDynamicBinary(ctx, objs.objFiles, sharedLibs,
@@ -2149,7 +2153,6 @@ func LinkageMutator(mctx android.BottomUpMutatorContext) {
 			modules := mctx.CreateLocalVariations(variations...)
 			static := modules[0].(LinkableInterface)
 			shared := modules[1].(LinkableInterface)
-
 			static.SetStatic()
 			shared.SetShared()
 
@@ -2172,6 +2175,12 @@ func LinkageMutator(mctx android.BottomUpMutatorContext) {
 		} else if len(variations) > 0 {
 			mctx.CreateLocalVariations(variations...)
 			mctx.AliasVariation(variations[0])
+		}
+		if library.BuildRlibVariant() && library.IsRustFFI() && !buildStatic {
+			// Rust modules do not build static libs, but rlibs are used as if they
+			// were via `static_libs`. Thus we need to alias the BuildRlibVariant
+			// to "static" for Rust FFI libraries.
+			mctx.CreateAliasVariation("static", "")
 		}
 	}
 }
