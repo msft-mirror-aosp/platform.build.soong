@@ -15,9 +15,6 @@
 package android
 
 import (
-	"crypto/md5"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -25,8 +22,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-
-	"android/soong/bazel"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -247,31 +242,6 @@ func SortedUniqueNamedPaths(l NamedPaths) NamedPaths {
 		}
 	}
 	return l[:k+1]
-}
-
-// soongConfigTrace holds all references to VendorVars. Uses []string for blueprint:"mutated"
-type soongConfigTrace struct {
-	Bools   []string `json:",omitempty"`
-	Strings []string `json:",omitempty"`
-	IsSets  []string `json:",omitempty"`
-}
-
-func (c *soongConfigTrace) isEmpty() bool {
-	return len(c.Bools) == 0 && len(c.Strings) == 0 && len(c.IsSets) == 0
-}
-
-// Returns hash of serialized trace records (empty string if there's no trace recorded)
-func (c *soongConfigTrace) hash() string {
-	// Use MD5 for speed. We don't care collision or preimage attack
-	if c.isEmpty() {
-		return ""
-	}
-	j, err := json.Marshal(c)
-	if err != nil {
-		panic(fmt.Errorf("json marshal of %#v failed: %#v", *c, err))
-	}
-	hash := md5.Sum(j)
-	return hex.EncodeToString(hash[:])
 }
 
 type nameProperties struct {
@@ -524,14 +494,6 @@ type commonProperties struct {
 	// for example "" for core or "recovery" for recovery.  It will often be set to one of the
 	// constants in image.go, but can also be set to a custom value by individual module types.
 	ImageVariation string `blueprint:"mutated"`
-
-	// SoongConfigTrace records accesses to VendorVars (soong_config). The trace will be hashed
-	// and used as a subdir of PathForModuleOut.  Note that we mainly focus on incremental
-	// builds among similar products (e.g. aosp_cf_x86_64_phone and aosp_cf_x86_64_foldable),
-	// and there are variables other than soong_config, which isn't captured by soong config
-	// trace, but influence modules among products.
-	SoongConfigTrace     soongConfigTrace `blueprint:"mutated"`
-	SoongConfigTraceHash string           `blueprint:"mutated"`
 
 	// The team (defined by the owner/vendor) who owns the property.
 	Team *string `android:"path"`
@@ -849,9 +811,6 @@ type ModuleBase struct {
 	// archPropRoot that is filled with arch specific values by the arch mutator.
 	archProperties [][]interface{}
 
-	// Properties specific to the Blueprint to BUILD migration.
-	bazelTargetModuleProperties bazel.BazelTargetModuleProperties
-
 	// Information about all the properties on the module that contains visibility rules that need
 	// checking.
 	visibilityPropertyInfo []visibilityProperty
@@ -919,6 +878,10 @@ type ModuleBase struct {
 	// outputFiles stores the output of a module by tag and is used to set
 	// the OutputFilesProvider in GenerateBuildActions
 	outputFiles OutputFilesInfo
+
+	// complianceMetadataInfo is for different module types to dump metadata.
+	// See android.ModuleContext interface.
+	complianceMetadataInfo *ComplianceMetadataInfo
 }
 
 func (m *ModuleBase) AddJSONData(d *map[string]interface{}) {
@@ -1235,17 +1198,28 @@ func (m *ModuleBase) GenerateTaggedDistFiles(ctx BaseModuleContext) TaggedDistFi
 		// the special tag name which represents that.
 		tag := proptools.StringDefault(dist.Tag, DefaultDistTag)
 
+		distFileForTagFromProvider, err := outputFilesForModuleFromProvider(ctx, m.module, tag)
+		if err != OutputFilesProviderNotSet {
+			if err != nil && tag != DefaultDistTag {
+				ctx.PropertyErrorf("dist.tag", "%s", err.Error())
+			} else {
+				distFiles = distFiles.addPathsForTag(tag, distFileForTagFromProvider...)
+				continue
+			}
+		}
+
+		// if the tagged dist file cannot be obtained from OutputFilesProvider,
+		// fall back to use OutputFileProducer
+		// TODO: remove this part after OutputFilesProvider fully replaces OutputFileProducer
 		if outputFileProducer, ok := m.module.(OutputFileProducer); ok {
 			// Call the OutputFiles(tag) method to get the paths associated with the tag.
 			distFilesForTag, err := outputFileProducer.OutputFiles(tag)
-
 			// If the tag was not supported and is not DefaultDistTag then it is an error.
 			// Failing to find paths for DefaultDistTag is not an error. It just means
 			// that the module type requires the legacy behavior.
 			if err != nil && tag != DefaultDistTag {
 				ctx.PropertyErrorf("dist.tag", "%s", err.Error())
 			}
-
 			distFiles = distFiles.addPathsForTag(tag, distFilesForTag...)
 		} else if tag != DefaultDistTag {
 			// If the tag was specified then it is an error if the module does not
@@ -2049,6 +2023,8 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	if m.outputFiles.DefaultOutputFiles != nil || m.outputFiles.TaggedOutputFiles != nil {
 		SetProvider(ctx, OutputFilesProvider, m.outputFiles)
 	}
+
+	buildComplianceMetadataProvider(ctx, m)
 }
 
 func SetJarJarPrefixHandler(handler func(ModuleContext)) {
@@ -2512,7 +2488,7 @@ func OutputFileForModule(ctx PathContext, module blueprint.Module, tag string) P
 
 func outputFilesForModule(ctx PathContext, module blueprint.Module, tag string) (Paths, error) {
 	outputFilesFromProvider, err := outputFilesForModuleFromProvider(ctx, module, tag)
-	if outputFilesFromProvider != nil || err != nil {
+	if outputFilesFromProvider != nil || err != OutputFilesProviderNotSet {
 		return outputFilesFromProvider, err
 	}
 	if outputFileProducer, ok := module.(OutputFileProducer); ok {
@@ -2540,32 +2516,42 @@ func outputFilesForModule(ctx PathContext, module blueprint.Module, tag string) 
 // reading OutputFilesProvider before GenerateBuildActions is finished.
 // If a module doesn't have the OutputFilesProvider, nil is returned.
 func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, tag string) (Paths, error) {
-	// TODO: support OutputFilesProvider for singletons
-	mctx, ok := ctx.(ModuleContext)
-	if !ok {
-		return nil, nil
-	}
-	if mctx.Module() != module {
-		if outputFilesProvider, ok := OtherModuleProvider(mctx, module, OutputFilesProvider); ok {
-			if tag == "" {
-				return outputFilesProvider.DefaultOutputFiles, nil
-			} else if taggedOutputFiles, hasTag := outputFilesProvider.TaggedOutputFiles[tag]; hasTag {
-				return taggedOutputFiles, nil
-			} else {
-				return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-			}
-		}
-	} else {
-		if tag == "" {
-			return mctx.Module().base().outputFiles.DefaultOutputFiles, nil
-		} else if taggedOutputFiles, hasTag := mctx.Module().base().outputFiles.TaggedOutputFiles[tag]; hasTag {
-			return taggedOutputFiles, nil
+	var outputFiles OutputFilesInfo
+	fromProperty := false
+
+	if mctx, isMctx := ctx.(ModuleContext); isMctx {
+		if mctx.Module() != module {
+			outputFiles, _ = OtherModuleProvider(mctx, module, OutputFilesProvider)
 		} else {
+			outputFiles = mctx.Module().base().outputFiles
+			fromProperty = true
+		}
+	} else if cta, isCta := ctx.(*singletonContextAdaptor); isCta {
+		providerData, _ := cta.moduleProvider(module, OutputFilesProvider)
+		outputFiles, _ = providerData.(OutputFilesInfo)
+	}
+	// TODO: Add a check for skipped context
+
+	if outputFiles.isEmpty() {
+		// TODO: Add a check for param module not having OutputFilesProvider set
+		return nil, OutputFilesProviderNotSet
+	}
+
+	if tag == "" {
+		return outputFiles.DefaultOutputFiles, nil
+	} else if taggedOutputFiles, hasTag := outputFiles.TaggedOutputFiles[tag]; hasTag {
+		return taggedOutputFiles, nil
+	} else {
+		if fromProperty {
 			return nil, fmt.Errorf("unsupported tag %q for module getting its own output files", tag)
+		} else {
+			return nil, fmt.Errorf("unsupported module reference tag %q", tag)
 		}
 	}
-	// TODO: Add a check for param module not having OutputFilesProvider set
-	return nil, nil
+}
+
+func (o OutputFilesInfo) isEmpty() bool {
+	return o.DefaultOutputFiles == nil && o.TaggedOutputFiles == nil
 }
 
 type OutputFilesInfo struct {
@@ -2578,6 +2564,9 @@ type OutputFilesInfo struct {
 
 var OutputFilesProvider = blueprint.NewProvider[OutputFilesInfo]()
 
+// This is used to mark the case where OutputFilesProvider is not set on some modules.
+var OutputFilesProviderNotSet = fmt.Errorf("No output files from provider")
+
 // Modules can implement HostToolProvider and return a valid OptionalPath from HostToolPath() to
 // specify that they can be used as a tool by a genrule module.
 type HostToolProvider interface {
@@ -2589,8 +2578,6 @@ type HostToolProvider interface {
 
 func init() {
 	RegisterParallelSingletonType("buildtarget", BuildTargetSingleton)
-	RegisterParallelSingletonType("soongconfigtrace", soongConfigTraceSingletonFunc)
-	FinalDepsMutators(registerSoongConfigTraceMutator)
 }
 
 func BuildTargetSingleton() Singleton {
@@ -2751,55 +2738,4 @@ type IdeInfo struct {
 func CheckBlueprintSyntax(ctx BaseModuleContext, filename string, contents string) []error {
 	bpctx := ctx.blueprintBaseModuleContext()
 	return blueprint.CheckBlueprintSyntax(bpctx.ModuleFactories(), filename, contents)
-}
-
-func registerSoongConfigTraceMutator(ctx RegisterMutatorsContext) {
-	ctx.BottomUp("soongconfigtrace", soongConfigTraceMutator).Parallel()
-}
-
-// soongConfigTraceMutator accumulates recorded soong_config trace from children. Also it normalizes
-// SoongConfigTrace to make it consistent.
-func soongConfigTraceMutator(ctx BottomUpMutatorContext) {
-	trace := &ctx.Module().base().commonProperties.SoongConfigTrace
-	ctx.VisitDirectDeps(func(m Module) {
-		childTrace := &m.base().commonProperties.SoongConfigTrace
-		trace.Bools = append(trace.Bools, childTrace.Bools...)
-		trace.Strings = append(trace.Strings, childTrace.Strings...)
-		trace.IsSets = append(trace.IsSets, childTrace.IsSets...)
-	})
-	trace.Bools = SortedUniqueStrings(trace.Bools)
-	trace.Strings = SortedUniqueStrings(trace.Strings)
-	trace.IsSets = SortedUniqueStrings(trace.IsSets)
-
-	ctx.Module().base().commonProperties.SoongConfigTraceHash = trace.hash()
-}
-
-// soongConfigTraceSingleton writes a map from each module's config hash value to trace data.
-func soongConfigTraceSingletonFunc() Singleton {
-	return &soongConfigTraceSingleton{}
-}
-
-type soongConfigTraceSingleton struct {
-}
-
-func (s *soongConfigTraceSingleton) GenerateBuildActions(ctx SingletonContext) {
-	outFile := PathForOutput(ctx, "soong_config_trace.json")
-
-	traces := make(map[string]*soongConfigTrace)
-	ctx.VisitAllModules(func(module Module) {
-		trace := &module.base().commonProperties.SoongConfigTrace
-		if !trace.isEmpty() {
-			hash := module.base().commonProperties.SoongConfigTraceHash
-			traces[hash] = trace
-		}
-	})
-
-	j, err := json.Marshal(traces)
-	if err != nil {
-		ctx.Errorf("json marshal to %q failed: %#v", outFile, err)
-		return
-	}
-
-	WriteFileRule(ctx, outFile, string(j))
-	ctx.Phony("soong_config_trace", outFile)
 }

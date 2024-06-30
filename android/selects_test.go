@@ -27,6 +27,7 @@ func TestSelects(t *testing.T) {
 	testCases := []struct {
 		name           string
 		bp             string
+		fs             MockFS
 		provider       selectsTestProvider
 		providers      map[string]selectsTestProvider
 		vendorVars     map[string]map[string]string
@@ -98,6 +99,26 @@ func TestSelects(t *testing.T) {
 			},
 		},
 		{
+			name: "Expression in select",
+			bp: `
+			my_module_type {
+				name: "foo",
+				my_string: select(soong_config_variable("my_namespace", "my_variable"), {
+					"a": "foo" + "bar",
+					default: "baz",
+				}),
+			}
+			`,
+			provider: selectsTestProvider{
+				my_string: proptools.StringPtr("foobar"),
+			},
+			vendorVars: map[string]map[string]string{
+				"my_namespace": {
+					"my_variable": "a",
+				},
+			},
+		},
+		{
 			name: "paths with module references",
 			bp: `
 			my_module_type {
@@ -112,20 +133,6 @@ func TestSelects(t *testing.T) {
 			expectedError: `"foo" depends on undefined module "c"`,
 		},
 		{
-			name: "Differing types",
-			bp: `
-			my_module_type {
-				name: "foo",
-				my_string: select(soong_config_variable("my_namespace", "my_variable"), {
-					"a": "a.cpp",
-					"b": true,
-					default: "c.cpp",
-				}),
-			}
-			`,
-			expectedError: `Android.bp:8:5: Found select statement with differing types "string" and "bool" in its cases`,
-		},
-		{
 			name: "Select type doesn't match property type",
 			bp: `
 			my_module_type {
@@ -137,7 +144,7 @@ func TestSelects(t *testing.T) {
 				}),
 			}
 			`,
-			expectedError: `can't assign bool value to string property "my_string\[0\]"`,
+			expectedError: `can't assign bool value to string property`,
 		},
 		{
 			name: "String list non-default",
@@ -825,10 +832,194 @@ func TestSelects(t *testing.T) {
 				my_string_list: &[]string{"a.cpp", "c.cpp", "foo.cpp"},
 			},
 		},
+		{
+			name: "Arch variant bool",
+			bp: `
+			my_variable = ["b.cpp"]
+			my_module_type {
+				name: "foo",
+				arch_variant_configurable_bool: false,
+				target: {
+					bionic_arm64: {
+						enabled: true,
+					},
+				},
+			}
+			`,
+			provider: selectsTestProvider{
+				arch_variant_configurable_bool: proptools.BoolPtr(false),
+			},
+		},
+		{
+			name: "Simple string binding",
+			bp: `
+			my_module_type {
+				name: "foo",
+				my_string: select(soong_config_variable("my_namespace", "my_variable"), {
+					any @ my_binding: "hello " + my_binding,
+					default: "goodbye",
+				})
+			}
+			`,
+			vendorVars: map[string]map[string]string{
+				"my_namespace": {
+					"my_variable": "world!",
+				},
+			},
+			provider: selectsTestProvider{
+				my_string: proptools.StringPtr("hello world!"),
+			},
+		},
+		{
+			name: "Any branch with binding not taken",
+			bp: `
+			my_module_type {
+				name: "foo",
+				my_string: select(soong_config_variable("my_namespace", "my_variable"), {
+					any @ my_binding: "hello " + my_binding,
+					default: "goodbye",
+				})
+			}
+			`,
+			provider: selectsTestProvider{
+				my_string: proptools.StringPtr("goodbye"),
+			},
+		},
+		{
+			name: "Any branch without binding",
+			bp: `
+			my_module_type {
+				name: "foo",
+				my_string: select(soong_config_variable("my_namespace", "my_variable"), {
+					any: "hello",
+					default: "goodbye",
+				})
+			}
+			`,
+			vendorVars: map[string]map[string]string{
+				"my_namespace": {
+					"my_variable": "world!",
+				},
+			},
+			provider: selectsTestProvider{
+				my_string: proptools.StringPtr("hello"),
+			},
+		},
+		{
+			name: "Binding conflicts with file-level variable",
+			bp: `
+			my_binding = "asdf"
+			my_module_type {
+				name: "foo",
+				my_string: select(soong_config_variable("my_namespace", "my_variable"), {
+					any @ my_binding: "hello",
+					default: "goodbye",
+				})
+			}
+			`,
+			vendorVars: map[string]map[string]string{
+				"my_namespace": {
+					"my_variable": "world!",
+				},
+			},
+			expectedError: "variable already set in inherited scope, previous assignment",
+		},
+		{
+			name: "Binding in combination with file-level variable",
+			bp: `
+			my_var = " there "
+			my_module_type {
+				name: "foo",
+				my_string: select(soong_config_variable("my_namespace", "my_variable"), {
+					any @ my_binding: "hello" + my_var + my_binding,
+					default: "goodbye",
+				})
+			}
+			`,
+			vendorVars: map[string]map[string]string{
+				"my_namespace": {
+					"my_variable": "world!",
+				},
+			},
+			provider: selectsTestProvider{
+				my_string: proptools.StringPtr("hello there world!"),
+			},
+		},
+		{
+			name: "Bindings in subdirectory inherits variable",
+			fs: map[string][]byte{
+				"Android.bp": []byte(`
+my_var = "abcd"
+`),
+				"directoryB/Android.bp": []byte(`
+my_module_type {
+	name: "foo",
+	my_string: select(soong_config_variable("my_namespace", "variable_a"), {
+		any @ my_binding: my_var + my_binding,
+		default: "",
+	}),
+}
+`),
+			},
+			vendorVars: map[string]map[string]string{
+				"my_namespace": {
+					"variable_a": "e",
+				},
+			},
+			provider: selectsTestProvider{
+				my_string: proptools.StringPtr("abcde"),
+			},
+		},
+		{
+			name: "Cannot modify variable after referenced by select",
+			bp: `
+my_var = "foo"
+my_module_type {
+	name: "foo",
+	my_string: select(soong_config_variable("my_namespace", "variable_a"), {
+		"a": my_var,
+		default: "",
+	}),
+}
+my_var += "bar"
+`,
+			vendorVars: map[string]map[string]string{
+				"my_namespace": {
+					"variable_a": "b", // notably not the value that causes my_var to be referenced
+				},
+			},
+			expectedError: `modified variable "my_var" with \+= after referencing`,
+		},
+		{
+			name: "Cannot shadow variable with binding",
+			bp: `
+my_var = "foo"
+my_module_type {
+	name: "foo",
+	my_string: select(soong_config_variable("my_namespace", "variable_a"), {
+		any @ my_var: my_var,
+		default: "",
+	}),
+}
+`,
+			vendorVars: map[string]map[string]string{
+				"my_namespace": {
+					"variable_a": "a",
+				},
+			},
+			expectedError: `variable already set in inherited scope, previous assignment:`,
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			fs := tc.fs
+			if fs == nil {
+				fs = make(MockFS)
+			}
+			if tc.bp != "" {
+				fs["Android.bp"] = []byte(tc.bp)
+			}
 			fixtures := GroupFixturePreparers(
 				PrepareForTestWithDefaults,
 				PrepareForTestWithArchMutator,
@@ -841,11 +1032,12 @@ func TestSelects(t *testing.T) {
 					variables.VendorVars = tc.vendorVars
 					variables.VendorVarTypes = tc.vendorVarTypes
 				}),
+				FixtureMergeMockFs(fs),
 			)
 			if tc.expectedError != "" {
 				fixtures = fixtures.ExtendWithErrorHandler(FixtureExpectsOneErrorPattern(tc.expectedError))
 			}
-			result := fixtures.RunTestWithBp(t, tc.bp)
+			result := fixtures.RunTest(t)
 
 			if tc.expectedError == "" {
 				if len(tc.providers) == 0 {
@@ -873,6 +1065,7 @@ type selectsTestProvider struct {
 	my_string_list                 *[]string
 	my_paths                       *[]string
 	replacing_string_list          *[]string
+	arch_variant_configurable_bool *bool
 	my_nonconfigurable_bool        *bool
 	my_nonconfigurable_string      *string
 	my_nonconfigurable_string_list []string
@@ -897,6 +1090,7 @@ func (p *selectsTestProvider) String() string {
     my_string_list: %s,
     my_paths: %s,
 	replacing_string_list %s,
+	arch_variant_configurable_bool %v
 	my_nonconfigurable_bool: %v,
 	my_nonconfigurable_string: %s,
 	my_nonconfigurable_string_list: %s,
@@ -906,6 +1100,7 @@ func (p *selectsTestProvider) String() string {
 		p.my_string_list,
 		p.my_paths,
 		p.replacing_string_list,
+		p.arch_variant_configurable_bool,
 		p.my_nonconfigurable_bool,
 		myNonconfigurableStringStr,
 		p.my_nonconfigurable_string_list,
@@ -920,6 +1115,7 @@ type selectsMockModuleProperties struct {
 	My_string_list                 proptools.Configurable[[]string]
 	My_paths                       proptools.Configurable[[]string] `android:"path"`
 	Replacing_string_list          proptools.Configurable[[]string] `android:"replace_instead_of_append,arch_variant"`
+	Arch_variant_configurable_bool proptools.Configurable[bool]     `android:"replace_instead_of_append,arch_variant"`
 	My_nonconfigurable_bool        *bool
 	My_nonconfigurable_string      *string
 	My_nonconfigurable_string_list []string
@@ -950,6 +1146,7 @@ func (p *selectsMockModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 		my_string_list:                 optionalToPtr(p.properties.My_string_list.Get(ctx)),
 		my_paths:                       optionalToPtr(p.properties.My_paths.Get(ctx)),
 		replacing_string_list:          optionalToPtr(p.properties.Replacing_string_list.Get(ctx)),
+		arch_variant_configurable_bool: optionalToPtr(p.properties.Arch_variant_configurable_bool.Get(ctx)),
 		my_nonconfigurable_bool:        p.properties.My_nonconfigurable_bool,
 		my_nonconfigurable_string:      p.properties.My_nonconfigurable_string,
 		my_nonconfigurable_string_list: p.properties.My_nonconfigurable_string_list,
