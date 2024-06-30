@@ -603,10 +603,10 @@ hashes to `$OUT_DIR/soong/soong_config_trace.json`.
 ## Build logic
 
 The build logic is written in Go using the
-[blueprint](http://godoc.org/github.com/google/blueprint) framework.  Build
-logic receives module definitions parsed into Go structures using reflection
-and produces build rules.  The build rules are collected by blueprint and
-written to a [ninja](http://ninja-build.org) build file.
+[blueprint](https://android.googlesource.com/platform/build/blueprint)
+framework.  Build logic receives module definitions parsed into Go structures
+using reflection and produces build rules.  The build rules are collected by
+blueprint and written to a [ninja](http://ninja-build.org) build file.
 
 ## Environment Variables Config File
 

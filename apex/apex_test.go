@@ -7125,6 +7125,46 @@ func TestJavaSDKLibrary(t *testing.T) {
 	ensureMatches(t, contents, "<library\\n\\s+name=\\\"foo\\\"\\n\\s+file=\\\"/apex/myapex/javalib/foo.jar\\\"")
 }
 
+func TestJavaSDKLibraryOverrideApexes(t *testing.T) {
+	ctx := testApex(t, `
+		override_apex {
+			name: "mycompanyapex",
+			base: "myapex",
+		}
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			java_libs: ["foo"],
+			updatable: false,
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java"],
+			api_packages: ["foo"],
+			apex_available: [ "myapex" ],
+		}
+
+		prebuilt_apis {
+			name: "sdk",
+			api_dirs: ["100"],
+		}
+	`, withFiles(filesForSdkLibrary))
+
+	// Permission XML should point to the activated path of impl jar of java_sdk_library.
+	// Since override variants (com.mycompany.android.foo) are installed in the same package as the overridden variant
+	// (com.android.foo), the filepath should not contain override apex name.
+	sdkLibrary := ctx.ModuleForTests("foo.xml", "android_common_mycompanyapex").Output("foo.xml")
+	contents := android.ContentFromFileRuleForTests(t, ctx, sdkLibrary)
+	ensureMatches(t, contents, "<library\\n\\s+name=\\\"foo\\\"\\n\\s+file=\\\"/apex/myapex/javalib/foo.jar\\\"")
+}
+
 func TestJavaSDKLibrary_WithinApex(t *testing.T) {
 	ctx := testApex(t, `
 		apex {
@@ -9995,6 +10035,56 @@ func TestApexStrictUpdtabilityLintBcpFragmentDeps(t *testing.T) {
 	if !strings.Contains(*sboxProto.Commands[0].Command, "--baseline lint-baseline.xml --disallowed_issues NewApi") {
 		t.Errorf("Strict updabality lint missing in myjavalib coming from bootclasspath_fragment mybootclasspath-fragment\nActual lint cmd: %v", *sboxProto.Commands[0].Command)
 	}
+}
+
+func TestApexLintBcpFragmentSdkLibDeps(t *testing.T) {
+	bp := `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			bootclasspath_fragments: ["mybootclasspathfragment"],
+			min_sdk_version: "29",
+		}
+		apex_key {
+			name: "myapex.key",
+		}
+		bootclasspath_fragment {
+			name: "mybootclasspathfragment",
+			contents: ["foo"],
+			apex_available: ["myapex"],
+			hidden_api: {
+				split_packages: ["*"],
+			},
+		}
+		java_sdk_library {
+			name: "foo",
+			srcs: ["MyClass.java"],
+			apex_available: [ "myapex" ],
+			sdk_version: "current",
+			min_sdk_version: "29",
+			compile_dex: true,
+		}
+		`
+	fs := android.MockFS{
+		"lint-baseline.xml": nil,
+	}
+
+	result := android.GroupFixturePreparers(
+		prepareForApexTest,
+		java.PrepareForTestWithJavaSdkLibraryFiles,
+		java.PrepareForTestWithJacocoInstrumentation,
+		java.FixtureWithLastReleaseApis("foo"),
+		android.FixtureModifyConfig(func(config android.Config) {
+			config.SetApiLibraries([]string{"foo"})
+		}),
+		android.FixtureMergeMockFs(fs),
+	).RunTestWithBp(t, bp)
+
+	myapex := result.ModuleForTests("myapex", "android_common_myapex")
+	lintReportInputs := strings.Join(myapex.Output("lint-report-xml.zip").Inputs.Strings(), " ")
+	android.AssertStringDoesContain(t,
+		"myapex lint report expected to contain that of the sdk library impl lib as an input",
+		lintReportInputs, "foo.impl")
 }
 
 // updatable apexes should propagate updatable=true to its apps

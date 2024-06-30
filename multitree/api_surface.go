@@ -16,8 +16,6 @@ package multitree
 
 import (
 	"android/soong/android"
-	"fmt"
-
 	"github.com/google/blueprint"
 )
 
@@ -40,7 +38,6 @@ type ApiSurface struct {
 	ExportableModuleBase
 	properties apiSurfaceProperties
 
-	allOutputs    android.Paths
 	taggedOutputs map[string]android.Paths
 }
 
@@ -86,15 +83,9 @@ func (surface *ApiSurface) GenerateAndroidBuildActions(ctx android.ModuleContext
 		Inputs: allOutputs,
 	})
 
-	surface.allOutputs = allOutputs
 	surface.taggedOutputs = contributionFiles
-}
 
-func (surface *ApiSurface) OutputFiles(tag string) (android.Paths, error) {
-	if tag != "" {
-		return nil, fmt.Errorf("unknown tag: %q", tag)
-	}
-	return surface.allOutputs, nil
+	ctx.SetOutputFiles(allOutputs, "")
 }
 
 func (surface *ApiSurface) TaggedOutputs() map[string]android.Paths {
@@ -105,7 +96,6 @@ func (surface *ApiSurface) Exportable() bool {
 	return true
 }
 
-var _ android.OutputFileProducer = (*ApiSurface)(nil)
 var _ Exportable = (*ApiSurface)(nil)
 
 type ApiContribution interface {
