@@ -118,9 +118,6 @@ type apiScope struct {
 	// The tag to use to depend on the stubs source module (if separate from the API module).
 	stubsSourceTag scopeDependencyTag
 
-	// The tag to use to depend on the API file generating module (if separate from the stubs source module).
-	apiFileTag scopeDependencyTag
-
 	// The tag to use to depend on the stubs source and API module.
 	stubsSourceAndApiTag scopeDependencyTag
 
@@ -194,11 +191,6 @@ func initApiScope(scope *apiScope) *apiScope {
 		name:             name + "-stubs-source",
 		apiScope:         scope,
 		depInfoExtractor: (*scopePaths).extractStubsSourceInfoFromDep,
-	}
-	scope.apiFileTag = scopeDependencyTag{
-		name:             name + "-api",
-		apiScope:         scope,
-		depInfoExtractor: (*scopePaths).extractApiInfoFromDep,
 	}
 	scope.stubsSourceAndApiTag = scopeDependencyTag{
 		name:             name + "-stubs-source-and-api",
@@ -804,12 +796,6 @@ func (paths *scopePaths) extractApiInfoFromApiStubsProvider(provider ApiStubsPro
 	return combinedError
 }
 
-func (paths *scopePaths) extractApiInfoFromDep(ctx android.ModuleContext, dep android.Module) error {
-	return paths.treatDepAsApiStubsProvider(dep, func(provider ApiStubsProvider) error {
-		return paths.extractApiInfoFromApiStubsProvider(provider, Everything)
-	})
-}
-
 func (paths *scopePaths) extractStubsSourceInfoFromApiStubsProviders(provider ApiStubsSrcProvider, stubsType StubsType) error {
 	stubsSrcJar, err := provider.StubsSrcJar(stubsType)
 	if err == nil {
@@ -819,22 +805,23 @@ func (paths *scopePaths) extractStubsSourceInfoFromApiStubsProviders(provider Ap
 }
 
 func (paths *scopePaths) extractStubsSourceInfoFromDep(ctx android.ModuleContext, dep android.Module) error {
+	stubsType := Everything
+	if ctx.Config().ReleaseHiddenApiExportableStubs() {
+		stubsType = Exportable
+	}
 	return paths.treatDepAsApiStubsSrcProvider(dep, func(provider ApiStubsSrcProvider) error {
-		return paths.extractStubsSourceInfoFromApiStubsProviders(provider, Everything)
+		return paths.extractStubsSourceInfoFromApiStubsProviders(provider, stubsType)
 	})
 }
 
 func (paths *scopePaths) extractStubsSourceAndApiInfoFromApiStubsProvider(ctx android.ModuleContext, dep android.Module) error {
+	stubsType := Everything
 	if ctx.Config().ReleaseHiddenApiExportableStubs() {
-		return paths.treatDepAsApiStubsProvider(dep, func(provider ApiStubsProvider) error {
-			extractApiInfoErr := paths.extractApiInfoFromApiStubsProvider(provider, Exportable)
-			extractStubsSourceInfoErr := paths.extractStubsSourceInfoFromApiStubsProviders(provider, Exportable)
-			return errors.Join(extractApiInfoErr, extractStubsSourceInfoErr)
-		})
+		stubsType = Exportable
 	}
 	return paths.treatDepAsApiStubsProvider(dep, func(provider ApiStubsProvider) error {
-		extractApiInfoErr := paths.extractApiInfoFromApiStubsProvider(provider, Everything)
-		extractStubsSourceInfoErr := paths.extractStubsSourceInfoFromApiStubsProviders(provider, Everything)
+		extractApiInfoErr := paths.extractApiInfoFromApiStubsProvider(provider, stubsType)
+		extractStubsSourceInfoErr := paths.extractStubsSourceInfoFromApiStubsProviders(provider, stubsType)
 		return errors.Join(extractApiInfoErr, extractStubsSourceInfoErr)
 	})
 }
@@ -1679,6 +1666,7 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		module.dexer.proguardDictionary = module.implLibraryModule.dexer.proguardDictionary
 		module.dexer.proguardUsageZip = module.implLibraryModule.dexer.proguardUsageZip
 		module.linter.reports = module.implLibraryModule.linter.reports
+		module.linter.outputs.depSets = module.implLibraryModule.LintDepSets()
 
 		if !module.Host() {
 			module.hostdexInstallFile = module.implLibraryModule.hostdexInstallFile

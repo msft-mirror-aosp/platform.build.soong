@@ -1246,6 +1246,11 @@ func (c *configImpl) StartGoma() bool {
 }
 
 func (c *configImpl) canSupportRBE() bool {
+	// Only supported on linux
+	if runtime.GOOS != "linux" {
+		return false
+	}
+
 	// Do not use RBE with prod credentials in scenarios when stubby doesn't exist, since
 	// its unlikely that we will be able to obtain necessary creds without stubby.
 	authType, _ := c.rbeAuth()
