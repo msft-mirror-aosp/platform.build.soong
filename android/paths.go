@@ -15,6 +15,9 @@
 package android
 
 import (
+	"bytes"
+	"encoding/gob"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1068,6 +1071,28 @@ type basePath struct {
 	rel  string
 }
 
+func (p basePath) GobEncode() ([]byte, error) {
+	w := new(bytes.Buffer)
+	encoder := gob.NewEncoder(w)
+	err := errors.Join(encoder.Encode(p.path), encoder.Encode(p.rel))
+	if err != nil {
+		return nil, err
+	}
+
+	return w.Bytes(), nil
+}
+
+func (p *basePath) GobDecode(data []byte) error {
+	r := bytes.NewBuffer(data)
+	decoder := gob.NewDecoder(r)
+	err := errors.Join(decoder.Decode(&p.path), decoder.Decode(&p.rel))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (p basePath) Ext() string {
 	return filepath.Ext(p.path)
 }
@@ -1304,6 +1329,28 @@ type OutputPath struct {
 	soongOutDir string
 
 	fullPath string
+}
+
+func (p OutputPath) GobEncode() ([]byte, error) {
+	w := new(bytes.Buffer)
+	encoder := gob.NewEncoder(w)
+	err := errors.Join(encoder.Encode(p.basePath), encoder.Encode(p.soongOutDir), encoder.Encode(p.fullPath))
+	if err != nil {
+		return nil, err
+	}
+
+	return w.Bytes(), nil
+}
+
+func (p *OutputPath) GobDecode(data []byte) error {
+	r := bytes.NewBuffer(data)
+	decoder := gob.NewDecoder(r)
+	err := errors.Join(decoder.Decode(&p.basePath), decoder.Decode(&p.soongOutDir), decoder.Decode(&p.fullPath))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (p OutputPath) withRel(rel string) OutputPath {
@@ -1557,11 +1604,10 @@ type ModuleOutPathContext interface {
 	ModuleName() string
 	ModuleDir() string
 	ModuleSubDir() string
-	SoongConfigTraceHash() string
 }
 
 func pathForModuleOut(ctx ModuleOutPathContext) OutputPath {
-	return PathForOutput(ctx, ".intermediates", ctx.ModuleDir(), ctx.ModuleName(), ctx.ModuleSubDir(), ctx.SoongConfigTraceHash())
+	return PathForOutput(ctx, ".intermediates", ctx.ModuleDir(), ctx.ModuleName(), ctx.ModuleSubDir())
 }
 
 // PathForModuleOut returns a Path representing the paths... under the module's
