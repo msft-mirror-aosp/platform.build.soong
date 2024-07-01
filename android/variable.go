@@ -199,11 +199,12 @@ type ProductVariables struct {
 	// Suffix to add to generated Makefiles
 	Make_suffix *string `json:",omitempty"`
 
-	BuildId             *string `json:",omitempty"`
-	BuildNumberFile     *string `json:",omitempty"`
-	BuildHostnameFile   *string `json:",omitempty"`
-	BuildThumbprintFile *string `json:",omitempty"`
-	DisplayBuildNumber  *bool   `json:",omitempty"`
+	BuildId              *string `json:",omitempty"`
+	BuildFingerprintFile *string `json:",omitempty"`
+	BuildNumberFile      *string `json:",omitempty"`
+	BuildHostnameFile    *string `json:",omitempty"`
+	BuildThumbprintFile  *string `json:",omitempty"`
+	DisplayBuildNumber   *bool   `json:",omitempty"`
 
 	Platform_display_version_name          *string  `json:",omitempty"`
 	Platform_version_name                  *string  `json:",omitempty"`
@@ -398,7 +399,8 @@ type ProductVariables struct {
 
 	PlatformSepolicyCompatVersions []string `json:",omitempty"`
 
-	VendorVars map[string]map[string]string `json:",omitempty"`
+	VendorVars     map[string]map[string]string `json:",omitempty"`
+	VendorVarTypes map[string]map[string]string `json:",omitempty"`
 
 	Ndk_abis *bool `json:",omitempty"`
 
@@ -458,6 +460,7 @@ type ProductVariables struct {
 	BuildBrokenIncorrectPartitionImages bool     `json:",omitempty"`
 	BuildBrokenInputDirModules          []string `json:",omitempty"`
 	BuildBrokenDontCheckSystemSdk       bool     `json:",omitempty"`
+	BuildBrokenDupSysprop               bool     `json:",omitempty"`
 
 	BuildWarningBadOptionalUsesLibsAllowlist []string `json:",omitempty"`
 
@@ -476,7 +479,6 @@ type ProductVariables struct {
 
 	IgnorePrefer32OnDevice bool `json:",omitempty"`
 
-	IncludeTags    []string `json:",omitempty"`
 	SourceRootDirs []string `json:",omitempty"`
 
 	AfdoProfiles []string `json:",omitempty"`

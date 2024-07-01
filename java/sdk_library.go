@@ -118,9 +118,6 @@ type apiScope struct {
 	// The tag to use to depend on the stubs source module (if separate from the API module).
 	stubsSourceTag scopeDependencyTag
 
-	// The tag to use to depend on the API file generating module (if separate from the stubs source module).
-	apiFileTag scopeDependencyTag
-
 	// The tag to use to depend on the stubs source and API module.
 	stubsSourceAndApiTag scopeDependencyTag
 
@@ -194,11 +191,6 @@ func initApiScope(scope *apiScope) *apiScope {
 		name:             name + "-stubs-source",
 		apiScope:         scope,
 		depInfoExtractor: (*scopePaths).extractStubsSourceInfoFromDep,
-	}
-	scope.apiFileTag = scopeDependencyTag{
-		name:             name + "-api",
-		apiScope:         scope,
-		depInfoExtractor: (*scopePaths).extractApiInfoFromDep,
 	}
 	scope.stubsSourceAndApiTag = scopeDependencyTag{
 		name:             name + "-stubs-source-and-api",
@@ -324,6 +316,16 @@ func (scopes apiScopes) MapToIndex(accessor func(*apiScope) string) map[string]i
 	return ret
 }
 
+func (scopes apiScopes) ConvertStubsLibraryExportableToEverything(name string) string {
+	for _, scope := range scopes {
+		if strings.HasSuffix(name, scope.exportableStubsLibraryModuleNameSuffix()) {
+			return strings.TrimSuffix(name, scope.exportableStubsLibraryModuleNameSuffix()) +
+				scope.stubsLibraryModuleNameSuffix()
+		}
+	}
+	return name
+}
+
 var (
 	scopeByName    = make(map[string]*apiScope)
 	allScopeNames  []string
@@ -418,7 +420,7 @@ var (
 		},
 		kind: android.SdkSystemServer,
 	})
-	allApiScopes = apiScopes{
+	AllApiScopes = apiScopes{
 		apiScopePublic,
 		apiScopeSystem,
 		apiScopeTest,
@@ -794,12 +796,6 @@ func (paths *scopePaths) extractApiInfoFromApiStubsProvider(provider ApiStubsPro
 	return combinedError
 }
 
-func (paths *scopePaths) extractApiInfoFromDep(ctx android.ModuleContext, dep android.Module) error {
-	return paths.treatDepAsApiStubsProvider(dep, func(provider ApiStubsProvider) error {
-		return paths.extractApiInfoFromApiStubsProvider(provider, Everything)
-	})
-}
-
 func (paths *scopePaths) extractStubsSourceInfoFromApiStubsProviders(provider ApiStubsSrcProvider, stubsType StubsType) error {
 	stubsSrcJar, err := provider.StubsSrcJar(stubsType)
 	if err == nil {
@@ -809,22 +805,23 @@ func (paths *scopePaths) extractStubsSourceInfoFromApiStubsProviders(provider Ap
 }
 
 func (paths *scopePaths) extractStubsSourceInfoFromDep(ctx android.ModuleContext, dep android.Module) error {
+	stubsType := Everything
+	if ctx.Config().ReleaseHiddenApiExportableStubs() {
+		stubsType = Exportable
+	}
 	return paths.treatDepAsApiStubsSrcProvider(dep, func(provider ApiStubsSrcProvider) error {
-		return paths.extractStubsSourceInfoFromApiStubsProviders(provider, Everything)
+		return paths.extractStubsSourceInfoFromApiStubsProviders(provider, stubsType)
 	})
 }
 
 func (paths *scopePaths) extractStubsSourceAndApiInfoFromApiStubsProvider(ctx android.ModuleContext, dep android.Module) error {
+	stubsType := Everything
 	if ctx.Config().ReleaseHiddenApiExportableStubs() {
-		return paths.treatDepAsApiStubsProvider(dep, func(provider ApiStubsProvider) error {
-			extractApiInfoErr := paths.extractApiInfoFromApiStubsProvider(provider, Exportable)
-			extractStubsSourceInfoErr := paths.extractStubsSourceInfoFromApiStubsProviders(provider, Exportable)
-			return errors.Join(extractApiInfoErr, extractStubsSourceInfoErr)
-		})
+		stubsType = Exportable
 	}
 	return paths.treatDepAsApiStubsProvider(dep, func(provider ApiStubsProvider) error {
-		extractApiInfoErr := paths.extractApiInfoFromApiStubsProvider(provider, Everything)
-		extractStubsSourceInfoErr := paths.extractStubsSourceInfoFromApiStubsProviders(provider, Everything)
+		extractApiInfoErr := paths.extractApiInfoFromApiStubsProvider(provider, stubsType)
+		extractStubsSourceInfoErr := paths.extractStubsSourceInfoFromApiStubsProviders(provider, stubsType)
 		return errors.Join(extractApiInfoErr, extractStubsSourceInfoErr)
 	})
 }
@@ -1204,7 +1201,7 @@ func (c *commonToSdkLibraryAndImport) selectScopePaths(ctx android.BaseModuleCon
 	paths := c.findClosestScopePath(apiScope)
 	if paths == nil {
 		var scopes []string
-		for _, s := range allApiScopes {
+		for _, s := range AllApiScopes {
 			if c.findScopePaths(s) != nil {
 				scopes = append(scopes, s.name)
 			}
@@ -1421,7 +1418,7 @@ func (module *SdkLibrary) getGeneratedApiScopes(ctx android.EarlyModuleContext) 
 	// Check to see if any scopes have been explicitly enabled. If any have then all
 	// must be.
 	anyScopesExplicitlyEnabled := false
-	for _, scope := range allApiScopes {
+	for _, scope := range AllApiScopes {
 		scopeProperties := module.scopeToProperties[scope]
 		if scopeProperties.Enabled != nil {
 			anyScopesExplicitlyEnabled = true
@@ -1431,7 +1428,7 @@ func (module *SdkLibrary) getGeneratedApiScopes(ctx android.EarlyModuleContext) 
 
 	var generatedScopes apiScopes
 	enabledScopes := make(map[*apiScope]struct{})
-	for _, scope := range allApiScopes {
+	for _, scope := range AllApiScopes {
 		scopeProperties := module.scopeToProperties[scope]
 		// If any scopes are explicitly enabled then ignore the legacy enabled status.
 		// This is to ensure that any new usages of this module type do not rely on legacy
@@ -1451,7 +1448,7 @@ func (module *SdkLibrary) getGeneratedApiScopes(ctx android.EarlyModuleContext) 
 
 	// Now check to make sure that any scope that is extended by an enabled scope is also
 	// enabled.
-	for _, scope := range allApiScopes {
+	for _, scope := range AllApiScopes {
 		if _, ok := enabledScopes[scope]; ok {
 			extends := scope.extends
 			if extends != nil {
@@ -1669,6 +1666,7 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		module.dexer.proguardDictionary = module.implLibraryModule.dexer.proguardDictionary
 		module.dexer.proguardUsageZip = module.implLibraryModule.dexer.proguardUsageZip
 		module.linter.reports = module.implLibraryModule.linter.reports
+		module.linter.outputs.depSets = module.implLibraryModule.LintDepSets()
 
 		if !module.Host() {
 			module.hostdexInstallFile = module.implLibraryModule.hostdexInstallFile
@@ -2580,7 +2578,7 @@ func SdkLibraryFactory() android.Module {
 
 	// Initialize the map from scope to scope specific properties.
 	scopeToProperties := make(map[*apiScope]*ApiScopeProperties)
-	for _, scope := range allApiScopes {
+	for _, scope := range AllApiScopes {
 		scopeToProperties[scope] = scope.scopeSpecificProperties(module)
 	}
 	module.scopeToProperties = scopeToProperties
@@ -2697,7 +2695,7 @@ var allScopeStructType = createAllScopePropertiesStructType()
 // Dynamically create a structure type for each apiscope in allApiScopes.
 func createAllScopePropertiesStructType() reflect.Type {
 	var fields []reflect.StructField
-	for _, apiScope := range allApiScopes {
+	for _, apiScope := range AllApiScopes {
 		field := reflect.StructField{
 			Name: apiScope.fieldName,
 			Type: reflect.TypeOf(sdkLibraryScopeProperties{}),
@@ -2715,7 +2713,7 @@ func createPropertiesInstance() (interface{}, map[*apiScope]*sdkLibraryScopeProp
 	allScopePropertiesStruct := allScopePropertiesPtr.Elem()
 	scopeProperties := make(map[*apiScope]*sdkLibraryScopeProperties)
 
-	for _, apiScope := range allApiScopes {
+	for _, apiScope := range AllApiScopes {
 		field := allScopePropertiesStruct.FieldByName(apiScope.fieldName)
 		scopeProperties[apiScope] = field.Addr().Interface().(*sdkLibraryScopeProperties)
 	}
@@ -3242,11 +3240,6 @@ func (module *sdkLibraryXml) SubDir() string {
 	return "permissions"
 }
 
-// from android.PrebuiltEtcModule
-func (module *sdkLibraryXml) OutputFiles(tag string) (android.Paths, error) {
-	return android.OutputPaths{module.outputFilePath}.Paths(), nil
-}
-
 var _ etc.PrebuiltEtcModule = (*sdkLibraryXml)(nil)
 
 // from android.ApexModule
@@ -3274,7 +3267,7 @@ func (module *sdkLibraryXml) implPath(ctx android.ModuleContext) string {
 		// TODO(b/146468504): ApexVariationName() is only a soong module name, not apex name.
 		// In most cases, this works fine. But when apex_name is set or override_apex is used
 		// this can be wrong.
-		return fmt.Sprintf("/apex/%s/javalib/%s.jar", apexInfo.ApexVariationName, implName)
+		return fmt.Sprintf("/apex/%s/javalib/%s.jar", apexInfo.BaseApexName, implName)
 	}
 	partition := "system"
 	if module.SocSpecific() {
@@ -3390,6 +3383,8 @@ func (module *sdkLibraryXml) GenerateAndroidBuildActions(ctx android.ModuleConte
 
 	module.installDirPath = android.PathForModuleInstall(ctx, "etc", module.SubDir())
 	ctx.PackageFile(module.installDirPath, libName+".xml", module.outputFilePath)
+
+	ctx.SetOutputFiles(android.OutputPaths{module.outputFilePath}.Paths(), "")
 }
 
 func (module *sdkLibraryXml) AndroidMkEntries() []android.AndroidMkEntries {
@@ -3597,7 +3592,7 @@ func (s *sdkLibrarySdkMemberProperties) PopulateFromVariant(ctx android.SdkMembe
 	s.Stem = sdk.distStem()
 
 	s.Scopes = make(map[*apiScope]*scopeProperties)
-	for _, apiScope := range allApiScopes {
+	for _, apiScope := range AllApiScopes {
 		paths := sdk.findScopePaths(apiScope)
 		if paths == nil {
 			continue
@@ -3659,7 +3654,7 @@ func (s *sdkLibrarySdkMemberProperties) AddToPropertySet(ctx android.SdkMemberCo
 
 	stem := s.Stem
 
-	for _, apiScope := range allApiScopes {
+	for _, apiScope := range AllApiScopes {
 		if properties, ok := s.Scopes[apiScope]; ok {
 			scopeSet := propertySet.AddPropertySet(apiScope.propertyName)
 
