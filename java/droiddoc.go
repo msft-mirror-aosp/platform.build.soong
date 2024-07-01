@@ -223,17 +223,6 @@ type Javadoc struct {
 	exportableStubsSrcJar android.WritablePath
 }
 
-func (j *Javadoc) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return android.Paths{j.stubsSrcJar}, nil
-	case ".docs.zip":
-		return android.Paths{j.docZip}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
-}
-
 // javadoc converts .java source files to documentation using javadoc.
 func JavadocFactory() android.Module {
 	module := &Javadoc{}
@@ -253,8 +242,6 @@ func JavadocHostFactory() android.Module {
 	InitDroiddocModule(module, android.HostSupported)
 	return module
 }
-
-var _ android.OutputFileProducer = (*Javadoc)(nil)
 
 func (j *Javadoc) SdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
 	return android.SdkSpecFrom(ctx, String(j.properties.Sdk_version))
@@ -585,6 +572,9 @@ func (j *Javadoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	zipSyncCleanupCmd(rule, srcJarDir)
 
 	rule.Build("javadoc", "javadoc")
+
+	ctx.SetOutputFiles(android.Paths{j.stubsSrcJar}, "")
+	ctx.SetOutputFiles(android.Paths{j.docZip}, ".docs.zip")
 }
 
 // Droiddoc
@@ -614,15 +604,6 @@ func DroiddocHostFactory() android.Module {
 
 	InitDroiddocModule(module, android.HostSupported)
 	return module
-}
-
-func (d *Droiddoc) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "", ".docs.zip":
-		return android.Paths{d.Javadoc.docZip}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
 }
 
 func (d *Droiddoc) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -876,6 +857,9 @@ func (d *Droiddoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	zipSyncCleanupCmd(rule, srcJarDir)
 
 	rule.Build("javadoc", desc)
+
+	ctx.SetOutputFiles(android.Paths{d.Javadoc.docZip}, "")
+	ctx.SetOutputFiles(android.Paths{d.Javadoc.docZip}, ".docs.zip")
 }
 
 // Exported Droiddoc Directory
