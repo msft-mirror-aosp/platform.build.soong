@@ -34,7 +34,7 @@ func main() {
 	var json, pb, textproto, inheritance bool
 	var product string
 	var allMake bool
-	var useBuildVar bool
+	var useBuildVar, allowMissing bool
 	var guard bool
 
 	defaultRelease := os.Getenv("TARGET_RELEASE")
@@ -47,6 +47,7 @@ func main() {
 	flag.BoolVar(&quiet, "quiet", false, "disable warning messages")
 	flag.Var(&releaseConfigMapPaths, "map", "path to a release_config_map.textproto. may be repeated")
 	flag.StringVar(&targetRelease, "release", defaultRelease, "TARGET_RELEASE for this build")
+	flag.BoolVar(&allowMissing, "allow-missing", false, "Use trunk_staging values if release not found")
 	flag.StringVar(&outputDir, "out_dir", rc_lib.GetDefaultOutDir(), "basepath for the output. Multiple formats are created")
 	flag.BoolVar(&textproto, "textproto", true, "write artifacts as text protobuf")
 	flag.BoolVar(&json, "json", true, "write artifacts as json")
@@ -65,7 +66,7 @@ func main() {
 	if err = os.Chdir(top); err != nil {
 		panic(err)
 	}
-	configs, err = rc_lib.ReadReleaseConfigMaps(releaseConfigMapPaths, targetRelease, useBuildVar)
+	configs, err = rc_lib.ReadReleaseConfigMaps(releaseConfigMapPaths, targetRelease, useBuildVar, allowMissing)
 	if err != nil {
 		panic(err)
 	}
@@ -87,7 +88,7 @@ func main() {
 		return
 	}
 	// Write the makefile where release_config.mk is going to look for it.
-	err = configs.WriteMakefile(makefilePath, targetRelease)
+	err = config.WriteMakefile(makefilePath, targetRelease, configs)
 	if err != nil {
 		panic(err)
 	}
@@ -96,7 +97,7 @@ func main() {
 		for _, c := range configs.GetSortedReleaseConfigs() {
 			if c.Name != targetRelease {
 				makefilePath = filepath.Join(outputDir, fmt.Sprintf("release_config-%s-%s.varmk", product, c.Name))
-				err = configs.WriteMakefile(makefilePath, c.Name)
+				err = config.WriteMakefile(makefilePath, c.Name, configs)
 				if err != nil {
 					panic(err)
 				}

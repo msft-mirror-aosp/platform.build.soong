@@ -65,8 +65,6 @@ var PrepareForTestWithBpf = android.FixtureRegisterWithContext(registerBpfBuildC
 type BpfModule interface {
 	android.Module
 
-	OutputFiles(tag string) (android.Paths, error)
-
 	// Returns the sub install directory if the bpf module is included by apex.
 	SubDir() string
 }
@@ -106,6 +104,14 @@ var _ android.ImageInterface = (*bpf)(nil)
 
 func (bpf *bpf) ImageMutatorBegin(ctx android.BaseModuleContext) {}
 
+func (bpf *bpf) VendorVariantNeeded(ctx android.BaseModuleContext) bool {
+	return proptools.Bool(bpf.properties.Vendor)
+}
+
+func (bpf *bpf) ProductVariantNeeded(ctx android.BaseModuleContext) bool {
+	return false
+}
+
 func (bpf *bpf) CoreVariantNeeded(ctx android.BaseModuleContext) bool {
 	return !proptools.Bool(bpf.properties.Vendor)
 }
@@ -127,13 +133,10 @@ func (bpf *bpf) RecoveryVariantNeeded(ctx android.BaseModuleContext) bool {
 }
 
 func (bpf *bpf) ExtraImageVariations(ctx android.BaseModuleContext) []string {
-	if proptools.Bool(bpf.properties.Vendor) {
-		return []string{"vendor"}
-	}
 	return nil
 }
 
-func (bpf *bpf) SetImageVariation(ctx android.BaseModuleContext, variation string, module android.Module) {
+func (bpf *bpf) SetImageVariation(ctx android.BaseModuleContext, variation string) {
 	bpf.properties.VendorInternal = variation == "vendor"
 }
 
@@ -213,6 +216,8 @@ func (bpf *bpf) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: srcs.Strings()})
+
+	ctx.SetOutputFiles(bpf.objs, "")
 }
 
 func (bpf *bpf) AndroidMk() android.AndroidMkData {
@@ -255,22 +260,9 @@ func (bpf *bpf) AndroidMk() android.AndroidMkData {
 	}
 }
 
-// Implements OutputFileFileProducer interface so that the obj output can be used in the data property
-// of other modules.
-func (bpf *bpf) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return bpf.objs, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
-}
-
 func (bpf *bpf) SubDir() string {
 	return bpf.properties.Sub_dir
 }
-
-var _ android.OutputFileProducer = (*bpf)(nil)
 
 func BpfFactory() android.Module {
 	module := &bpf{}

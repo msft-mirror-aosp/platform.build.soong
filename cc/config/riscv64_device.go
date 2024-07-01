@@ -35,8 +35,6 @@ var (
 		// (Note that we'll probably want to wait for berberis to be good enough
 		// that most people don't care about qemu's V performance either!)
 		"-mno-implicit-float",
-		// TODO: remove when clang default changed (https://github.com/google/android-riscv64/issues/124)
-		"-mllvm -jump-is-expensive=false",
 	}
 
 	riscv64ArchVariantCflags = map[string][]string{}
