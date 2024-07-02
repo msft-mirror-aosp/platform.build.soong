@@ -15,8 +15,6 @@
 package android
 
 import (
-	"fmt"
-
 	"github.com/google/blueprint/proptools"
 )
 
@@ -41,18 +39,8 @@ type buildinfoPropModule struct {
 	installPath    InstallPath
 }
 
-var _ OutputFileProducer = (*buildinfoPropModule)(nil)
-
 func (p *buildinfoPropModule) installable() bool {
 	return proptools.BoolDefault(p.properties.Installable, true)
-}
-
-// OutputFileProducer
-func (p *buildinfoPropModule) OutputFiles(tag string) (Paths, error) {
-	if tag != "" {
-		return nil, fmt.Errorf("unsupported tag %q", tag)
-	}
-	return Paths{p.outputFilePath}, nil
 }
 
 func shouldAddBuildThumbprint(config Config) bool {
@@ -76,6 +64,8 @@ func (p *buildinfoPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 		return
 	}
 	p.outputFilePath = PathForModuleOut(ctx, p.Name()).OutputPath
+	ctx.SetOutputFiles(Paths{p.outputFilePath}, "")
+
 	if !ctx.Config().KatiEnabled() {
 		WriteFileRule(ctx, p.outputFilePath, "# no buildinfo.prop if kati is disabled")
 		return
