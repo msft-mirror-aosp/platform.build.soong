@@ -211,6 +211,7 @@ func mergeAconfigFiles(ctx ModuleContext, container string, inputs Paths, genera
 }
 
 func getAconfigFilePaths(m *ModuleBase, aconfigFiles map[string]Paths) (paths Paths) {
+	// TODO(b/311155208): The default container here should be system.
 	container := "system"
 
 	if m.SocSpecific() {
@@ -222,5 +223,17 @@ func getAconfigFilePaths(m *ModuleBase, aconfigFiles map[string]Paths) (paths Pa
 	}
 
 	paths = append(paths, aconfigFiles[container]...)
+	if container == "system" {
+		// TODO(b/311155208): Once the default container is system, we can drop this.
+		paths = append(paths, aconfigFiles[""]...)
+	}
+	if container != "system" {
+		if len(aconfigFiles[container]) == 0 && len(aconfigFiles[""]) > 0 {
+			// TODO(b/308625757): Either we guessed the container wrong, or the flag is misdeclared.
+			// For now, just include the system (aka "") container if we get here.
+			//fmt.Printf("container_mismatch: module=%v container=%v files=%v\n", m, container, aconfigFiles)
+		}
+		paths = append(paths, aconfigFiles[""]...)
+	}
 	return
 }
