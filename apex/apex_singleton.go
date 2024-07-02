@@ -46,6 +46,9 @@ var (
 		Command: "cat $out.rsp | xargs cat" +
 			// Only track non-external dependencies, i.e. those that end up in the binary
 			" | grep -v '(external)'" +
+			// Allowlist androidx deps
+			" | grep -v '^androidx\\.'" +
+			" | grep -v '^prebuilt_androidx\\.'" +
 			// Ignore comments in any of the files
 			" | grep -v '^#'" +
 			" | sort -u -f >$out",
