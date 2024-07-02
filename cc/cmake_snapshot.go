@@ -51,8 +51,10 @@ var cmakeExtAddAidlLibrary string
 var cmakeExtAppendFlags string
 
 var defaultUnportableFlags []string = []string{
+	"-Wno-c99-designator",
 	"-Wno-class-memaccess",
 	"-Wno-exit-time-destructors",
+	"-Winconsistent-missing-override",
 	"-Wno-inconsistent-missing-override",
 	"-Wreorder-init-list",
 	"-Wno-reorder-init-list",

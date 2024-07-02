@@ -60,7 +60,9 @@ type filesystem struct {
 	output     android.OutputPath
 	installDir android.InstallPath
 
-	// For testing. Keeps the result of CopySpecsToDir()
+	fileListFile android.OutputPath
+
+	// Keeps the entries installed from this filesystem
 	entries []string
 }
 
@@ -221,8 +223,26 @@ func (f *filesystem) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	f.installDir = android.PathForModuleInstall(ctx, "etc")
 	ctx.InstallFile(f.installDir, f.installFileName(), f.output)
-
 	ctx.SetOutputFiles([]android.Path{f.output}, "")
+
+	f.fileListFile = android.PathForModuleOut(ctx, "fileList").OutputPath
+	android.WriteFileRule(ctx, f.fileListFile, f.installedFilesList())
+}
+
+func (f *filesystem) appendToEntry(ctx android.ModuleContext, installedFile android.OutputPath) {
+	partitionBaseDir := android.PathForModuleOut(ctx, "root", f.partitionName()).String() + "/"
+
+	relPath, inTargetPartition := strings.CutPrefix(installedFile.String(), partitionBaseDir)
+	if inTargetPartition {
+		f.entries = append(f.entries, relPath)
+	}
+}
+
+func (f *filesystem) installedFilesList() string {
+	installedFilePaths := android.FirstUniqueStrings(f.entries)
+	slices.Sort(installedFilePaths)
+
+	return strings.Join(installedFilePaths, "\n")
 }
 
 func validatePartitionType(ctx android.ModuleContext, p partition) {
@@ -269,17 +289,19 @@ func (f *filesystem) buildNonDepsFiles(ctx android.ModuleContext, builder *andro
 		builder.Command().Textf("(! [ -e %s -o -L %s ] || (echo \"%s already exists from an earlier stage of the build\" && exit 1))", dst, dst, dst)
 		builder.Command().Text("mkdir -p").Text(filepath.Dir(dst.String()))
 		builder.Command().Text("ln -sf").Text(proptools.ShellEscape(target)).Text(dst.String())
+		f.appendToEntry(ctx, dst)
 	}
 
 	// create extra files if there's any
 	if f.buildExtraFiles != nil {
 		rootForExtraFiles := android.PathForModuleGen(ctx, "root-extra").OutputPath
 		extraFiles := f.buildExtraFiles(ctx, rootForExtraFiles)
-		for _, f := range extraFiles {
-			rel, err := filepath.Rel(rootForExtraFiles.String(), f.String())
+		for _, extraFile := range extraFiles {
+			rel, err := filepath.Rel(rootForExtraFiles.String(), extraFile.String())
 			if err != nil || strings.HasPrefix(rel, "..") {
-				ctx.ModuleErrorf("can't make %q relative to %q", f, rootForExtraFiles)
+				ctx.ModuleErrorf("can't make %q relative to %q", extraFile, rootForExtraFiles)
 			}
+			f.appendToEntry(ctx, rootDir.Join(ctx, rel))
 		}
 		if len(extraFiles) > 0 {
 			builder.Command().BuiltTool("merge_directories").
@@ -535,6 +557,8 @@ func (f *filesystem) buildEventLogtagsFile(ctx android.ModuleContext, builder *a
 	for _, path := range android.SortedKeys(logtagsFilePaths) {
 		cmd.Text(path)
 	}
+
+	f.appendToEntry(ctx, eventLogtagsPath)
 }
 
 type partition interface {
@@ -558,6 +582,7 @@ func (f *filesystem) AndroidMkEntries() []android.AndroidMkEntries {
 			func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 				entries.SetString("LOCAL_MODULE_PATH", f.installDir.String())
 				entries.SetString("LOCAL_INSTALLED_MODULE_STEM", f.installFileName())
+				entries.SetString("LOCAL_FILESYSTEM_FILELIST", f.fileListFile.String())
 			},
 		},
 	}}
