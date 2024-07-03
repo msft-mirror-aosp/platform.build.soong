@@ -51,8 +51,10 @@ var cmakeExtAddAidlLibrary string
 var cmakeExtAppendFlags string
 
 var defaultUnportableFlags []string = []string{
+	"-Wno-c99-designator",
 	"-Wno-class-memaccess",
 	"-Wno-exit-time-destructors",
+	"-Winconsistent-missing-override",
 	"-Wno-inconsistent-missing-override",
 	"-Wreorder-init-list",
 	"-Wno-reorder-init-list",
@@ -67,6 +69,11 @@ var ignoredSystemLibs []string = []string{
 	"libc",
 	"libc++",
 	"libc++_static",
+	"libc_musl",
+	"libc_musl_crtbegin_so",
+	"libc_musl_crtbegin_static",
+	"libc_musl_crtend",
+	"libc_musl_crtend_so",
 	"libdl",
 	"libm",
 	"prebuilt_libclang_rt.builtins",
@@ -89,8 +96,17 @@ type LibraryMappingProperty struct {
 }
 
 type CmakeSnapshotProperties struct {
-	// Modules to add to the snapshot package. Their dependencies are pulled in automatically.
+	// TODO: remove
 	Modules []string
+
+	// Host modules to add to the snapshot package. Their dependencies are pulled in automatically.
+	Modules_host []string
+
+	// System modules to add to the snapshot package. Their dependencies are pulled in automatically.
+	Modules_system []string
+
+	// Vendor modules to add to the snapshot package. Their dependencies are pulled in automatically.
+	Modules_vendor []string
 
 	// Host prebuilts to bundle with the snapshot. These are tools needed to build outside Android.
 	Prebuilts []string
@@ -268,8 +284,15 @@ func executeTemplate(templ *template.Template, buffer *bytes.Buffer, data any) s
 }
 
 func (m *CmakeSnapshot) DepsMutator(ctx android.BottomUpMutatorContext) {
+	deviceVariations := ctx.Config().AndroidFirstDeviceTarget.Variations()
+	deviceSystemVariations := append(deviceVariations, blueprint.Variation{"image", ""})
+	deviceVendorVariations := append(deviceVariations, blueprint.Variation{"image", "vendor"})
 	hostVariations := ctx.Config().BuildOSTarget.Variations()
+
 	ctx.AddVariationDependencies(hostVariations, cmakeSnapshotModuleTag, m.Properties.Modules...)
+	ctx.AddVariationDependencies(hostVariations, cmakeSnapshotModuleTag, m.Properties.Modules_host...)
+	ctx.AddVariationDependencies(deviceSystemVariations, cmakeSnapshotModuleTag, m.Properties.Modules_system...)
+	ctx.AddVariationDependencies(deviceVendorVariations, cmakeSnapshotModuleTag, m.Properties.Modules_vendor...)
 
 	if len(m.Properties.Prebuilts) > 0 {
 		prebuilts := append(m.Properties.Prebuilts, "libc++")
