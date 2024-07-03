@@ -527,7 +527,7 @@ func OdexOnSystemOtherByName(name string, dexLocation string, global *GlobalConf
 		return false
 	}
 
-	if contains(global.SpeedApps, name) || contains(global.SystemServerApps, name) {
+	if contains(global.SystemServerApps, name) {
 		return false
 	}
 
