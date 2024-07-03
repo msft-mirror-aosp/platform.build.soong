@@ -99,9 +99,10 @@ type configImpl struct {
 	// Autodetected
 	totalRAM uint64
 
-	brokenDupRules     bool
-	brokenUsesNetwork  bool
-	brokenNinjaEnvVars []string
+	brokenDupRules       bool
+	brokenUsesNetwork    bool
+	brokenNinjaEnvVars   []string
+	brokenMissingOutputs bool
 
 	pathReplaced bool
 
@@ -1606,6 +1607,14 @@ func (c *configImpl) SetBuildBrokenNinjaUsesEnvVars(val []string) {
 
 func (c *configImpl) BuildBrokenNinjaUsesEnvVars() []string {
 	return c.brokenNinjaEnvVars
+}
+
+func (c *configImpl) SetBuildBrokenMissingOutputs(val bool) {
+	c.brokenMissingOutputs = val
+}
+
+func (c *configImpl) BuildBrokenMissingOutputs() bool {
+	return c.brokenMissingOutputs
 }
 
 func (c *configImpl) SetTargetDeviceDir(dir string) {
