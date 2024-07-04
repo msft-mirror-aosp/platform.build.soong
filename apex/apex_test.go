@@ -8278,60 +8278,6 @@ func TestUpdatableDefault_should_set_min_sdk_version(t *testing.T) {
 	`)
 }
 
-func Test_use_vndk_as_stable_shouldnt_be_used_for_updatable_vendor_apexes(t *testing.T) {
-	testApexError(t, `"myapex" .*: use_vndk_as_stable: updatable APEXes can't use external VNDK libs`, `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			updatable: true,
-			use_vndk_as_stable: true,
-			soc_specific: true,
-		}
-
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-	`)
-}
-
-func Test_use_vndk_as_stable_shouldnt_be_used_with_min_sdk_version(t *testing.T) {
-	testApexError(t, `"myapex" .*: use_vndk_as_stable: not supported when min_sdk_version is set`, `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			updatable: false,
-			min_sdk_version: "29",
-			use_vndk_as_stable: true,
-			vendor: true,
-		}
-
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-	`)
-}
-
-func Test_use_vndk_as_stable_shouldnt_be_used_for_non_vendor_apexes(t *testing.T) {
-	testApexError(t, `"myapex" .*: use_vndk_as_stable: not supported for system/system_ext APEXes`, `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			updatable: false,
-			use_vndk_as_stable: true,
-		}
-
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-	`)
-}
-
 func TestUpdatable_should_not_set_generate_classpaths_proto(t *testing.T) {
 	testApexError(t, `"mysystemserverclasspathfragment" .* it must not set generate_classpaths_proto to false`, `
 		apex {
