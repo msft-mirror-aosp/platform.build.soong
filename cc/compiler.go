@@ -539,12 +539,10 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		flags.Global.CommonFlags = append(flags.Global.CommonFlags, "${config.ExternalCflags}")
 	}
 
-	if tc.Bionic() {
-		if Bool(compiler.Properties.Rtti) {
-			flags.Local.CppFlags = append(flags.Local.CppFlags, "-frtti")
-		} else {
-			flags.Local.CppFlags = append(flags.Local.CppFlags, "-fno-rtti")
-		}
+	if Bool(compiler.Properties.Rtti) {
+		flags.Local.CppFlags = append(flags.Local.CppFlags, "-frtti")
+	} else {
+		flags.Local.CppFlags = append(flags.Local.CppFlags, "-fno-rtti")
 	}
 
 	flags.Global.AsFlags = append(flags.Global.AsFlags, "${config.CommonGlobalAsflags}")
@@ -795,9 +793,6 @@ type RustBindgenClangProperties struct {
 	// list of directories relative to the Blueprints file that will
 	// be added to the include path using -I
 	Local_include_dirs []string `android:"arch_variant,variant_prepend"`
-
-	// list of Rust static libraries.
-	Static_rlibs []string `android:"arch_variant,variant_prepend"`
 
 	// list of static libraries that provide headers for this binding.
 	Static_libs []string `android:"arch_variant,variant_prepend"`

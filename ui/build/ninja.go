@@ -77,6 +77,14 @@ func runNinjaForBuild(ctx Context, config Config) {
 		"-w", "dupbuild=err",
 		"-w", "missingdepfile=err")
 
+	if !config.BuildBrokenMissingOutputs() {
+		// Missing outputs will be treated as errors.
+		// BUILD_BROKEN_MISSING_OUTPUTS can be used to bypass this check.
+		args = append(args,
+			"-w", "missingoutfile=err",
+		)
+	}
+
 	cmd := Command(ctx, config, "ninja", executable, args...)
 
 	// Set up the nsjail sandbox Ninja runs in.
