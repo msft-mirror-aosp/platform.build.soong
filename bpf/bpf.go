@@ -104,6 +104,14 @@ var _ android.ImageInterface = (*bpf)(nil)
 
 func (bpf *bpf) ImageMutatorBegin(ctx android.BaseModuleContext) {}
 
+func (bpf *bpf) VendorVariantNeeded(ctx android.BaseModuleContext) bool {
+	return proptools.Bool(bpf.properties.Vendor)
+}
+
+func (bpf *bpf) ProductVariantNeeded(ctx android.BaseModuleContext) bool {
+	return false
+}
+
 func (bpf *bpf) CoreVariantNeeded(ctx android.BaseModuleContext) bool {
 	return !proptools.Bool(bpf.properties.Vendor)
 }
@@ -125,9 +133,6 @@ func (bpf *bpf) RecoveryVariantNeeded(ctx android.BaseModuleContext) bool {
 }
 
 func (bpf *bpf) ExtraImageVariations(ctx android.BaseModuleContext) []string {
-	if proptools.Bool(bpf.properties.Vendor) {
-		return []string{"vendor"}
-	}
 	return nil
 }
 

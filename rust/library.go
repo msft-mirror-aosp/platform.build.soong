@@ -43,9 +43,9 @@ func init() {
 	android.RegisterModuleType("rust_ffi_host_rlib", RustFFIRlibHostFactory)
 
 	// TODO: Remove when all instances of rust_ffi_static have been switched to rust_ffi_rlib
-	// Alias rust_ffi_static to the combined rust_ffi_rlib factory
-	android.RegisterModuleType("rust_ffi_static", RustFFIStaticRlibFactory)
-	android.RegisterModuleType("rust_ffi_host_static", RustFFIStaticRlibHostFactory)
+	// Alias rust_ffi_static to the rust_ffi_rlib factory
+	android.RegisterModuleType("rust_ffi_static", RustFFIRlibFactory)
+	android.RegisterModuleType("rust_ffi_host_static", RustFFIRlibHostFactory)
 }
 
 type VariantLibraryProperties struct {
@@ -353,7 +353,7 @@ func RustFFISharedHostFactory() android.Module {
 // type "rlib").
 func RustFFIRlibHostFactory() android.Module {
 	module, library := NewRustLibrary(android.HostSupported)
-	library.BuildOnlyRlibStatic()
+	library.BuildOnlyRlib()
 
 	library.isFFI = true
 	return module.Init()
@@ -368,30 +368,12 @@ func RustFFIRlibFactory() android.Module {
 	return module.Init()
 }
 
-// rust_ffi_static produces a staticlib and an rlib variant
-func RustFFIStaticRlibFactory() android.Module {
-	module, library := NewRustLibrary(android.HostAndDeviceSupported)
-	library.BuildOnlyRlibStatic()
-
-	library.isFFI = true
-	return module.Init()
-}
-
-// rust_ffi_static_host produces a staticlib and an rlib variant for the host
-func RustFFIStaticRlibHostFactory() android.Module {
-	module, library := NewRustLibrary(android.HostSupported)
-	library.BuildOnlyRlibStatic()
-
-	library.isFFI = true
-	return module.Init()
-}
-
 func (library *libraryDecorator) BuildOnlyFFI() {
 	library.MutatedProperties.BuildDylib = false
 	// we build rlibs for later static ffi linkage.
 	library.MutatedProperties.BuildRlib = true
 	library.MutatedProperties.BuildShared = true
-	library.MutatedProperties.BuildStatic = true
+	library.MutatedProperties.BuildStatic = false
 
 	library.isFFI = true
 }
@@ -415,14 +397,6 @@ func (library *libraryDecorator) BuildOnlyRlib() {
 	library.MutatedProperties.BuildRlib = true
 	library.MutatedProperties.BuildShared = false
 	library.MutatedProperties.BuildStatic = false
-}
-
-func (library *libraryDecorator) BuildOnlyRlibStatic() {
-	library.MutatedProperties.BuildDylib = false
-	library.MutatedProperties.BuildRlib = true
-	library.MutatedProperties.BuildShared = false
-	library.MutatedProperties.BuildStatic = true
-	library.isFFI = true
 }
 
 func (library *libraryDecorator) BuildOnlyStatic() {
@@ -766,10 +740,13 @@ func LibraryMutator(mctx android.BottomUpMutatorContext) {
 
 	// The order of the variations (modules) matches the variant names provided. Iterate
 	// through the new variation modules and set their mutated properties.
+	var emptyVariant = false
+	var rlibVariant = false
 	for i, v := range modules {
 		switch variants[i] {
 		case rlibVariation:
 			v.(*Module).compiler.(libraryInterface).setRlib()
+			rlibVariant = true
 		case dylibVariation:
 			v.(*Module).compiler.(libraryInterface).setDylib()
 			if v.(*Module).ModuleBase.ImageVariation().Variation == android.VendorRamdiskVariation {
@@ -784,9 +761,17 @@ func LibraryMutator(mctx android.BottomUpMutatorContext) {
 			// Disable the compilation steps.
 			v.(*Module).compiler.SetDisabled()
 		case "":
-			// if there's an empty variant, alias it so it is the default variant
-			mctx.AliasVariation("")
+			emptyVariant = true
 		}
+	}
+
+	if rlibVariant && library.isFFILibrary() {
+		// If an rlib variant is set and this is an FFI library, make it the
+		// default variant so CC can link against it appropriately.
+		mctx.AliasVariation(rlibVariation)
+	} else if emptyVariant {
+		// If there's an empty variant, alias it so it is the default variant
+		mctx.AliasVariation("")
 	}
 
 	// If a source variant is created, add an inter-variant dependency
@@ -817,6 +802,7 @@ func LibstdMutator(mctx android.BottomUpMutatorContext) {
 					rlib := modules[0].(*Module)
 					rlib.compiler.(libraryInterface).setRlibStd()
 					rlib.Properties.RustSubName += RlibStdlibSuffix
+					mctx.AliasVariation("rlib-std")
 				} else {
 					variants := []string{"rlib-std", "dylib-std"}
 					modules := mctx.CreateLocalVariations(variants...)

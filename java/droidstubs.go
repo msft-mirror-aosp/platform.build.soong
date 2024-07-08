@@ -1453,17 +1453,6 @@ type PrebuiltStubsSources struct {
 	stubsSrcJar android.Path
 }
 
-func (p *PrebuiltStubsSources) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	// prebuilt droidstubs does not output "exportable" stubs.
-	// Output the "everything" stubs srcjar file if the tag is ".exportable".
-	case "", ".exportable":
-		return android.Paths{p.stubsSrcJar}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
-}
-
 func (d *PrebuiltStubsSources) StubsSrcJar(_ StubsType) (android.Path, error) {
 	return d.stubsSrcJar, nil
 }
@@ -1502,6 +1491,11 @@ func (p *PrebuiltStubsSources) GenerateAndroidBuildActions(ctx android.ModuleCon
 		rule.Build("zip src", "Create srcjar from prebuilt source")
 		p.stubsSrcJar = outPath
 	}
+
+	ctx.SetOutputFiles(android.Paths{p.stubsSrcJar}, "")
+	// prebuilt droidstubs does not output "exportable" stubs.
+	// Output the "everything" stubs srcjar file if the tag is ".exportable".
+	ctx.SetOutputFiles(android.Paths{p.stubsSrcJar}, ".exportable")
 }
 
 func (p *PrebuiltStubsSources) Prebuilt() *android.Prebuilt {

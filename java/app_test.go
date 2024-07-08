@@ -4146,6 +4146,7 @@ func TestTargetSdkVersionMtsTests(t *testing.T) {
 	bpTemplate := `
 	%v {
 		name: "mytest",
+		min_sdk_version: "34",
 		target_sdk_version: "%v",
 		test_suites: ["othersuite", "%v"],
 	}

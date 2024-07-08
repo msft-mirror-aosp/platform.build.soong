@@ -226,8 +226,16 @@ func (config *ReleaseConfig) GenerateReleaseConfig(configs *ReleaseConfigs) erro
 			config.PriorStagesMap[priorStage] = true
 		}
 		myDirsMap[contrib.DeclarationIndex] = true
-		if config.AconfigFlagsOnly && len(contrib.FlagValues) > 0 {
-			return fmt.Errorf("%s does not allow build flag overrides", config.Name)
+		if config.AconfigFlagsOnly {
+			// AconfigFlagsOnly allows very very few build flag values, all of them are part of aconfig flags.
+			allowedFlags := map[string]bool{
+				"RELEASE_ACONFIG_EXTRA_RELEASE_CONFIGS": true,
+			}
+			for _, fv := range contrib.FlagValues {
+				if !allowedFlags[*fv.proto.Name] {
+					return fmt.Errorf("%s does not allow build flag overrides", config.Name)
+				}
+			}
 		}
 		for _, value := range contrib.FlagValues {
 			name := *value.proto.Name
@@ -256,7 +264,7 @@ func (config *ReleaseConfig) GenerateReleaseConfig(configs *ReleaseConfigs) erro
 	myAconfigValueSets := []string{}
 	myAconfigValueSetsMap := map[string]bool{}
 	for _, v := range strings.Split(releaseAconfigValueSets.Value.GetStringValue(), " ") {
-		if myAconfigValueSetsMap[v] {
+		if v == "" || myAconfigValueSetsMap[v] {
 			continue
 		}
 		myAconfigValueSetsMap[v] = true
@@ -320,6 +328,23 @@ func (config *ReleaseConfig) WriteMakefile(outFile, targetRelease string, config
 	makeVars := make(map[string]string)
 
 	myFlagArtifacts := config.FlagArtifacts.Clone()
+
+	// Add any RELEASE_ACONFIG_EXTRA_RELEASE_CONFIGS variables.
+	var extraAconfigReleaseConfigs []string
+	if extraAconfigValueSetsValue, ok := config.FlagArtifacts["RELEASE_ACONFIG_EXTRA_RELEASE_CONFIGS"]; ok {
+		if val := MarshalValue(extraAconfigValueSetsValue.Value); len(val) > 0 {
+			extraAconfigReleaseConfigs = strings.Split(val, " ")
+		}
+	}
+	for _, rcName := range extraAconfigReleaseConfigs {
+		rc, err := configs.GetReleaseConfig(rcName)
+		if err != nil {
+			return err
+		}
+		myFlagArtifacts["RELEASE_ACONFIG_VALUE_SETS_"+rcName] = rc.FlagArtifacts["RELEASE_ACONFIG_VALUE_SETS"]
+		myFlagArtifacts["RELEASE_ACONFIG_FLAG_DEFAULT_PERMISSION_"+rcName] = rc.FlagArtifacts["RELEASE_ACONFIG_FLAG_DEFAULT_PERMISSION"]
+	}
+
 	// Sort the flags by name first.
 	names := myFlagArtifacts.SortedFlagNames()
 	partitions := make(map[string][]string)
