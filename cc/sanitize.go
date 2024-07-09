@@ -1899,7 +1899,3 @@ func (txt *sanitizerLibrariesTxtModule) BaseDir() string {
 func (txt *sanitizerLibrariesTxtModule) SubDir() string {
 	return ""
 }
-
-func (txt *sanitizerLibrariesTxtModule) OutputFiles(tag string) (android.Paths, error) {
-	return android.Paths{txt.outputFile}, nil
-}

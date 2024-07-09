@@ -313,6 +313,7 @@ func NewConfig(ctx Context, args ...string) Config {
 		"DISPLAY",
 		"GREP_OPTIONS",
 		"JAVAC",
+		"LEX",
 		"NDK_ROOT",
 		"POSIXLY_CORRECT",
 
