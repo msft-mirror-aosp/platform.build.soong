@@ -7054,7 +7054,6 @@ func TestLegacyAndroid10Support(t *testing.T) {
 	module := ctx.ModuleForTests("myapex", "android_common_myapex")
 	args := module.Rule("apexRule").Args
 	ensureContains(t, args["opt_flags"], "--manifest_json "+module.Output("apex_manifest.json").Output.String())
-	ensureNotContains(t, args["opt_flags"], "--no_hashtree")
 
 	// The copies of the libraries in the apex should have one more dependency than
 	// the ones outside the apex, namely the unwinder. Ideally we should check
