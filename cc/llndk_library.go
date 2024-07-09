@@ -184,10 +184,6 @@ func (txt *llndkLibrariesTxtModule) SubDir() string {
 	return ""
 }
 
-func (txt *llndkLibrariesTxtModule) OutputFiles(tag string) (android.Paths, error) {
-	return android.Paths{txt.outputFile}, nil
-}
-
 func llndkMutator(mctx android.BottomUpMutatorContext) {
 	m, ok := mctx.Module().(*Module)
 	if !ok {
