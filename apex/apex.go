@@ -157,8 +157,7 @@ type apexBundleProperties struct {
 	// Default: true.
 	Installable *bool
 
-	// If set true, VNDK libs are considered as stable libs and are not included in this APEX.
-	// Should be only used in non-system apexes (e.g. vendor: true). Default is false.
+	// Deprecated. Do not use. TODO(b/350644693) remove this after removing all usage
 	Use_vndk_as_stable *bool
 
 	// The type of filesystem to use. Either 'ext4', 'f2fs' or 'erofs'. Default 'ext4'.
@@ -167,10 +166,6 @@ type apexBundleProperties struct {
 	// For telling the APEX to ignore special handling for system libraries such as bionic.
 	// Default is false.
 	Ignore_system_library_special_case *bool
-
-	// Whenever apex_payload.img of the APEX should include dm-verity hashtree.
-	// Default value is true.
-	Generate_hashtree *bool
 
 	// Whenever apex_payload.img of the APEX should not be dm-verity signed. Should be only
 	// used in tests.
@@ -489,6 +484,9 @@ type apexBundle struct {
 	javaApisUsedByModuleFile     android.ModuleOutPath
 
 	aconfigFiles []android.Path
+
+	// Required modules, filled out during GenerateAndroidBuildActions and used in AndroidMk
+	required []string
 }
 
 // apexFileClass represents a type of file that can be included in APEX.
@@ -567,7 +565,7 @@ func newApexFile(ctx android.BaseModuleContext, builtFile android.Path, androidM
 	if module != nil {
 		ret.moduleDir = ctx.OtherModuleDir(module)
 		ret.partition = module.PartitionTag(ctx.DeviceConfig())
-		ret.requiredModuleNames = module.RequiredModuleNames()
+		ret.requiredModuleNames = module.RequiredModuleNames(ctx)
 		ret.targetRequiredModuleNames = module.TargetRequiredModuleNames()
 		ret.hostRequiredModuleNames = module.HostRequiredModuleNames()
 		ret.multilib = module.Target().Arch.ArchType.Multilib
@@ -745,9 +743,9 @@ func (a *apexBundle) getImageVariationPair() (string, string) {
 
 	prefix := android.CoreVariation
 	if a.SocSpecific() || a.DeviceSpecific() {
-		prefix = cc.VendorVariation
+		prefix = android.VendorVariation
 	} else if a.ProductSpecific() {
-		prefix = cc.ProductVariation
+		prefix = android.ProductVariation
 	}
 
 	return prefix, ""
@@ -947,29 +945,6 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		return
 	}
 
-	// Special casing for APEXes on non-system (e.g., vendor, odm, etc.) partitions. They are
-	// provided with a property named use_vndk_as_stable, which when set to true doesn't collect
-	// VNDK libraries as transitive dependencies. This option is useful for reducing the size of
-	// the non-system APEXes because the VNDK libraries won't be included (and duped) in the
-	// APEX, but shared across APEXes via the VNDK APEX.
-	useVndk := a.SocSpecific() || a.DeviceSpecific() || (a.ProductSpecific() && mctx.Config().EnforceProductPartitionInterface())
-	if proptools.Bool(a.properties.Use_vndk_as_stable) {
-		if !useVndk {
-			mctx.PropertyErrorf("use_vndk_as_stable", "not supported for system/system_ext APEXes")
-		}
-		if a.minSdkVersionValue(mctx) != "" {
-			mctx.PropertyErrorf("use_vndk_as_stable", "not supported when min_sdk_version is set")
-		}
-		mctx.VisitDirectDepsWithTag(sharedLibTag, func(dep android.Module) {
-			if c, ok := dep.(*cc.Module); ok && c.IsVndk() {
-				mctx.PropertyErrorf("use_vndk_as_stable", "Trying to include a VNDK library(%s) while use_vndk_as_stable is true.", dep.Name())
-			}
-		})
-		if mctx.Failed() {
-			return
-		}
-	}
-
 	continueApexDepsWalk := func(child, parent android.Module) bool {
 		am, ok := child.(android.ApexModule)
 		if !ok || !am.CanHaveApexVariants() {
@@ -985,10 +960,6 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		}
 		if !android.IsDepInSameApex(mctx, parent, child) {
 			return false
-		}
-
-		if useVndk && child.Name() == "libbinder" {
-			mctx.ModuleErrorf("Module %s in the vendor APEX %s should not use libbinder. Use libbinder_ndk instead.", parent.Name(), a.Name())
 		}
 
 		// By default, all the transitive dependencies are collected, unless filtered out
@@ -1045,6 +1016,7 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		InApexModules:     []string{a.Name()}, // could be com.mycompany.android.foo
 		ApexContents:      []*android.ApexContents{apexContents},
 		TestApexes:        testApexes,
+		BaseApexName:      mctx.ModuleName(),
 	}
 	mctx.WalkDeps(func(child, parent android.Module) bool {
 		if !continueApexDepsWalk(child, parent) {
@@ -1173,6 +1145,7 @@ var (
 		"test_com.android.os.statsd",
 		"test_com.android.permission",
 		"test_com.android.wifi",
+		"test_imgdiag_com.android.art",
 		"test_jitzygote_com.android.art",
 		// go/keep-sorted end
 	}
@@ -1371,25 +1344,6 @@ func (a *apexBundle) DepIsInSameApex(_ android.BaseModuleContext, _ android.Modu
 	return true
 }
 
-var _ android.OutputFileProducer = (*apexBundle)(nil)
-
-// Implements android.OutputFileProducer
-func (a *apexBundle) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "", android.DefaultDistTag:
-		// This is the default dist path.
-		return android.Paths{a.outputFile}, nil
-	case imageApexSuffix:
-		// uncompressed one
-		if a.outputApexFile != nil {
-			return android.Paths{a.outputApexFile}, nil
-		}
-		fallthrough
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
-}
-
 var _ multitree.Exportable = (*apexBundle)(nil)
 
 func (a *apexBundle) Exportable() bool {
@@ -1465,11 +1419,6 @@ func (a *apexBundle) getCertString(ctx android.BaseModuleContext) string {
 // See the installable property
 func (a *apexBundle) installable() bool {
 	return !a.properties.PreventInstall && (a.properties.Installable == nil || proptools.Bool(a.properties.Installable))
-}
-
-// See the generate_hashtree property
-func (a *apexBundle) shouldGenerateHashtree() bool {
-	return proptools.BoolDefault(a.properties.Generate_hashtree, true)
 }
 
 // See the test_only_unsigned_payload property
@@ -1668,12 +1617,12 @@ var _ javaModule = (*java.DexImport)(nil)
 var _ javaModule = (*java.SdkLibraryImport)(nil)
 
 // apexFileForJavaModule creates an apexFile for a java module's dex implementation jar.
-func apexFileForJavaModule(ctx android.BaseModuleContext, module javaModule) apexFile {
+func apexFileForJavaModule(ctx android.ModuleContext, module javaModule) apexFile {
 	return apexFileForJavaModuleWithFile(ctx, module, module.DexJarBuildPath(ctx).PathOrNil())
 }
 
 // apexFileForJavaModuleWithFile creates an apexFile for a java module with the supplied file.
-func apexFileForJavaModuleWithFile(ctx android.BaseModuleContext, module javaModule, dexImplementationJar android.Path) apexFile {
+func apexFileForJavaModuleWithFile(ctx android.ModuleContext, module javaModule, dexImplementationJar android.Path) apexFile {
 	dirInApex := "javalib"
 	af := newApexFile(ctx, dexImplementationJar, module.BaseModuleName(), dirInApex, javaSharedLib, module)
 	af.jacocoReportClassesFile = module.JacocoReportClassesFile()
@@ -1684,10 +1633,12 @@ func apexFileForJavaModuleWithFile(ctx android.BaseModuleContext, module javaMod
 	if sdkLib, ok := module.(*java.SdkLibrary); ok {
 		for _, install := range sdkLib.BuiltInstalledForApex() {
 			af.requiredModuleNames = append(af.requiredModuleNames, install.FullModuleName())
+			install.PackageFile(ctx)
 		}
 	} else if dexpreopter, ok := module.(java.DexpreopterInterface); ok {
 		for _, install := range dexpreopter.DexpreoptBuiltInstalledForApex() {
 			af.requiredModuleNames = append(af.requiredModuleNames, install.FullModuleName())
+			install.PackageFile(ctx)
 		}
 	}
 	return af
@@ -2119,7 +2070,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			}
 		case prebuiltTag:
 			if prebuilt, ok := child.(prebuilt_etc.PrebuiltEtcModule); ok {
-				filesToCopy, _ := prebuilt.OutputFiles("")
+				filesToCopy := android.OutputFilesForModule(ctx, prebuilt, "")
 				for _, etcFile := range filesToCopy {
 					vctx.filesInfo = append(vctx.filesInfo, apexFileForPrebuiltEtc(ctx, prebuilt, etcFile))
 				}
@@ -2256,7 +2207,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 		// Because APK-in-APEX embeds jni_libs transitively, we don't need to track transitive deps
 	} else if java.IsXmlPermissionsFileDepTag(depTag) {
 		if prebuilt, ok := child.(prebuilt_etc.PrebuiltEtcModule); ok {
-			filesToCopy, _ := prebuilt.OutputFiles("")
+			filesToCopy := android.OutputFilesForModule(ctx, prebuilt, "")
 			for _, etcFile := range filesToCopy {
 				vctx.filesInfo = append(vctx.filesInfo, apexFileForPrebuiltEtc(ctx, prebuilt, etcFile))
 			}
@@ -2429,6 +2380,10 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.provideApexExportsInfo(ctx)
 
 	a.providePrebuiltInfo(ctx)
+
+	a.required = a.RequiredModuleNames(ctx)
+
+	a.setOutputFiles(ctx)
 }
 
 // Set prebuiltInfoProvider. This will be used by `apex_prebuiltinfo_singleton` to print out a metadata file
@@ -2455,6 +2410,18 @@ func (a *apexBundle) provideApexExportsInfo(ctx android.ModuleContext) {
 			android.SetProvider(ctx, android.ApexExportsInfoProvider, exports)
 		}
 	})
+}
+
+// Set output files to outputFiles property, which is later used to set the
+// OutputFilesProvider
+func (a *apexBundle) setOutputFiles(ctx android.ModuleContext) {
+	// default dist path
+	ctx.SetOutputFiles(android.Paths{a.outputFile}, "")
+	ctx.SetOutputFiles(android.Paths{a.outputFile}, android.DefaultDistTag)
+	// uncompressed one
+	if a.outputApexFile != nil {
+		ctx.SetOutputFiles(android.Paths{a.outputApexFile}, imageApexSuffix)
+	}
 }
 
 // apexBootclasspathFragmentFiles returns the list of apexFile structures defining the files that
@@ -2718,9 +2685,6 @@ func (a *apexBundle) checkUpdatable(ctx android.ModuleContext) {
 		}
 		if a.UsePlatformApis() {
 			ctx.PropertyErrorf("updatable", "updatable APEXes can't use platform APIs")
-		}
-		if proptools.Bool(a.properties.Use_vndk_as_stable) {
-			ctx.PropertyErrorf("use_vndk_as_stable", "updatable APEXes can't use external VNDK libs")
 		}
 		if a.FutureUpdatable() {
 			ctx.PropertyErrorf("future_updatable", "Already updatable. Remove `future_updatable: true:`")

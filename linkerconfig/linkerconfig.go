@@ -15,7 +15,6 @@
 package linkerconfig
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
@@ -73,17 +72,6 @@ func (l *linkerConfig) OutputFile() android.OutputPath {
 	return l.outputFilePath
 }
 
-var _ android.OutputFileProducer = (*linkerConfig)(nil)
-
-func (l *linkerConfig) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return android.Paths{l.outputFilePath}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
-}
-
 func (l *linkerConfig) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	input := android.PathForModuleSrc(ctx, android.String(l.properties.Src))
 	output := android.PathForModuleOut(ctx, "linker.config.pb").OutputPath
@@ -98,6 +86,8 @@ func (l *linkerConfig) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		l.SkipInstall()
 	}
 	ctx.InstallFile(l.installDirPath, l.outputFilePath.Base(), l.outputFilePath)
+
+	ctx.SetOutputFiles(android.Paths{l.outputFilePath}, "")
 }
 
 func BuildLinkerConfig(ctx android.ModuleContext, builder *android.RuleBuilder,
@@ -114,7 +104,7 @@ func BuildLinkerConfig(ctx android.ModuleContext, builder *android.RuleBuilder,
 	// Secondly, if there's provideLibs gathered from provideModules, append them
 	var provideLibs []string
 	for _, m := range provideModules {
-		if c, ok := m.(*cc.Module); ok && cc.IsStubTarget(c) {
+		if c, ok := m.(*cc.Module); ok && (cc.IsStubTarget(c) || c.HasLlndkStubs()) {
 			for _, ps := range c.PackagingSpecs() {
 				provideLibs = append(provideLibs, ps.FileName())
 			}

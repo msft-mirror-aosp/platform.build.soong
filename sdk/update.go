@@ -434,6 +434,14 @@ be unnecessary as every module in the sdk already has its own licenses property.
 		prebuiltModule := memberType.AddPrebuiltModule(memberCtx, member)
 		s.createMemberSnapshot(memberCtx, member, prebuiltModule.(*bpModule))
 
+		// Set stripper to none to skip stripping for generated snapshots.
+		// Mainline prebuilts (cc_prebuilt_library_shared) are not strippable in older platforms.
+		// Thus, stripping should be skipped when being used as prebuilts.
+		if memberType.DisablesStrip() {
+			stripPropertySet := prebuiltModule.(*bpModule).AddPropertySet("strip")
+			stripPropertySet.AddProperty("none", true)
+		}
+
 		if member.memberType != android.LicenseModuleSdkMemberType && !builder.isInternalMember(member.name) {
 			// More exceptions
 			// 1. Skip BCP and SCCP fragments
@@ -480,6 +488,12 @@ be unnecessary as every module in the sdk already has its own licenses property.
 		// Transform the module module to make it suitable for use in the snapshot.
 		module = transformModule(module, snapshotTransformer)
 		module = transformModule(module, emptyClasspathContentsTransformation{})
+
+		targetApiLevel, err := android.ApiLevelFromUserWithConfig(ctx.Config(), s.targetBuildRelease(ctx).name)
+		if err == nil && targetApiLevel.LessThan(android.ApiLevelVanillaIceCream) {
+			module = transformModule(module, replaceExportablePropertiesTransformer{})
+		}
+
 		if module != nil {
 			bpFile.AddModule(module)
 		}
@@ -802,6 +816,50 @@ func (t pruneEmptySetTransformer) transformPropertySetAfterContents(_ string, pr
 	} else {
 		return propertySet, tag
 	}
+}
+
+type replaceExportablePropertiesTransformer struct {
+	identityTransformation
+}
+
+var _ bpTransformer = (*replaceExportablePropertiesTransformer)(nil)
+
+func handleExportableProperties[T any](value T) any {
+	switch v := any(value).(type) {
+	case string:
+		return java.AllApiScopes.ConvertStubsLibraryExportableToEverything(v)
+	case *bpPropertySet:
+		v.properties = handleExportableProperties(v.properties).(map[string]interface{})
+		return v
+	case []string:
+		result := make([]string, len(v))
+		for i, elem := range v {
+			result[i] = handleExportableProperties(elem).(string)
+		}
+		return result
+	case []any:
+		result := make([]any, len(v))
+		for i, elem := range v {
+			result[i] = handleExportableProperties(elem)
+		}
+		return result
+	case map[string]any:
+		result := make(map[string]any)
+		for k, val := range v {
+			result[k] = handleExportableProperties(val)
+		}
+		return result
+	default:
+		return value
+	}
+}
+
+func (t replaceExportablePropertiesTransformer) transformPropertySetAfterContents(name string, propertySet *bpPropertySet, tag android.BpPropertyTag) (*bpPropertySet, android.BpPropertyTag) {
+	if name == "name" {
+		return propertySet, tag
+	}
+	propertySet.properties = handleExportableProperties(propertySet.properties).(map[string]interface{})
+	return propertySet, tag
 }
 
 func generateBpContents(bpFile *bpFile) string {
