@@ -2994,22 +2994,22 @@ func TestJavaLibraryOutputFilesRel(t *testing.T) {
 	baz := result.ModuleForTests("baz", "android_common")
 
 	fooOutputPath := android.OutputFileForModule(android.PathContext(nil), foo.Module(), "")
-	barOutputPath := android.OutputFileForModule(android.PathContext(nil), bar.Module(), "")
-	bazOutputPath := android.OutputFileForModule(android.PathContext(nil), baz.Module(), "")
+	barOutputPaths := bar.OutputFiles(t, "")
+	bazOutputPaths := baz.OutputFiles(t, "")
 
 	android.AssertPathRelativeToTopEquals(t, "foo output path",
 		"out/soong/.intermediates/foo/android_common/javac/foo.jar", fooOutputPath)
-	android.AssertPathRelativeToTopEquals(t, "bar output path",
-		"out/soong/.intermediates/bar/android_common/combined/bar.jar", barOutputPath)
-	android.AssertPathRelativeToTopEquals(t, "baz output path",
-		"out/soong/.intermediates/baz/android_common/combined/baz.jar", bazOutputPath)
+	android.AssertPathsRelativeToTopEquals(t, "bar output path",
+		[]string{"out/soong/.intermediates/bar/android_common/combined/bar.jar"}, barOutputPaths)
+	android.AssertPathsRelativeToTopEquals(t, "baz output path",
+		[]string{"out/soong/.intermediates/baz/android_common/combined/baz.jar"}, bazOutputPaths)
 
 	android.AssertStringEquals(t, "foo relative output path",
 		"foo.jar", fooOutputPath.Rel())
 	android.AssertStringEquals(t, "bar relative output path",
-		"bar.jar", barOutputPath.Rel())
+		"bar.jar", barOutputPaths[0].Rel())
 	android.AssertStringEquals(t, "baz relative output path",
-		"baz.jar", bazOutputPath.Rel())
+		"baz.jar", bazOutputPaths[0].Rel())
 }
 
 func assertTestOnlyAndTopLevel(t *testing.T, ctx *android.TestResult, expectedTestOnly []string, expectedTopLevel []string) {
