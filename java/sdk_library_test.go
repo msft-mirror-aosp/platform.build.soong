@@ -492,7 +492,7 @@ func TestJavaSdkLibrary_AccessOutputFiles_NoAnnotations(t *testing.T) {
 		PrepareForTestWithJavaSdkLibraryFiles,
 		FixtureWithLastReleaseApis("foo"),
 	).
-		ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`module "bar" variant "android_common": failed to get output file from module "foo" at tag ".public.annotations.zip": annotations.zip not available for api scope public`)).
+		ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`module "bar" variant "android_common": unsupported module reference tag ".public.annotations.zip"`)).
 		RunTestWithBp(t, `
 		java_sdk_library {
 			name: "foo",
@@ -517,7 +517,7 @@ func TestJavaSdkLibrary_AccessOutputFiles_MissingScope(t *testing.T) {
 		PrepareForTestWithJavaSdkLibraryFiles,
 		FixtureWithLastReleaseApis("foo"),
 	).
-		ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`"foo" does not provide api scope system`)).
+		ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`module "bar" variant "android_common": unsupported module reference tag ".system.stubs.source"`)).
 		RunTestWithBp(t, `
 		java_sdk_library {
 			name: "foo",
@@ -606,7 +606,7 @@ func TestJavaSdkLibraryImport_AccessOutputFiles_Invalid(t *testing.T) {
 
 	t.Run("stubs.source", func(t *testing.T) {
 		prepareForJavaTest.
-			ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`stubs.source not available for api scope public`)).
+			ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`module "foo" is not an SourceFileProducer or having valid output file for tag ".public.stubs.source"`)).
 			RunTestWithBp(t, bp+`
 				java_library {
 					name: "bar",
@@ -621,7 +621,7 @@ func TestJavaSdkLibraryImport_AccessOutputFiles_Invalid(t *testing.T) {
 
 	t.Run("api.txt", func(t *testing.T) {
 		prepareForJavaTest.
-			ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`api.txt not available for api scope public`)).
+			ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`module "foo" is not an SourceFileProducer or having valid output file for tag ".public.api.txt"`)).
 			RunTestWithBp(t, bp+`
 				java_library {
 					name: "bar",
@@ -635,7 +635,7 @@ func TestJavaSdkLibraryImport_AccessOutputFiles_Invalid(t *testing.T) {
 
 	t.Run("removed-api.txt", func(t *testing.T) {
 		prepareForJavaTest.
-			ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`removed-api.txt not available for api scope public`)).
+			ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`module "foo" is not an SourceFileProducer or having valid output file for tag ".public.removed-api.txt"`)).
 			RunTestWithBp(t, bp+`
 				java_library {
 					name: "bar",
