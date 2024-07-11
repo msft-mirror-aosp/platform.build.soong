@@ -649,34 +649,20 @@ func (j *Module) provideHiddenAPIPropertyInfo(ctx android.ModuleContext) {
 	android.SetProvider(ctx, hiddenAPIPropertyInfoProvider, hiddenAPIInfo)
 }
 
-func (j *Module) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return append(android.Paths{j.outputFile}, j.extraOutputFiles...), nil
-	case android.DefaultDistTag:
-		return android.Paths{j.outputFile}, nil
-	case ".jar":
-		return android.Paths{j.implementationAndResourcesJar}, nil
-	case ".hjar":
-		return android.Paths{j.headerJarFile}, nil
-	case ".proguard_map":
-		if j.dexer.proguardDictionary.Valid() {
-			return android.Paths{j.dexer.proguardDictionary.Path()}, nil
-		}
-		return nil, fmt.Errorf("%q was requested, but no output file was found.", tag)
-	case ".generated_srcjars":
-		return j.properties.Generated_srcjars, nil
-	case ".lint":
-		if j.linter.outputs.xml != nil {
-			return android.Paths{j.linter.outputs.xml}, nil
-		}
-		return nil, fmt.Errorf("%q was requested, but no output file was found.", tag)
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
+// helper method for java modules to set OutputFilesProvider
+func setOutputFiles(ctx android.ModuleContext, m Module) {
+	ctx.SetOutputFiles(append(android.Paths{m.outputFile}, m.extraOutputFiles...), "")
+	ctx.SetOutputFiles(android.Paths{m.outputFile}, android.DefaultDistTag)
+	ctx.SetOutputFiles(android.Paths{m.implementationAndResourcesJar}, ".jar")
+	ctx.SetOutputFiles(android.Paths{m.headerJarFile}, ".hjar")
+	if m.dexer.proguardDictionary.Valid() {
+		ctx.SetOutputFiles(android.Paths{m.dexer.proguardDictionary.Path()}, ".proguard_map")
+	}
+	ctx.SetOutputFiles(m.properties.Generated_srcjars, ".generated_srcjars")
+	if m.linter.outputs.xml != nil {
+		ctx.SetOutputFiles(android.Paths{m.linter.outputs.xml}, ".lint")
 	}
 }
-
-var _ android.OutputFileProducer = (*Module)(nil)
 
 func InitJavaModule(module android.DefaultableModule, hod android.HostOrDeviceSupported) {
 	initJavaModule(module, hod, false)
