@@ -1021,20 +1021,6 @@ type AARImport struct {
 	classLoaderContexts dexpreopt.ClassLoaderContextMap
 }
 
-var _ android.OutputFileProducer = (*AARImport)(nil)
-
-// For OutputFileProducer interface
-func (a *AARImport) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case ".aar":
-		return []android.Path{a.aarPath}, nil
-	case "":
-		return []android.Path{a.implementationAndResourcesJarFile}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
-}
-
 func (a *AARImport) SdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
 	return android.SdkSpecFrom(ctx, String(a.properties.Sdk_version))
 }
@@ -1388,6 +1374,9 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	android.SetProvider(ctx, JniPackageProvider, JniPackageInfo{
 		JniPackages: a.jniPackages,
 	})
+
+	ctx.SetOutputFiles([]android.Path{a.implementationAndResourcesJarFile}, "")
+	ctx.SetOutputFiles([]android.Path{a.aarPath}, ".aar")
 }
 
 func (a *AARImport) HeaderJars() android.Paths {
