@@ -56,6 +56,17 @@ func runNinjaForBuild(ctx Context, config Config) {
 		"-d", "stats",
 		"--frontend_file", fifo,
 	}
+	if config.useN2 {
+		executable = config.PrebuiltBuildTool("n2")
+		args = []string{
+			"-d", "trace",
+			// TODO: implement these features, or remove them.
+			//"-d", "keepdepfile",
+			//"-d", "keeprsp",
+			//"-d", "stats",
+			"--frontend-file", fifo,
+		}
+	}
 
 	args = append(args, config.NinjaArgs()...)
 
@@ -72,17 +83,21 @@ func runNinjaForBuild(ctx Context, config Config) {
 
 	args = append(args, "-f", config.CombinedNinjaFile())
 
-	args = append(args,
-		"-o", "usesphonyoutputs=yes",
-		"-w", "dupbuild=err",
-		"-w", "missingdepfile=err")
+	if !config.useN2 {
+		args = append(args,
+			"-o", "usesphonyoutputs=yes",
+			"-w", "dupbuild=err",
+			"-w", "missingdepfile=err")
+	}
 
 	if !config.BuildBrokenMissingOutputs() {
 		// Missing outputs will be treated as errors.
 		// BUILD_BROKEN_MISSING_OUTPUTS can be used to bypass this check.
-		args = append(args,
-			"-w", "missingoutfile=err",
-		)
+		if !config.useN2 {
+			args = append(args,
+				"-w", "missingoutfile=err",
+			)
+		}
 	}
 
 	cmd := Command(ctx, config, "ninja", executable, args...)
@@ -97,16 +112,22 @@ func runNinjaForBuild(ctx Context, config Config) {
 
 	switch config.NinjaWeightListSource() {
 	case NINJA_LOG:
-		cmd.Args = append(cmd.Args, "-o", "usesninjalogasweightlist=yes")
+		if !config.useN2 {
+			cmd.Args = append(cmd.Args, "-o", "usesninjalogasweightlist=yes")
+		}
 	case EVENLY_DISTRIBUTED:
 		// pass empty weight list means ninja considers every tasks's weight as 1(default value).
-		cmd.Args = append(cmd.Args, "-o", "usesweightlist=/dev/null")
+		if !config.useN2 {
+			cmd.Args = append(cmd.Args, "-o", "usesweightlist=/dev/null")
+		}
 	case EXTERNAL_FILE:
 		fallthrough
 	case HINT_FROM_SOONG:
 		// The weight list is already copied/generated.
-		ninjaWeightListPath := filepath.Join(config.OutDir(), ninjaWeightListFileName)
-		cmd.Args = append(cmd.Args, "-o", "usesweightlist="+ninjaWeightListPath)
+		if !config.useN2 {
+			ninjaWeightListPath := filepath.Join(config.OutDir(), ninjaWeightListFileName)
+			cmd.Args = append(cmd.Args, "-o", "usesweightlist="+ninjaWeightListPath)
+		}
 	}
 
 	// Allow both NINJA_ARGS and NINJA_EXTRA_ARGS, since both have been
@@ -206,11 +227,16 @@ func runNinjaForBuild(ctx Context, config Config) {
 			// We don't want this build broken flag to cause reanalysis, so allow it through to the
 			// actions.
 			"BUILD_BROKEN_INCORRECT_PARTITION_IMAGES",
+			"SOONG_USE_N2",
+			"RUST_BACKTRACE",
 		}, config.BuildBrokenNinjaUsesEnvVars()...)...)
 	}
 
 	cmd.Environment.Set("DIST_DIR", config.DistDir())
 	cmd.Environment.Set("SHELL", "/bin/bash")
+	if config.useN2 {
+		cmd.Environment.Set("RUST_BACKTRACE", "1")
+	}
 
 	// Print the environment variables that Ninja is operating in.
 	ctx.Verboseln("Ninja environment: ")
