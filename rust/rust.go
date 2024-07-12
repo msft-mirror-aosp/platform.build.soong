@@ -1107,7 +1107,6 @@ var (
 	rlibDepTag          = dependencyTag{name: "rlibTag", library: true}
 	dylibDepTag         = dependencyTag{name: "dylib", library: true, dynamic: true}
 	procMacroDepTag     = dependencyTag{name: "procMacro", procMacro: true}
-	testPerSrcDepTag    = dependencyTag{name: "rust_unit_tests"}
 	sourceDepTag        = dependencyTag{name: "source"}
 	dataLibDepTag       = dependencyTag{name: "data lib"}
 	dataBinDepTag       = dependencyTag{name: "data bin"}
