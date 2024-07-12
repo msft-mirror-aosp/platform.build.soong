@@ -1017,6 +1017,22 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 			isPrebuilt:     false,
 		},
 	)
+
+	a.setOutputFiles(ctx)
+}
+
+func (a *AndroidApp) setOutputFiles(ctx android.ModuleContext) {
+	ctx.SetOutputFiles([]android.Path{a.proguardOptionsFile}, ".aapt.proguardOptionsFile")
+	if a.aaptSrcJar != nil {
+		ctx.SetOutputFiles([]android.Path{a.aaptSrcJar}, ".aapt.srcjar")
+	}
+	if a.rJar != nil {
+		ctx.SetOutputFiles([]android.Path{a.rJar}, ".aapt.jar")
+	}
+	ctx.SetOutputFiles([]android.Path{a.outputFile}, ".apk")
+	ctx.SetOutputFiles([]android.Path{a.exportPackage}, ".export-package.apk")
+	ctx.SetOutputFiles([]android.Path{a.aapt.manifestPath}, ".manifest.xml")
+	setOutputFiles(ctx, a.Library.Module)
 }
 
 type appDepsInterface interface {
@@ -1205,31 +1221,6 @@ func (a *AndroidApp) DepIsInSameApex(ctx android.BaseModuleContext, dep android.
 		return true
 	}
 	return a.Library.DepIsInSameApex(ctx, dep)
-}
-
-// For OutputFileProducer interface
-func (a *AndroidApp) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	// In some instances, it can be useful to reference the aapt-generated flags from another
-	// target, e.g., system server implements services declared in the framework-res manifest.
-	case ".aapt.proguardOptionsFile":
-		return []android.Path{a.proguardOptionsFile}, nil
-	case ".aapt.srcjar":
-		if a.aaptSrcJar != nil {
-			return []android.Path{a.aaptSrcJar}, nil
-		}
-	case ".aapt.jar":
-		if a.rJar != nil {
-			return []android.Path{a.rJar}, nil
-		}
-	case ".apk":
-		return []android.Path{a.outputFile}, nil
-	case ".export-package.apk":
-		return []android.Path{a.exportPackage}, nil
-	case ".manifest.xml":
-		return []android.Path{a.aapt.manifestPath}, nil
-	}
-	return a.Library.OutputFiles(tag)
 }
 
 func (a *AndroidApp) Privileged() bool {

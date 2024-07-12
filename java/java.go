@@ -977,6 +977,8 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		TestOnly:       Bool(j.sourceProperties.Test_only),
 		TopLevelTarget: j.sourceProperties.Top_level_test_target,
 	})
+
+	setOutputFiles(ctx, j.Module)
 }
 
 func (j *Library) setInstallRules(ctx android.ModuleContext, installModuleName string) {
@@ -1836,6 +1838,8 @@ func (j *Binary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		// libraries.  This is verified by TestBinary.
 		j.binaryFile = ctx.InstallExecutable(android.PathForModuleInstall(ctx, "bin"),
 			ctx.ModuleName()+ext, j.wrapperFile)
+
+		setOutputFiles(ctx, j.Library.Module)
 	}
 }
 

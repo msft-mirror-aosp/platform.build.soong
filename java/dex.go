@@ -91,6 +91,10 @@ type DexProperties struct {
 
 	// Exclude kotlinc generate files: *.kotlin_module, *.kotlin_builtins. Defaults to false.
 	Exclude_kotlinc_generated_files *bool
+
+	// Disable dex container (also known as "multi-dex").
+	// This may be necessary as a temporary workaround to mask toolchain bugs (see b/341652226).
+	No_dex_container *bool
 }
 
 type dexer struct {

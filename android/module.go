@@ -2491,6 +2491,8 @@ func outputFilesForModule(ctx PathContext, module blueprint.Module, tag string) 
 	if outputFilesFromProvider != nil || err != OutputFilesProviderNotSet {
 		return outputFilesFromProvider, err
 	}
+	// TODO: add error when outputFilesFromProvider and err are both nil after
+	// OutputFileProducer and SourceFileProducer are deprecated.
 	if outputFileProducer, ok := module.(OutputFileProducer); ok {
 		paths, err := outputFileProducer.OutputFiles(tag)
 		if err != nil {
@@ -2505,7 +2507,7 @@ func outputFilesForModule(ctx PathContext, module blueprint.Module, tag string) 
 		paths := sourceFileProducer.Srcs()
 		return paths, nil
 	} else {
-		return nil, fmt.Errorf("module %q is not an OutputFileProducer or SourceFileProducer", pathContextName(ctx, module))
+		return nil, fmt.Errorf("module %q is not a SourceFileProducer or having valid output file for tag %q", pathContextName(ctx, module), tag)
 	}
 }
 
