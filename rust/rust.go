@@ -501,7 +501,7 @@ func (mod *Module) isCoverageVariant() bool {
 
 var _ cc.Coverage = (*Module)(nil)
 
-func (mod *Module) IsNativeCoverageNeeded(ctx android.IncomingTransitionContext) bool {
+func (mod *Module) IsNativeCoverageNeeded(ctx cc.IsNativeCoverageNeededContext) bool {
 	return mod.coverage != nil && mod.coverage.Properties.NeedCoverageVariant
 }
 
@@ -1107,7 +1107,6 @@ var (
 	rlibDepTag          = dependencyTag{name: "rlibTag", library: true}
 	dylibDepTag         = dependencyTag{name: "dylib", library: true, dynamic: true}
 	procMacroDepTag     = dependencyTag{name: "procMacro", procMacro: true}
-	testPerSrcDepTag    = dependencyTag{name: "rust_unit_tests"}
 	sourceDepTag        = dependencyTag{name: "source"}
 	dataLibDepTag       = dependencyTag{name: "data lib"}
 	dataBinDepTag       = dependencyTag{name: "data bin"}

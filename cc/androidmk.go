@@ -351,9 +351,6 @@ func (test *testBinary) AndroidMkEntries(ctx AndroidMkContext, entries *android.
 	ctx.subAndroidMk(entries, test.testDecorator)
 
 	entries.Class = "NATIVE_TESTS"
-	if Bool(test.Properties.Test_per_src) {
-		entries.SubName = "_" + String(test.binaryDecorator.Properties.Stem)
-	}
 	entries.ExtraEntries = append(entries.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 		if test.testConfig != nil {
 			entries.SetString("LOCAL_FULL_TEST_CONFIG", test.testConfig.String())
