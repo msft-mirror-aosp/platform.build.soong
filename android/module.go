@@ -1746,7 +1746,11 @@ func (m *ModuleBase) baseModuleContextFactory(ctx blueprint.BaseModuleContext) b
 	}
 }
 
-func (m *ModuleBase) archModuleContextFactory(ctx blueprint.IncomingTransitionContext) archModuleContext {
+type archModuleContextFactoryContext interface {
+	Config() interface{}
+}
+
+func (m *ModuleBase) archModuleContextFactory(ctx archModuleContextFactoryContext) archModuleContext {
 	config := ctx.Config().(Config)
 	target := m.Target()
 	primaryArch := false
@@ -2491,18 +2495,9 @@ func outputFilesForModule(ctx PathContext, module blueprint.Module, tag string) 
 	if outputFilesFromProvider != nil || err != OutputFilesProviderNotSet {
 		return outputFilesFromProvider, err
 	}
-	// TODO: add error when outputFilesFromProvider and err are both nil after
-	// OutputFileProducer and SourceFileProducer are deprecated.
-	if outputFileProducer, ok := module.(OutputFileProducer); ok {
-		paths, err := outputFileProducer.OutputFiles(tag)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get output file from module %q at tag %q: %s",
-				pathContextName(ctx, module), tag, err.Error())
-		}
-		return paths, nil
-	} else if sourceFileProducer, ok := module.(SourceFileProducer); ok {
+	if sourceFileProducer, ok := module.(SourceFileProducer); ok {
 		if tag != "" {
-			return nil, fmt.Errorf("module %q is a SourceFileProducer, not an OutputFileProducer, and so does not support tag %q", pathContextName(ctx, module), tag)
+			return nil, fmt.Errorf("module %q is a SourceFileProducer, which does not support tag %q", pathContextName(ctx, module), tag)
 		}
 		paths := sourceFileProducer.Srcs()
 		return paths, nil
@@ -2521,7 +2516,12 @@ func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, 
 	var outputFiles OutputFilesInfo
 	fromProperty := false
 
-	if mctx, isMctx := ctx.(ModuleContext); isMctx {
+	type OutputFilesProviderModuleContext interface {
+		OtherModuleProviderContext
+		Module() Module
+	}
+
+	if mctx, isMctx := ctx.(OutputFilesProviderModuleContext); isMctx {
 		if mctx.Module() != module {
 			outputFiles, _ = OtherModuleProvider(mctx, module, OutputFilesProvider)
 		} else {
@@ -2535,7 +2535,6 @@ func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, 
 	// TODO: Add a check for skipped context
 
 	if outputFiles.isEmpty() {
-		// TODO: Add a check for param module not having OutputFilesProvider set
 		return nil, OutputFilesProviderNotSet
 	}
 
