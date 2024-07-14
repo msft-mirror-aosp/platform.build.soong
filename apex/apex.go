@@ -1359,7 +1359,7 @@ func (a *apexBundle) TaggedOutputs() map[string]android.Paths {
 var _ cc.Coverage = (*apexBundle)(nil)
 
 // Implements cc.Coverage
-func (a *apexBundle) IsNativeCoverageNeeded(ctx android.IncomingTransitionContext) bool {
+func (a *apexBundle) IsNativeCoverageNeeded(ctx cc.IsNativeCoverageNeededContext) bool {
 	return ctx.DeviceConfig().NativeCoverageEnabled()
 }
 
@@ -2086,20 +2086,10 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			}
 		case testTag:
 			if ccTest, ok := child.(*cc.Module); ok {
-				if ccTest.IsTestPerSrcAllTestsVariation() {
-					// Multiple-output test module (where `test_per_src: true`).
-					//
-					// `ccTest` is the "" ("all tests") variation of a `test_per_src` module.
-					// We do not add this variation to `filesInfo`, as it has no output;
-					// however, we do add the other variations of this module as indirect
-					// dependencies (see below).
-				} else {
-					// Single-output test module (where `test_per_src: false`).
-					af := apexFileForExecutable(ctx, ccTest)
-					af.class = nativeTest
-					vctx.filesInfo = append(vctx.filesInfo, af)
-					addAconfigFiles(vctx, ctx, child)
-				}
+				af := apexFileForExecutable(ctx, ccTest)
+				af.class = nativeTest
+				vctx.filesInfo = append(vctx.filesInfo, af)
+				addAconfigFiles(vctx, ctx, child)
 				return true // track transitive dependencies
 			} else {
 				ctx.PropertyErrorf("tests", "%q is not a cc module", depName)
@@ -2186,19 +2176,6 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			af.transitiveDep = true
 			vctx.filesInfo = append(vctx.filesInfo, af)
 			addAconfigFiles(vctx, ctx, child)
-			return true // track transitive dependencies
-		}
-	} else if cc.IsTestPerSrcDepTag(depTag) {
-		if ch, ok := child.(*cc.Module); ok {
-			af := apexFileForExecutable(ctx, ch)
-			// Handle modules created as `test_per_src` variations of a single test module:
-			// use the name of the generated test binary (`fileToCopy`) instead of the name
-			// of the original test module (`depName`, shared by all `test_per_src`
-			// variations of that module).
-			af.androidMkModuleName = filepath.Base(af.builtFile.String())
-			// these are not considered transitive dep
-			af.transitiveDep = false
-			vctx.filesInfo = append(vctx.filesInfo, af)
 			return true // track transitive dependencies
 		}
 	} else if cc.IsHeaderDepTag(depTag) {

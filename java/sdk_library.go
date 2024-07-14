@@ -538,9 +538,6 @@ type sdkLibraryProperties struct {
 	// of the API.
 	Api_packages []string
 
-	// list of package names that must be hidden from the API
-	Hidden_api_packages []string
-
 	// the relative path to the directory containing the api specification files.
 	// Defaults to "api".
 	Api_dir *string
@@ -1965,10 +1962,6 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 	droidstubsArgs := []string{}
 	if len(module.sdkLibraryProperties.Api_packages) != 0 {
 		droidstubsArgs = append(droidstubsArgs, "--stub-packages "+strings.Join(module.sdkLibraryProperties.Api_packages, ":"))
-	}
-	if len(module.sdkLibraryProperties.Hidden_api_packages) != 0 {
-		droidstubsArgs = append(droidstubsArgs,
-			android.JoinWithPrefix(module.sdkLibraryProperties.Hidden_api_packages, " --hide-package "))
 	}
 	droidstubsArgs = append(droidstubsArgs, module.sdkLibraryProperties.Droiddoc_options...)
 	disabledWarnings := []string{"HiddenSuperclass"}
