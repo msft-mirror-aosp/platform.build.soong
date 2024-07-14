@@ -31,6 +31,7 @@ var sharedLibrarySdkMemberType = &librarySdkMemberType{
 		SupportsSdk:           true,
 		HostOsDependent:       true,
 		SupportedLinkageNames: []string{"shared"},
+		StripDisabled:         true,
 	},
 	prebuiltModuleType: "cc_prebuilt_library_shared",
 }
