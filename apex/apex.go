@@ -157,9 +157,6 @@ type apexBundleProperties struct {
 	// Default: true.
 	Installable *bool
 
-	// Deprecated. Do not use. TODO(b/350644693) remove this after removing all usage
-	Use_vndk_as_stable *bool
-
 	// The type of filesystem to use. Either 'ext4', 'f2fs' or 'erofs'. Default 'ext4'.
 	Payload_fs_type *string
 
