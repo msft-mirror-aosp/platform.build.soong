@@ -199,7 +199,10 @@ func (test *testDecorator) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 
 	flags.Local.CFlags = append(flags.Local.CFlags, "-DGTEST_HAS_STD_STRING")
 	if ctx.Host() {
-		flags.Local.CFlags = append(flags.Local.CFlags, "-O0", "-g")
+		flags.Local.CFlags = append([]string{"-Og", "-g"}, flags.Local.CFlags...)
+
+		// Turn off unused-result warning since it is not important for tests.
+		flags.Local.CFlags = append(flags.Local.CFlags, "-Wno-error=unused-result")
 
 		switch ctx.Os() {
 		case android.Windows:
