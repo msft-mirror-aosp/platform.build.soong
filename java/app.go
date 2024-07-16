@@ -47,6 +47,13 @@ var (
 		}, "packageName")
 )
 
+type FlagsPackages struct {
+	// Paths to the aconfig dump output text files that are consumed by aapt2
+	AconfigTextFiles android.Paths
+}
+
+var FlagsPackagesProvider = blueprint.NewProvider[FlagsPackages]()
+
 func RegisterAppBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("android_app", AndroidAppFactory)
 	ctx.RegisterModuleType("android_test", AndroidTestFactory)
@@ -338,7 +345,35 @@ func (a *AndroidApp) OverridablePropertiesDepsMutator(ctx android.BottomUpMutato
 	}
 }
 
+// TODO(b/156476221): Remove this allowlist
+var (
+	missingMinSdkVersionMtsAllowlist = []string{
+		"CellBroadcastReceiverGoogleUnitTests",
+		"CellBroadcastReceiverUnitTests",
+		"CtsBatterySavingTestCases",
+		"CtsDeviceAndProfileOwnerApp23",
+		"CtsDeviceAndProfileOwnerApp30",
+		"CtsIntentSenderApp",
+		"CtsJobSchedulerTestCases",
+		"CtsMimeMapTestCases",
+		"CtsTareTestCases",
+		"LibStatsPullTests",
+		"MediaProviderClientTests",
+		"TeleServiceTests",
+		"TestExternalImsServiceApp",
+		"TestSmsRetrieverApp",
+		"TetheringPrivilegedTests",
+	}
+)
+
+func checkMinSdkVersionMts(ctx android.ModuleContext, minSdkVersion android.ApiLevel) {
+	if includedInMts(ctx.Module()) && !minSdkVersion.Specified() && !android.InList(ctx.ModuleName(), missingMinSdkVersionMtsAllowlist) {
+		ctx.PropertyErrorf("min_sdk_version", "min_sdk_version is a required property for tests included in MTS")
+	}
+}
+
 func (a *AndroidTestHelperApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	checkMinSdkVersionMts(ctx, a.MinSdkVersion(ctx))
 	applicationId := a.appTestHelperAppProperties.Manifest_values.ApplicationId
 	if applicationId != nil {
 		if a.overridableAppProperties.Package_name != nil {
@@ -478,18 +513,27 @@ func (a *AndroidApp) renameResourcesPackage() bool {
 }
 
 func getAconfigFilePaths(ctx android.ModuleContext) (aconfigTextFilePaths android.Paths) {
-	ctx.VisitDirectDepsWithTag(aconfigDeclarationTag, func(dep android.Module) {
-		if provider, ok := android.OtherModuleProvider(ctx, dep, android.AconfigDeclarationsProviderKey); ok {
-			aconfigTextFilePaths = append(aconfigTextFilePaths, provider.IntermediateDumpOutputPath)
-		} else {
-			ctx.ModuleErrorf("Only aconfig_declarations module type is allowed for "+
-				"flags_packages property, but %s is not aconfig_declarations module type",
-				dep.Name(),
-			)
+	ctx.VisitDirectDeps(func(dep android.Module) {
+		tag := ctx.OtherModuleDependencyTag(dep)
+		switch tag {
+		case staticLibTag:
+			if flagPackages, ok := android.OtherModuleProvider(ctx, dep, FlagsPackagesProvider); ok {
+				aconfigTextFilePaths = append(aconfigTextFilePaths, flagPackages.AconfigTextFiles...)
+			}
+
+		case aconfigDeclarationTag:
+			if provider, ok := android.OtherModuleProvider(ctx, dep, android.AconfigDeclarationsProviderKey); ok {
+				aconfigTextFilePaths = append(aconfigTextFilePaths, provider.IntermediateDumpOutputPath)
+			} else {
+				ctx.ModuleErrorf("Only aconfig_declarations module type is allowed for "+
+					"flags_packages property, but %s is not aconfig_declarations module type",
+					dep.Name(),
+				)
+			}
 		}
 	})
 
-	return aconfigTextFilePaths
+	return android.FirstUniquePaths(aconfigTextFilePaths)
 }
 
 func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
@@ -539,11 +583,18 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 	a.aapt.splitNames = a.appProperties.Package_splits
 	a.aapt.LoggingParent = String(a.overridableAppProperties.Logging_parent)
 	if a.Updatable() {
-		a.aapt.defaultManifestVersion = android.DefaultUpdatableModuleVersion
+		if override := ctx.Config().Getenv("OVERRIDE_APEX_MANIFEST_DEFAULT_VERSION"); override != "" {
+			a.aapt.defaultManifestVersion = override
+		} else {
+			a.aapt.defaultManifestVersion = android.DefaultUpdatableModuleVersion
+		}
 	}
 
 	// Use non final ids if we are doing optimized shrinking and are using R8.
 	nonFinalIds := a.dexProperties.optimizedResourceShrinkingEnabled(ctx) && a.dexer.effectiveOptimizeEnabled()
+
+	aconfigTextFilePaths := getAconfigFilePaths(ctx)
+
 	a.aapt.buildActions(ctx,
 		aaptBuildActionOptions{
 			sdkContext:                     android.SdkContext(a),
@@ -552,13 +603,17 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 			enforceDefaultTargetSdkVersion: a.enforceDefaultTargetSdkVersion(),
 			forceNonFinalResourceIDs:       nonFinalIds,
 			extraLinkFlags:                 aaptLinkFlags,
-			aconfigTextFiles:               getAconfigFilePaths(ctx),
+			aconfigTextFiles:               aconfigTextFilePaths,
 			usesLibrary:                    &a.usesLibrary,
 		},
 	)
 
 	// apps manifests are handled by aapt, don't let Module see them
 	a.properties.Manifest = nil
+
+	android.SetProvider(ctx, FlagsPackagesProvider, FlagsPackages{
+		AconfigTextFiles: aconfigTextFilePaths,
+	})
 }
 
 func (a *AndroidApp) proguardBuildActions(ctx android.ModuleContext) {
@@ -962,6 +1017,22 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 			isPrebuilt:     false,
 		},
 	)
+
+	a.setOutputFiles(ctx)
+}
+
+func (a *AndroidApp) setOutputFiles(ctx android.ModuleContext) {
+	ctx.SetOutputFiles([]android.Path{a.proguardOptionsFile}, ".aapt.proguardOptionsFile")
+	if a.aaptSrcJar != nil {
+		ctx.SetOutputFiles([]android.Path{a.aaptSrcJar}, ".aapt.srcjar")
+	}
+	if a.rJar != nil {
+		ctx.SetOutputFiles([]android.Path{a.rJar}, ".aapt.jar")
+	}
+	ctx.SetOutputFiles([]android.Path{a.outputFile}, ".apk")
+	ctx.SetOutputFiles([]android.Path{a.exportPackage}, ".export-package.apk")
+	ctx.SetOutputFiles([]android.Path{a.aapt.manifestPath}, ".manifest.xml")
+	setOutputFiles(ctx, a.Library.Module)
 }
 
 type appDepsInterface interface {
@@ -1152,36 +1223,11 @@ func (a *AndroidApp) DepIsInSameApex(ctx android.BaseModuleContext, dep android.
 	return a.Library.DepIsInSameApex(ctx, dep)
 }
 
-// For OutputFileProducer interface
-func (a *AndroidApp) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	// In some instances, it can be useful to reference the aapt-generated flags from another
-	// target, e.g., system server implements services declared in the framework-res manifest.
-	case ".aapt.proguardOptionsFile":
-		return []android.Path{a.proguardOptionsFile}, nil
-	case ".aapt.srcjar":
-		if a.aaptSrcJar != nil {
-			return []android.Path{a.aaptSrcJar}, nil
-		}
-	case ".aapt.jar":
-		if a.rJar != nil {
-			return []android.Path{a.rJar}, nil
-		}
-	case ".apk":
-		return []android.Path{a.outputFile}, nil
-	case ".export-package.apk":
-		return []android.Path{a.exportPackage}, nil
-	case ".manifest.xml":
-		return []android.Path{a.aapt.manifestPath}, nil
-	}
-	return a.Library.OutputFiles(tag)
-}
-
 func (a *AndroidApp) Privileged() bool {
 	return Bool(a.appProperties.Privileged)
 }
 
-func (a *AndroidApp) IsNativeCoverageNeeded(ctx android.IncomingTransitionContext) bool {
+func (a *AndroidApp) IsNativeCoverageNeeded(ctx cc.IsNativeCoverageNeededContext) bool {
 	return ctx.Device() && ctx.DeviceConfig().NativeCoverageEnabled()
 }
 
@@ -1343,6 +1389,7 @@ func (a *AndroidTestHelperApp) includedInTestSuite(searchPrefix string) bool {
 }
 
 func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	checkMinSdkVersionMts(ctx, a.MinSdkVersion(ctx))
 	var configs []tradefed.Config
 	if a.appTestProperties.Instrumentation_target_package != nil {
 		a.additionalAaptFlags = append(a.additionalAaptFlags,

@@ -91,6 +91,10 @@ type DexProperties struct {
 
 	// Exclude kotlinc generate files: *.kotlin_module, *.kotlin_builtins. Defaults to false.
 	Exclude_kotlinc_generated_files *bool
+
+	// Disable dex container (also known as "multi-dex").
+	// This may be necessary as a temporary workaround to mask toolchain bugs (see b/341652226).
+	No_dex_container *bool
 }
 
 type dexer struct {
@@ -180,7 +184,7 @@ var r8, r8RE = pctx.MultiCommandRemoteStaticRules("r8",
 		"$r8Template": &remoteexec.REParams{
 			Labels:          map[string]string{"type": "compile", "compiler": "r8"},
 			Inputs:          []string{"$implicits", "${config.R8Jar}"},
-			OutputFiles:     []string{"${outUsage}", "${outConfig}", "${outDict}", "${resourcesOutput}"},
+			OutputFiles:     []string{"${outUsage}", "${outConfig}", "${outDict}", "${resourcesOutput}", "${outR8ArtProfile}"},
 			ExecStrategy:    "${config.RER8ExecStrategy}",
 			ToolchainInputs: []string{"${config.JavaCmd}"},
 			Platform:        map[string]string{remoteexec.PoolKey: "${config.REJavaPool}"},
@@ -200,7 +204,7 @@ var r8, r8RE = pctx.MultiCommandRemoteStaticRules("r8",
 			Platform:     map[string]string{remoteexec.PoolKey: "${config.REJavaPool}"},
 		},
 	}, []string{"outDir", "outDict", "outConfig", "outUsage", "outUsageZip", "outUsageDir",
-		"r8Flags", "zipFlags", "mergeZipsFlags", "resourcesOutput"}, []string{"implicits"})
+		"r8Flags", "zipFlags", "mergeZipsFlags", "resourcesOutput", "outR8ArtProfile"}, []string{"implicits"})
 
 func (d *dexer) dexCommonFlags(ctx android.ModuleContext,
 	dexParams *compileDexParams) (flags []string, deps android.Paths) {
@@ -463,13 +467,6 @@ func (d *dexer) compileDex(ctx android.ModuleContext, dexParams *compileDexParam
 			proguardConfiguration,
 		}
 		r8Flags, r8Deps, r8ArtProfileOutputPath := d.r8Flags(ctx, dexParams)
-		if r8ArtProfileOutputPath != nil {
-			artProfileOutputPath = r8ArtProfileOutputPath
-			implicitOutputs = append(
-				implicitOutputs,
-				artProfileOutputPath,
-			)
-		}
 		rule := r8
 		args := map[string]string{
 			"r8Flags":        strings.Join(append(commonFlags, r8Flags...), " "),
@@ -482,6 +479,17 @@ func (d *dexer) compileDex(ctx android.ModuleContext, dexParams *compileDexParam
 			"outDir":         outDir.String(),
 			"mergeZipsFlags": mergeZipsFlags,
 		}
+		if r8ArtProfileOutputPath != nil {
+			artProfileOutputPath = r8ArtProfileOutputPath
+			implicitOutputs = append(
+				implicitOutputs,
+				artProfileOutputPath,
+			)
+			// Add the implicit r8 Art profile output to args so that r8RE knows
+			// about this implicit output
+			args["outR8ArtProfile"] = artProfileOutputPath.String()
+		}
+
 		if ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_R8") {
 			rule = r8RE
 			args["implicits"] = strings.Join(r8Deps.Strings(), ",")
