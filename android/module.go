@@ -1207,29 +1207,7 @@ func (m *ModuleBase) GenerateTaggedDistFiles(ctx BaseModuleContext) TaggedDistFi
 				continue
 			}
 		}
-
-		// if the tagged dist file cannot be obtained from OutputFilesProvider,
-		// fall back to use OutputFileProducer
-		// TODO: remove this part after OutputFilesProvider fully replaces OutputFileProducer
-		if outputFileProducer, ok := m.module.(OutputFileProducer); ok {
-			// Call the OutputFiles(tag) method to get the paths associated with the tag.
-			distFilesForTag, err := outputFileProducer.OutputFiles(tag)
-			// If the tag was not supported and is not DefaultDistTag then it is an error.
-			// Failing to find paths for DefaultDistTag is not an error. It just means
-			// that the module type requires the legacy behavior.
-			if err != nil && tag != DefaultDistTag {
-				ctx.PropertyErrorf("dist.tag", "%s", err.Error())
-			}
-			distFiles = distFiles.addPathsForTag(tag, distFilesForTag...)
-		} else if tag != DefaultDistTag {
-			// If the tag was specified then it is an error if the module does not
-			// implement OutputFileProducer because there is no other way of accessing
-			// the paths for the specified tag.
-			ctx.PropertyErrorf("dist.tag",
-				"tag %s not supported because the module does not implement OutputFileProducer", tag)
-		}
 	}
-
 	return distFiles
 }
 
@@ -1778,6 +1756,8 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		baseModuleContext: m.baseModuleContextFactory(blueprintCtx),
 		variables:         make(map[string]string),
 	}
+
+	setContainerInfo(ctx)
 
 	m.licenseMetadataFile = PathForModuleOut(ctx, "meta_lic")
 
@@ -2383,7 +2363,7 @@ type sourceOrOutputDependencyTag struct {
 	// The name of the module.
 	moduleName string
 
-	// The tag that will be passed to the module's OutputFileProducer.OutputFiles(tag) method.
+	// The tag that will be used to get the specific output file(s).
 	tag string
 }
 
@@ -2437,14 +2417,7 @@ type SourceFileProducer interface {
 	Srcs() Paths
 }
 
-// A module that implements OutputFileProducer can be referenced from any property that is tagged with `android:"path"`
-// using the ":module" syntax or ":module{.tag}" syntax and provides a list of output files to be used as if they were
-// listed in the property.
-type OutputFileProducer interface {
-	OutputFiles(tag string) (Paths, error)
-}
-
-// OutputFilesForModule returns the paths from an OutputFileProducer with the given tag.  On error, including if the
+// OutputFilesForModule returns the output file paths with the given tag. On error, including if the
 // module produced zero paths, it reports errors to the ctx and returns nil.
 func OutputFilesForModule(ctx PathContext, module blueprint.Module, tag string) Paths {
 	paths, err := outputFilesForModule(ctx, module, tag)
@@ -2455,7 +2428,7 @@ func OutputFilesForModule(ctx PathContext, module blueprint.Module, tag string) 
 	return paths
 }
 
-// OutputFileForModule returns the path from an OutputFileProducer with the given tag.  On error, including if the
+// OutputFileForModule returns the output file paths with the given tag.  On error, including if the
 // module produced zero or multiple paths, it reports errors to the ctx and returns nil.
 func OutputFileForModule(ctx PathContext, module blueprint.Module, tag string) Path {
 	paths, err := outputFilesForModule(ctx, module, tag)

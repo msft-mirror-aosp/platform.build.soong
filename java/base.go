@@ -549,6 +549,18 @@ type Module struct {
 	aconfigCacheFiles android.Paths
 }
 
+var _ android.InstallableModule = (*Module)(nil)
+
+// To satisfy the InstallableModule interface
+func (j *Module) EnforceApiContainerChecks() bool {
+	return true
+}
+
+// Overrides android.ModuleBase.InstallInProduct()
+func (j *Module) InstallInProduct() bool {
+	return j.ProductSpecific()
+}
+
 func (j *Module) CheckStableSdkVersion(ctx android.BaseModuleContext) error {
 	sdkVersion := j.SdkVersion(ctx)
 	if sdkVersion.Stable() {
