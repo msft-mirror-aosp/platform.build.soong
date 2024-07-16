@@ -126,6 +126,15 @@ type prebuiltSubdirProperties struct {
 	Relative_install_path *string `android:"arch_variant"`
 }
 
+type prebuiltRootProperties struct {
+	// Install this module to the root directory, without partition subdirs.  When this module is
+	// added to PRODUCT_PACKAGES, this module will be installed to $PRODUCT_OUT/root, which will
+	// then be copied to the root of system.img. When this module is packaged by other modules like
+	// android_filesystem, this module will be installed to the root ("/"), unlike normal
+	// prebuilt_root modules which are installed to the partition subdir (e.g. "/system/").
+	Install_in_root *bool
+}
+
 type PrebuiltEtcModule interface {
 	android.Module
 
@@ -140,7 +149,12 @@ type PrebuiltEtc struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
 
-	properties       prebuiltEtcProperties
+	properties prebuiltEtcProperties
+
+	// rootProperties is used to return the value of the InstallInRoot() method. Currently, only
+	// prebuilt_avb and prebuilt_root modules use this.
+	rootProperties prebuiltRootProperties
+
 	subdirProperties prebuiltSubdirProperties
 
 	sourceFilePaths android.Paths
@@ -156,9 +170,6 @@ type PrebuiltEtc struct {
 	additionalDependencies *android.Paths
 
 	usedSrcsProperty bool
-	// installInRoot is used to return the value of the InstallInRoot() method. The default value is false.
-	// Currently, only prebuilt_avb can be set to true.
-	installInRoot bool
 
 	makeClass string
 }
@@ -246,7 +257,7 @@ func (p *PrebuiltEtc) DebugRamdiskVariantNeeded(ctx android.BaseModuleContext) b
 }
 
 func (p *PrebuiltEtc) InstallInRoot() bool {
-	return p.installInRoot
+	return proptools.Bool(p.rootProperties.Install_in_root)
 }
 
 func (p *PrebuiltEtc) RecoveryVariantNeeded(ctx android.BaseModuleContext) bool {
@@ -502,21 +513,20 @@ func (p *PrebuiltEtc) AndroidModuleBase() *android.ModuleBase {
 
 func InitPrebuiltEtcModule(p *PrebuiltEtc, dirBase string) {
 	p.installDirBase = dirBase
-	p.installInRoot = false
 	p.AddProperties(&p.properties)
 	p.AddProperties(&p.subdirProperties)
 }
 
 func InitPrebuiltRootModule(p *PrebuiltEtc) {
 	p.installDirBase = "."
-	p.installInRoot = false
 	p.AddProperties(&p.properties)
+	p.AddProperties(&p.rootProperties)
 }
 
 func InitPrebuiltAvbModule(p *PrebuiltEtc) {
 	p.installDirBase = "avb"
-	p.installInRoot = true
 	p.AddProperties(&p.properties)
+	p.rootProperties.Install_in_root = proptools.BoolPtr(true)
 }
 
 // prebuilt_etc is for a prebuilt artifact that is installed in
