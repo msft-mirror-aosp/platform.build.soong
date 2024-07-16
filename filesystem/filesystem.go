@@ -312,6 +312,25 @@ func (f *filesystem) buildNonDepsFiles(ctx android.ModuleContext, builder *andro
 	}
 }
 
+func (f *filesystem) copyPackagingSpecs(ctx android.ModuleContext, builder *android.RuleBuilder, specs map[string]android.PackagingSpec, rootDir, rebasedDir android.WritablePath) []string {
+	rootDirSpecs := make(map[string]android.PackagingSpec)
+	rebasedDirSpecs := make(map[string]android.PackagingSpec)
+
+	for rel, spec := range specs {
+		if spec.Partition() == "root" {
+			rootDirSpecs[rel] = spec
+		} else {
+			rebasedDirSpecs[rel] = spec
+		}
+	}
+
+	dirsToSpecs := make(map[android.WritablePath]map[string]android.PackagingSpec)
+	dirsToSpecs[rootDir] = rootDirSpecs
+	dirsToSpecs[rebasedDir] = rebasedDirSpecs
+
+	return f.CopySpecsToDirs(ctx, builder, dirsToSpecs)
+}
+
 func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) android.OutputPath {
 	rootDir := android.PathForModuleOut(ctx, "root").OutputPath
 	rebasedDir := rootDir
@@ -322,7 +341,7 @@ func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) androi
 	// Wipe the root dir to get rid of leftover files from prior builds
 	builder.Command().Textf("rm -rf %s && mkdir -p %s", rootDir, rootDir)
 	specs := f.gatherFilteredPackagingSpecs(ctx)
-	f.entries = f.CopySpecsToDir(ctx, builder, specs, rebasedDir)
+	f.entries = f.copyPackagingSpecs(ctx, builder, specs, rootDir, rebasedDir)
 
 	f.buildNonDepsFiles(ctx, builder, rootDir)
 	f.addMakeBuiltFiles(ctx, builder, rootDir)
@@ -465,7 +484,7 @@ func (f *filesystem) buildCpioImage(ctx android.ModuleContext, compressed bool) 
 	// Wipe the root dir to get rid of leftover files from prior builds
 	builder.Command().Textf("rm -rf %s && mkdir -p %s", rootDir, rootDir)
 	specs := f.gatherFilteredPackagingSpecs(ctx)
-	f.entries = f.CopySpecsToDir(ctx, builder, specs, rebasedDir)
+	f.entries = f.copyPackagingSpecs(ctx, builder, specs, rootDir, rebasedDir)
 
 	f.buildNonDepsFiles(ctx, builder, rootDir)
 	f.buildFsverityMetadataFiles(ctx, builder, specs, rootDir, rebasedDir)
