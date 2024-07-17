@@ -22,7 +22,7 @@ type ImageInterface interface {
 	// VendorVariantNeeded should return true if the module needs a vendor variant (installed on the vendor image).
 	VendorVariantNeeded(ctx BaseModuleContext) bool
 
-	// ProductVariantNeeded should return true if the module needs a product variant (unstalled on the product image).
+	// ProductVariantNeeded should return true if the module needs a product variant (installed on the product image).
 	ProductVariantNeeded(ctx BaseModuleContext) bool
 
 	// CoreVariantNeeded should return true if the module needs a core variant (installed on the system image).
