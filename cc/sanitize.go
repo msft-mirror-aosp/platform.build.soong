@@ -36,7 +36,6 @@ var (
 	asanCflags = []string{
 		"-fno-omit-frame-pointer",
 	}
-	asanLdflags = []string{"-Wl,-u,__asan_preinit"}
 
 	// DO NOT ADD MLLVM FLAGS HERE! ADD THEM BELOW TO hwasanCommonFlags.
 	hwasanCflags = []string{
@@ -797,16 +796,17 @@ func (s *sanitize) flags(ctx ModuleContext, flags Flags) Flags {
 			flags.RequiredInstructionSet = "arm"
 		}
 		flags.Local.CFlags = append(flags.Local.CFlags, asanCflags...)
-		flags.Local.LdFlags = append(flags.Local.LdFlags, asanLdflags...)
 
 		if Bool(sanProps.Writeonly) {
 			flags.Local.CFlags = append(flags.Local.CFlags, "-mllvm", "-asan-instrument-reads=0")
 		}
 
 		if ctx.Host() {
-			// -nodefaultlibs (provided with libc++) prevents the driver from linking
-			// libraries needed with -fsanitize=address. http://b/18650275 (WAI)
-			flags.Local.LdFlags = append(flags.Local.LdFlags, "-Wl,--no-as-needed")
+			if !ctx.Darwin() { // ld64.lld doesn't know about '--no-as-needed'
+				// -nodefaultlibs (provided with libc++) prevents the driver from linking
+				// libraries needed with -fsanitize=address. http://b/18650275 (WAI)
+				flags.Local.LdFlags = append(flags.Local.LdFlags, "-Wl,--no-as-needed")
+			}
 		} else {
 			flags.Local.CFlags = append(flags.Local.CFlags, "-mllvm", "-asan-globals=0")
 			if ctx.bootstrap() {

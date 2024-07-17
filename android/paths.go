@@ -463,8 +463,8 @@ func ExistentPathsForSources(ctx PathGlobContext, paths []string) Paths {
 //   - glob, relative to the local module directory, resolves as filepath(s), relative to the local
 //     source directory.
 //   - other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
-//     or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
-//     filepath.
+//     or set the OutputFilesProvider. These resolve as a filepath to an output filepath or generated
+//     source filepath.
 //
 // Properties passed as the paths argument must have been annotated with struct tag
 // `android:"path"` so that dependencies on SourceFileProducer modules will have already been handled by the
@@ -491,8 +491,8 @@ type SourceInput struct {
 //   - glob, relative to the local module directory, resolves as filepath(s), relative to the local
 //     source directory. Not valid in excludes.
 //   - other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
-//     or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
-//     filepath.
+//     or set the OutputFilesProvider. These resolve as a filepath to an output filepath or generated
+//     source filepath.
 //
 // excluding the items (similarly resolved
 // Properties passed as the paths argument must have been annotated with struct tag
@@ -620,8 +620,8 @@ func GetModuleFromPathDep(ctx ModuleWithDepsPathContext, moduleName, tag string)
 //   - glob, relative to the local module directory, resolves as filepath(s), relative to the local
 //     source directory. Not valid in excludes.
 //   - other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
-//     or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
-//     filepath.
+//     or set the OutputFilesProvider. These resolve as a filepath to an output filepath or generated
+//     source filepath.
 //
 // and a list of the module names of missing module dependencies are returned as the second return.
 // Properties passed as the paths argument must have been annotated with struct tag

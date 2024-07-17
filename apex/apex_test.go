@@ -11720,3 +11720,20 @@ func TestOverrideApexWithPrebuiltApexPreferred(t *testing.T) {
 
 	java.CheckModuleHasDependency(t, res.TestContext, "myoverrideapex", "android_common_myoverrideapex_myoverrideapex", "foo")
 }
+
+func TestUpdatableApexMinSdkVersionCurrent(t *testing.T) {
+	testApexError(t, `"myapex" .*: updatable: updatable APEXes should not set min_sdk_version to current. Please use a finalized API level or a recognized in-development codename`, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			updatable: true,
+			min_sdk_version: "current",
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`)
+}
