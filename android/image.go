@@ -19,6 +19,12 @@ type ImageInterface interface {
 	// ImageMutatorBegin is called before any other method in the ImageInterface.
 	ImageMutatorBegin(ctx BaseModuleContext)
 
+	// VendorVariantNeeded should return true if the module needs a vendor variant (installed on the vendor image).
+	VendorVariantNeeded(ctx BaseModuleContext) bool
+
+	// ProductVariantNeeded should return true if the module needs a product variant (installed on the product image).
+	ProductVariantNeeded(ctx BaseModuleContext) bool
+
 	// CoreVariantNeeded should return true if the module needs a core variant (installed on the system image).
 	CoreVariantNeeded(ctx BaseModuleContext) bool
 
@@ -44,12 +50,19 @@ type ImageInterface interface {
 	ExtraImageVariations(ctx BaseModuleContext) []string
 
 	// SetImageVariation is called for each newly created image variant. The receiver is the original
-	// module, "variation" is the name of the newly created variant and "module" is the newly created
-	// variant itself.
-	SetImageVariation(ctx BaseModuleContext, variation string, module Module)
+	// module, "variation" is the name of the newly created variant. "variation" is set on the receiver.
+	SetImageVariation(ctx BaseModuleContext, variation string)
 }
 
 const (
+	// VendorVariation is the variant name used for /vendor code that does not
+	// compile against the VNDK.
+	VendorVariation string = "vendor"
+
+	// ProductVariation is the variant name used for /product code that does not
+	// compile against the VNDK.
+	ProductVariation string = "product"
+
 	// CoreVariation is the variant used for framework-private libraries, or
 	// SDK libraries. (which framework-private libraries can use), which
 	// will be installed to the system image.
@@ -95,6 +108,12 @@ func imageMutator(ctx BottomUpMutatorContext) {
 		if m.RecoveryVariantNeeded(ctx) {
 			variations = append(variations, RecoveryVariation)
 		}
+		if m.VendorVariantNeeded(ctx) {
+			variations = append(variations, VendorVariation)
+		}
+		if m.ProductVariantNeeded(ctx) {
+			variations = append(variations, ProductVariation)
+		}
 
 		extraVariations := m.ExtraImageVariations(ctx)
 		variations = append(variations, extraVariations...)
@@ -106,7 +125,7 @@ func imageMutator(ctx BottomUpMutatorContext) {
 		mod := ctx.CreateVariations(variations...)
 		for i, v := range variations {
 			mod[i].base().setImageVariation(v)
-			m.SetImageVariation(ctx, v, mod[i])
+			mod[i].(ImageInterface).SetImageVariation(ctx, v)
 		}
 	}
 }

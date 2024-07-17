@@ -67,7 +67,7 @@ func FlagArtifactsFactory(artifactsPath string) *FlagArtifacts {
 	if artifactsPath != "" {
 		fas := &rc_proto.FlagArtifacts{}
 		LoadMessage(artifactsPath, fas)
-		for _, fa_pb := range fas.FlagArtifacts {
+		for _, fa_pb := range fas.Flags {
 			fa := &FlagArtifact{}
 			fa.FlagDeclaration = fa_pb.GetFlagDeclaration()
 			if val := fa_pb.GetValue(); val != nil {
@@ -80,6 +80,15 @@ func FlagArtifactsFactory(artifactsPath string) *FlagArtifacts {
 		}
 	}
 	return &ret
+}
+
+func (fas *FlagArtifacts) SortedFlagNames() []string {
+	var names []string
+	for k, _ := range *fas {
+		names = append(names, k)
+	}
+	slices.Sort(names)
+	return names
 }
 
 func (fa *FlagArtifact) GenerateFlagDeclarationArtifact() *rc_proto.FlagDeclarationArtifact {
@@ -107,20 +116,20 @@ func FlagDeclarationArtifactsFactory(path string) *rc_proto.FlagDeclarationArtif
 	if path != "" {
 		LoadMessage(path, ret)
 	} else {
-		ret.FlagDeclarationArtifacts = []*rc_proto.FlagDeclarationArtifact{}
+		ret.FlagDeclarationArtifactList = []*rc_proto.FlagDeclarationArtifact{}
 	}
 	return ret
 }
 
 func (fas *FlagArtifacts) GenerateFlagDeclarationArtifacts(intermediates []*rc_proto.FlagDeclarationArtifacts) *rc_proto.FlagDeclarationArtifacts {
-	ret := &rc_proto.FlagDeclarationArtifacts{FlagDeclarationArtifacts: []*rc_proto.FlagDeclarationArtifact{}}
+	ret := &rc_proto.FlagDeclarationArtifacts{FlagDeclarationArtifactList: []*rc_proto.FlagDeclarationArtifact{}}
 	for _, fa := range *fas {
-		ret.FlagDeclarationArtifacts = append(ret.FlagDeclarationArtifacts, fa.GenerateFlagDeclarationArtifact())
+		ret.FlagDeclarationArtifactList = append(ret.FlagDeclarationArtifactList, fa.GenerateFlagDeclarationArtifact())
 	}
 	for _, fda := range intermediates {
-		ret.FlagDeclarationArtifacts = append(ret.FlagDeclarationArtifacts, fda.FlagDeclarationArtifacts...)
+		ret.FlagDeclarationArtifactList = append(ret.FlagDeclarationArtifactList, fda.FlagDeclarationArtifactList...)
 	}
-	slices.SortFunc(ret.FlagDeclarationArtifacts, func(a, b *rc_proto.FlagDeclarationArtifact) int {
+	slices.SortFunc(ret.FlagDeclarationArtifactList, func(a, b *rc_proto.FlagDeclarationArtifact) int {
 		return cmp.Compare(*a.Name, *b.Name)
 	})
 	return ret
@@ -135,9 +144,11 @@ func (src *FlagArtifact) Clone() *FlagArtifact {
 	value := &rc_proto.Value{}
 	proto.Merge(value, src.Value)
 	return &FlagArtifact{
-		FlagDeclaration: src.FlagDeclaration,
-		Traces:          src.Traces,
-		Value:           value,
+		FlagDeclaration:  src.FlagDeclaration,
+		Traces:           src.Traces,
+		Value:            value,
+		DeclarationIndex: src.DeclarationIndex,
+		Redacted:         src.Redacted,
 	}
 }
 

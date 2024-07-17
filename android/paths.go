@@ -15,6 +15,9 @@
 package android
 
 import (
+	"bytes"
+	"encoding/gob"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -460,8 +463,8 @@ func ExistentPathsForSources(ctx PathGlobContext, paths []string) Paths {
 //   - glob, relative to the local module directory, resolves as filepath(s), relative to the local
 //     source directory.
 //   - other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
-//     or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
-//     filepath.
+//     or set the OutputFilesProvider. These resolve as a filepath to an output filepath or generated
+//     source filepath.
 //
 // Properties passed as the paths argument must have been annotated with struct tag
 // `android:"path"` so that dependencies on SourceFileProducer modules will have already been handled by the
@@ -488,8 +491,8 @@ type SourceInput struct {
 //   - glob, relative to the local module directory, resolves as filepath(s), relative to the local
 //     source directory. Not valid in excludes.
 //   - other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
-//     or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
-//     filepath.
+//     or set the OutputFilesProvider. These resolve as a filepath to an output filepath or generated
+//     source filepath.
 //
 // excluding the items (similarly resolved
 // Properties passed as the paths argument must have been annotated with struct tag
@@ -617,8 +620,8 @@ func GetModuleFromPathDep(ctx ModuleWithDepsPathContext, moduleName, tag string)
 //   - glob, relative to the local module directory, resolves as filepath(s), relative to the local
 //     source directory. Not valid in excludes.
 //   - other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
-//     or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
-//     filepath.
+//     or set the OutputFilesProvider. These resolve as a filepath to an output filepath or generated
+//     source filepath.
 //
 // and a list of the module names of missing module dependencies are returned as the second return.
 // Properties passed as the paths argument must have been annotated with struct tag
@@ -1068,6 +1071,28 @@ type basePath struct {
 	rel  string
 }
 
+func (p basePath) GobEncode() ([]byte, error) {
+	w := new(bytes.Buffer)
+	encoder := gob.NewEncoder(w)
+	err := errors.Join(encoder.Encode(p.path), encoder.Encode(p.rel))
+	if err != nil {
+		return nil, err
+	}
+
+	return w.Bytes(), nil
+}
+
+func (p *basePath) GobDecode(data []byte) error {
+	r := bytes.NewBuffer(data)
+	decoder := gob.NewDecoder(r)
+	err := errors.Join(decoder.Decode(&p.path), decoder.Decode(&p.rel))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (p basePath) Ext() string {
 	return filepath.Ext(p.path)
 }
@@ -1304,6 +1329,28 @@ type OutputPath struct {
 	soongOutDir string
 
 	fullPath string
+}
+
+func (p OutputPath) GobEncode() ([]byte, error) {
+	w := new(bytes.Buffer)
+	encoder := gob.NewEncoder(w)
+	err := errors.Join(encoder.Encode(p.basePath), encoder.Encode(p.soongOutDir), encoder.Encode(p.fullPath))
+	if err != nil {
+		return nil, err
+	}
+
+	return w.Bytes(), nil
+}
+
+func (p *OutputPath) GobDecode(data []byte) error {
+	r := bytes.NewBuffer(data)
+	decoder := gob.NewDecoder(r)
+	err := errors.Join(decoder.Decode(&p.basePath), decoder.Decode(&p.soongOutDir), decoder.Decode(&p.fullPath))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (p OutputPath) withRel(rel string) OutputPath {
@@ -1557,11 +1604,10 @@ type ModuleOutPathContext interface {
 	ModuleName() string
 	ModuleDir() string
 	ModuleSubDir() string
-	SoongConfigTraceHash() string
 }
 
 func pathForModuleOut(ctx ModuleOutPathContext) OutputPath {
-	return PathForOutput(ctx, ".intermediates", ctx.ModuleDir(), ctx.ModuleName(), ctx.ModuleSubDir(), ctx.SoongConfigTraceHash())
+	return PathForOutput(ctx, ".intermediates", ctx.ModuleDir(), ctx.ModuleName(), ctx.ModuleSubDir())
 }
 
 // PathForModuleOut returns a Path representing the paths... under the module's

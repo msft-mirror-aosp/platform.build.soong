@@ -485,7 +485,7 @@ func transformSourceToObj(ctx ModuleContext, subdir string, srcFiles, noTidySrcs
 		coverageFiles = make(android.Paths, 0, len(srcFiles))
 	}
 	var kytheFiles android.Paths
-	if flags.emitXrefs {
+	if flags.emitXrefs && ctx.Module() == ctx.PrimaryModule() {
 		kytheFiles = make(android.Paths, 0, len(srcFiles))
 	}
 
@@ -664,7 +664,7 @@ func transformSourceToObj(ctx ModuleContext, subdir string, srcFiles, noTidySrcs
 		})
 
 		// Register post-process build statements (such as for tidy or kythe).
-		if emitXref {
+		if emitXref && ctx.Module() == ctx.PrimaryModule() {
 			kytheFile := android.ObjPathWithExt(ctx, subdir, srcFile, "kzip")
 			ctx.Build(pctx, android.BuildParams{
 				Rule:        kytheExtract,
@@ -798,9 +798,12 @@ func transformObjToStaticLib(ctx android.ModuleContext,
 // Generate a Rust staticlib from a list of rlibDeps. Returns nil if TransformRlibstoStaticlib is nil or rlibDeps is empty.
 func generateRustStaticlib(ctx android.ModuleContext, rlibDeps []RustRlibDep) android.Path {
 	if TransformRlibstoStaticlib == nil && len(rlibDeps) > 0 {
-		// This should only be reachable if a module defines static_rlibs and
+		// This should only be reachable if a module defines Rust deps in static_libs and
 		// soong-rust hasn't been loaded alongside soong-cc (e.g. in soong-cc tests).
-		panic(fmt.Errorf("TransformRlibstoStaticlib is not set and static_rlibs is defined in %s", ctx.ModuleName()))
+		panic(fmt.Errorf(
+			"TransformRlibstoStaticlib is not set and rust deps are defined in static_libs for %s",
+			ctx.ModuleName()))
+
 	} else if len(rlibDeps) == 0 {
 		return nil
 	}
@@ -829,6 +832,7 @@ func generateRustStaticlib(ctx android.ModuleContext, rlibDeps []RustRlibDep) an
 func genRustStaticlibSrcFile(crateNames []string) string {
 	lines := []string{
 		"// @Soong generated Source",
+		"#![no_std]", // pre-emptively set no_std to support both std and no_std.
 	}
 	for _, crate := range crateNames {
 		lines = append(lines, fmt.Sprintf("extern crate %s;", crate))

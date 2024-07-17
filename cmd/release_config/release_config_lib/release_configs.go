@@ -42,6 +42,10 @@ type ReleaseConfigMap struct {
 
 	// Flags declared this directory's flag_declarations/*.textproto
 	FlagDeclarations []rc_proto.FlagDeclaration
+
+	// Potential aconfig and build flag contributions in this map directory.
+	// This is used to detect errors.
+	FlagValueDirs map[string][]string
 }
 
 type ReleaseConfigDirMap map[string]int
@@ -317,6 +321,21 @@ func (configs *ReleaseConfigs) LoadReleaseConfigMap(path string, ConfigDirIndex 
 		return err
 	}
 
+	subDirs := func(subdir string) (ret []string) {
+		if flagVersions, err := os.ReadDir(filepath.Join(dir, subdir)); err == nil {
+			for _, e := range flagVersions {
+				if e.IsDir() && validReleaseConfigName(e.Name()) {
+					ret = append(ret, e.Name())
+				}
+			}
+		}
+		return
+	}
+	m.FlagValueDirs = map[string][]string{
+		"aconfig":     subDirs("aconfig"),
+		"flag_values": subDirs("flag_values"),
+	}
+
 	err = WalkTextprotoFiles(dir, "release_configs", func(path string, d fs.DirEntry, err error) error {
 		releaseConfigContribution := &ReleaseConfigContribution{path: path, DeclarationIndex: ConfigDirIndex}
 		LoadMessage(path, &releaseConfigContribution.proto)
@@ -395,92 +414,8 @@ func (configs *ReleaseConfigs) GetAllReleaseNames() []string {
 		allReleaseNames = append(allReleaseNames, v.Name)
 		allReleaseNames = append(allReleaseNames, v.OtherNames...)
 	}
-	slices.SortFunc(allReleaseNames, func(a, b string) int {
-		return cmp.Compare(a, b)
-	})
+	slices.Sort(allReleaseNames)
 	return allReleaseNames
-}
-
-// Write the makefile for this targetRelease.
-func (configs *ReleaseConfigs) WriteMakefile(outFile, targetRelease string) error {
-	makeVars := make(map[string]string)
-	config, err := configs.GetReleaseConfig(targetRelease)
-	if err != nil {
-		return err
-	}
-
-	myFlagArtifacts := config.FlagArtifacts.Clone()
-	// Sort the flags by name first.
-	names := []string{}
-	for k, _ := range myFlagArtifacts {
-		names = append(names, k)
-	}
-	slices.SortFunc(names, func(a, b string) int {
-		return cmp.Compare(a, b)
-	})
-	partitions := make(map[string][]string)
-
-	vNames := []string{}
-	addVar := func(name, suffix, value string) {
-		fullName := fmt.Sprintf("_ALL_RELEASE_FLAGS.%s.%s", name, suffix)
-		vNames = append(vNames, fullName)
-		makeVars[fullName] = value
-	}
-
-	for _, name := range names {
-		flag := myFlagArtifacts[name]
-		decl := flag.FlagDeclaration
-
-		for _, container := range decl.Containers {
-			partitions[container] = append(partitions[container], name)
-		}
-		value := MarshalValue(flag.Value)
-		makeVars[name] = value
-		addVar(name, "TYPE", ValueType(flag.Value))
-		addVar(name, "PARTITIONS", strings.Join(decl.Containers, " "))
-		addVar(name, "DEFAULT", MarshalValue(decl.Value))
-		addVar(name, "VALUE", value)
-		addVar(name, "DECLARED_IN", *flag.Traces[0].Source)
-		addVar(name, "SET_IN", *flag.Traces[len(flag.Traces)-1].Source)
-		addVar(name, "NAMESPACE", *decl.Namespace)
-	}
-	pNames := []string{}
-	for k := range partitions {
-		pNames = append(pNames, k)
-	}
-	slices.SortFunc(pNames, func(a, b string) int {
-		return cmp.Compare(a, b)
-	})
-
-	// Now sort the make variables, and output them.
-	slices.SortFunc(vNames, func(a, b string) int {
-		return cmp.Compare(a, b)
-	})
-
-	// Write the flags as:
-	//   _ALL_RELELASE_FLAGS
-	//   _ALL_RELEASE_FLAGS.PARTITIONS.*
-	//   all _ALL_RELEASE_FLAGS.*, sorted by name
-	//   Final flag values, sorted by name.
-	data := fmt.Sprintf("# TARGET_RELEASE=%s\n", config.Name)
-	if targetRelease != config.Name {
-		data += fmt.Sprintf("# User specified TARGET_RELEASE=%s\n", targetRelease)
-	}
-	// As it stands this list is not per-product, but conceptually it is, and will be.
-	data += fmt.Sprintf("ALL_RELEASE_CONFIGS_FOR_PRODUCT :=$= %s\n", strings.Join(configs.GetAllReleaseNames(), " "))
-	data += fmt.Sprintf("_used_files := %s\n", strings.Join(config.GetSortedFileList(), " "))
-	data += fmt.Sprintf("_ALL_RELEASE_FLAGS :=$= %s\n", strings.Join(names, " "))
-	for _, pName := range pNames {
-		data += fmt.Sprintf("_ALL_RELEASE_FLAGS.PARTITIONS.%s :=$= %s\n", pName, strings.Join(partitions[pName], " "))
-	}
-	for _, vName := range vNames {
-		data += fmt.Sprintf("%s :=$= %s\n", vName, makeVars[vName])
-	}
-	data += "\n\n# Values for all build flags\n"
-	for _, name := range names {
-		data += fmt.Sprintf("%s :=$= %s\n", name, makeVars[name])
-	}
-	return os.WriteFile(outFile, []byte(data), 0644)
 }
 
 func (configs *ReleaseConfigs) GenerateReleaseConfigs(targetRelease string) error {
@@ -506,6 +441,27 @@ func (configs *ReleaseConfigs) GenerateReleaseConfigs(targetRelease string) erro
 		if err != nil {
 			return err
 		}
+	}
+
+	// Look for ignored flagging values.  Gather the entire list to make it easier to fix them.
+	errors := []string{}
+	for _, contrib := range configs.ReleaseConfigMaps {
+		dirName := filepath.Dir(contrib.path)
+		for k, names := range contrib.FlagValueDirs {
+			for _, rcName := range names {
+				if config, err := configs.GetReleaseConfig(rcName); err == nil {
+					rcPath := filepath.Join(dirName, "release_configs", fmt.Sprintf("%s.textproto", config.Name))
+					if _, err := os.Stat(rcPath); err != nil {
+						errors = append(errors, fmt.Sprintf("%s exists but %s does not contribute to %s",
+							filepath.Join(dirName, k, rcName), dirName, config.Name))
+					}
+				}
+
+			}
+		}
+	}
+	if len(errors) > 0 {
+		return fmt.Errorf("%s", strings.Join(errors, "\n"))
 	}
 
 	releaseConfig, err := configs.GetReleaseConfig(targetRelease)

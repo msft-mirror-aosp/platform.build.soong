@@ -977,6 +977,8 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		TestOnly:       Bool(j.sourceProperties.Test_only),
 		TopLevelTarget: j.sourceProperties.Top_level_test_target,
 	})
+
+	setOutputFiles(ctx, j.Module)
 }
 
 func (j *Library) setInstallRules(ctx android.ModuleContext, installModuleName string) {
@@ -1356,7 +1358,7 @@ func (j *JavaTestImport) InstallInTestcases() bool {
 	return true
 }
 
-func (j *TestHost) IsNativeCoverageNeeded(ctx android.IncomingTransitionContext) bool {
+func (j *TestHost) IsNativeCoverageNeeded(ctx cc.IsNativeCoverageNeededContext) bool {
 	return ctx.DeviceConfig().NativeCoverageEnabled()
 }
 
@@ -1501,7 +1503,7 @@ func (j *TestHost) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		InstalledFiles:      j.data,
 		OutputFile:          j.outputFile,
 		TestConfig:          j.testConfig,
-		RequiredModuleNames: j.RequiredModuleNames(),
+		RequiredModuleNames: j.RequiredModuleNames(ctx),
 		TestSuites:          j.testProperties.Test_suites,
 		IsHost:              true,
 		LocalSdkVersion:     j.sdkVersion.String(),
@@ -1510,6 +1512,7 @@ func (j *TestHost) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 }
 
 func (j *Test) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	checkMinSdkVersionMts(ctx, j.MinSdkVersion(ctx))
 	j.generateAndroidBuildActionsWithConfig(ctx, nil)
 	android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 }
@@ -1835,6 +1838,8 @@ func (j *Binary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		// libraries.  This is verified by TestBinary.
 		j.binaryFile = ctx.InstallExecutable(android.PathForModuleInstall(ctx, "bin"),
 			ctx.ModuleName()+ext, j.wrapperFile)
+
+		setOutputFiles(ctx, j.Library.Module)
 	}
 }
 
@@ -2285,10 +2290,10 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	al.stubsFlags(ctx, cmd, stubsDir)
 
-	migratingNullability := String(al.properties.Previous_api) != ""
-	if migratingNullability {
-		previousApi := android.PathForModuleSrc(ctx, String(al.properties.Previous_api))
-		cmd.FlagWithInput("--migrate-nullness ", previousApi)
+	previousApi := String(al.properties.Previous_api)
+	if previousApi != "" {
+		previousApiFiles := android.PathsForModuleSrc(ctx, []string{previousApi})
+		cmd.FlagForEachInput("--migrate-nullness ", previousApiFiles)
 	}
 
 	al.addValidation(ctx, cmd, al.validationPaths)
@@ -2751,6 +2756,9 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		StubsLinkType:                  j.stubsLinkType,
 		// TODO(b/289117800): LOCAL_ACONFIG_FILES for prebuilts
 	})
+
+	ctx.SetOutputFiles(android.Paths{j.combinedImplementationFile}, "")
+	ctx.SetOutputFiles(android.Paths{j.combinedImplementationFile}, ".jar")
 }
 
 func (j *Import) maybeInstall(ctx android.ModuleContext, jarName string, outputFile android.Path) {
@@ -2770,17 +2778,6 @@ func (j *Import) maybeInstall(ctx android.ModuleContext, jarName string, outputF
 	}
 	ctx.InstallFile(installDir, jarName, outputFile)
 }
-
-func (j *Import) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "", ".jar":
-		return android.Paths{j.combinedImplementationFile}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
-}
-
-var _ android.OutputFileProducer = (*Import)(nil)
 
 func (j *Import) HeaderJars() android.Paths {
 	return android.PathsIfNonNil(j.combinedHeaderFile)
