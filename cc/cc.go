@@ -1867,8 +1867,10 @@ var (
 		"libdl":         true,
 		"libz":          true,
 		// art apex
+		// TODO(b/234351700): Remove this when com.android.art.debug is gone.
 		"libandroidio":    true,
 		"libdexfile":      true,
+		"libdexfiled":     true, // com.android.art.debug only
 		"libnativebridge": true,
 		"libnativehelper": true,
 		"libnativeloader": true,
