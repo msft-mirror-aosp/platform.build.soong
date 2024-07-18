@@ -2504,8 +2504,9 @@ func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, 
 	} else if cta, isCta := ctx.(*singletonContextAdaptor); isCta {
 		providerData, _ := cta.moduleProvider(module, OutputFilesProvider)
 		outputFiles, _ = providerData.(OutputFilesInfo)
+	} else {
+		return nil, fmt.Errorf("unsupported context %q in method outputFilesForModuleFromProvider", reflect.TypeOf(ctx))
 	}
-	// TODO: Add a check for skipped context
 
 	if outputFiles.isEmpty() {
 		return nil, OutputFilesProviderNotSet
