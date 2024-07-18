@@ -116,7 +116,8 @@ func (test *testDecorator) compilerProps() []interface{} {
 }
 
 func (test *testDecorator) install(ctx ModuleContext) {
-	testInstallBase := "/data/local/tests/unrestricted"
+	// TODO: (b/167308193) Switch to /data/local/tests/unrestricted as the default install base.
+	testInstallBase := "/data/local/tmp"
 	if ctx.RustModule().InVendorOrProduct() {
 		testInstallBase = "/data/local/tests/vendor"
 	}

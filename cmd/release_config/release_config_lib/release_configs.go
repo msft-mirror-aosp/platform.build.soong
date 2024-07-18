@@ -42,6 +42,10 @@ type ReleaseConfigMap struct {
 
 	// Flags declared this directory's flag_declarations/*.textproto
 	FlagDeclarations []rc_proto.FlagDeclaration
+
+	// Potential aconfig and build flag contributions in this map directory.
+	// This is used to detect errors.
+	FlagValueDirs map[string][]string
 }
 
 type ReleaseConfigDirMap map[string]int
@@ -317,6 +321,21 @@ func (configs *ReleaseConfigs) LoadReleaseConfigMap(path string, ConfigDirIndex 
 		return err
 	}
 
+	subDirs := func(subdir string) (ret []string) {
+		if flagVersions, err := os.ReadDir(filepath.Join(dir, subdir)); err == nil {
+			for _, e := range flagVersions {
+				if e.IsDir() && validReleaseConfigName(e.Name()) {
+					ret = append(ret, e.Name())
+				}
+			}
+		}
+		return
+	}
+	m.FlagValueDirs = map[string][]string{
+		"aconfig":     subDirs("aconfig"),
+		"flag_values": subDirs("flag_values"),
+	}
+
 	err = WalkTextprotoFiles(dir, "release_configs", func(path string, d fs.DirEntry, err error) error {
 		releaseConfigContribution := &ReleaseConfigContribution{path: path, DeclarationIndex: ConfigDirIndex}
 		LoadMessage(path, &releaseConfigContribution.proto)
@@ -422,6 +441,27 @@ func (configs *ReleaseConfigs) GenerateReleaseConfigs(targetRelease string) erro
 		if err != nil {
 			return err
 		}
+	}
+
+	// Look for ignored flagging values.  Gather the entire list to make it easier to fix them.
+	errors := []string{}
+	for _, contrib := range configs.ReleaseConfigMaps {
+		dirName := filepath.Dir(contrib.path)
+		for k, names := range contrib.FlagValueDirs {
+			for _, rcName := range names {
+				if config, err := configs.GetReleaseConfig(rcName); err == nil {
+					rcPath := filepath.Join(dirName, "release_configs", fmt.Sprintf("%s.textproto", config.Name))
+					if _, err := os.Stat(rcPath); err != nil {
+						errors = append(errors, fmt.Sprintf("%s exists but %s does not contribute to %s",
+							filepath.Join(dirName, k, rcName), dirName, config.Name))
+					}
+				}
+
+			}
+		}
+	}
+	if len(errors) > 0 {
+		return fmt.Errorf("%s", strings.Join(errors, "\n"))
 	}
 
 	releaseConfig, err := configs.GetReleaseConfig(targetRelease)
