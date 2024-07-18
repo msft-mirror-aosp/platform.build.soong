@@ -132,9 +132,11 @@ type variableProperties struct {
 				Keep_symbols                 *bool
 				Keep_symbols_and_debug_frame *bool
 			}
-			Static_libs       []string
-			Whole_static_libs []string
-			Shared_libs       []string
+			Static_libs         []string
+			Exclude_static_libs []string
+			Whole_static_libs   []string
+			Shared_libs         []string
+			Jni_libs            []string
 
 			Cmdline []string
 
@@ -274,8 +276,10 @@ type ProductVariables struct {
 	AAPTPreferredConfig *string  `json:",omitempty"`
 	AAPTPrebuiltDPI     []string `json:",omitempty"`
 
-	DefaultAppCertificate           *string `json:",omitempty"`
-	MainlineSepolicyDevCertificates *string `json:",omitempty"`
+	DefaultAppCertificate           *string  `json:",omitempty"`
+	ExtraOtaKeys                    []string `json:",omitempty"`
+	ExtraOtaRecoveryKeys            []string `json:",omitempty"`
+	MainlineSepolicyDevCertificates *string  `json:",omitempty"`
 
 	AppsDefaultVersionName *string `json:",omitempty"`
 

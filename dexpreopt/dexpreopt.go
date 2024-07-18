@@ -527,12 +527,12 @@ func OdexOnSystemOtherByName(name string, dexLocation string, global *GlobalConf
 		return false
 	}
 
-	if contains(global.SpeedApps, name) || contains(global.SystemServerApps, name) {
+	if contains(global.SystemServerApps, name) {
 		return false
 	}
 
 	for _, f := range global.PatternsOnSystemOther {
-		if makefileMatch(filepath.Join(SystemPartition, f), dexLocation) {
+		if makefileMatch("/"+f, dexLocation) || makefileMatch(filepath.Join(SystemPartition, f), dexLocation) {
 			return true
 		}
 	}
