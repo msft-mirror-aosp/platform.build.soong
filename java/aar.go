@@ -440,7 +440,8 @@ func (a *aapt) buildActions(ctx android.ModuleContext, opts aaptBuildActionOptio
 	var compiledResDirs []android.Paths
 	for _, dir := range resDirs {
 		a.resourceFiles = append(a.resourceFiles, dir.files...)
-		compiledResDirs = append(compiledResDirs, aapt2Compile(ctx, dir.dir, dir.files, compileFlags, a.filterProduct()).Paths())
+		compiledResDirs = append(compiledResDirs, aapt2Compile(ctx, dir.dir, dir.files,
+			compileFlags, a.filterProduct(), opts.aconfigTextFiles).Paths())
 	}
 
 	for i, zip := range resZips {
@@ -499,7 +500,8 @@ func (a *aapt) buildActions(ctx android.ModuleContext, opts aaptBuildActionOptio
 	}
 
 	for _, dir := range overlayDirs {
-		compiledOverlay = append(compiledOverlay, aapt2Compile(ctx, dir.dir, dir.files, compileFlags, a.filterProduct()).Paths()...)
+		compiledOverlay = append(compiledOverlay, aapt2Compile(ctx, dir.dir, dir.files,
+			compileFlags, a.filterProduct(), opts.aconfigTextFiles).Paths()...)
 	}
 
 	var splitPackages android.WritablePaths
