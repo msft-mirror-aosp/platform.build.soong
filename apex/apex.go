@@ -2650,18 +2650,13 @@ func (a *apexBundle) checkStaticLinkingToStubLibraries(ctx android.ModuleContext
 	})
 }
 
-// TODO (b/221087384): Remove this allowlist
-var (
-	updatableApexesWithCurrentMinSdkVersionAllowlist = []string{"com.android.profiling"}
-)
-
 // checkUpdatable enforces APEX and its transitive dep properties to have desired values for updatable APEXes.
 func (a *apexBundle) checkUpdatable(ctx android.ModuleContext) {
 	if a.Updatable() {
 		if a.minSdkVersionValue(ctx) == "" {
 			ctx.PropertyErrorf("updatable", "updatable APEXes should set min_sdk_version as well")
 		}
-		if a.minSdkVersion(ctx).IsCurrent() && !android.InList(ctx.ModuleName(), updatableApexesWithCurrentMinSdkVersionAllowlist) {
+		if a.minSdkVersion(ctx).IsCurrent() {
 			ctx.PropertyErrorf("updatable", "updatable APEXes should not set min_sdk_version to current. Please use a finalized API level or a recognized in-development codename")
 		}
 		if a.UsePlatformApis() {
