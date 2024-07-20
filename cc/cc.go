@@ -48,10 +48,10 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("cc_defaults", defaultsFactory)
 
 	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("sdk", sdkMutator).Parallel()
+		ctx.Transition("sdk", &sdkTransitionMutator{})
 		ctx.BottomUp("llndk", llndkMutator).Parallel()
-		ctx.BottomUp("link", LinkageMutator).Parallel()
-		ctx.BottomUp("version", versionMutator).Parallel()
+		ctx.Transition("link", &linkageTransitionMutator{})
+		ctx.Transition("version", &versionTransitionMutator{})
 		ctx.BottomUp("begin", BeginMutator).Parallel()
 	})
 
@@ -1867,8 +1867,10 @@ var (
 		"libdl":         true,
 		"libz":          true,
 		// art apex
+		// TODO(b/234351700): Remove this when com.android.art.debug is gone.
 		"libandroidio":    true,
 		"libdexfile":      true,
+		"libdexfiled":     true, // com.android.art.debug only
 		"libnativebridge": true,
 		"libnativehelper": true,
 		"libnativeloader": true,
