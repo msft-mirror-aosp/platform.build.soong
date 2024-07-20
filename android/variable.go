@@ -132,9 +132,11 @@ type variableProperties struct {
 				Keep_symbols                 *bool
 				Keep_symbols_and_debug_frame *bool
 			}
-			Static_libs       []string
-			Whole_static_libs []string
-			Shared_libs       []string
+			Static_libs         []string
+			Exclude_static_libs []string
+			Whole_static_libs   []string
+			Shared_libs         []string
+			Jni_libs            []string
 
 			Cmdline []string
 
@@ -518,6 +520,8 @@ type ProductVariables struct {
 	BoardUseVbmetaDigestInFingerprint *bool `json:",omitempty"`
 
 	OemProperties []string `json:",omitempty"`
+
+	ArtTargetIncludeDebugBuild *bool `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {
