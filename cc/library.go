@@ -19,6 +19,7 @@ import (
 	"io"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -711,7 +712,7 @@ type versionedInterface interface {
 	setStubsVersion(string)
 	stubsVersion() string
 
-	stubsVersions(ctx android.BaseMutatorContext) []string
+	stubsVersions(ctx android.BaseModuleContext) []string
 	setAllStubsVersions([]string)
 	allStubsVersions() []string
 
@@ -1903,7 +1904,7 @@ func (library *libraryDecorator) isStubsImplementationRequired() bool {
 	return BoolDefault(library.Properties.Stubs.Implementation_installable, true)
 }
 
-func (library *libraryDecorator) stubsVersions(ctx android.BaseMutatorContext) []string {
+func (library *libraryDecorator) stubsVersions(ctx android.BaseModuleContext) []string {
 	if !library.hasStubsVariants() {
 		return nil
 	}
@@ -2064,26 +2065,26 @@ func NewLibrary(hod android.HostOrDeviceSupported) (*Module, *libraryDecorator) 
 
 // connects a shared library to a static library in order to reuse its .o files to avoid
 // compiling source files twice.
-func reuseStaticLibrary(mctx android.BottomUpMutatorContext, static, shared *Module) {
-	if staticCompiler, ok := static.compiler.(*libraryDecorator); ok {
-		sharedCompiler := shared.compiler.(*libraryDecorator)
+func reuseStaticLibrary(ctx android.BottomUpMutatorContext, shared *Module) {
+	if sharedCompiler, ok := shared.compiler.(*libraryDecorator); ok {
 
 		// Check libraries in addition to cflags, since libraries may be exporting different
 		// include directories.
-		if len(staticCompiler.StaticProperties.Static.Cflags.GetOrDefault(mctx, nil)) == 0 &&
-			len(sharedCompiler.SharedProperties.Shared.Cflags.GetOrDefault(mctx, nil)) == 0 &&
-			len(staticCompiler.StaticProperties.Static.Whole_static_libs) == 0 &&
+		if len(sharedCompiler.StaticProperties.Static.Cflags.GetOrDefault(ctx, nil)) == 0 &&
+			len(sharedCompiler.SharedProperties.Shared.Cflags.GetOrDefault(ctx, nil)) == 0 &&
+			len(sharedCompiler.StaticProperties.Static.Whole_static_libs) == 0 &&
 			len(sharedCompiler.SharedProperties.Shared.Whole_static_libs) == 0 &&
-			len(staticCompiler.StaticProperties.Static.Static_libs) == 0 &&
+			len(sharedCompiler.StaticProperties.Static.Static_libs) == 0 &&
 			len(sharedCompiler.SharedProperties.Shared.Static_libs) == 0 &&
-			len(staticCompiler.StaticProperties.Static.Shared_libs) == 0 &&
+			len(sharedCompiler.StaticProperties.Static.Shared_libs) == 0 &&
 			len(sharedCompiler.SharedProperties.Shared.Shared_libs) == 0 &&
 			// Compare System_shared_libs properties with nil because empty lists are
 			// semantically significant for them.
-			staticCompiler.StaticProperties.Static.System_shared_libs == nil &&
+			sharedCompiler.StaticProperties.Static.System_shared_libs == nil &&
 			sharedCompiler.SharedProperties.Shared.System_shared_libs == nil {
 
-			mctx.AddInterVariantDependency(reuseObjTag, shared, static)
+			// TODO: namespaces?
+			ctx.AddVariationDependencies([]blueprint.Variation{{"link", "static"}}, reuseObjTag, ctx.ModuleName())
 			sharedCompiler.baseCompiler.Properties.OriginalSrcs =
 				sharedCompiler.baseCompiler.Properties.Srcs
 			sharedCompiler.baseCompiler.Properties.Srcs = nil
@@ -2091,19 +2092,21 @@ func reuseStaticLibrary(mctx android.BottomUpMutatorContext, static, shared *Mod
 		}
 
 		// This dep is just to reference static variant from shared variant
-		mctx.AddInterVariantDependency(staticVariantTag, shared, static)
+		ctx.AddVariationDependencies([]blueprint.Variation{{"link", "static"}}, staticVariantTag, ctx.ModuleName())
 	}
 }
 
-// LinkageMutator adds "static" or "shared" variants for modules depending
+// linkageTransitionMutator adds "static" or "shared" variants for modules depending
 // on whether the module can be built as a static library or a shared library.
-func LinkageMutator(mctx android.BottomUpMutatorContext) {
+type linkageTransitionMutator struct{}
+
+func (linkageTransitionMutator) Split(ctx android.BaseModuleContext) []string {
 	ccPrebuilt := false
-	if m, ok := mctx.Module().(*Module); ok && m.linker != nil {
+	if m, ok := ctx.Module().(*Module); ok && m.linker != nil {
 		_, ccPrebuilt = m.linker.(prebuiltLibraryInterface)
 	}
 	if ccPrebuilt {
-		library := mctx.Module().(*Module).linker.(prebuiltLibraryInterface)
+		library := ctx.Module().(*Module).linker.(prebuiltLibraryInterface)
 
 		// Differentiate between header only and building an actual static/shared library
 		buildStatic := library.buildStatic()
@@ -2112,75 +2115,118 @@ func LinkageMutator(mctx android.BottomUpMutatorContext) {
 			// Always create both the static and shared variants for prebuilt libraries, and then disable the one
 			// that is not being used.  This allows them to share the name of a cc_library module, which requires that
 			// all the variants of the cc_library also exist on the prebuilt.
-			modules := mctx.CreateLocalVariations("static", "shared")
-			static := modules[0].(*Module)
-			shared := modules[1].(*Module)
-
-			static.linker.(prebuiltLibraryInterface).setStatic()
-			shared.linker.(prebuiltLibraryInterface).setShared()
-
-			if buildShared {
-				mctx.AliasVariation("shared")
-			} else if buildStatic {
-				mctx.AliasVariation("static")
-			}
-
-			if !buildStatic {
-				static.linker.(prebuiltLibraryInterface).disablePrebuilt()
-			}
-			if !buildShared {
-				shared.linker.(prebuiltLibraryInterface).disablePrebuilt()
-			}
+			return []string{"static", "shared"}
 		} else {
 			// Header only
 		}
-
-	} else if library, ok := mctx.Module().(LinkableInterface); ok && (library.CcLibraryInterface() || library.RustLibraryInterface()) {
+	} else if library, ok := ctx.Module().(LinkableInterface); ok && (library.CcLibraryInterface() || library.RustLibraryInterface()) {
 		// Non-cc.Modules may need an empty variant for their mutators.
 		variations := []string{}
 		if library.NonCcVariants() {
 			variations = append(variations, "")
 		}
 		isLLNDK := false
-		if m, ok := mctx.Module().(*Module); ok {
+		if m, ok := ctx.Module().(*Module); ok {
 			isLLNDK = m.IsLlndk()
 		}
 		buildStatic := library.BuildStaticVariant() && !isLLNDK
 		buildShared := library.BuildSharedVariant()
 		if buildStatic && buildShared {
-			variations := append([]string{"static", "shared"}, variations...)
-
-			modules := mctx.CreateLocalVariations(variations...)
-			static := modules[0].(LinkableInterface)
-			shared := modules[1].(LinkableInterface)
-			static.SetStatic()
-			shared.SetShared()
-
-			if _, ok := library.(*Module); ok {
-				reuseStaticLibrary(mctx, static.(*Module), shared.(*Module))
-			}
-			mctx.AliasVariation("shared")
+			variations = append([]string{"static", "shared"}, variations...)
+			return variations
 		} else if buildStatic {
-			variations := append([]string{"static"}, variations...)
-
-			modules := mctx.CreateLocalVariations(variations...)
-			modules[0].(LinkableInterface).SetStatic()
-			mctx.AliasVariation("static")
+			variations = append([]string{"static"}, variations...)
 		} else if buildShared {
-			variations := append([]string{"shared"}, variations...)
-
-			modules := mctx.CreateLocalVariations(variations...)
-			modules[0].(LinkableInterface).SetShared()
-			mctx.AliasVariation("shared")
-		} else if len(variations) > 0 {
-			mctx.CreateLocalVariations(variations...)
-			mctx.AliasVariation(variations[0])
+			variations = append([]string{"shared"}, variations...)
 		}
-		if library.BuildRlibVariant() && library.IsRustFFI() && !buildStatic {
+
+		if len(variations) > 0 {
+			return variations
+		}
+	}
+	return []string{""}
+}
+
+func (linkageTransitionMutator) OutgoingTransition(ctx android.OutgoingTransitionContext, sourceVariation string) string {
+	return ""
+}
+
+func (linkageTransitionMutator) IncomingTransition(ctx android.IncomingTransitionContext, incomingVariation string) string {
+	ccPrebuilt := false
+	if m, ok := ctx.Module().(*Module); ok && m.linker != nil {
+		_, ccPrebuilt = m.linker.(prebuiltLibraryInterface)
+	}
+	if ccPrebuilt {
+		if incomingVariation != "" {
+			return incomingVariation
+		}
+		library := ctx.Module().(*Module).linker.(prebuiltLibraryInterface)
+		if library.buildShared() {
+			return "shared"
+		} else if library.buildStatic() {
+			return "static"
+		}
+		return ""
+	} else if library, ok := ctx.Module().(LinkableInterface); ok && library.CcLibraryInterface() {
+		isLLNDK := false
+		if m, ok := ctx.Module().(*Module); ok {
+			isLLNDK = m.IsLlndk()
+		}
+		buildStatic := library.BuildStaticVariant() && !isLLNDK
+		buildShared := library.BuildSharedVariant()
+		if library.BuildRlibVariant() && library.IsRustFFI() && !buildStatic && (incomingVariation == "static" || incomingVariation == "") {
 			// Rust modules do not build static libs, but rlibs are used as if they
 			// were via `static_libs`. Thus we need to alias the BuildRlibVariant
 			// to "static" for Rust FFI libraries.
-			mctx.CreateAliasVariation("static", "")
+			return ""
+		}
+		if incomingVariation != "" {
+			return incomingVariation
+		}
+		if buildShared {
+			return "shared"
+		} else if buildStatic {
+			return "static"
+		}
+		return ""
+	}
+	return ""
+}
+
+func (linkageTransitionMutator) Mutate(ctx android.BottomUpMutatorContext, variation string) {
+	ccPrebuilt := false
+	if m, ok := ctx.Module().(*Module); ok && m.linker != nil {
+		_, ccPrebuilt = m.linker.(prebuiltLibraryInterface)
+	}
+	if ccPrebuilt {
+		library := ctx.Module().(*Module).linker.(prebuiltLibraryInterface)
+		if variation == "static" {
+			library.setStatic()
+			if !library.buildStatic() {
+				library.disablePrebuilt()
+			}
+		} else if variation == "shared" {
+			library.setShared()
+			if !library.buildShared() {
+				library.disablePrebuilt()
+			}
+		}
+	} else if library, ok := ctx.Module().(LinkableInterface); ok && library.CcLibraryInterface() {
+		if variation == "static" {
+			library.SetStatic()
+		} else if variation == "shared" {
+			library.SetShared()
+			var isLLNDK bool
+			if m, ok := ctx.Module().(*Module); ok {
+				isLLNDK = m.IsLlndk()
+			}
+			buildStatic := library.BuildStaticVariant() && !isLLNDK
+			buildShared := library.BuildSharedVariant()
+			if buildStatic && buildShared {
+				if _, ok := library.(*Module); ok {
+					reuseStaticLibrary(ctx, library.(*Module))
+				}
+			}
 		}
 	}
 }
@@ -2204,64 +2250,14 @@ func normalizeVersions(ctx android.BaseModuleContext, versions []string) {
 	}
 }
 
-func createVersionVariations(mctx android.BottomUpMutatorContext, versions []string) {
-	// "" is for the non-stubs (implementation) variant for system modules, or the LLNDK variant
-	// for LLNDK modules.
-	variants := append(android.CopyOf(versions), "")
-
-	m := mctx.Module().(*Module)
-	isLLNDK := m.IsLlndk()
-	isVendorPublicLibrary := m.IsVendorPublicLibrary()
-	isImportedApiLibrary := m.isImportedApiLibrary()
-
-	modules := mctx.CreateLocalVariations(variants...)
-	for i, m := range modules {
-
-		if variants[i] != "" || isLLNDK || isVendorPublicLibrary || isImportedApiLibrary {
-			// A stubs or LLNDK stubs variant.
-			c := m.(*Module)
-			if c.sanitize != nil {
-				c.sanitize.Properties.ForceDisable = true
-			}
-			if c.stl != nil {
-				c.stl.Properties.Stl = StringPtr("none")
-			}
-			c.Properties.PreventInstall = true
-			lib := moduleLibraryInterface(m)
-			isLatest := i == (len(versions) - 1)
-			lib.setBuildStubs(isLatest)
-
-			if variants[i] != "" {
-				// A non-LLNDK stubs module is hidden from make and has a dependency from the
-				// implementation module to the stubs module.
-				c.Properties.HideFromMake = true
-				lib.setStubsVersion(variants[i])
-				mctx.AddInterVariantDependency(stubImplDepTag, modules[len(modules)-1], modules[i])
-			}
-		}
-	}
-	mctx.AliasVariation("")
-	latestVersion := ""
-	if len(versions) > 0 {
-		latestVersion = versions[len(versions)-1]
-	}
-	mctx.CreateAliasVariation("latest", latestVersion)
-}
-
-func createPerApiVersionVariations(mctx android.BottomUpMutatorContext, minSdkVersion string) {
+func perApiVersionVariations(mctx android.BaseModuleContext, minSdkVersion string) []string {
 	from, err := nativeApiLevelFromUser(mctx, minSdkVersion)
 	if err != nil {
 		mctx.PropertyErrorf("min_sdk_version", err.Error())
-		return
+		return []string{""}
 	}
 
-	versionStrs := ndkLibraryVersions(mctx, from)
-	modules := mctx.CreateLocalVariations(versionStrs...)
-
-	for i, module := range modules {
-		module.(*Module).Properties.Sdk_version = StringPtr(versionStrs[i])
-		module.(*Module).Properties.Min_sdk_version = StringPtr(versionStrs[i])
-	}
+	return ndkLibraryVersions(mctx, from)
 }
 
 func canBeOrLinkAgainstVersionVariants(module interface {
@@ -2291,7 +2287,7 @@ func moduleLibraryInterface(module blueprint.Module) libraryInterface {
 }
 
 // setStubsVersions normalizes the versions in the Stubs.Versions property into MutatedProperties.AllStubsVersions.
-func setStubsVersions(mctx android.BottomUpMutatorContext, library libraryInterface, module *Module) {
+func setStubsVersions(mctx android.BaseModuleContext, library libraryInterface, module *Module) {
 	if !library.buildShared() || !canBeVersionVariant(module) {
 		return
 	}
@@ -2304,25 +2300,98 @@ func setStubsVersions(mctx android.BottomUpMutatorContext, library libraryInterf
 	library.setAllStubsVersions(versions)
 }
 
-// versionMutator splits a module into the mandatory non-stubs variant
+// versionTransitionMutator splits a module into the mandatory non-stubs variant
 // (which is unnamed) and zero or more stubs variants.
-func versionMutator(mctx android.BottomUpMutatorContext) {
-	if mctx.Os() != android.Android {
-		return
+type versionTransitionMutator struct{}
+
+func (versionTransitionMutator) Split(ctx android.BaseModuleContext) []string {
+	if ctx.Os() != android.Android {
+		return []string{""}
 	}
 
-	m, ok := mctx.Module().(*Module)
-	if library := moduleLibraryInterface(mctx.Module()); library != nil && canBeVersionVariant(m) {
-		setStubsVersions(mctx, library, m)
+	m, ok := ctx.Module().(*Module)
+	if library := moduleLibraryInterface(ctx.Module()); library != nil && canBeVersionVariant(m) {
+		setStubsVersions(ctx, library, m)
 
-		createVersionVariations(mctx, library.allStubsVersions())
-		return
+		return append(slices.Clone(library.allStubsVersions()), "")
+	} else if ok && m.SplitPerApiLevel() && m.IsSdkVariant() {
+		return perApiVersionVariations(ctx, m.MinSdkVersion())
 	}
 
-	if ok {
-		if m.SplitPerApiLevel() && m.IsSdkVariant() {
-			createPerApiVersionVariations(mctx, m.MinSdkVersion())
+	return []string{""}
+}
+
+func (versionTransitionMutator) OutgoingTransition(ctx android.OutgoingTransitionContext, sourceVariation string) string {
+	return ""
+}
+
+func (versionTransitionMutator) IncomingTransition(ctx android.IncomingTransitionContext, incomingVariation string) string {
+	if ctx.Os() != android.Android {
+		return ""
+	}
+	m, ok := ctx.Module().(*Module)
+	if library := moduleLibraryInterface(ctx.Module()); library != nil && canBeVersionVariant(m) {
+		if incomingVariation == "latest" {
+			latestVersion := ""
+			versions := library.allStubsVersions()
+			if len(versions) > 0 {
+				latestVersion = versions[len(versions)-1]
+			}
+			return latestVersion
 		}
+		return incomingVariation
+	} else if ok && m.SplitPerApiLevel() && m.IsSdkVariant() {
+		// If this module only has variants with versions and the incoming dependency doesn't specify which one
+		// is needed then assume the latest version.
+		if incomingVariation == "" {
+			return android.FutureApiLevel.String()
+		}
+		return incomingVariation
+	}
+
+	return ""
+}
+
+func (versionTransitionMutator) Mutate(ctx android.BottomUpMutatorContext, variation string) {
+	// Optimization: return early if this module can't be affected.
+	if ctx.Os() != android.Android {
+		return
+	}
+
+	m, ok := ctx.Module().(*Module)
+	if library := moduleLibraryInterface(ctx.Module()); library != nil && canBeVersionVariant(m) {
+		isLLNDK := m.IsLlndk()
+		isVendorPublicLibrary := m.IsVendorPublicLibrary()
+		isImportedApiLibrary := m.isImportedApiLibrary()
+
+		if variation != "" || isLLNDK || isVendorPublicLibrary || isImportedApiLibrary {
+			// A stubs or LLNDK stubs variant.
+			if m.sanitize != nil {
+				m.sanitize.Properties.ForceDisable = true
+			}
+			if m.stl != nil {
+				m.stl.Properties.Stl = StringPtr("none")
+			}
+			m.Properties.PreventInstall = true
+			lib := moduleLibraryInterface(m)
+			allStubsVersions := library.allStubsVersions()
+			isLatest := len(allStubsVersions) > 0 && variation == allStubsVersions[len(allStubsVersions)-1]
+			lib.setBuildStubs(isLatest)
+		}
+		if variation != "" {
+			// A non-LLNDK stubs module is hidden from make
+			library.setStubsVersion(variation)
+			m.Properties.HideFromMake = true
+		} else {
+			// A non-LLNDK implementation module has a dependency to all stubs versions
+			for _, version := range library.allStubsVersions() {
+				ctx.AddVariationDependencies([]blueprint.Variation{{"version", version}},
+					stubImplDepTag, ctx.ModuleName())
+			}
+		}
+	} else if ok && m.SplitPerApiLevel() && m.IsSdkVariant() {
+		m.Properties.Sdk_version = StringPtr(variation)
+		m.Properties.Min_sdk_version = StringPtr(variation)
 	}
 }
 

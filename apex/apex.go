@@ -696,7 +696,6 @@ func addDependenciesForNativeModules(ctx android.BottomUpMutatorContext, nativeM
 	rustLibVariations := append(
 		target.Variations(), []blueprint.Variation{
 			{Mutator: "rust_libraries", Variation: "dylib"},
-			{Mutator: "link", Variation: ""},
 		}...,
 	)
 
@@ -2656,6 +2655,9 @@ func (a *apexBundle) checkUpdatable(ctx android.ModuleContext) {
 	if a.Updatable() {
 		if a.minSdkVersionValue(ctx) == "" {
 			ctx.PropertyErrorf("updatable", "updatable APEXes should set min_sdk_version as well")
+		}
+		if a.minSdkVersion(ctx).IsCurrent() {
+			ctx.PropertyErrorf("updatable", "updatable APEXes should not set min_sdk_version to current. Please use a finalized API level or a recognized in-development codename")
 		}
 		if a.UsePlatformApis() {
 			ctx.PropertyErrorf("updatable", "updatable APEXes can't use platform APIs")
