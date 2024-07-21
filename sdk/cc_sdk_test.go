@@ -2196,6 +2196,7 @@ cc_prebuilt_library_shared {
     prefer: false,
     visibility: ["//visibility:public"],
     apex_available: ["//apex_available:platform"],
+    stl: "none",
     compile_multilib: "both",
     stubs: {
         versions: [

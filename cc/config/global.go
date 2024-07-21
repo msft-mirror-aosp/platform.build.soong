@@ -376,6 +376,8 @@ var (
 		"-Wno-unqualified-std-cast-call",
 		"-Wno-array-parameter",
 		"-Wno-gnu-offsetof-extensions",
+		// TODO: Enable this warning http://b/315245071
+		"-Wno-fortify-source",
 	}
 
 	llvmNextExtraCommonGlobalCflags = []string{
@@ -395,8 +397,8 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r522817"
-	ClangDefaultShortVersion = "18"
+	ClangDefaultVersion      = "clang-r530567"
+	ClangDefaultShortVersion = "19"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{

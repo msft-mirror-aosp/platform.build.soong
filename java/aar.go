@@ -798,18 +798,6 @@ type AndroidLibrary struct {
 	aarFile android.WritablePath
 }
 
-var _ android.OutputFileProducer = (*AndroidLibrary)(nil)
-
-// For OutputFileProducer interface
-func (a *AndroidLibrary) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case ".aar":
-		return []android.Path{a.aarFile}, nil
-	default:
-		return a.Library.OutputFiles(tag)
-	}
-}
-
 var _ AndroidLibraryDependency = (*AndroidLibrary)(nil)
 
 func (a *AndroidLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -911,6 +899,13 @@ func (a *AndroidLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 	android.SetProvider(ctx, FlagsPackagesProvider, FlagsPackages{
 		AconfigTextFiles: aconfigTextFilePaths,
 	})
+
+	a.setOutputFiles(ctx)
+}
+
+func (a *AndroidLibrary) setOutputFiles(ctx android.ModuleContext) {
+	ctx.SetOutputFiles([]android.Path{a.aarFile}, ".aar")
+	setOutputFiles(ctx, a.Library.Module)
 }
 
 func (a *AndroidLibrary) IDEInfo(dpInfo *android.IdeInfo) {

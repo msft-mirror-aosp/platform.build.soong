@@ -5728,7 +5728,6 @@ func TestApexWithTests(t *testing.T) {
 			updatable: false,
 			tests: [
 				"mytest",
-				"mytests",
 			],
 		}
 
@@ -5771,25 +5770,6 @@ func TestApexWithTests(t *testing.T) {
 				"testdata/baz"
 			],
 		}
-
-		cc_test {
-			name: "mytests",
-			gtest: false,
-			srcs: [
-				"mytest1.cpp",
-				"mytest2.cpp",
-				"mytest3.cpp",
-			],
-			test_per_src: true,
-			relative_install_path: "test",
-			system_shared_libs: [],
-			static_executable: true,
-			stl: "none",
-			data: [
-				":fg",
-				":fg2",
-			],
-		}
 	`)
 
 	apexRule := ctx.ModuleForTests("myapex", "android_common_myapex").Rule("apexRule")
@@ -5803,11 +5783,6 @@ func TestApexWithTests(t *testing.T) {
 	ensureContains(t, copyCmds, "image.apex/bin/test/baz")
 	ensureContains(t, copyCmds, "image.apex/bin/test/bar/baz")
 
-	// Ensure that test deps built with `test_per_src` are copied into apex.
-	ensureContains(t, copyCmds, "image.apex/bin/test/mytest1")
-	ensureContains(t, copyCmds, "image.apex/bin/test/mytest2")
-	ensureContains(t, copyCmds, "image.apex/bin/test/mytest3")
-
 	// Ensure the module is correctly translated.
 	bundle := ctx.ModuleForTests("myapex", "android_common_myapex").Module().(*apexBundle)
 	data := android.AndroidMkDataForTest(t, ctx, bundle)
@@ -5817,9 +5792,6 @@ func TestApexWithTests(t *testing.T) {
 	data.Custom(&builder, name, prefix, "", data)
 	androidMk := builder.String()
 	ensureContains(t, androidMk, "LOCAL_MODULE := mytest.myapex\n")
-	ensureContains(t, androidMk, "LOCAL_MODULE := mytest1.myapex\n")
-	ensureContains(t, androidMk, "LOCAL_MODULE := mytest2.myapex\n")
-	ensureContains(t, androidMk, "LOCAL_MODULE := mytest3.myapex\n")
 	ensureContains(t, androidMk, "LOCAL_MODULE := myapex\n")
 }
 
@@ -11748,4 +11720,21 @@ func TestOverrideApexWithPrebuiltApexPreferred(t *testing.T) {
 	`)
 
 	java.CheckModuleHasDependency(t, res.TestContext, "myoverrideapex", "android_common_myoverrideapex_myoverrideapex", "foo")
+}
+
+func TestUpdatableApexMinSdkVersionCurrent(t *testing.T) {
+	testApexError(t, `"myapex" .*: updatable: updatable APEXes should not set min_sdk_version to current. Please use a finalized API level or a recognized in-development codename`, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			updatable: true,
+			min_sdk_version: "current",
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`)
 }
