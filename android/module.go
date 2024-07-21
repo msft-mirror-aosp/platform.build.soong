@@ -603,6 +603,11 @@ type hostAndDeviceProperties struct {
 	Device_supported *bool
 }
 
+type hostCrossProperties struct {
+	// If set to true, build a variant of the module for the host cross.  Defaults to true.
+	Host_cross_supported *bool
+}
+
 type Multilib string
 
 const (
@@ -718,6 +723,10 @@ func InitAndroidArchModule(m Module, hod HostOrDeviceSupported, defaultMultilib 
 		m.AddProperties(&base.hostAndDeviceProperties)
 	}
 
+	if hod&hostCrossSupported != 0 {
+		m.AddProperties(&base.hostCrossProperties)
+	}
+
 	initArchModule(m)
 }
 
@@ -803,6 +812,7 @@ type ModuleBase struct {
 	distProperties          distProperties
 	variableProperties      interface{}
 	hostAndDeviceProperties hostAndDeviceProperties
+	hostCrossProperties     hostCrossProperties
 
 	// Arch specific versions of structs in GetProperties() prior to
 	// initialization in InitAndroidArchModule, lets call it `generalProperties`.
@@ -1299,7 +1309,11 @@ func (m *ModuleBase) HostCrossSupported() bool {
 	// hostEnabled is true if the host_supported property is true or the HostOrDeviceSupported
 	// value has the hostDefault bit set.
 	hostEnabled := proptools.BoolDefault(m.hostAndDeviceProperties.Host_supported, hod&hostDefault != 0)
-	return hod&hostCrossSupported != 0 && hostEnabled
+
+	// Default true for the Host_cross_supported property
+	hostCrossEnabled := proptools.BoolDefault(m.hostCrossProperties.Host_cross_supported, true)
+
+	return hod&hostCrossSupported != 0 && hostEnabled && hostCrossEnabled
 }
 
 func (m *ModuleBase) Platform() bool {
@@ -2199,6 +2213,9 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 		switch variable {
 		case "debuggable":
 			return proptools.ConfigurableValueBool(ctx.Config().Debuggable())
+		case "use_debug_art":
+			// TODO(b/234351700): Remove once ART does not have separated debug APEX
+			return proptools.ConfigurableValueBool(ctx.Config().UseDebugArt())
 		default:
 			// TODO(b/323382414): Might add these on a case-by-case basis
 			ctx.OtherModulePropertyErrorf(m, property, fmt.Sprintf("TODO(b/323382414): Product variable %q is not yet supported in selects", variable))
@@ -2504,8 +2521,9 @@ func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, 
 	} else if cta, isCta := ctx.(*singletonContextAdaptor); isCta {
 		providerData, _ := cta.moduleProvider(module, OutputFilesProvider)
 		outputFiles, _ = providerData.(OutputFilesInfo)
+	} else {
+		return nil, fmt.Errorf("unsupported context %q in method outputFilesForModuleFromProvider", reflect.TypeOf(ctx))
 	}
-	// TODO: Add a check for skipped context
 
 	if outputFiles.isEmpty() {
 		return nil, OutputFilesProviderNotSet
