@@ -443,6 +443,30 @@ var (
 	usesLibCompat30OptTag   = makeUsesLibraryDependencyTag(30, true)
 )
 
+// A list of tags for deps used for compiling a module.
+// Any dependency tags that modifies the following properties of `deps` in `Module.collectDeps` should be
+// added to this list:
+// - bootClasspath
+// - classpath
+// - java9Classpath
+// - systemModules
+// - kotlin deps...
+var (
+	compileDependencyTags = []blueprint.DependencyTag{
+		sdkLibTag,
+		libTag,
+		staticLibTag,
+		bootClasspathTag,
+		systemModulesTag,
+		java9LibTag,
+		kotlinStdlibTag,
+		kotlinAnnotationsTag,
+		kotlinPluginTag,
+		syspropPublicStubDepTag,
+		instrumentationForTag,
+	}
+)
+
 func IsLibDepTag(depTag blueprint.DependencyTag) bool {
 	return depTag == libTag || depTag == sdkLibTag
 }
@@ -2386,9 +2410,34 @@ func (al *ApiLibrary) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiL
 	return android.FutureApiLevel
 }
 
+func (al *ApiLibrary) IDEInfo(i *android.IdeInfo) {
+	i.Deps = append(i.Deps, al.ideDeps()...)
+	i.Libs = append(i.Libs, al.properties.Libs...)
+	i.Static_libs = append(i.Static_libs, al.properties.Static_libs...)
+	i.SrcJars = append(i.SrcJars, al.stubsSrcJar.String())
+}
+
+// deps of java_api_library for module_bp_java_deps.json
+func (al *ApiLibrary) ideDeps() []string {
+	ret := []string{}
+	ret = append(ret, al.properties.Libs...)
+	ret = append(ret, al.properties.Static_libs...)
+	if al.properties.System_modules != nil {
+		ret = append(ret, proptools.String(al.properties.System_modules))
+	}
+	if al.properties.Full_api_surface_stub != nil {
+		ret = append(ret, proptools.String(al.properties.Full_api_surface_stub))
+	}
+	// Other non java_library dependencies like java_api_contribution are ignored for now.
+	return ret
+}
+
 // implement the following interfaces for hiddenapi processing
 var _ hiddenAPIModule = (*ApiLibrary)(nil)
 var _ UsesLibraryDependency = (*ApiLibrary)(nil)
+
+// implement the following interface for IDE completion.
+var _ android.IDEInfo = (*ApiLibrary)(nil)
 
 //
 // Java prebuilts

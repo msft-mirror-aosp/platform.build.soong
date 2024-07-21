@@ -200,15 +200,8 @@ func registerRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("rust_prebuilt_library", PrebuiltLibraryFactory)
 	ctx.RegisterModuleType("rust_prebuilt_dylib", PrebuiltDylibFactory)
 	ctx.RegisterModuleType("rust_prebuilt_rlib", PrebuiltRlibFactory)
-	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		// rust mutators
-		ctx.BottomUp("rust_libraries", LibraryMutator).Parallel()
-		ctx.BottomUp("rust_stdlinkage", LibstdMutator).Parallel()
-		ctx.BottomUp("rust_begin", BeginMutator).Parallel()
-	})
+	ctx.PreDepsMutators(registerPreDepsMutators)
 	ctx.RegisterParallelSingletonType("rust_project_generator", rustProjectGeneratorSingleton)
 	ctx.RegisterParallelSingletonType("kythe_rust_extract", kytheExtractRustFactory)
-	ctx.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("rust_sanitizers", rustSanitizerRuntimeMutator).Parallel()
-	})
+	ctx.PostDepsMutators(registerPostDepsMutators)
 }

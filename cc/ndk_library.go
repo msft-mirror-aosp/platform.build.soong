@@ -133,7 +133,7 @@ func (stub *stubDecorator) implementationModuleName(name string) string {
 	return strings.TrimSuffix(name, ndkLibrarySuffix)
 }
 
-func ndkLibraryVersions(ctx android.BaseMutatorContext, from android.ApiLevel) []string {
+func ndkLibraryVersions(ctx android.BaseModuleContext, from android.ApiLevel) []string {
 	var versions []android.ApiLevel
 	versionStrs := []string{}
 	for _, version := range ctx.Config().AllSupportedApiLevels() {
@@ -147,7 +147,7 @@ func ndkLibraryVersions(ctx android.BaseMutatorContext, from android.ApiLevel) [
 	return versionStrs
 }
 
-func (this *stubDecorator) stubsVersions(ctx android.BaseMutatorContext) []string {
+func (this *stubDecorator) stubsVersions(ctx android.BaseModuleContext) []string {
 	if !ctx.Module().Enabled(ctx) {
 		return nil
 	}

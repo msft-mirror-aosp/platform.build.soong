@@ -4364,7 +4364,16 @@ func TestPrivappAllowlistAndroidMk(t *testing.T) {
 }
 
 func TestAppFlagsPackages(t *testing.T) {
-	ctx := testApp(t, `
+	ctx := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		android.FixtureMergeMockFs(
+			map[string][]byte{
+				"res/layout/layout.xml":         nil,
+				"res/values/strings.xml":        nil,
+				"res/values-en-rUS/strings.xml": nil,
+			},
+		),
+	).RunTestWithBp(t, `
 		android_app {
 			name: "foo",
 			srcs: ["a.java"],
@@ -4396,16 +4405,24 @@ func TestAppFlagsPackages(t *testing.T) {
 
 	// android_app module depends on aconfig_declarations listed in flags_packages
 	android.AssertBoolEquals(t, "foo expected to depend on bar", true,
-		CheckModuleHasDependency(t, ctx, "foo", "android_common", "bar"))
+		CheckModuleHasDependency(t, ctx.TestContext, "foo", "android_common", "bar"))
 
 	android.AssertBoolEquals(t, "foo expected to depend on baz", true,
-		CheckModuleHasDependency(t, ctx, "foo", "android_common", "baz"))
+		CheckModuleHasDependency(t, ctx.TestContext, "foo", "android_common", "baz"))
 
 	aapt2LinkRule := foo.Rule("android/soong/java.aapt2Link")
 	linkInFlags := aapt2LinkRule.Args["inFlags"]
 	android.AssertStringDoesContain(t,
 		"aapt2 link command expected to pass feature flags arguments",
 		linkInFlags,
+		"--feature-flags @out/soong/.intermediates/bar/intermediate.txt --feature-flags @out/soong/.intermediates/baz/intermediate.txt",
+	)
+
+	aapt2CompileRule := foo.Rule("android/soong/java.aapt2Compile")
+	compileFlags := aapt2CompileRule.Args["cFlags"]
+	android.AssertStringDoesContain(t,
+		"aapt2 compile command expected to pass feature flags arguments",
+		compileFlags,
 		"--feature-flags @out/soong/.intermediates/bar/intermediate.txt --feature-flags @out/soong/.intermediates/baz/intermediate.txt",
 	)
 }

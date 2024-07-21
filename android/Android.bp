@@ -42,6 +42,7 @@ bootstrap_go_package {
         "buildinfo_prop.go",
         "compliance_metadata.go",
         "config.go",
+        "container.go",
         "test_config.go",
         "configurable_properties.go",
         "configured_jars.go",
