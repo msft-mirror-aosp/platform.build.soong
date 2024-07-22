@@ -91,6 +91,10 @@ type CommonProperties struct {
 	// if not blank, run jarjar using the specified rules file
 	Jarjar_rules *string `android:"path,arch_variant"`
 
+	// java class names to rename with jarjar when a reverse dependency has a jarjar_prefix
+	// property.
+	Jarjar_rename []string
+
 	// if not blank, used as prefix to generate repackage rule
 	Jarjar_prefix *string
 
@@ -2650,8 +2654,7 @@ func (module *Module) collectJarJarRules(ctx android.ModuleContext) *JarJarProvi
 	// Gather repackage information from deps
 	result := collectDirectDepsProviders(ctx)
 
-	// Update that with entries we've stored for ourself
-	for orig, renamed := range module.jarjarRenameRules {
+	add := func(orig string, renamed string) {
 		if result == nil {
 			result = &JarJarProviderData{
 				Rename: make(map[string]string),
@@ -2660,10 +2663,20 @@ func (module *Module) collectJarJarRules(ctx android.ModuleContext) *JarJarProvi
 		if renamed != "" {
 			if preexisting, exists := (*result).Rename[orig]; exists && preexisting != renamed {
 				ctx.ModuleErrorf("Conflicting jarjar rules inherited for class: %s (%s and %s)", orig, renamed, preexisting)
-				continue
+				return
 			}
 		}
 		(*result).Rename[orig] = renamed
+	}
+
+	// Update that with entries we've stored for ourself
+	for orig, renamed := range module.jarjarRenameRules {
+		add(orig, renamed)
+	}
+
+	// Update that with entries given in the jarjar_rename property.
+	for _, orig := range module.properties.Jarjar_rename {
+		add(orig, "")
 	}
 
 	// If there are no renamings, then jarjar_prefix does nothing, so skip the extra work.
