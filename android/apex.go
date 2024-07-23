@@ -84,6 +84,9 @@ type ApexInfo struct {
 
 	// Returns the name of the test apexes that this module is included in.
 	TestApexes []string
+
+	// Returns the name of the overridden apex (com.android.foo)
+	BaseApexName string
 }
 
 // AllApexInfo holds the ApexInfo of all apexes that include this module.
