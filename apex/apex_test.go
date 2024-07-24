@@ -11737,3 +11737,121 @@ func TestUpdatableApexMinSdkVersionCurrent(t *testing.T) {
 		}
 	`)
 }
+
+func TestPrebuiltStubNoinstall(t *testing.T) {
+	testFunc := func(t *testing.T, expectLibfooOnSystemLib bool, fs android.MockFS) {
+		result := android.GroupFixturePreparers(
+			prepareForApexTest,
+			android.PrepareForTestWithAndroidMk,
+			android.PrepareForTestWithMakevars,
+			android.FixtureMergeMockFs(fs),
+		).RunTest(t)
+
+		ldRule := result.ModuleForTests("installedlib", "android_arm64_armv8-a_shared").Rule("ld")
+		android.AssertStringDoesContain(t, "", ldRule.Args["libFlags"], "android_arm64_armv8-a_shared/libfoo.so")
+
+		installRules := result.InstallMakeRulesForTesting(t)
+
+		var installedlibRule *android.InstallMakeRule
+		for i, rule := range installRules {
+			if rule.Target == "out/target/product/test_device/system/lib/installedlib.so" {
+				if installedlibRule != nil {
+					t.Errorf("Duplicate install rules for %s", rule.Target)
+				}
+				installedlibRule = &installRules[i]
+			}
+		}
+		if installedlibRule == nil {
+			t.Errorf("No install rule found for installedlib")
+			return
+		}
+
+		if expectLibfooOnSystemLib {
+			android.AssertStringListContains(t,
+				"installedlib doesn't have install dependency on libfoo impl",
+				installedlibRule.OrderOnlyDeps,
+				"out/target/product/test_device/system/lib/libfoo.so")
+		} else {
+			android.AssertStringListDoesNotContain(t,
+				"installedlib has install dependency on libfoo stub",
+				installedlibRule.Deps,
+				"out/target/product/test_device/system/lib/libfoo.so")
+			android.AssertStringListDoesNotContain(t,
+				"installedlib has order-only install dependency on libfoo stub",
+				installedlibRule.OrderOnlyDeps,
+				"out/target/product/test_device/system/lib/libfoo.so")
+		}
+	}
+
+	prebuiltLibfooBp := []byte(`
+		cc_prebuilt_library {
+			name: "libfoo",
+			prefer: true,
+			srcs: ["libfoo.so"],
+			stubs: {
+				versions: ["1"],
+			},
+			apex_available: ["apexfoo"],
+		}
+	`)
+
+	apexfooBp := []byte(`
+		apex {
+			name: "apexfoo",
+			key: "apexfoo.key",
+			native_shared_libs: ["libfoo"],
+			updatable: false,
+			compile_multilib: "both",
+		}
+		apex_key {
+			name: "apexfoo.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`)
+
+	installedlibBp := []byte(`
+		cc_library {
+			name: "installedlib",
+			shared_libs: ["libfoo"],
+		}
+	`)
+
+	t.Run("prebuilt stub (without source): no install", func(t *testing.T) {
+		testFunc(
+			t,
+			/*expectLibfooOnSystemLib=*/ false,
+			android.MockFS{
+				"prebuilts/module_sdk/art/current/Android.bp": prebuiltLibfooBp,
+				"apexfoo/Android.bp":                          apexfooBp,
+				"system/sepolicy/apex/apexfoo-file_contexts":  nil,
+				"Android.bp": installedlibBp,
+			},
+		)
+	})
+
+	disabledSourceLibfooBp := []byte(`
+		cc_library {
+			name: "libfoo",
+			enabled: false,
+			stubs: {
+				versions: ["1"],
+			},
+			apex_available: ["apexfoo"],
+		}
+	`)
+
+	t.Run("prebuilt stub (with disabled source): no install", func(t *testing.T) {
+		testFunc(
+			t,
+			/*expectLibfooOnSystemLib=*/ false,
+			android.MockFS{
+				"prebuilts/module_sdk/art/current/Android.bp": prebuiltLibfooBp,
+				"impl/Android.bp":                            disabledSourceLibfooBp,
+				"apexfoo/Android.bp":                         apexfooBp,
+				"system/sepolicy/apex/apexfoo-file_contexts": nil,
+				"Android.bp":                                 installedlibBp,
+			},
+		)
+	})
+}
