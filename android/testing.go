@@ -224,6 +224,10 @@ func (ctx *TestContext) OtherModuleProviderAdaptor() OtherModuleProviderContext 
 	})
 }
 
+func (ctx *TestContext) OtherModulePropertyErrorf(module Module, property string, fmt_ string, args ...interface{}) {
+	panic(fmt.Sprintf(fmt_, args...))
+}
+
 // registeredComponentOrder defines the order in which a sortableComponent type is registered at
 // runtime and provides support for reordering the components registered for a test in the same
 // way.
@@ -1014,20 +1018,21 @@ func (m TestingModule) VariablesForTestsRelativeToTop() map[string]string {
 	return normalizeStringMapRelativeToTop(m.config, m.module.VariablesForTests())
 }
 
-// OutputFiles calls OutputFileProducer.OutputFiles on the encapsulated module, exits the test
-// immediately if there is an error and otherwise returns the result of calling Paths.RelativeToTop
+// OutputFiles checks if module base outputFiles property has any output
+// files can be used to return.
+// Exits the test immediately if there is an error and
+// otherwise returns the result of calling Paths.RelativeToTop
 // on the returned Paths.
 func (m TestingModule) OutputFiles(t *testing.T, tag string) Paths {
-	producer, ok := m.module.(OutputFileProducer)
-	if !ok {
-		t.Fatalf("%q must implement OutputFileProducer\n", m.module.Name())
-	}
-	paths, err := producer.OutputFiles(tag)
-	if err != nil {
-		t.Fatal(err)
+	outputFiles := m.Module().base().outputFiles
+	if tag == "" && outputFiles.DefaultOutputFiles != nil {
+		return outputFiles.DefaultOutputFiles.RelativeToTop()
+	} else if taggedOutputFiles, hasTag := outputFiles.TaggedOutputFiles[tag]; hasTag {
+		return taggedOutputFiles.RelativeToTop()
 	}
 
-	return paths.RelativeToTop()
+	t.Fatal(fmt.Errorf("No test output file has been set for tag %q", tag))
+	return nil
 }
 
 // TestingSingleton is wrapper around an android.Singleton that provides methods to find information about individual
@@ -1122,7 +1127,7 @@ func AndroidMkEntriesForTest(t *testing.T, ctx *TestContext, mod blueprint.Modul
 
 	entriesList := p.AndroidMkEntries()
 	aconfigUpdateAndroidMkEntries(ctx, mod.(Module), &entriesList)
-	for i, _ := range entriesList {
+	for i := range entriesList {
 		entriesList[i].fillInEntries(ctx, mod)
 	}
 	return entriesList
@@ -1285,5 +1290,23 @@ func EnsureListContainsSuffix(t *testing.T, result []string, expected string) {
 	t.Helper()
 	if !SuffixInList(result, expected) {
 		t.Errorf("%q is not found in %v", expected, result)
+	}
+}
+
+type panickingConfigAndErrorContext struct {
+	ctx *TestContext
+}
+
+func (ctx *panickingConfigAndErrorContext) OtherModulePropertyErrorf(module Module, property, fmt string, args ...interface{}) {
+	panic(ctx.ctx.PropertyErrorf(module, property, fmt, args...).Error())
+}
+
+func (ctx *panickingConfigAndErrorContext) Config() Config {
+	return ctx.ctx.Config()
+}
+
+func PanickingConfigAndErrorContext(ctx *TestContext) ConfigAndErrorContext {
+	return &panickingConfigAndErrorContext{
+		ctx: ctx,
 	}
 }

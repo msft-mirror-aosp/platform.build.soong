@@ -177,7 +177,7 @@ func (p *prebuiltLibraryLinker) link(ctx ModuleContext,
 				implicits = append(implicits, importLibOutputFile)
 
 				ctx.Build(pctx, android.BuildParams{
-					Rule:        android.Cp,
+					Rule:        android.CpExecutable,
 					Description: "prebuilt import library",
 					Input:       importLibSrc,
 					Output:      importLibOutputFile,
@@ -188,7 +188,7 @@ func (p *prebuiltLibraryLinker) link(ctx ModuleContext,
 			}
 
 			ctx.Build(pctx, android.BuildParams{
-				Rule:        android.Cp,
+				Rule:        android.CpExecutable,
 				Description: "prebuilt shared library",
 				Implicits:   implicits,
 				Input:       in,
@@ -204,17 +204,6 @@ func (p *prebuiltLibraryLinker) link(ctx ModuleContext,
 
 				TableOfContents: p.tocFile,
 			})
-
-			// TODO(b/220898484): Mainline module sdk prebuilts of stub libraries use a stub
-			// library as their source and must not be installed, but other prebuilts like
-			// libclang_rt.* libraries set `stubs` property because they are LLNDK libraries,
-			// but use an implementation library as their source and need to be installed.
-			// This discrepancy should be resolved without the prefix hack below.
-			isModuleSdkPrebuilts := android.HasAnyPrefix(ctx.ModuleDir(), []string{
-				"prebuilts/runtime/mainline/", "prebuilts/module_sdk/"})
-			if p.hasStubsVariants() && !p.buildStubs() && !ctx.Host() && isModuleSdkPrebuilts {
-				ctx.Module().MakeUninstallable()
-			}
 
 			return outputFile
 		}

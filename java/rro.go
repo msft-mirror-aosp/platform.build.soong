@@ -122,6 +122,10 @@ func (r *RuntimeResourceOverlay) DepsMutator(ctx android.BottomUpMutatorContext)
 
 	ctx.AddVariationDependencies(nil, staticLibTag, r.properties.Static_libs...)
 	ctx.AddVariationDependencies(nil, libTag, r.properties.Resource_libs...)
+
+	for _, aconfig_declaration := range r.aaptProperties.Flags_packages {
+		ctx.AddDependency(ctx.Module(), aconfigDeclarationTag, aconfig_declaration)
+	}
 }
 
 func (r *RuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -146,11 +150,13 @@ func (r *RuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleC
 		aaptLinkFlags = append(aaptLinkFlags,
 			"--rename-overlay-category "+*r.overridableProperties.Category)
 	}
+	aconfigTextFilePaths := getAconfigFilePaths(ctx)
 	r.aapt.buildActions(ctx,
 		aaptBuildActionOptions{
 			sdkContext:                     r,
 			enforceDefaultTargetSdkVersion: false,
 			extraLinkFlags:                 aaptLinkFlags,
+			aconfigTextFiles:               aconfigTextFilePaths,
 		},
 	)
 
@@ -171,6 +177,10 @@ func (r *RuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleC
 	partition := rroPartition(ctx)
 	r.installDir = android.PathForModuleInPartitionInstall(ctx, partition, "overlay", String(r.properties.Theme))
 	ctx.InstallFile(r.installDir, r.outputFile.Base(), r.outputFile)
+
+	android.SetProvider(ctx, FlagsPackagesProvider, FlagsPackages{
+		AconfigTextFiles: aconfigTextFilePaths,
+	})
 }
 
 func (r *RuntimeResourceOverlay) SdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {

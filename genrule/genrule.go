@@ -126,7 +126,7 @@ type generatorProperties struct {
 	//  $(out): a single output file.
 	//  $(genDir): the sandbox directory for this tool; contains $(out).
 	//  $$: a literal $
-	Cmd *string
+	Cmd proptools.Configurable[string] `android:"replace_instead_of_append"`
 
 	// name of the modules (if any) that produces the host executable.   Leave empty for
 	// prebuilts or scripts that do not need a module to build them.
@@ -180,9 +180,6 @@ type Module struct {
 
 	subName string
 	subDir  string
-
-	// Aconfig files for all transitive deps.  Also exposed via TransitiveDeclarationsInfo
-	mergedAconfigFiles map[string]android.Paths
 }
 
 type taskFunc func(ctx android.ModuleContext, rawCommand string, srcFiles android.Paths) []generateTask
@@ -216,21 +213,7 @@ func (g *Module) GeneratedDeps() android.Paths {
 	return g.outputDeps
 }
 
-func (g *Module) OutputFiles(tag string) (android.Paths, error) {
-	if tag == "" {
-		return append(android.Paths{}, g.outputFiles...), nil
-	}
-	// otherwise, tag should match one of outputs
-	for _, outputFile := range g.outputFiles {
-		if outputFile.Rel() == tag {
-			return android.Paths{outputFile}, nil
-		}
-	}
-	return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-}
-
 var _ android.SourceFileProducer = (*Module)(nil)
-var _ android.OutputFileProducer = (*Module)(nil)
 
 func toolDepsMutator(ctx android.BottomUpMutatorContext) {
 	if g, ok := ctx.Module().(*Module); ok {
@@ -299,7 +282,7 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 				case android.HostToolProvider:
 					// A HostToolProvider provides the path to a tool, which will be copied
 					// into the sandbox.
-					if !t.(android.Module).Enabled() {
+					if !t.(android.Module).Enabled(ctx) {
 						if ctx.Config().AllowMissingDependencies() {
 							ctx.AddMissingDependencies([]string{tool})
 						} else {
@@ -317,7 +300,17 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 						// required relative locations of the tool and its dependencies, use those
 						// instead.  They will be copied to those relative locations in the sbox
 						// sandbox.
-						packagedTools = append(packagedTools, specs...)
+						// Care must be taken since TransitivePackagingSpec may return device-side
+						// paths via the required property. Filter them out.
+						for i, ps := range specs {
+							if ps.Partition() != "" {
+								if i == 0 {
+									panic("first PackagingSpec is assumed to be the host-side tool")
+								}
+								continue
+							}
+							packagedTools = append(packagedTools, ps)
+						}
 						// Assume that the first PackagingSpec of the module is the tool.
 						addLocationLabel(tag.label, packagedToolLocation{specs[0]})
 					} else {
@@ -396,7 +389,7 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 	var outputFiles android.WritablePaths
 	var zipArgs strings.Builder
 
-	cmd := String(g.properties.Cmd)
+	cmd := g.properties.Cmd.GetOrDefault(ctx, "")
 	if g.CmdModifier != nil {
 		cmd = g.CmdModifier(ctx, cmd)
 	}
@@ -578,24 +571,19 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		})
 		g.outputDeps = android.Paths{phonyFile}
 	}
-	android.CollectDependencyAconfigFiles(ctx, &g.mergedAconfigFiles)
+
+	g.setOutputFiles(ctx)
 }
 
-func (g *Module) AndroidMkEntries() []android.AndroidMkEntries {
-	ret := android.AndroidMkEntries{
-		OutputFile: android.OptionalPathForPath(g.outputFiles[0]),
-		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
-			func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
-				android.SetAconfigFileMkEntries(g.AndroidModuleBase(), entries, g.mergedAconfigFiles)
-			},
-		},
+func (g *Module) setOutputFiles(ctx android.ModuleContext) {
+	if len(g.outputFiles) == 0 {
+		return
 	}
-
-	return []android.AndroidMkEntries{ret}
-}
-
-func (g *Module) AndroidModuleBase() *android.ModuleBase {
-	return &g.ModuleBase
+	ctx.SetOutputFiles(g.outputFiles, "")
+	// non-empty-string-tag should match one of the outputs
+	for _, files := range g.outputFiles {
+		ctx.SetOutputFiles(android.Paths{files}, files.Rel())
+	}
 }
 
 // Collect information for opening IDE project files in java/jdeps.go.
@@ -655,13 +643,15 @@ func generatorFactory(taskGenerator taskFunc, props ...interface{}) *Module {
 type noopImageInterface struct{}
 
 func (x noopImageInterface) ImageMutatorBegin(android.BaseModuleContext)                 {}
+func (x noopImageInterface) VendorVariantNeeded(android.BaseModuleContext) bool          { return false }
+func (x noopImageInterface) ProductVariantNeeded(android.BaseModuleContext) bool         { return false }
 func (x noopImageInterface) CoreVariantNeeded(android.BaseModuleContext) bool            { return false }
 func (x noopImageInterface) RamdiskVariantNeeded(android.BaseModuleContext) bool         { return false }
 func (x noopImageInterface) VendorRamdiskVariantNeeded(android.BaseModuleContext) bool   { return false }
 func (x noopImageInterface) DebugRamdiskVariantNeeded(android.BaseModuleContext) bool    { return false }
 func (x noopImageInterface) RecoveryVariantNeeded(android.BaseModuleContext) bool        { return false }
 func (x noopImageInterface) ExtraImageVariations(ctx android.BaseModuleContext) []string { return nil }
-func (x noopImageInterface) SetImageVariation(ctx android.BaseModuleContext, variation string, module android.Module) {
+func (x noopImageInterface) SetImageVariation(ctx android.BaseModuleContext, variation string) {
 }
 
 func NewGenSrcs() *Module {
@@ -704,13 +694,13 @@ func NewGenSrcs() *Module {
 			rule := getSandboxedRuleBuilder(ctx, android.NewRuleBuilder(pctx, ctx).Sbox(genDir, nil))
 
 			for _, in := range shard {
-				outFile := android.GenPathWithExt(ctx, finalSubDir, in, String(properties.Output_extension))
+				outFile := android.GenPathWithExtAndTrimExt(ctx, finalSubDir, in, String(properties.Output_extension), String(properties.Trim_extension))
 
 				// If sharding is enabled, then outFile is the path to the output file in
 				// the shard directory, and copyTo is the path to the output file in the
 				// final directory.
 				if len(shards) > 1 {
-					shardFile := android.GenPathWithExt(ctx, genSubDir, in, String(properties.Output_extension))
+					shardFile := android.GenPathWithExtAndTrimExt(ctx, genSubDir, in, String(properties.Output_extension), String(properties.Trim_extension))
 					copyTo = append(copyTo, outFile)
 					outFile = shardFile
 				}
@@ -764,6 +754,7 @@ func NewGenSrcs() *Module {
 func GenSrcsFactory() android.Module {
 	m := NewGenSrcs()
 	android.InitAndroidModule(m)
+	android.InitDefaultableModule(m)
 	return m
 }
 
@@ -776,6 +767,9 @@ type genSrcsProperties struct {
 
 	// Additional files needed for build that are not tooling related.
 	Data []string `android:"path"`
+
+	// Trim the matched extension for each input file, and it should start with ".".
+	Trim_extension *string
 }
 
 const defaultShardSize = 50
@@ -808,7 +802,7 @@ func GenRuleFactory() android.Module {
 
 type genRuleProperties struct {
 	// names of the output files that will be generated
-	Out []string
+	Out []string `android:"arch_variant"`
 }
 
 var Bool = proptools.Bool
@@ -842,19 +836,15 @@ var sandboxingAllowlistKey = android.NewOnceKey("genruleSandboxingAllowlistKey")
 
 type sandboxingAllowlistSets struct {
 	sandboxingDenyModuleSet map[string]bool
-	sandboxingDenyPathSet   map[string]bool
 }
 
 func getSandboxingAllowlistSets(ctx android.PathContext) *sandboxingAllowlistSets {
 	return ctx.Config().Once(sandboxingAllowlistKey, func() interface{} {
 		sandboxingDenyModuleSet := map[string]bool{}
-		sandboxingDenyPathSet := map[string]bool{}
 
 		android.AddToStringSet(sandboxingDenyModuleSet, SandboxingDenyModuleList)
-		android.AddToStringSet(sandboxingDenyPathSet, SandboxingDenyPathList)
 		return &sandboxingAllowlistSets{
 			sandboxingDenyModuleSet: sandboxingDenyModuleSet,
-			sandboxingDenyPathSet:   sandboxingDenyPathSet,
 		}
 	}).(*sandboxingAllowlistSets)
 }
@@ -864,8 +854,7 @@ func getSandboxedRuleBuilder(ctx android.ModuleContext, r *android.RuleBuilder) 
 		return r.SandboxTools()
 	}
 	sandboxingAllowlistSets := getSandboxingAllowlistSets(ctx)
-	if sandboxingAllowlistSets.sandboxingDenyPathSet[ctx.ModuleDir()] ||
-		sandboxingAllowlistSets.sandboxingDenyModuleSet[ctx.ModuleName()] {
+	if sandboxingAllowlistSets.sandboxingDenyModuleSet[ctx.ModuleName()] {
 		return r.SandboxTools()
 	}
 	return r.SandboxInputs()

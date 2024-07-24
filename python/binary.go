@@ -71,9 +71,6 @@ type PythonBinaryModule struct {
 	installedDest android.Path
 
 	androidMkSharedLibs []string
-
-	// Aconfig files for all transitive deps.  Also exposed via TransitiveDeclarationsInfo
-	mergedAconfigFiles map[string]android.Paths
 }
 
 var _ android.AndroidMkEntriesProvider = (*PythonBinaryModule)(nil)
@@ -106,7 +103,7 @@ func (p *PythonBinaryModule) GenerateAndroidBuildActions(ctx android.ModuleConte
 	p.buildBinary(ctx)
 	p.installedDest = ctx.InstallFile(installDir(ctx, "bin", "", ""),
 		p.installSource.Base(), p.installSource)
-	android.CollectDependencyAconfigFiles(ctx, &p.mergedAconfigFiles)
+	ctx.SetOutputFiles(android.Paths{p.installSource}, "")
 }
 
 func (p *PythonBinaryModule) buildBinary(ctx android.ModuleContext) {
@@ -170,7 +167,6 @@ func (p *PythonBinaryModule) AndroidMkEntries() []android.AndroidMkEntries {
 			entries.SetString("LOCAL_MODULE_STEM", stem)
 			entries.AddStrings("LOCAL_SHARED_LIBRARIES", p.androidMkSharedLibs...)
 			entries.SetBool("LOCAL_CHECK_ELF_FILES", false)
-			android.SetAconfigFileMkEntries(&p.ModuleBase, entries, p.mergedAconfigFiles)
 		})
 
 	return []android.AndroidMkEntries{entries}
@@ -192,18 +188,8 @@ func (p *PythonBinaryModule) HostToolPath() android.OptionalPath {
 	return android.OptionalPathForPath(p.installedDest)
 }
 
-// OutputFiles returns output files based on given tag, returns an error if tag is unsupported.
-func (p *PythonBinaryModule) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return android.Paths{p.installSource}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
-}
-
 func (p *PythonBinaryModule) isEmbeddedLauncherEnabled() bool {
-	return Bool(p.properties.Embedded_launcher)
+	return BoolDefault(p.properties.Embedded_launcher, true)
 }
 
 func (b *PythonBinaryModule) autorun() bool {

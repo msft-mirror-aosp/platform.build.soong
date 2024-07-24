@@ -15,8 +15,6 @@
 package java
 
 import (
-	"fmt"
-
 	"android/soong/android"
 	"android/soong/dexpreopt"
 )
@@ -57,9 +55,6 @@ type platformBootclasspathModule struct {
 
 	// Path to the monolithic hiddenapi-unsupported.csv file.
 	hiddenAPIMetadataCSV android.OutputPath
-
-	// Path to a srcjar containing all the transitive sources of the bootclasspath.
-	srcjar android.OutputPath
 }
 
 type platformBootclasspathProperties struct {
@@ -76,8 +71,6 @@ func platformBootclasspathFactory() android.SingletonModule {
 	return m
 }
 
-var _ android.OutputFileProducer = (*platformBootclasspathModule)(nil)
-
 func (b *platformBootclasspathModule) AndroidMkEntries() (entries []android.AndroidMkEntries) {
 	entries = append(entries, android.AndroidMkEntries{
 		Class: "FAKE",
@@ -87,22 +80,6 @@ func (b *platformBootclasspathModule) AndroidMkEntries() (entries []android.Andr
 	})
 	entries = append(entries, b.classpathFragmentBase().androidMkEntries()...)
 	return
-}
-
-// Make the hidden API files available from the platform-bootclasspath module.
-func (b *platformBootclasspathModule) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "hiddenapi-flags.csv":
-		return android.Paths{b.hiddenAPIFlagsCSV}, nil
-	case "hiddenapi-index.csv":
-		return android.Paths{b.hiddenAPIIndexCSV}, nil
-	case "hiddenapi-metadata.csv":
-		return android.Paths{b.hiddenAPIMetadataCSV}, nil
-	case ".srcjar":
-		return android.Paths{b.srcjar}, nil
-	}
-
-	return nil, fmt.Errorf("unknown tag %s", tag)
 }
 
 func (b *platformBootclasspathModule) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -198,8 +175,8 @@ func (b *platformBootclasspathModule) GenerateAndroidBuildActions(ctx android.Mo
 	}
 	jarArgs := resourcePathsToJarArgs(transitiveSrcFiles)
 	jarArgs = append(jarArgs, "-srcjar") // Move srcfiles to the right package
-	b.srcjar = android.PathForModuleOut(ctx, ctx.ModuleName()+"-transitive.srcjar").OutputPath
-	TransformResourcesToJar(ctx, b.srcjar, jarArgs, transitiveSrcFiles)
+	srcjar := android.PathForModuleOut(ctx, ctx.ModuleName()+"-transitive.srcjar").OutputPath
+	TransformResourcesToJar(ctx, srcjar, jarArgs, transitiveSrcFiles)
 
 	// Gather all the fragments dependencies.
 	b.fragments = gatherApexModulePairDepsWithTag(ctx, bootclasspathFragmentDepTag)
@@ -213,6 +190,11 @@ func (b *platformBootclasspathModule) GenerateAndroidBuildActions(ctx android.Mo
 
 	bootDexJarByModule := b.generateHiddenAPIBuildActions(ctx, b.configuredModules, b.fragments)
 	buildRuleForBootJarsPackageCheck(ctx, bootDexJarByModule)
+
+	ctx.SetOutputFiles(android.Paths{b.hiddenAPIFlagsCSV}, "hiddenapi-flags.csv")
+	ctx.SetOutputFiles(android.Paths{b.hiddenAPIIndexCSV}, "hiddenapi-index.csv")
+	ctx.SetOutputFiles(android.Paths{b.hiddenAPIMetadataCSV}, "hiddenapi-metadata.csv")
+	ctx.SetOutputFiles(android.Paths{srcjar}, ".srcjar")
 }
 
 // Generate classpaths.proto config
@@ -221,6 +203,7 @@ func (b *platformBootclasspathModule) generateClasspathProtoBuildActions(ctx and
 	// ART and platform boot jars must have a corresponding entry in DEX2OATBOOTCLASSPATH
 	classpathJars := configuredJarListToClasspathJars(ctx, configuredJars, BOOTCLASSPATH, DEX2OATBOOTCLASSPATH)
 	b.classpathFragmentBase().generateClasspathProtoBuildActions(ctx, configuredJars, classpathJars)
+	b.classpathFragmentBase().installClasspathProto(ctx)
 }
 
 func (b *platformBootclasspathModule) configuredJars(ctx android.ModuleContext) android.ConfiguredJarList {
@@ -293,6 +276,15 @@ func (b *platformBootclasspathModule) checkApexModules(ctx android.ModuleContext
 
 // generateHiddenAPIBuildActions generates all the hidden API related build rules.
 func (b *platformBootclasspathModule) generateHiddenAPIBuildActions(ctx android.ModuleContext, modules []android.Module, fragments []android.Module) bootDexJarByModule {
+	createEmptyHiddenApiFiles := func() {
+		paths := android.OutputPaths{b.hiddenAPIFlagsCSV, b.hiddenAPIIndexCSV, b.hiddenAPIMetadataCSV}
+		for _, path := range paths {
+			ctx.Build(pctx, android.BuildParams{
+				Rule:   android.Touch,
+				Output: path,
+			})
+		}
+	}
 
 	// Save the paths to the monolithic files for retrieval via OutputFiles().
 	b.hiddenAPIFlagsCSV = hiddenAPISingletonPaths(ctx).flags
@@ -305,13 +297,7 @@ func (b *platformBootclasspathModule) generateHiddenAPIBuildActions(ctx android.
 	// optimization that can be used to reduce the incremental build time but as its name suggests it
 	// can be unsafe to use, e.g. when the changes affect anything that goes on the bootclasspath.
 	if ctx.Config().DisableHiddenApiChecks() {
-		paths := android.OutputPaths{b.hiddenAPIFlagsCSV, b.hiddenAPIIndexCSV, b.hiddenAPIMetadataCSV}
-		for _, path := range paths {
-			ctx.Build(pctx, android.BuildParams{
-				Rule:   android.Touch,
-				Output: path,
-			})
-		}
+		createEmptyHiddenApiFiles()
 		return bootDexJarByModule
 	}
 
@@ -323,6 +309,13 @@ func (b *platformBootclasspathModule) generateHiddenAPIBuildActions(ctx android.
 	// Extract the classes jars only from those libraries that do not have corresponding fragments as
 	// the fragments will have already provided the flags that are needed.
 	classesJars := monolithicInfo.ClassesJars
+
+	if len(classesJars) == 0 {
+		// This product does not include any monolithic jars. Monolithic hiddenapi flag generation is not required.
+		// However, generate an empty file so that the dist tags in f/b/boot/Android.bp can be resolved, and `m dist` works.
+		createEmptyHiddenApiFiles()
+		return bootDexJarByModule
+	}
 
 	// Create the input to pass to buildRuleToGenerateHiddenAPIStubFlagsFile
 	input := newHiddenAPIFlagInput()

@@ -77,6 +77,14 @@ func (mod *Module) SetCoreVariantNeeded(b bool) {
 	mod.Properties.CoreVariantNeeded = b
 }
 
+func (mod *Module) SetProductVariantNeeded(b bool) {
+	mod.Properties.ProductVariantNeeded = b
+}
+
+func (mod *Module) SetVendorVariantNeeded(b bool) {
+	mod.Properties.VendorVariantNeeded = b
+}
+
 func (mod *Module) SnapshotVersion(mctx android.BaseModuleContext) string {
 	if snapshot, ok := mod.compiler.(cc.SnapshotInterface); ok {
 		return snapshot.Version()
@@ -84,6 +92,14 @@ func (mod *Module) SnapshotVersion(mctx android.BaseModuleContext) string {
 		mctx.ModuleErrorf("version is unknown for snapshot prebuilt")
 		return ""
 	}
+}
+
+func (mod *Module) VendorVariantNeeded(ctx android.BaseModuleContext) bool {
+	return mod.Properties.VendorVariantNeeded
+}
+
+func (mod *Module) ProductVariantNeeded(ctx android.BaseModuleContext) bool {
+	return mod.Properties.ProductVariantNeeded
 }
 
 func (mod *Module) VendorRamdiskVariantNeeded(ctx android.BaseModuleContext) bool {
@@ -184,12 +200,12 @@ func (mod *Module) HasNonSystemVariants() bool {
 }
 
 func (mod *Module) InProduct() bool {
-	return mod.Properties.ImageVariation == cc.ProductVariation
+	return mod.Properties.ImageVariation == android.ProductVariation
 }
 
 // Returns true if the module is "vendor" variant. Usually these modules are installed in /vendor
 func (mod *Module) InVendor() bool {
-	return mod.Properties.ImageVariation == cc.VendorVariation
+	return mod.Properties.ImageVariation == android.VendorVariation
 }
 
 // Returns true if the module is "vendor" or "product" variant.
@@ -197,29 +213,20 @@ func (mod *Module) InVendorOrProduct() bool {
 	return mod.InVendor() || mod.InProduct()
 }
 
-func (mod *Module) SetImageVariation(ctx android.BaseModuleContext, variant string, module android.Module) {
-	m := module.(*Module)
+func (mod *Module) SetImageVariation(ctx android.BaseModuleContext, variant string) {
 	if variant == android.VendorRamdiskVariation {
-		m.MakeAsPlatform()
+		mod.MakeAsPlatform()
 	} else if variant == android.RecoveryVariation {
-		m.MakeAsPlatform()
-	} else if strings.HasPrefix(variant, cc.VendorVariation) {
-		m.Properties.ImageVariation = cc.VendorVariation
+		mod.MakeAsPlatform()
+	} else if strings.HasPrefix(variant, android.VendorVariation) {
+		mod.Properties.ImageVariation = android.VendorVariation
 		if strings.HasPrefix(variant, cc.VendorVariationPrefix) {
-			m.Properties.VndkVersion = strings.TrimPrefix(variant, cc.VendorVariationPrefix)
+			mod.Properties.VndkVersion = strings.TrimPrefix(variant, cc.VendorVariationPrefix)
 		}
-
-		// Makefile shouldn't know vendor modules other than BOARD_VNDK_VERSION.
-		// Hide other vendor variants to avoid collision.
-		vndkVersion := ctx.DeviceConfig().VndkVersion()
-		if vndkVersion != "current" && vndkVersion != "" && vndkVersion != m.Properties.VndkVersion {
-			m.Properties.HideFromMake = true
-			m.HideFromMake()
-		}
-	} else if strings.HasPrefix(variant, cc.ProductVariation) {
-		m.Properties.ImageVariation = cc.ProductVariation
+	} else if strings.HasPrefix(variant, android.ProductVariation) {
+		mod.Properties.ImageVariation = android.ProductVariation
 		if strings.HasPrefix(variant, cc.ProductVariationPrefix) {
-			m.Properties.VndkVersion = strings.TrimPrefix(variant, cc.ProductVariationPrefix)
+			mod.Properties.VndkVersion = strings.TrimPrefix(variant, cc.ProductVariationPrefix)
 		}
 	}
 }

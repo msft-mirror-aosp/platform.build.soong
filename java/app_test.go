@@ -119,10 +119,7 @@ func TestAppSplits(t *testing.T) {
 		foo.Output(expectedOutput)
 	}
 
-	outputFiles, err := foo.Module().(*AndroidApp).OutputFiles("")
-	if err != nil {
-		t.Fatal(err)
-	}
+	outputFiles := foo.OutputFiles(t, "")
 	android.AssertPathsRelativeToTopEquals(t, `OutputFiles("")`, expectedOutputs, outputFiles)
 }
 
@@ -519,6 +516,49 @@ func TestUpdatableApps_ErrorIfDepMinSdkVersionIsHigher(t *testing.T) {
 	testJavaError(t, `"libjni" .*: links "libbar" built against newer API version "current"`, bp)
 }
 
+func TestUpdatableApps_ApplyDefaultUpdatableModuleVersion(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+	).RunTestWithBp(t, `
+		android_app {
+			name: "com.android.foo",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			min_sdk_version: "31",
+			updatable: true,
+		}
+	`)
+	foo := result.ModuleForTests("com.android.foo", "android_common").Rule("manifestFixer")
+	android.AssertStringDoesContain(t,
+		"com.android.foo: expected manifest fixer to set override-placeholder-version to android.DefaultUpdatableModuleVersion",
+		foo.BuildParams.Args["args"],
+		fmt.Sprintf("--override-placeholder-version %s", android.DefaultUpdatableModuleVersion),
+	)
+}
+
+func TestUpdatableApps_ApplyOverrideApexManifestDefaultVersion(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+		android.FixtureMergeEnv(map[string]string{
+			"OVERRIDE_APEX_MANIFEST_DEFAULT_VERSION": "1234",
+		}),
+	).RunTestWithBp(t, `
+		android_app {
+			name: "com.android.foo",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			min_sdk_version: "31",
+			updatable: true,
+		}
+	`)
+	foo := result.ModuleForTests("com.android.foo", "android_common").Rule("manifestFixer")
+	android.AssertStringDoesContain(t,
+		"com.android.foo: expected manifest fixer to set override-placeholder-version to 1234",
+		foo.BuildParams.Args["args"],
+		"--override-placeholder-version 1234",
+	)
+}
+
 func TestResourceDirs(t *testing.T) {
 	testCases := []struct {
 		name      string
@@ -829,12 +869,12 @@ func TestAndroidResourceProcessor(t *testing.T) {
 				"out/soong/.intermediates/default/java/android_stubs_current/android_common/turbine-combined/android_stubs_current.jar",
 				"out/soong/.intermediates/shared/android_common/turbine-combined/shared.jar",
 				"out/soong/.intermediates/direct/android_common/turbine-combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/turbine-combined/direct_import.jar",
 			},
 			appCombined: []string{
 				"out/soong/.intermediates/app/android_common/javac/app.jar",
 				"out/soong/.intermediates/direct/android_common/combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/combined/direct_import.jar",
 			},
 
 			directResources: nil,
@@ -849,12 +889,12 @@ func TestAndroidResourceProcessor(t *testing.T) {
 			directClasspath: []string{
 				"out/soong/.intermediates/default/java/android_stubs_current/android_common/turbine-combined/android_stubs_current.jar",
 				"out/soong/.intermediates/transitive/android_common/turbine-combined/transitive.jar",
-				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/transitive_import/android_common/turbine-combined/transitive_import.jar",
 			},
 			directCombined: []string{
 				"out/soong/.intermediates/direct/android_common/javac/direct.jar",
 				"out/soong/.intermediates/transitive/android_common/javac/transitive.jar",
-				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/transitive_import/android_common/combined/transitive_import.jar",
 			},
 
 			transitiveResources: []string{"out/soong/.intermediates/transitive/android_common/aapt2/transitive/res/values_strings.arsc.flat"},
@@ -928,13 +968,13 @@ func TestAndroidResourceProcessor(t *testing.T) {
 				"out/soong/.intermediates/app/android_common/busybox/R.jar",
 				"out/soong/.intermediates/shared/android_common/turbine-combined/shared.jar",
 				"out/soong/.intermediates/direct/android_common/turbine-combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/turbine-combined/direct_import.jar",
 			},
 			appCombined: []string{
 				"out/soong/.intermediates/app/android_common/javac/app.jar",
 				"out/soong/.intermediates/app/android_common/busybox/R.jar",
 				"out/soong/.intermediates/direct/android_common/combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/combined/direct_import.jar",
 			},
 
 			directResources: nil,
@@ -948,17 +988,17 @@ func TestAndroidResourceProcessor(t *testing.T) {
 			directSrcJars: nil,
 			directClasspath: []string{
 				"out/soong/.intermediates/default/java/android_stubs_current/android_common/turbine-combined/android_stubs_current.jar",
-				"out/soong/.intermediates/transitive_import/android_common/busybox/R.jar",
-				"out/soong/.intermediates/transitive_import_dep/android_common/busybox/R.jar",
-				"out/soong/.intermediates/transitive/android_common/busybox/R.jar",
 				"out/soong/.intermediates/direct/android_common/busybox/R.jar",
+				"out/soong/.intermediates/transitive/android_common/busybox/R.jar",
+				"out/soong/.intermediates/transitive_import_dep/android_common/busybox/R.jar",
+				"out/soong/.intermediates/transitive_import/android_common/busybox/R.jar",
 				"out/soong/.intermediates/transitive/android_common/turbine-combined/transitive.jar",
-				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/transitive_import/android_common/turbine-combined/transitive_import.jar",
 			},
 			directCombined: []string{
 				"out/soong/.intermediates/direct/android_common/javac/direct.jar",
 				"out/soong/.intermediates/transitive/android_common/javac/transitive.jar",
-				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/transitive_import/android_common/combined/transitive_import.jar",
 			},
 
 			transitiveResources: []string{"out/soong/.intermediates/transitive/android_common/aapt2/transitive/res/values_strings.arsc.flat"},
@@ -981,9 +1021,9 @@ func TestAndroidResourceProcessor(t *testing.T) {
 			sharedSrcJars: nil,
 			sharedClasspath: []string{
 				"out/soong/.intermediates/default/java/android_stubs_current/android_common/turbine-combined/android_stubs_current.jar",
+				"out/soong/.intermediates/shared/android_common/busybox/R.jar",
 				"out/soong/.intermediates/shared_transitive_static/android_common/busybox/R.jar",
 				"out/soong/.intermediates/shared_transitive_shared/android_common/busybox/R.jar",
-				"out/soong/.intermediates/shared/android_common/busybox/R.jar",
 				"out/soong/.intermediates/shared_transitive_shared/android_common/turbine-combined/shared_transitive_shared.jar",
 				"out/soong/.intermediates/shared_transitive_static/android_common/turbine-combined/shared_transitive_static.jar",
 			},
@@ -1034,13 +1074,13 @@ func TestAndroidResourceProcessor(t *testing.T) {
 				"out/soong/.intermediates/app/android_common/busybox/R.jar",
 				"out/soong/.intermediates/shared/android_common/turbine-combined/shared.jar",
 				"out/soong/.intermediates/direct/android_common/turbine-combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/turbine-combined/direct_import.jar",
 			},
 			appCombined: []string{
 				"out/soong/.intermediates/app/android_common/javac/app.jar",
 				"out/soong/.intermediates/app/android_common/busybox/R.jar",
 				"out/soong/.intermediates/direct/android_common/combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/combined/direct_import.jar",
 			},
 
 			dontVerifyDirect:           true,
@@ -1075,12 +1115,12 @@ func TestAndroidResourceProcessor(t *testing.T) {
 				"out/soong/.intermediates/default/java/android_stubs_current/android_common/turbine-combined/android_stubs_current.jar",
 				"out/soong/.intermediates/shared/android_common/turbine-combined/shared.jar",
 				"out/soong/.intermediates/direct/android_common/turbine-combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/turbine-combined/direct_import.jar",
 			},
 			appCombined: []string{
 				"out/soong/.intermediates/app/android_common/javac/app.jar",
 				"out/soong/.intermediates/direct/android_common/combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/combined/direct_import.jar",
 			},
 
 			directResources: nil,
@@ -1094,16 +1134,16 @@ func TestAndroidResourceProcessor(t *testing.T) {
 			directSrcJars: nil,
 			directClasspath: []string{
 				"out/soong/.intermediates/default/java/android_stubs_current/android_common/turbine-combined/android_stubs_current.jar",
-				"out/soong/.intermediates/transitive_import/android_common/busybox/R.jar",
-				"out/soong/.intermediates/transitive_import_dep/android_common/busybox/R.jar",
 				"out/soong/.intermediates/direct/android_common/busybox/R.jar",
+				"out/soong/.intermediates/transitive_import_dep/android_common/busybox/R.jar",
+				"out/soong/.intermediates/transitive_import/android_common/busybox/R.jar",
 				"out/soong/.intermediates/transitive/android_common/turbine-combined/transitive.jar",
-				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/transitive_import/android_common/turbine-combined/transitive_import.jar",
 			},
 			directCombined: []string{
 				"out/soong/.intermediates/direct/android_common/javac/direct.jar",
 				"out/soong/.intermediates/transitive/android_common/javac/transitive.jar",
-				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/transitive_import/android_common/combined/transitive_import.jar",
 			},
 
 			dontVerifyTransitive:       true,
@@ -1137,12 +1177,12 @@ func TestAndroidResourceProcessor(t *testing.T) {
 				"out/soong/.intermediates/default/java/android_stubs_current/android_common/turbine-combined/android_stubs_current.jar",
 				"out/soong/.intermediates/shared/android_common/turbine-combined/shared.jar",
 				"out/soong/.intermediates/direct/android_common/turbine-combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/turbine-combined/direct_import.jar",
 			},
 			appCombined: []string{
 				"out/soong/.intermediates/app/android_common/javac/app.jar",
 				"out/soong/.intermediates/direct/android_common/combined/direct.jar",
-				"out/soong/.intermediates/direct_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/direct_import/android_common/combined/direct_import.jar",
 			},
 
 			directResources: nil,
@@ -1157,12 +1197,12 @@ func TestAndroidResourceProcessor(t *testing.T) {
 			directClasspath: []string{
 				"out/soong/.intermediates/default/java/android_stubs_current/android_common/turbine-combined/android_stubs_current.jar",
 				"out/soong/.intermediates/transitive/android_common/turbine-combined/transitive.jar",
-				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/transitive_import/android_common/turbine-combined/transitive_import.jar",
 			},
 			directCombined: []string{
 				"out/soong/.intermediates/direct/android_common/javac/direct.jar",
 				"out/soong/.intermediates/transitive/android_common/javac/transitive.jar",
-				"out/soong/.intermediates/transitive_import/android_common/aar/classes-combined.jar",
+				"out/soong/.intermediates/transitive_import/android_common/combined/transitive_import.jar",
 			},
 
 			transitiveResources: []string{"out/soong/.intermediates/transitive/android_common/aapt2/transitive/res/values_strings.arsc.flat"},
@@ -3244,7 +3284,10 @@ func TestUsesLibraries(t *testing.T) {
 			name: "static-y",
 			srcs: ["a.java"],
 			uses_libs: ["runtime-required-y"],
-			optional_uses_libs: ["runtime-optional-y"],
+			optional_uses_libs: [
+				"runtime-optional-y",
+				"missing-lib-a",
+			],
 			sdk_version: "current",
 		}
 
@@ -3280,7 +3323,7 @@ func TestUsesLibraries(t *testing.T) {
 			sdk_version: "current",
 			optional_uses_libs: [
 				"bar",
-				"baz",
+				"missing-lib-b",
 			],
 		}
 
@@ -3295,7 +3338,7 @@ func TestUsesLibraries(t *testing.T) {
 			],
 			optional_uses_libs: [
 				"bar",
-				"baz",
+				"missing-lib-b",
 			],
 		}
 	`
@@ -3317,10 +3360,10 @@ func TestUsesLibraries(t *testing.T) {
 	// propagated from dependencies.
 	actualManifestFixerArgs := app.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
 	expectManifestFixerArgs := `--extract-native-libs=true ` +
-		`--uses-library qux ` +
-		`--uses-library quuz ` +
 		`--uses-library foo ` +
 		`--uses-library com.non.sdk.lib ` +
+		`--uses-library qux ` +
+		`--uses-library quuz ` +
 		`--uses-library runtime-library ` +
 		`--uses-library runtime-required-x ` +
 		`--uses-library runtime-required-y ` +
@@ -3339,9 +3382,10 @@ func TestUsesLibraries(t *testing.T) {
 		`--uses-library runtime-required-x ` +
 		`--uses-library runtime-required-y ` +
 		`--optional-uses-library bar ` +
-		`--optional-uses-library baz ` +
 		`--optional-uses-library runtime-optional-x ` +
-		`--optional-uses-library runtime-optional-y `
+		`--optional-uses-library runtime-optional-y ` +
+		`--missing-optional-uses-library missing-lib-b ` +
+		`--missing-optional-uses-library missing-lib-a`
 	android.AssertStringDoesContain(t, "verify cmd args", verifyCmd, verifyArgs)
 
 	// Test that all libraries are verified for an APK (library order matters).
@@ -3350,7 +3394,7 @@ func TestUsesLibraries(t *testing.T) {
 		`--uses-library com.non.sdk.lib ` +
 		`--uses-library android.test.runner ` +
 		`--optional-uses-library bar ` +
-		`--optional-uses-library baz `
+		`--missing-optional-uses-library missing-lib-b `
 	android.AssertStringDoesContain(t, "verify apk cmd args", verifyApkCmd, verifyApkArgs)
 
 	// Test that necessary args are passed for constructing CLC in Ninja phase.
@@ -3625,7 +3669,10 @@ func TestExportedProguardFlagFiles(t *testing.T) {
 		android_app {
 			name: "foo",
 			sdk_version: "current",
-			static_libs: ["lib1"],
+			static_libs: [
+				"lib1",
+				"lib3",
+			],
 		}
 
 		android_library {
@@ -3633,22 +3680,49 @@ func TestExportedProguardFlagFiles(t *testing.T) {
 			sdk_version: "current",
 			optimize: {
 				proguard_flags_files: ["lib1proguard.cfg"],
+			},
+			static_libs: ["lib2"],
+		}
+
+		android_library {
+			name: "lib2",
+			sdk_version: "current",
+			optimize: {
+				proguard_flags_files: ["lib2proguard.cfg"],
 			}
 		}
+
+		android_library_import {
+			name: "lib3",
+			sdk_version: "current",
+			aars: ["lib3.aar"],
+			static_libs: ["lib4"],
+		}
+
+		android_library {
+			name: "lib4",
+			sdk_version: "current",
+			optimize: {
+				proguard_flags_files: ["lib4proguard.cfg"],
+			}
+		}
+
+
 	`)
 
 	m := ctx.ModuleForTests("foo", "android_common")
-	hasLib1Proguard := false
-	for _, s := range m.Rule("java.r8").Implicits.Strings() {
-		if s == "lib1proguard.cfg" {
-			hasLib1Proguard = true
-			break
-		}
-	}
+	r8 := m.Rule("java.r8")
+	implicits := r8.Implicits.RelativeToTop().Strings()
+	android.AssertStringListContains(t, "r8 implicits", implicits, "lib1proguard.cfg")
+	android.AssertStringListContains(t, "r8 implicits", implicits, "lib2proguard.cfg")
+	android.AssertStringListContains(t, "r8 implicits", implicits, "lib4proguard.cfg")
+	android.AssertStringListContains(t, "r8 implicits", implicits, "out/soong/.intermediates/lib3/android_common/aar/proguard.txt")
 
-	if !hasLib1Proguard {
-		t.Errorf("App does not use library proguard config")
-	}
+	flags := r8.Args["r8Flags"]
+	android.AssertStringDoesContain(t, "r8 flags", flags, "-include lib1proguard.cfg")
+	android.AssertStringDoesContain(t, "r8 flags", flags, "-include lib2proguard.cfg")
+	android.AssertStringDoesContain(t, "r8 flags", flags, "-include lib4proguard.cfg")
+	android.AssertStringDoesContain(t, "r8 flags", flags, "-include out/soong/.intermediates/lib3/android_common/aar/proguard.txt")
 }
 
 func TestTargetSdkVersionManifestFixer(t *testing.T) {
@@ -4112,6 +4186,7 @@ func TestTargetSdkVersionMtsTests(t *testing.T) {
 	bpTemplate := `
 	%v {
 		name: "mytest",
+		min_sdk_version: "34",
 		target_sdk_version: "%v",
 		test_suites: ["othersuite", "%v"],
 	}
@@ -4288,54 +4363,17 @@ func TestPrivappAllowlistAndroidMk(t *testing.T) {
 	)
 }
 
-func TestApexGlobalMinSdkVersionOverride(t *testing.T) {
-	result := android.GroupFixturePreparers(
-		PrepareForTestWithJavaDefaultModules,
-		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.ApexGlobalMinSdkVersionOverride = proptools.StringPtr("Tiramisu")
-		}),
-	).RunTestWithBp(t, `
-		android_app {
-			name: "com.android.bar",
-			srcs: ["a.java"],
-			sdk_version: "current",
-		}
-		android_app {
-			name: "com.android.foo",
-			srcs: ["a.java"],
-			sdk_version: "current",
-			min_sdk_version: "S",
-			updatable: true,
-		}
-		override_android_app {
-			name: "com.android.go.foo",
-			base: "com.android.foo",
-		}
-	`)
-	foo := result.ModuleForTests("com.android.foo", "android_common").Rule("manifestFixer")
-	fooOverride := result.ModuleForTests("com.android.foo", "android_common_com.android.go.foo").Rule("manifestFixer")
-	bar := result.ModuleForTests("com.android.bar", "android_common").Rule("manifestFixer")
-
-	android.AssertStringDoesContain(t,
-		"expected manifest fixer to set com.android.bar minSdkVersion to S",
-		bar.BuildParams.Args["args"],
-		"--minSdkVersion  S",
-	)
-	android.AssertStringDoesContain(t,
-		"com.android.foo: expected manifest fixer to set minSdkVersion to T",
-		foo.BuildParams.Args["args"],
-		"--minSdkVersion  T",
-	)
-	android.AssertStringDoesContain(t,
-		"com.android.go.foo: expected manifest fixer to set minSdkVersion to T",
-		fooOverride.BuildParams.Args["args"],
-		"--minSdkVersion  T",
-	)
-
-}
-
 func TestAppFlagsPackages(t *testing.T) {
-	ctx := testApp(t, `
+	ctx := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		android.FixtureMergeMockFs(
+			map[string][]byte{
+				"res/layout/layout.xml":         nil,
+				"res/values/strings.xml":        nil,
+				"res/values-en-rUS/strings.xml": nil,
+			},
+		),
+	).RunTestWithBp(t, `
 		android_app {
 			name: "foo",
 			srcs: ["a.java"],
@@ -4348,6 +4386,7 @@ func TestAppFlagsPackages(t *testing.T) {
 		aconfig_declarations {
 			name: "bar",
 			package: "com.example.package.bar",
+			container: "com.android.foo",
 			srcs: [
 				"bar.aconfig",
 			],
@@ -4355,6 +4394,7 @@ func TestAppFlagsPackages(t *testing.T) {
 		aconfig_declarations {
 			name: "baz",
 			package: "com.example.package.baz",
+			container: "com.android.foo",
 			srcs: [
 				"baz.aconfig",
 			],
@@ -4365,10 +4405,10 @@ func TestAppFlagsPackages(t *testing.T) {
 
 	// android_app module depends on aconfig_declarations listed in flags_packages
 	android.AssertBoolEquals(t, "foo expected to depend on bar", true,
-		CheckModuleHasDependency(t, ctx, "foo", "android_common", "bar"))
+		CheckModuleHasDependency(t, ctx.TestContext, "foo", "android_common", "bar"))
 
 	android.AssertBoolEquals(t, "foo expected to depend on baz", true,
-		CheckModuleHasDependency(t, ctx, "foo", "android_common", "baz"))
+		CheckModuleHasDependency(t, ctx.TestContext, "foo", "android_common", "baz"))
 
 	aapt2LinkRule := foo.Rule("android/soong/java.aapt2Link")
 	linkInFlags := aapt2LinkRule.Args["inFlags"]
@@ -4376,6 +4416,90 @@ func TestAppFlagsPackages(t *testing.T) {
 		"aapt2 link command expected to pass feature flags arguments",
 		linkInFlags,
 		"--feature-flags @out/soong/.intermediates/bar/intermediate.txt --feature-flags @out/soong/.intermediates/baz/intermediate.txt",
+	)
+
+	aapt2CompileRule := foo.Rule("android/soong/java.aapt2Compile")
+	compileFlags := aapt2CompileRule.Args["cFlags"]
+	android.AssertStringDoesContain(t,
+		"aapt2 compile command expected to pass feature flags arguments",
+		compileFlags,
+		"--feature-flags @out/soong/.intermediates/bar/intermediate.txt --feature-flags @out/soong/.intermediates/baz/intermediate.txt",
+	)
+}
+
+func TestAppFlagsPackagesPropagation(t *testing.T) {
+	ctx := testApp(t, `
+		aconfig_declarations {
+			name: "foo",
+			package: "com.example.package.foo",
+			container: "com.android.foo",
+			srcs: [
+				"foo.aconfig",
+			],
+		}
+		aconfig_declarations {
+			name: "bar",
+			package: "com.example.package.bar",
+			container: "com.android.bar",
+			srcs: [
+				"bar.aconfig",
+			],
+		}
+		aconfig_declarations {
+			name: "baz",
+			package: "com.example.package.baz",
+			container: "com.android.baz",
+			srcs: [
+				"baz.aconfig",
+			],
+		}
+		android_library {
+			name: "foo_lib",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			flags_packages: [
+				"foo",
+			],
+		}
+		android_library {
+			name: "bar_lib",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			flags_packages: [
+				"bar",
+			],
+		}
+		android_app {
+			name: "baz_app",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			flags_packages: [
+				"baz",
+			],
+			static_libs: [
+				"bar_lib",
+			],
+			libs: [
+				"foo_lib",
+			],
+		}
+	`)
+
+	bazApp := ctx.ModuleForTests("baz_app", "android_common")
+
+	// android_app module depends on aconfig_declarations listed in flags_packages
+	// and that of static libs, but not libs
+	aapt2LinkRule := bazApp.Rule("android/soong/java.aapt2Link")
+	linkInFlags := aapt2LinkRule.Args["inFlags"]
+	android.AssertStringDoesContain(t,
+		"aapt2 link command expected to pass feature flags arguments of flags_packages and that of its static libs",
+		linkInFlags,
+		"--feature-flags @out/soong/.intermediates/bar/intermediate.txt --feature-flags @out/soong/.intermediates/baz/intermediate.txt",
+	)
+	android.AssertStringDoesNotContain(t,
+		"aapt2 link command expected to not pass feature flags arguments of flags_packages of its libs",
+		linkInFlags,
+		"--feature-flags @out/soong/.intermediates/foo/intermediate.txt",
 	)
 }
 
@@ -4400,4 +4524,133 @@ func TestNoDexpreoptOptionalUsesLibDoesNotHaveImpl(t *testing.T) {
 	result := prepareForJavaTest.RunTestWithBp(t, bp)
 	dexpreopt := result.ModuleForTests("app", "android_common").MaybeRule("dexpreopt").Rule
 	android.AssertBoolEquals(t, "dexpreopt should be disabled if optional_uses_libs does not have an implementation", true, dexpreopt == nil)
+}
+
+func TestTestOnlyApp(t *testing.T) {
+	t.Parallel()
+	ctx := android.GroupFixturePreparers(
+		prepareForJavaTest,
+	).RunTestWithBp(t, `
+                // These should be test-only
+                android_test {
+                        name: "android-test",
+                }
+                android_test_helper_app {
+                        name: "helper-app",
+                }
+                override_android_test {
+                        name: "override-test",
+                        base: "android-app",
+                }
+                // And these should not be
+		android_app {
+			name: "android-app",
+                        srcs: ["b.java"],
+			sdk_version: "current",
+		}
+	`)
+
+	expectedTestOnly := []string{
+		"android-test",
+		"helper-app",
+		"override-test",
+	}
+
+	expectedTopLevel := []string{
+		"android-test",
+		"override-test",
+	}
+
+	assertTestOnlyAndTopLevel(t, ctx, expectedTestOnly, expectedTopLevel)
+}
+
+func TestAppStem(t *testing.T) {
+	ctx := testApp(t, `
+				android_app {
+					name: "foo",
+					srcs: ["a.java"],
+					stem: "foo-new",
+					sdk_version: "current",
+				}`)
+
+	foo := ctx.ModuleForTests("foo", "android_common")
+
+	outputs := fmt.Sprint(foo.AllOutputs())
+	if !strings.Contains(outputs, "foo-new.apk") {
+		t.Errorf("Module output does not contain expected apk %s", "foo-new.apk")
+	}
+}
+
+func TestAppMinSdkVersionOverride(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+	).RunTestWithBp(t, `
+		android_app {
+			name: "com.android.foo",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			min_sdk_version: "31",
+			updatable: true,
+		}
+		override_android_app {
+			name: "com.android.go.foo",
+			base: "com.android.foo",
+			min_sdk_version: "33",
+		}
+	`)
+	foo := result.ModuleForTests("com.android.foo", "android_common").Rule("manifestFixer")
+	fooOverride := result.ModuleForTests("com.android.foo", "android_common_com.android.go.foo").Rule("manifestFixer")
+
+	android.AssertStringDoesContain(t,
+		"com.android.foo: expected manifest fixer to set minSdkVersion to T",
+		foo.BuildParams.Args["args"],
+		"--minSdkVersion  31",
+	)
+	android.AssertStringDoesContain(t,
+		"com.android.go.foo: expected manifest fixer to set minSdkVersion to T",
+		fooOverride.BuildParams.Args["args"],
+		"--minSdkVersion  33",
+	)
+
+}
+
+func TestNotApplyDefaultUpdatableModuleVersion(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+	).RunTestWithBp(t, `
+		android_app {
+			name: "com.android.foo",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			min_sdk_version: "31",
+		}
+	`)
+	foo := result.ModuleForTests("com.android.foo", "android_common").Rule("manifestFixer")
+	android.AssertStringDoesNotContain(t,
+		"com.android.foo: expected manifest fixer to not set override-placeholder-version",
+		foo.BuildParams.Args["args"],
+		"--override-placeholder-version",
+	)
+}
+
+func TestNotApplyOverrideApexManifestDefaultVersion(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+		android.FixtureMergeEnv(map[string]string{
+			"OVERRIDE_APEX_MANIFEST_DEFAULT_VERSION": "1234",
+		}),
+	).RunTestWithBp(t, `
+		android_app {
+			name: "com.android.foo",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			min_sdk_version: "31",
+		}
+	`)
+	foo := result.ModuleForTests("com.android.foo", "android_common").Rule("manifestFixer")
+	android.AssertStringDoesNotContain(t,
+		"com.android.foo: expected manifest fixer to not set override-placeholder-version",
+		foo.BuildParams.Args["args"],
+		"--override-placeholder-version",
+	)
 }

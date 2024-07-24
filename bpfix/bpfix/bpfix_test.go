@@ -19,6 +19,7 @@ package bpfix
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -45,7 +46,7 @@ func buildTree(local_include_dirs []string, export_include_dirs []string) (file 
 	}
 	`,
 		printListOfStrings(local_include_dirs), printListOfStrings(export_include_dirs))
-	tree, errs := parser.Parse("", strings.NewReader(input), parser.NewScope(nil))
+	tree, errs := parser.Parse("", strings.NewReader(input))
 	if len(errs) > 0 {
 		errs = append([]error{fmt.Errorf("failed to parse:\n%s", input)}, errs...)
 	}
@@ -166,7 +167,7 @@ func preProcessIn(in string) (fixer *Fixer, err error) {
 		return fixer, err
 	}
 
-	tree, errs := parser.Parse("<testcase>", bytes.NewBufferString(in), parser.NewScope(nil))
+	tree, errs := parser.Parse("<testcase>", bytes.NewBufferString(in))
 	if errs != nil {
 		return fixer, err
 	}
@@ -2214,4 +2215,10 @@ func TestRemoveResourceAndAssetsIfDefault(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestMain(m *testing.M) {
+	// Skip checking Android.mk path with cleaning "ANDROID_BUILD_TOP"
+	os.Setenv("ANDROID_BUILD_TOP", "")
+	os.Exit(m.Run())
 }

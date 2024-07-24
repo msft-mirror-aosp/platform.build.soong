@@ -15,6 +15,9 @@
 package android
 
 import (
+	"bytes"
+	"encoding/gob"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -60,6 +63,7 @@ type EarlyModulePathContext interface {
 
 	ModuleDir() string
 	ModuleErrorf(fmt string, args ...interface{})
+	OtherModulePropertyErrorf(module Module, property, fmt string, args ...interface{})
 }
 
 var _ EarlyModulePathContext = ModuleContext(nil)
@@ -277,6 +281,7 @@ type WritablePath interface {
 
 type genPathProvider interface {
 	genPathWithExt(ctx ModuleOutPathContext, subdir, ext string) ModuleGenPath
+	genPathWithExtAndTrimExt(ctx ModuleOutPathContext, subdir, ext string, trimExt string) ModuleGenPath
 }
 type objPathProvider interface {
 	objPathWithExt(ctx ModuleOutPathContext, subdir, ext string) ModuleObjPath
@@ -290,6 +295,16 @@ type resPathProvider interface {
 func GenPathWithExt(ctx ModuleOutPathContext, subdir string, p Path, ext string) ModuleGenPath {
 	if path, ok := p.(genPathProvider); ok {
 		return path.genPathWithExt(ctx, subdir, ext)
+	}
+	ReportPathErrorf(ctx, "Tried to create generated file from unsupported path: %s(%s)", reflect.TypeOf(p).Name(), p)
+	return PathForModuleGen(ctx)
+}
+
+// GenPathWithExtAndTrimExt derives a new file path in ctx's generated sources directory
+// from the current path, but with the new extension and trim the suffix.
+func GenPathWithExtAndTrimExt(ctx ModuleOutPathContext, subdir string, p Path, ext string, trimExt string) ModuleGenPath {
+	if path, ok := p.(genPathProvider); ok {
+		return path.genPathWithExtAndTrimExt(ctx, subdir, ext, trimExt)
 	}
 	ReportPathErrorf(ctx, "Tried to create generated file from unsupported path: %s(%s)", reflect.TypeOf(p).Name(), p)
 	return PathForModuleGen(ctx)
@@ -448,8 +463,8 @@ func ExistentPathsForSources(ctx PathGlobContext, paths []string) Paths {
 //   - glob, relative to the local module directory, resolves as filepath(s), relative to the local
 //     source directory.
 //   - other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
-//     or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
-//     filepath.
+//     or set the OutputFilesProvider. These resolve as a filepath to an output filepath or generated
+//     source filepath.
 //
 // Properties passed as the paths argument must have been annotated with struct tag
 // `android:"path"` so that dependencies on SourceFileProducer modules will have already been handled by the
@@ -476,8 +491,8 @@ type SourceInput struct {
 //   - glob, relative to the local module directory, resolves as filepath(s), relative to the local
 //     source directory. Not valid in excludes.
 //   - other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
-//     or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
-//     filepath.
+//     or set the OutputFilesProvider. These resolve as a filepath to an output filepath or generated
+//     source filepath.
 //
 // excluding the items (similarly resolved
 // Properties passed as the paths argument must have been annotated with struct tag
@@ -550,24 +565,18 @@ func getPathsFromModuleDep(ctx ModuleWithDepsPathContext, path, moduleName, tag 
 	if module == nil {
 		return nil, missingDependencyError{[]string{moduleName}}
 	}
-	if aModule, ok := module.(Module); ok && !aModule.Enabled() {
+	if aModule, ok := module.(Module); ok && !aModule.Enabled(ctx) {
 		return nil, missingDependencyError{[]string{moduleName}}
 	}
-	if outProducer, ok := module.(OutputFileProducer); ok {
-		outputFiles, err := outProducer.OutputFiles(tag)
-		if err != nil {
-			return nil, fmt.Errorf("path dependency %q: %s", path, err)
-		}
-		return outputFiles, nil
-	} else if tag != "" {
-		return nil, fmt.Errorf("path dependency %q is not an output file producing module", path)
-	} else if goBinary, ok := module.(bootstrap.GoBinaryTool); ok {
+	if goBinary, ok := module.(bootstrap.GoBinaryTool); ok && tag == "" {
 		goBinaryPath := PathForGoBinary(ctx, goBinary)
 		return Paths{goBinaryPath}, nil
-	} else if srcProducer, ok := module.(SourceFileProducer); ok {
-		return srcProducer.Srcs(), nil
+	}
+	outputFiles, err := outputFilesForModule(ctx, module, tag)
+	if outputFiles != nil && err == nil {
+		return outputFiles, nil
 	} else {
-		return nil, fmt.Errorf("path dependency %q is not a source file producing module", path)
+		return nil, err
 	}
 }
 
@@ -611,8 +620,8 @@ func GetModuleFromPathDep(ctx ModuleWithDepsPathContext, moduleName, tag string)
 //   - glob, relative to the local module directory, resolves as filepath(s), relative to the local
 //     source directory. Not valid in excludes.
 //   - other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
-//     or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
-//     filepath.
+//     or set the OutputFilesProvider. These resolve as a filepath to an output filepath or generated
+//     source filepath.
 //
 // and a list of the module names of missing module dependencies are returned as the second return.
 // Properties passed as the paths argument must have been annotated with struct tag
@@ -673,7 +682,8 @@ func PathsAndMissingDepsRelativeToModuleSourceDir(input SourceInput) (Paths, []s
 		expandedSrcFiles = append(expandedSrcFiles, srcFiles...)
 	}
 
-	return expandedSrcFiles, append(missingDeps, missingExcludeDeps...)
+	// TODO: b/334169722 - Replace with an error instead of implicitly removing duplicates.
+	return FirstUniquePaths(expandedSrcFiles), append(missingDeps, missingExcludeDeps...)
 }
 
 type missingDependencyError struct {
@@ -1061,6 +1071,28 @@ type basePath struct {
 	rel  string
 }
 
+func (p basePath) GobEncode() ([]byte, error) {
+	w := new(bytes.Buffer)
+	encoder := gob.NewEncoder(w)
+	err := errors.Join(encoder.Encode(p.path), encoder.Encode(p.rel))
+	if err != nil {
+		return nil, err
+	}
+
+	return w.Bytes(), nil
+}
+
+func (p *basePath) GobDecode(data []byte) error {
+	r := bytes.NewBuffer(data)
+	decoder := gob.NewDecoder(r)
+	err := errors.Join(decoder.Decode(&p.path), decoder.Decode(&p.rel))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (p basePath) Ext() string {
 	return filepath.Ext(p.path)
 }
@@ -1299,6 +1331,28 @@ type OutputPath struct {
 	fullPath string
 }
 
+func (p OutputPath) GobEncode() ([]byte, error) {
+	w := new(bytes.Buffer)
+	encoder := gob.NewEncoder(w)
+	err := errors.Join(encoder.Encode(p.basePath), encoder.Encode(p.soongOutDir), encoder.Encode(p.fullPath))
+	if err != nil {
+		return nil, err
+	}
+
+	return w.Bytes(), nil
+}
+
+func (p *OutputPath) GobDecode(data []byte) error {
+	r := bytes.NewBuffer(data)
+	decoder := gob.NewDecoder(r)
+	err := errors.Join(decoder.Decode(&p.basePath), decoder.Decode(&p.soongOutDir), decoder.Decode(&p.fullPath))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (p OutputPath) withRel(rel string) OutputPath {
 	p.basePath = p.basePath.withRel(rel)
 	p.fullPath = filepath.Join(p.fullPath, rel)
@@ -1506,6 +1560,17 @@ func (p SourcePath) genPathWithExt(ctx ModuleOutPathContext, subdir, ext string)
 	return PathForModuleGen(ctx, subdir, pathtools.ReplaceExtension(p.path, ext))
 }
 
+func (p SourcePath) genPathWithExtAndTrimExt(ctx ModuleOutPathContext, subdir, ext string, trimExt string) ModuleGenPath {
+	// If Trim_extension being set, force append Output_extension without replace original extension.
+	if trimExt != "" {
+		if ext != "" {
+			return PathForModuleGen(ctx, subdir, strings.TrimSuffix(p.path, trimExt)+"."+ext)
+		}
+		return PathForModuleGen(ctx, subdir, strings.TrimSuffix(p.path, trimExt))
+	}
+	return PathForModuleGen(ctx, subdir, pathtools.ReplaceExtension(p.path, ext))
+}
+
 func (p SourcePath) objPathWithExt(ctx ModuleOutPathContext, subdir, ext string) ModuleObjPath {
 	return PathForModuleObj(ctx, subdir, pathtools.ReplaceExtension(p.path, ext))
 }
@@ -1539,11 +1604,10 @@ type ModuleOutPathContext interface {
 	ModuleName() string
 	ModuleDir() string
 	ModuleSubDir() string
-	SoongConfigTraceHash() string
 }
 
 func pathForModuleOut(ctx ModuleOutPathContext) OutputPath {
-	return PathForOutput(ctx, ".intermediates", ctx.ModuleDir(), ctx.ModuleName(), ctx.ModuleSubDir(), ctx.SoongConfigTraceHash())
+	return PathForOutput(ctx, ".intermediates", ctx.ModuleDir(), ctx.ModuleName(), ctx.ModuleSubDir())
 }
 
 // PathForModuleOut returns a Path representing the paths... under the module's
@@ -1590,6 +1654,17 @@ func PathForModuleGen(ctx ModuleOutPathContext, paths ...string) ModuleGenPath {
 
 func (p ModuleGenPath) genPathWithExt(ctx ModuleOutPathContext, subdir, ext string) ModuleGenPath {
 	// TODO: make a different path for local vs remote generated files?
+	return PathForModuleGen(ctx, subdir, pathtools.ReplaceExtension(p.path, ext))
+}
+
+func (p ModuleGenPath) genPathWithExtAndTrimExt(ctx ModuleOutPathContext, subdir, ext string, trimExt string) ModuleGenPath {
+	// If Trim_extension being set, force append Output_extension without replace original extension.
+	if trimExt != "" {
+		if ext != "" {
+			return PathForModuleGen(ctx, subdir, strings.TrimSuffix(p.path, trimExt)+"."+ext)
+		}
+		return PathForModuleGen(ctx, subdir, strings.TrimSuffix(p.path, trimExt))
+	}
 	return PathForModuleGen(ctx, subdir, pathtools.ReplaceExtension(p.path, ext))
 }
 
@@ -1831,17 +1906,13 @@ func pathForInstall(ctx PathContext, os OsType, arch ArchType, partition string,
 	return base.Join(ctx, pathComponents...)
 }
 
-func pathForNdkOrSdkInstall(ctx PathContext, prefix string, paths []string) InstallPath {
-	base := pathForPartitionInstallDir(ctx, "", prefix, false)
-	return base.Join(ctx, paths...)
-}
-
-func PathForNdkInstall(ctx PathContext, paths ...string) InstallPath {
-	return pathForNdkOrSdkInstall(ctx, "ndk", paths)
+func PathForNdkInstall(ctx PathContext, paths ...string) OutputPath {
+	return PathForOutput(ctx, append([]string{"ndk"}, paths...)...)
 }
 
 func PathForMainlineSdksInstall(ctx PathContext, paths ...string) InstallPath {
-	return pathForNdkOrSdkInstall(ctx, "mainline-sdks", paths)
+	base := pathForPartitionInstallDir(ctx, "", "mainline-sdks", false)
+	return base.Join(ctx, paths...)
 }
 
 func InstallPathToOnDevicePath(ctx PathContext, path InstallPath) string {

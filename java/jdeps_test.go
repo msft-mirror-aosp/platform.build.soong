@@ -22,28 +22,46 @@ import (
 )
 
 func TestCollectJavaLibraryPropertiesAddLibsDeps(t *testing.T) {
-	expected := []string{"Foo", "Bar"}
-	module := LibraryFactory().(*Library)
-	module.properties.Libs = append(module.properties.Libs, expected...)
+	ctx, _ := testJava(t,
+		`
+		java_library {name: "Foo"}
+		java_library {name: "Bar"}
+		java_library {
+			name: "javalib",
+			libs: ["Foo", "Bar"],
+		}
+	`)
+	module := ctx.ModuleForTests("javalib", "android_common").Module().(*Library)
 	dpInfo := &android.IdeInfo{}
 
 	module.IDEInfo(dpInfo)
 
-	if !reflect.DeepEqual(dpInfo.Deps, expected) {
-		t.Errorf("Library.IDEInfo() Deps = %v, want %v", dpInfo.Deps, expected)
+	for _, expected := range []string{"Foo", "Bar"} {
+		if !android.InList(expected, dpInfo.Deps) {
+			t.Errorf("Library.IDEInfo() Deps = %v, %v not found", dpInfo.Deps, expected)
+		}
 	}
 }
 
 func TestCollectJavaLibraryPropertiesAddStaticLibsDeps(t *testing.T) {
-	expected := []string{"Foo", "Bar"}
-	module := LibraryFactory().(*Library)
-	module.properties.Static_libs = append(module.properties.Static_libs, expected...)
+	ctx, _ := testJava(t,
+		`
+		java_library {name: "Foo"}
+		java_library {name: "Bar"}
+		java_library {
+			name: "javalib",
+			static_libs: ["Foo", "Bar"],
+		}
+	`)
+	module := ctx.ModuleForTests("javalib", "android_common").Module().(*Library)
 	dpInfo := &android.IdeInfo{}
 
 	module.IDEInfo(dpInfo)
 
-	if !reflect.DeepEqual(dpInfo.Deps, expected) {
-		t.Errorf("Library.IDEInfo() Deps = %v, want %v", dpInfo.Deps, expected)
+	for _, expected := range []string{"Foo", "Bar"} {
+		if !android.InList(expected, dpInfo.Deps) {
+			t.Errorf("Library.IDEInfo() Deps = %v, %v not found", dpInfo.Deps, expected)
+		}
 	}
 }
 

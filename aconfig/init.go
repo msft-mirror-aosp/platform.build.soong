@@ -15,33 +15,23 @@
 package aconfig
 
 import (
+	"encoding/gob"
+
 	"android/soong/android"
 
 	"github.com/google/blueprint"
 )
 
-type CodegenInfo struct {
-	// AconfigDeclarations is the name of the aconfig_declarations modules that
-	// the codegen module is associated with
-	AconfigDeclarations []string
-
-	// Paths to the cache files of the associated aconfig_declaration modules
-	IntermediateCacheOutputPaths android.Paths
-
-	// Paths to the srcjar files generated from the java_aconfig_library modules
-	Srcjars android.Paths
-}
-
-var CodegenInfoProvider = blueprint.NewProvider[CodegenInfo]()
-
 var (
-	pctx = android.NewPackageContext("android/soong/aconfig")
+	pkgPath = "android/soong/aconfig"
+	pctx    = android.NewPackageContext(pkgPath)
 
 	// For aconfig_declarations: Generate cache file
 	aconfigRule = pctx.AndroidStaticRule("aconfig",
 		blueprint.RuleParams{
 			Command: `${aconfig} create-cache` +
 				` --package ${package}` +
+				` ${container}` +
 				` ${declarations}` +
 				` ${values}` +
 				` ${default-permission}` +
@@ -52,12 +42,12 @@ var (
 				"${aconfig}",
 			},
 			Restat: true,
-		}, "release_version", "package", "declarations", "values", "default-permission")
+		}, "release_version", "package", "container", "declarations", "values", "default-permission")
 
 	// For create-device-config-sysprops: Generate aconfig flag value map text file
 	aconfigTextRule = pctx.AndroidStaticRule("aconfig_text",
 		blueprint.RuleParams{
-			Command: `${aconfig} dump-cache --dedup --format='{fully_qualified_name}={state:bool}'` +
+			Command: `${aconfig} dump-cache --dedup --format='{fully_qualified_name}:{permission}={state:bool}'` +
 				` --cache ${in}` +
 				` --out ${out}.tmp` +
 				` && ( if cmp -s ${out}.tmp ${out} ; then rm ${out}.tmp ; else mv ${out}.tmp ${out} ; fi )`,
@@ -119,6 +109,9 @@ func init() {
 	RegisterBuildComponents(android.InitRegistrationContext)
 	pctx.HostBinToolVariable("aconfig", "aconfig")
 	pctx.HostBinToolVariable("soong_zip", "soong_zip")
+
+	gob.Register(android.AconfigDeclarationsProviderData{})
+	gob.Register(android.ModuleOutPath{})
 }
 
 func RegisterBuildComponents(ctx android.RegistrationContext) {

@@ -14,17 +14,12 @@ bootstrap_go_package {
     // Source file name convention is to include _snapshot as a
     // file suffix for files that are generating snapshots.
     srcs: [
-        "host_fake_snapshot.go",
         "host_snapshot.go",
-        "recovery_snapshot.go",
-        "snapshot.go",
         "snapshot_base.go",
         "util.go",
-        "vendor_snapshot.go",
     ],
     testSrcs: [
         "host_test.go",
-        "test.go",
     ],
     pluginFor: ["soong_build"],
 }

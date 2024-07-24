@@ -293,15 +293,14 @@ type BottomUpMutatorContext interface {
 	// WalkDeps, etc.
 	AddInterVariantDependency(tag blueprint.DependencyTag, from, to blueprint.Module)
 
-	// ReplaceDependencies replaces all dependencies on the identical variant of the module with the
-	// specified name with the current variant of this module.  Replacements don't take effect until
-	// after the mutator pass is finished.
+	// ReplaceDependencies finds all the variants of the module with the specified name, then
+	// replaces all dependencies onto those variants with the current variant of this module.
+	// Replacements don't take effect until after the mutator pass is finished.
 	ReplaceDependencies(string)
 
-	// ReplaceDependencies replaces all dependencies on the identical variant of the module with the
-	// specified name with the current variant of this module as long as the supplied predicate returns
-	// true.
-	//
+	// ReplaceDependenciesIf finds all the variants of the module with the specified name, then
+	// replaces all dependencies onto those variants with the current variant of this module
+	// as long as the supplied predicate returns true.
 	// Replacements don't take effect until after the mutator pass is finished.
 	ReplaceDependenciesIf(string, blueprint.ReplaceDependencyPredicate)
 
@@ -391,6 +390,7 @@ func (x *registerMutatorsContext) BottomUpBlueprint(name string, m blueprint.Bot
 
 type IncomingTransitionContext interface {
 	ArchModuleContext
+	ModuleProviderContext
 
 	// Module returns the target of the dependency edge for which the transition
 	// is being computed
@@ -400,10 +400,17 @@ type IncomingTransitionContext interface {
 	Config() Config
 
 	DeviceConfig() DeviceConfig
+
+	// IsAddingDependency returns true if the transition is being called while adding a dependency
+	// after the transition mutator has already run, or false if it is being called when the transition
+	// mutator is running.  This should be used sparingly, all uses will have to be removed in order
+	// to support creating variants on demand.
+	IsAddingDependency() bool
 }
 
 type OutgoingTransitionContext interface {
 	ArchModuleContext
+	ModuleProviderContext
 
 	// Module returns the target of the dependency edge for which the transition
 	// is being computed
@@ -505,6 +512,7 @@ type TransitionMutator interface {
 type androidTransitionMutator struct {
 	finalPhase bool
 	mutator    TransitionMutator
+	name       string
 }
 
 func (a *androidTransitionMutator) Split(ctx blueprint.BaseModuleContext) []string {
@@ -535,6 +543,10 @@ func (c *outgoingTransitionContextImpl) Config() Config {
 
 func (c *outgoingTransitionContextImpl) DeviceConfig() DeviceConfig {
 	return DeviceConfig{c.bp.Config().(Config).deviceConfig}
+}
+
+func (c *outgoingTransitionContextImpl) provider(provider blueprint.AnyProviderKey) (any, bool) {
+	return c.bp.Provider(provider)
 }
 
 func (a *androidTransitionMutator) OutgoingTransition(bpctx blueprint.OutgoingTransitionContext, sourceVariation string) string {
@@ -568,6 +580,14 @@ func (c *incomingTransitionContextImpl) DeviceConfig() DeviceConfig {
 	return DeviceConfig{c.bp.Config().(Config).deviceConfig}
 }
 
+func (c *incomingTransitionContextImpl) IsAddingDependency() bool {
+	return c.bp.IsAddingDependency()
+}
+
+func (c *incomingTransitionContextImpl) provider(provider blueprint.AnyProviderKey) (any, bool) {
+	return c.bp.Provider(provider)
+}
+
 func (a *androidTransitionMutator) IncomingTransition(bpctx blueprint.IncomingTransitionContext, incomingVariation string) string {
 	if m, ok := bpctx.Module().(Module); ok {
 		ctx := incomingTransitionContextPool.Get().(*incomingTransitionContextImpl)
@@ -584,6 +604,14 @@ func (a *androidTransitionMutator) IncomingTransition(bpctx blueprint.IncomingTr
 
 func (a *androidTransitionMutator) Mutate(ctx blueprint.BottomUpMutatorContext, variation string) {
 	if am, ok := ctx.Module().(Module); ok {
+		if variation != "" {
+			// TODO: this should really be checking whether the TransitionMutator affected this module, not
+			//  the empty variant, but TransitionMutator has no concept of skipping a module.
+			base := am.base()
+			base.commonProperties.DebugMutators = append(base.commonProperties.DebugMutators, a.name)
+			base.commonProperties.DebugVariations = append(base.commonProperties.DebugVariations, variation)
+		}
+
 		mctx := bottomUpMutatorContextFactory(ctx, am, a.finalPhase)
 		defer bottomUpMutatorContextPool.Put(mctx)
 		a.mutator.Mutate(mctx, variation)
@@ -594,6 +622,7 @@ func (x *registerMutatorsContext) Transition(name string, m TransitionMutator) {
 	atm := &androidTransitionMutator{
 		finalPhase: x.finalPhase,
 		mutator:    m,
+		name:       name,
 	}
 	mutator := &mutator{
 		name:              name,
@@ -659,13 +688,11 @@ func RegisterComponentsMutator(ctx RegisterMutatorsContext) {
 // on component modules to be added so that they can depend directly on a prebuilt
 // module.
 func componentDepsMutator(ctx BottomUpMutatorContext) {
-	if m := ctx.Module(); m.Enabled() {
-		m.ComponentDepsMutator(ctx)
-	}
+	ctx.Module().ComponentDepsMutator(ctx)
 }
 
 func depsMutator(ctx BottomUpMutatorContext) {
-	if m := ctx.Module(); m.Enabled() {
+	if m := ctx.Module(); m.Enabled(ctx) {
 		m.base().baseDepsMutator(ctx)
 		m.DepsMutator(ctx)
 	}

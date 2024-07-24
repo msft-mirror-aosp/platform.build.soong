@@ -15,7 +15,6 @@
 package build
 
 import (
-	"android/soong/ui/tracer"
 	"fmt"
 	"io/fs"
 	"os"
@@ -26,7 +25,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"android/soong/bazel"
+	"android/soong/ui/tracer"
+
 	"android/soong/ui/metrics"
 	"android/soong/ui/metrics/metrics_proto"
 	"android/soong/ui/status"
@@ -270,7 +270,13 @@ func bootstrapEpochCleanup(ctx Context, config Config) {
 	} else if !exists {
 		// The tree is out of date for the current epoch, delete files used by bootstrap
 		// and force the primary builder to rerun.
-		os.Remove(config.SoongNinjaFile())
+		soongNinjaFile := config.SoongNinjaFile()
+		os.Remove(soongNinjaFile)
+		for _, file := range blueprint.GetNinjaShardFiles(soongNinjaFile) {
+			if ok, _ := fileExists(file); ok {
+				os.Remove(file)
+			}
+		}
 		for _, globFile := range bootstrapGlobFileList(config) {
 			os.Remove(globFile)
 		}
@@ -307,6 +313,9 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	}
 	if config.ensureAllowlistIntegrity {
 		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--ensure-allowlist-integrity")
+	}
+	if config.incrementalBuildActions {
+		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--incremental-build-actions")
 	}
 
 	queryviewDir := filepath.Join(config.SoongOutDir(), "queryview")
@@ -394,7 +403,6 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	}
 
 	blueprintCtx := blueprint.NewContext()
-	blueprintCtx.AddIncludeTags(config.GetIncludeTags()...)
 	blueprintCtx.AddSourceRootDirs(config.GetSourceRootDirs()...)
 	blueprintCtx.SetIgnoreUnknownModuleTypes(true)
 	blueprintConfig := BlueprintConfig{
@@ -594,10 +602,6 @@ func runSoong(ctx Context, config Config) {
 
 		checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(soongBuildTag))
 
-		// Remove bazel files in the event that bazel is disabled for the build.
-		// These files may have been left over from a previous bazel-enabled build.
-		cleanBazelFiles(config)
-
 		if config.JsonModuleGraph() {
 			checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(jsonModuleGraphTag))
 		}
@@ -634,6 +638,22 @@ func runSoong(ctx Context, config Config) {
 			"--frontend_file", fifo,
 			"-f", filepath.Join(config.SoongOutDir(), "bootstrap.ninja"),
 		}
+		if config.useN2 {
+			ninjaArgs = []string{
+				// TODO: implement these features, or remove them.
+				//"-d", "keepdepfile",
+				//"-d", "stats",
+				//"-o", "usesphonyoutputs=yes",
+				//"-o", "preremoveoutputs=yes",
+				//"-w", "dupbuild=err",
+				//"-w", "outputdir=err",
+				//"-w", "missingoutfile=err",
+				"-v",
+				"-j", strconv.Itoa(config.Parallel()),
+				"--frontend-file", fifo,
+				"-f", filepath.Join(config.SoongOutDir(), "bootstrap.ninja"),
+			}
+		}
 
 		if extra, ok := config.Environment().Get("SOONG_UI_NINJA_ARGS"); ok {
 			ctx.Printf(`CAUTION: arguments in $SOONG_UI_NINJA_ARGS=%q, e.g. "-n", can make soong_build FAIL or INCORRECT`, extra)
@@ -641,8 +661,13 @@ func runSoong(ctx Context, config Config) {
 		}
 
 		ninjaArgs = append(ninjaArgs, targets...)
+		ninjaCmd := config.PrebuiltBuildTool("ninja")
+		if config.useN2 {
+			ninjaCmd = config.PrebuiltBuildTool("n2")
+		}
+
 		cmd := Command(ctx, config, "soong bootstrap",
-			config.PrebuiltBuildTool("ninja"), ninjaArgs...)
+			ninjaCmd, ninjaArgs...)
 
 		var ninjaEnv Environment
 
@@ -680,8 +705,15 @@ func runSoong(ctx Context, config Config) {
 
 	loadSoongBuildMetrics(ctx, config, beforeSoongTimestamp)
 
-	distGzipFile(ctx, config, config.SoongNinjaFile(), "soong")
+	soongNinjaFile := config.SoongNinjaFile()
+	distGzipFile(ctx, config, soongNinjaFile, "soong")
+	for _, file := range blueprint.GetNinjaShardFiles(soongNinjaFile) {
+		if ok, _ := fileExists(file); ok {
+			distGzipFile(ctx, config, file, "soong")
+		}
+	}
 	distFile(ctx, config, config.SoongVarsFile(), "soong")
+	distFile(ctx, config, config.SoongExtraVarsFile(), "soong")
 
 	if !config.SkipKati() {
 		distGzipFile(ctx, config, config.SoongAndroidMk(), "soong")
@@ -739,18 +771,6 @@ func loadSoongBuildMetrics(ctx Context, config Config, oldTimestamp time.Time) {
 			}
 			ctx.Tracer.CountersAtTime(group.GetName(), ctx.Thread, timestamp, counters)
 		}
-	}
-}
-
-func cleanBazelFiles(config Config) {
-	files := []string{
-		shared.JoinPath(config.SoongOutDir(), "bp2build"),
-		shared.JoinPath(config.SoongOutDir(), "workspace"),
-		shared.JoinPath(config.SoongOutDir(), bazel.SoongInjectionDirName),
-		shared.JoinPath(config.OutDir(), "bazel")}
-
-	for _, f := range files {
-		os.RemoveAll(f)
 	}
 }
 

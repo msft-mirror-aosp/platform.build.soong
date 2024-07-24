@@ -85,6 +85,7 @@ type configImpl struct {
 	skipMetricsUpload        bool
 	buildStartedTime         int64 // For metrics-upload-only - manually specify a build-started time
 	buildFromSourceStub      bool
+	incrementalBuildActions  bool
 	ensureAllowlistIntegrity bool // For CI builds - make sure modules are mixed-built
 
 	// From the product config
@@ -98,9 +99,10 @@ type configImpl struct {
 	// Autodetected
 	totalRAM uint64
 
-	brokenDupRules     bool
-	brokenUsesNetwork  bool
-	brokenNinjaEnvVars []string
+	brokenDupRules       bool
+	brokenUsesNetwork    bool
+	brokenNinjaEnvVars   []string
+	brokenMissingOutputs bool
 
 	pathReplaced bool
 
@@ -119,6 +121,10 @@ type configImpl struct {
 	// There's quite a bit of overlap with module-info.json and soong module graph. We
 	// could consider merging them.
 	moduleDebugFile string
+
+	// Whether to use n2 instead of ninja.  This is controlled with the
+	// environment variable SOONG_USE_N2
+	useN2 bool
 }
 
 type NinjaWeightListSource uint
@@ -281,6 +287,10 @@ func NewConfig(ctx Context, args ...string) Config {
 		ret.moduleDebugFile, _ = filepath.Abs(shared.JoinPath(ret.SoongOutDir(), "soong-debug-info.json"))
 	}
 
+	if os.Getenv("SOONG_USE_N2") == "true" {
+		ret.useN2 = true
+	}
+
 	ret.environ.Unset(
 		// We're already using it
 		"USE_SOONG_UI",
@@ -311,6 +321,7 @@ func NewConfig(ctx Context, args ...string) Config {
 		"DISPLAY",
 		"GREP_OPTIONS",
 		"JAVAC",
+		"LEX",
 		"NDK_ROOT",
 		"POSIXLY_CORRECT",
 
@@ -336,6 +347,9 @@ func NewConfig(ctx Context, args ...string) Config {
 
 		// We read it here already, don't let others share in the fun
 		"GENERATE_SOONG_DEBUG",
+
+		// Use config.useN2 instead.
+		"SOONG_USE_N2",
 	)
 
 	if ret.UseGoma() || ret.ForceUseGoma() {
@@ -386,22 +400,21 @@ func NewConfig(ctx Context, args ...string) Config {
 
 	// Configure Java-related variables, including adding it to $PATH
 	java8Home := filepath.Join("prebuilts/jdk/jdk8", ret.HostPrebuiltTag())
-	java17Home := filepath.Join("prebuilts/jdk/jdk17", ret.HostPrebuiltTag())
 	java21Home := filepath.Join("prebuilts/jdk/jdk21", ret.HostPrebuiltTag())
 	javaHome := func() string {
 		if override, ok := ret.environ.Get("OVERRIDE_ANDROID_JAVA_HOME"); ok {
 			return override
 		}
-		if ret.environ.IsEnvTrue("EXPERIMENTAL_USE_OPENJDK21_TOOLCHAIN") {
-			return java21Home
-		}
 		if toolchain11, ok := ret.environ.Get("EXPERIMENTAL_USE_OPENJDK11_TOOLCHAIN"); ok && toolchain11 != "true" {
-			ctx.Fatalln("The environment variable EXPERIMENTAL_USE_OPENJDK11_TOOLCHAIN is no longer supported. An OpenJDK 11 toolchain is now the global default.")
+			ctx.Fatalln("The environment variable EXPERIMENTAL_USE_OPENJDK11_TOOLCHAIN is no longer supported. An OpenJDK 21 toolchain is now the global default.")
 		}
 		if toolchain17, ok := ret.environ.Get("EXPERIMENTAL_USE_OPENJDK17_TOOLCHAIN"); ok && toolchain17 != "true" {
-			ctx.Fatalln("The environment variable EXPERIMENTAL_USE_OPENJDK17_TOOLCHAIN is no longer supported. An OpenJDK 17 toolchain is now the global default.")
+			ctx.Fatalln("The environment variable EXPERIMENTAL_USE_OPENJDK17_TOOLCHAIN is no longer supported. An OpenJDK 21 toolchain is now the global default.")
 		}
-		return java17Home
+		if toolchain21, ok := ret.environ.Get("EXPERIMENTAL_USE_OPENJDK21_TOOLCHAIN"); ok && toolchain21 != "true" {
+			ctx.Fatalln("The environment variable EXPERIMENTAL_USE_OPENJDK21_TOOLCHAIN is no longer supported. An OpenJDK 21 toolchain is now the global default.")
+		}
+		return java21Home
 	}()
 	absJavaHome := absPath(ctx, javaHome)
 
@@ -812,6 +825,8 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			}
 		} else if arg == "--build-from-source-stub" {
 			c.buildFromSourceStub = true
+		} else if arg == "--incremental-build-actions" {
+			c.incrementalBuildActions = true
 		} else if strings.HasPrefix(arg, "--build-command=") {
 			buildCmd := strings.TrimPrefix(arg, "--build-command=")
 			// remove quotations
@@ -1165,14 +1180,6 @@ func (c *configImpl) SetSourceRootDirs(i []string) {
 	c.sourceRootDirs = i
 }
 
-func (c *configImpl) GetIncludeTags() []string {
-	return c.includeTags
-}
-
-func (c *configImpl) SetIncludeTags(i []string) {
-	c.includeTags = i
-}
-
 func (c *configImpl) GetLogsPrefix() string {
 	return c.logsPrefix
 }
@@ -1252,6 +1259,11 @@ func (c *configImpl) StartGoma() bool {
 }
 
 func (c *configImpl) canSupportRBE() bool {
+	// Only supported on linux
+	if runtime.GOOS != "linux" {
+		return false
+	}
+
 	// Do not use RBE with prod credentials in scenarios when stubby doesn't exist, since
 	// its unlikely that we will be able to obtain necessary creds without stubby.
 	authType, _ := c.rbeAuth()
@@ -1387,7 +1399,9 @@ func (c *configImpl) rbeAuth() (string, string) {
 }
 
 func (c *configImpl) rbeSockAddr(dir string) (string, error) {
-	maxNameLen := len(syscall.RawSockaddrUnix{}.Path)
+	// Absolute path socket addresses have a prefix of //. This should
+	// be included in the length limit.
+	maxNameLen := len(syscall.RawSockaddrUnix{}.Path) - 2
 	base := fmt.Sprintf("reproxy_%v.sock", rbeRandPrefix)
 
 	name := filepath.Join(dir, base)
@@ -1495,6 +1509,15 @@ func (c *configImpl) SoongVarsFile() string {
 	}
 }
 
+func (c *configImpl) SoongExtraVarsFile() string {
+	targetProduct, err := c.TargetProductOrErr()
+	if err != nil {
+		return filepath.Join(c.SoongOutDir(), "soong.extra.variables")
+	} else {
+		return filepath.Join(c.SoongOutDir(), "soong."+targetProduct+".extra.variables")
+	}
+}
+
 func (c *configImpl) SoongNinjaFile() string {
 	targetProduct, err := c.TargetProductOrErr()
 	if err != nil {
@@ -1596,6 +1619,14 @@ func (c *configImpl) SetBuildBrokenNinjaUsesEnvVars(val []string) {
 
 func (c *configImpl) BuildBrokenNinjaUsesEnvVars() []string {
 	return c.brokenNinjaEnvVars
+}
+
+func (c *configImpl) SetBuildBrokenMissingOutputs(val bool) {
+	c.brokenMissingOutputs = val
+}
+
+func (c *configImpl) BuildBrokenMissingOutputs() bool {
+	return c.brokenMissingOutputs
 }
 
 func (c *configImpl) SetTargetDeviceDir(dir string) {

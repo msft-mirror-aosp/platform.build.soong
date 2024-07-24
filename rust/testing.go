@@ -43,26 +43,34 @@ var PrepareForTestWithRustDefaultModules = android.GroupFixturePreparers(
 // Preparer that will allow use of all rust modules fully.
 var PrepareForIntegrationTestWithRust = android.GroupFixturePreparers(
 	PrepareForTestWithRustDefaultModules,
-)
-
-var PrepareForTestWithRustIncludeVndk = android.GroupFixturePreparers(
-	PrepareForIntegrationTestWithRust,
-	cc.PrepareForTestWithCcIncludeVndk,
+	cc.PrepareForIntegrationTestWithCc,
 )
 
 func GatherRequiredDepsForTest() string {
 	bp := `
 		rust_prebuilt_library {
-				name: "libstd",
-				crate_name: "std",
-				rlib: {
-					srcs: ["libstd.rlib"],
-				},
-				dylib: {
-					srcs: ["libstd.so"],
-				},
-				host_supported: true,
-				sysroot: true,
+			name: "libstd",
+			crate_name: "std",
+			rlib: {
+				srcs: ["libstd/libstd.rlib"],
+			},
+			dylib: {
+				srcs: ["libstd/libstd.so"],
+			},
+			host_supported: true,
+			sysroot: true,
+		}
+		rust_prebuilt_library {
+			name: "libcore.sysroot",
+			crate_name: "core",
+			rlib: {
+				srcs: ["libcore/libcore.rlib"],
+			},
+			dylib: {
+				srcs: ["libcore/libcore.so"],
+			},
+			host_supported: true,
+			sysroot: true,
 		}
 		//////////////////////////////
 		// Device module requirements
@@ -180,26 +188,20 @@ func registerRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("rust_fuzz_host", RustFuzzHostFactory)
 	ctx.RegisterModuleType("rust_ffi", RustFFIFactory)
 	ctx.RegisterModuleType("rust_ffi_shared", RustFFISharedFactory)
-	ctx.RegisterModuleType("rust_ffi_static", RustFFIStaticFactory)
+	ctx.RegisterModuleType("rust_ffi_rlib", RustFFIRlibFactory)
+	ctx.RegisterModuleType("rust_ffi_static", RustFFIRlibFactory)
 	ctx.RegisterModuleType("rust_ffi_host", RustFFIHostFactory)
 	ctx.RegisterModuleType("rust_ffi_host_shared", RustFFISharedHostFactory)
-	ctx.RegisterModuleType("rust_ffi_host_static", RustFFIStaticHostFactory)
+	ctx.RegisterModuleType("rust_ffi_host_rlib", RustFFIRlibHostFactory)
+	ctx.RegisterModuleType("rust_ffi_host_static", RustFFIRlibHostFactory)
 	ctx.RegisterModuleType("rust_proc_macro", ProcMacroFactory)
 	ctx.RegisterModuleType("rust_protobuf", RustProtobufFactory)
 	ctx.RegisterModuleType("rust_protobuf_host", RustProtobufHostFactory)
 	ctx.RegisterModuleType("rust_prebuilt_library", PrebuiltLibraryFactory)
 	ctx.RegisterModuleType("rust_prebuilt_dylib", PrebuiltDylibFactory)
 	ctx.RegisterModuleType("rust_prebuilt_rlib", PrebuiltRlibFactory)
-	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		// rust mutators
-		ctx.BottomUp("rust_libraries", LibraryMutator).Parallel()
-		ctx.BottomUp("rust_stdlinkage", LibstdMutator).Parallel()
-		ctx.BottomUp("rust_begin", BeginMutator).Parallel()
-	})
+	ctx.PreDepsMutators(registerPreDepsMutators)
 	ctx.RegisterParallelSingletonType("rust_project_generator", rustProjectGeneratorSingleton)
 	ctx.RegisterParallelSingletonType("kythe_rust_extract", kytheExtractRustFactory)
-	ctx.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("rust_sanitizers", rustSanitizerRuntimeMutator).Parallel()
-	})
-	registerRustSnapshotModules(ctx)
+	ctx.PostDepsMutators(registerPostDepsMutators)
 }

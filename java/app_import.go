@@ -17,7 +17,6 @@ package java
 // This file contains the module implementations for android_app_import and android_test_import.
 
 import (
-	"fmt"
 	"reflect"
 	"strings"
 
@@ -87,9 +86,6 @@ type AndroidAppImport struct {
 	hideApexVariantFromMake bool
 
 	provenanceMetaDataFile android.OutputPath
-
-	// Single aconfig "cache file" merged from this module and all dependencies.
-	mergedAconfigFiles map[string]android.Paths
 }
 
 type AndroidAppImportProperties struct {
@@ -150,6 +146,11 @@ type AndroidAppImportProperties struct {
 	// If unspecified, follows the naming convention that the source module of
 	// the prebuilt is Name() without "prebuilt_" prefix
 	Source_module_name *string
+
+	// Path to the .prebuilt_info file of the prebuilt app.
+	// In case of mainline modules, the .prebuilt_info file contains the build_id that was used
+	// to generate the prebuilt.
+	Prebuilt_info *string `android:"path"`
 }
 
 func (a *AndroidAppImport) IsInstallable() bool {
@@ -350,7 +351,7 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 	}
 
 	if a.usesLibrary.enforceUsesLibraries() {
-		a.usesLibrary.verifyUsesLibrariesAPK(ctx, srcApk)
+		a.usesLibrary.verifyUsesLibrariesAPK(ctx, srcApk, &a.dexpreopter.classLoaderContexts)
 	}
 
 	a.dexpreopter.dexpreopt(ctx, android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName()), jnisUncompressed)
@@ -411,7 +412,16 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 		artifactPath := android.PathForModuleSrc(ctx, *a.properties.Apk)
 		a.provenanceMetaDataFile = provenance.GenerateArtifactProvenanceMetaData(ctx, artifactPath, a.installPath)
 	}
-	android.CollectDependencyAconfigFiles(ctx, &a.mergedAconfigFiles)
+
+	providePrebuiltInfo(ctx,
+		prebuiltInfoProps{
+			baseModuleName: a.BaseModuleName(),
+			isPrebuilt:     true,
+			prebuiltInfo:   a.properties.Prebuilt_info,
+		},
+	)
+
+	ctx.SetOutputFiles([]android.Path{a.outputFile}, "")
 
 	// TODO: androidmk converter jni libs
 }
@@ -450,15 +460,6 @@ func (a *AndroidAppImport) Name() string {
 
 func (a *AndroidAppImport) OutputFile() android.Path {
 	return a.outputFile
-}
-
-func (a *AndroidAppImport) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return []android.Path{a.outputFile}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
 }
 
 func (a *AndroidAppImport) JacocoReportClassesFile() android.Path {
@@ -597,6 +598,12 @@ func createArchDpiVariantGroupType(archNames []string, dpiNames []string) reflec
 	})
 	return return_struct
 }
+
+func (a *AndroidAppImport) UsesLibrary() *usesLibrary {
+	return &a.usesLibrary
+}
+
+var _ ModuleWithUsesLibrary = (*AndroidAppImport)(nil)
 
 // android_app_import imports a prebuilt apk with additional processing specified in the module.
 // DPI-specific apk source files can be specified using dpi_variants. Example:

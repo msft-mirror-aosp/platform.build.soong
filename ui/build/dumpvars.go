@@ -147,7 +147,6 @@ func dumpMakeVars(ctx Context, config Config, goals, vars []string, write_soong_
 var BannerVars = []string{
 	"PLATFORM_VERSION_CODENAME",
 	"PLATFORM_VERSION",
-	"PRODUCT_INCLUDE_TAGS",
 	"PRODUCT_SOURCE_ROOT_DIRS",
 	"TARGET_PRODUCT",
 	"TARGET_BUILD_VARIANT",
@@ -236,6 +235,11 @@ func runMakeProductConfig(ctx Context, config Config) {
 		"BUILD_BROKEN_SRC_DIR_IS_WRITABLE",
 		"BUILD_BROKEN_SRC_DIR_RW_ALLOWLIST",
 
+		// Whether missing outputs should be treated as warnings
+		// instead of errors.
+		// `true` will relegate missing outputs to warnings.
+		"BUILD_BROKEN_MISSING_OUTPUTS",
+
 		// Not used, but useful to be in the soong.log
 		"TARGET_BUILD_TYPE",
 		"HOST_ARCH",
@@ -301,6 +305,6 @@ func runMakeProductConfig(ctx Context, config Config) {
 	config.SetBuildBrokenDupRules(makeVars["BUILD_BROKEN_DUP_RULES"] == "true")
 	config.SetBuildBrokenUsesNetwork(makeVars["BUILD_BROKEN_USES_NETWORK"] == "true")
 	config.SetBuildBrokenNinjaUsesEnvVars(strings.Fields(makeVars["BUILD_BROKEN_NINJA_USES_ENV_VARS"]))
-	config.SetIncludeTags(strings.Fields(makeVars["PRODUCT_INCLUDE_TAGS"]))
 	config.SetSourceRootDirs(strings.Fields(makeVars["PRODUCT_SOURCE_ROOT_DIRS"]))
+	config.SetBuildBrokenMissingOutputs(makeVars["BUILD_BROKEN_MISSING_OUTPUTS"] == "true")
 }

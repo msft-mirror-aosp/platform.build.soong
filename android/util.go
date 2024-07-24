@@ -24,6 +24,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/google/blueprint/proptools"
 )
 
 // CopyOf returns a new slice that has the same contents as s.
@@ -199,6 +201,12 @@ func ListSetDifference[T comparable](l1, l2 []T) (bool, []T, []T) {
 	return listsDiffer, diff1, diff2
 }
 
+// Returns true if the two lists have common elements.
+func HasIntersection[T comparable](l1, l2 []T) bool {
+	_, a, b := ListSetDifference(l1, l2)
+	return len(a)+len(b) < len(setFromList(l1))+len(setFromList(l2))
+}
+
 // Returns true if the given string s is prefixed with any string in the given prefix list.
 func HasAnyPrefix(s string, prefixList []string) bool {
 	for _, prefix := range prefixList {
@@ -300,6 +308,24 @@ func RemoveFromList(s string, list []string) (bool, []string) {
 		}
 	}
 	return removed, result
+}
+
+// FirstUniqueFunc returns all unique elements of a slice, keeping the first copy of
+// each.  It does not modify the input slice. The eq function should return true
+// if two elements can be considered equal.
+func FirstUniqueFunc[SortableList ~[]Sortable, Sortable any](list SortableList, eq func(a, b Sortable) bool) SortableList {
+	k := 0
+outer:
+	for i := 0; i < len(list); i++ {
+		for j := 0; j < k; j++ {
+			if eq(list[i], list[j]) {
+				continue outer
+			}
+		}
+		list[k] = list[i]
+		k++
+	}
+	return list[:k]
 }
 
 // FirstUniqueStrings returns all unique elements of a slice of strings, keeping the first copy of
@@ -526,18 +552,7 @@ func SplitFileExt(name string) (string, string, string) {
 
 // ShardPaths takes a Paths, and returns a slice of Paths where each one has at most shardSize paths.
 func ShardPaths(paths Paths, shardSize int) []Paths {
-	if len(paths) == 0 {
-		return nil
-	}
-	ret := make([]Paths, 0, (len(paths)+shardSize-1)/shardSize)
-	for len(paths) > shardSize {
-		ret = append(ret, paths[0:shardSize])
-		paths = paths[shardSize:]
-	}
-	if len(paths) > 0 {
-		ret = append(ret, paths)
-	}
-	return ret
+	return proptools.ShardBySize(paths, shardSize)
 }
 
 // ShardString takes a string and returns a slice of strings where the length of each one is
@@ -560,18 +575,7 @@ func ShardString(s string, shardSize int) []string {
 // ShardStrings takes a slice of strings, and returns a slice of slices of strings where each one has at most shardSize
 // elements.
 func ShardStrings(s []string, shardSize int) [][]string {
-	if len(s) == 0 {
-		return nil
-	}
-	ret := make([][]string, 0, (len(s)+shardSize-1)/shardSize)
-	for len(s) > shardSize {
-		ret = append(ret, s[0:shardSize])
-		s = s[shardSize:]
-	}
-	if len(s) > 0 {
-		ret = append(ret, s)
-	}
-	return ret
+	return proptools.ShardBySize(s, shardSize)
 }
 
 // CheckDuplicate checks if there are duplicates in given string list.

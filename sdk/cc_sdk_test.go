@@ -123,6 +123,11 @@ func TestSdkCompileMultilibOverride(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_sdkmember"],
+}
+
 cc_prebuilt_library_shared {
     name: "sdkmember",
     prefer: false,
@@ -142,6 +147,9 @@ cc_prebuilt_library_shared {
             enabled: true,
             srcs: ["linux_glibc/x86_64/lib/sdkmember.so"],
         },
+    },
+    strip: {
+        none: true,
     },
 }
 `),
@@ -225,6 +233,11 @@ func TestSnapshotWithObject(t *testing.T) {
 	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_crtobj"],
+}
 
 cc_prebuilt_object {
     name: "crtobj",
@@ -333,6 +346,11 @@ func TestSnapshotWithCcExportGeneratedHeaders(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_mynativelib"],
+}
+
 cc_prebuilt_library_shared {
     name: "mynativelib",
     prefer: false,
@@ -352,6 +370,9 @@ cc_prebuilt_library_shared {
         arm: {
             srcs: ["arm/lib/mynativelib.so"],
         },
+    },
+    strip: {
+        none: true,
     },
 }
 `),
@@ -406,6 +427,11 @@ func TestSnapshotWithCcSharedLibraryCommonProperties(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_mynativelib"],
+}
+
 cc_prebuilt_library_shared {
     name: "mynativelib",
     prefer: false,
@@ -434,6 +460,9 @@ cc_prebuilt_library_shared {
                 integer_overflow: true,
             },
         },
+    },
+    strip: {
+        none: true,
     },
 }
 `),
@@ -464,6 +493,11 @@ func TestSnapshotWithCcBinary(t *testing.T) {
 	CheckSnapshot(t, result, "mymodule_exports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "mymodule_exports.contributions",
+    contents: ["prebuilt_mynativebinary"],
+}
 
 cc_prebuilt_binary {
     name: "mynativebinary",
@@ -522,6 +556,11 @@ func TestMultipleHostOsTypesSnapshotWithCcBinary(t *testing.T) {
 	CheckSnapshot(t, result, "myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "myexports.contributions",
+    contents: ["prebuilt_mynativebinary"],
+}
 
 cc_prebuilt_binary {
     name: "mynativebinary",
@@ -621,6 +660,14 @@ func TestSnapshotWithSingleHostOsType(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "myexports.contributions",
+    contents: [
+        "prebuilt_mynativebinary",
+        "prebuilt_mynativelib",
+    ],
+}
+
 cc_prebuilt_binary {
     name: "mynativebinary",
     prefer: false,
@@ -659,6 +706,9 @@ cc_prebuilt_library_shared {
             srcs: ["x86_64/lib/mynativelib.so"],
         },
     },
+    strip: {
+        none: true,
+    },
 }
 `),
 		checkAllCopyRules(`
@@ -695,6 +745,11 @@ func TestSnapshotWithCcStaticNocrtBinary(t *testing.T) {
 	CheckSnapshot(t, result, "mymodule_exports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "mymodule_exports.contributions",
+    contents: ["prebuilt_linker"],
+}
 
 cc_prebuilt_binary {
     name: "linker",
@@ -755,6 +810,11 @@ func TestSnapshotWithCcSharedLibrary(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_mynativelib"],
+}
+
 cc_prebuilt_library_shared {
     name: "mynativelib",
     prefer: false,
@@ -775,6 +835,9 @@ cc_prebuilt_library_shared {
             srcs: ["arm/lib/mynativelib.so"],
             export_include_dirs: ["arm/include_gen/mynativelib/android_arm_armv7-a-neon_shared/gen/aidl"],
         },
+    },
+    strip: {
+        none: true,
     },
 }
 `),
@@ -856,6 +919,15 @@ func TestSnapshotWithCcSharedLibrarySharedLibs(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: [
+        "prebuilt_mynativelib",
+        "prebuilt_myothernativelib",
+        "prebuilt_mysystemnativelib",
+    ],
+}
+
 cc_prebuilt_library_shared {
     name: "mynativelib",
     prefer: false,
@@ -875,6 +947,9 @@ cc_prebuilt_library_shared {
             srcs: ["arm/lib/mynativelib.so"],
         },
     },
+    strip: {
+        none: true,
+    },
 }
 
 cc_prebuilt_library_shared {
@@ -893,6 +968,9 @@ cc_prebuilt_library_shared {
             srcs: ["arm/lib/myothernativelib.so"],
         },
     },
+    strip: {
+        none: true,
+    },
 }
 
 cc_prebuilt_library_shared {
@@ -909,6 +987,9 @@ cc_prebuilt_library_shared {
         arm: {
             srcs: ["arm/lib/mysystemnativelib.so"],
         },
+    },
+    strip: {
+        none: true,
     },
 }
 `),
@@ -953,6 +1034,11 @@ func TestHostSnapshotWithCcSharedLibrary(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_mynativelib"],
+}
+
 cc_prebuilt_library_shared {
     name: "mynativelib",
     prefer: false,
@@ -978,6 +1064,9 @@ cc_prebuilt_library_shared {
             srcs: ["x86/lib/mynativelib.so"],
             export_include_dirs: ["x86/include_gen/mynativelib/linux_glibc_x86_shared/gen/aidl"],
         },
+    },
+    strip: {
+        none: true,
     },
 }
 `),
@@ -1029,6 +1118,11 @@ func TestMultipleHostOsTypesSnapshotWithCcSharedLibrary(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_mynativelib"],
+}
+
 cc_prebuilt_library_shared {
     name: "mynativelib",
     prefer: false,
@@ -1059,6 +1153,9 @@ cc_prebuilt_library_shared {
             enabled: true,
             srcs: ["windows/x86_64/lib/mynativelib.dll"],
         },
+    },
+    strip: {
+        none: true,
     },
 }
 `),
@@ -1094,6 +1191,11 @@ func TestSnapshotWithCcStaticLibrary(t *testing.T) {
 	CheckSnapshot(t, result, "myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "myexports.contributions",
+    contents: ["prebuilt_mynativelib"],
+}
 
 cc_prebuilt_library_static {
     name: "mynativelib",
@@ -1158,6 +1260,11 @@ func TestHostSnapshotWithCcStaticLibrary(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "myexports.contributions",
+    contents: ["prebuilt_mynativelib"],
+}
+
 cc_prebuilt_library_static {
     name: "mynativelib",
     prefer: false,
@@ -1221,6 +1328,11 @@ func TestSnapshotWithCcLibrary(t *testing.T) {
 	CheckSnapshot(t, result, "myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "myexports.contributions",
+    contents: ["prebuilt_mynativelib"],
+}
 
 cc_prebuilt_library {
     name: "mynativelib",
@@ -1297,6 +1409,11 @@ func TestSnapshotSameLibraryWithNativeLibsAndNativeSharedLib(t *testing.T) {
 	CheckSnapshot(t, result, "myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "myexports.contributions",
+    contents: ["prebuilt_mynativelib"],
+}
 
 cc_prebuilt_library {
     name: "mynativelib",
@@ -1393,6 +1510,11 @@ func TestSnapshotSameLibraryWithAndroidNativeLibsAndHostNativeSharedLib(t *testi
 	CheckSnapshot(t, result, "myexports", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "myexports.contributions",
+    contents: ["prebuilt_mynativelib"],
+}
 
 cc_prebuilt_library {
     name: "mynativelib",
@@ -1520,6 +1642,11 @@ func TestHostSnapshotWithMultiLib64(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "myexports.contributions",
+    contents: ["prebuilt_mynativelib"],
+}
+
 cc_prebuilt_library_static {
     name: "mynativelib",
     prefer: false,
@@ -1572,6 +1699,11 @@ func TestSnapshotWithCcHeadersLibrary(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_mynativeheaders"],
+}
+
 cc_prebuilt_library_headers {
     name: "mynativeheaders",
     prefer: false,
@@ -1594,6 +1726,9 @@ func TestSnapshotWithCcHeadersLibraryAndNativeBridgeSupport(t *testing.T) {
 		PrepareForTestWithSdkBuildComponents,
 		ccTestFs.AddToFixture(),
 		prepareForTestWithNativeBridgeTarget,
+		android.FixtureRegisterWithContext(func(ctx android.RegistrationContext) {
+			android.RegisterApexContributionsBuildComponents(ctx)
+		}),
 	).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
@@ -1615,6 +1750,11 @@ func TestSnapshotWithCcHeadersLibraryAndNativeBridgeSupport(t *testing.T) {
 	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_mynativeheaders"],
+}
 
 cc_prebuilt_library_headers {
     name: "mynativeheaders",
@@ -1679,6 +1819,9 @@ func TestSnapshotWithCcHeadersLibraryAndImageVariants(t *testing.T) {
 			cc.PrepareForTestWithCcDefaultModules,
 			PrepareForTestWithSdkBuildComponents,
 			ccTestFs.AddToFixture(),
+			android.FixtureRegisterWithContext(func(ctx android.RegistrationContext) {
+				android.RegisterApexContributionsBuildComponents(ctx)
+			}),
 		).RunTestWithBp(t, fmt.Sprintf(`
 		sdk {
 			name: "mysdk",
@@ -1700,6 +1843,11 @@ func TestSnapshotWithCcHeadersLibraryAndImageVariants(t *testing.T) {
 		CheckSnapshot(t, result, "mysdk", "",
 			checkAndroidBpContents(fmt.Sprintf(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_mynativeheaders"],
+}
 
 cc_prebuilt_library_headers {
     name: "mynativeheaders",
@@ -1749,6 +1897,11 @@ func TestHostSnapshotWithCcHeadersLibrary(t *testing.T) {
 	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_mynativeheaders"],
+}
 
 cc_prebuilt_library_headers {
     name: "mynativeheaders",
@@ -1806,6 +1959,11 @@ func TestDeviceAndHostSnapshotWithCcHeadersLibrary(t *testing.T) {
 	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_mynativeheaders"],
+}
 
 cc_prebuilt_library_headers {
     name: "mynativeheaders",
@@ -1870,6 +2028,15 @@ func TestSystemSharedLibPropagation(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: [
+        "prebuilt_sslnil",
+        "prebuilt_sslempty",
+        "prebuilt_sslnonempty",
+    ],
+}
+
 cc_prebuilt_library_shared {
     name: "sslnil",
     prefer: false,
@@ -1883,6 +2050,9 @@ cc_prebuilt_library_shared {
         arm: {
             srcs: ["arm/lib/sslnil.so"],
         },
+    },
+    strip: {
+        none: true,
     },
 }
 
@@ -1901,6 +2071,9 @@ cc_prebuilt_library_shared {
             srcs: ["arm/lib/sslempty.so"],
         },
     },
+    strip: {
+        none: true,
+    },
 }
 
 cc_prebuilt_library_shared {
@@ -1917,6 +2090,9 @@ cc_prebuilt_library_shared {
         arm: {
             srcs: ["arm/lib/sslnonempty.so"],
         },
+    },
+    strip: {
+        none: true,
     },
 }
 `))
@@ -1942,6 +2118,11 @@ cc_prebuilt_library_shared {
 	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_sslvariants"],
+}
 
 cc_prebuilt_library_shared {
     name: "sslvariants",
@@ -1971,6 +2152,9 @@ cc_prebuilt_library_shared {
             enabled: true,
             srcs: ["linux_glibc/x86/lib/sslvariants.so"],
         },
+    },
+    strip: {
+        none: true,
     },
 }
 `),
@@ -2002,11 +2186,17 @@ func TestStubsLibrary(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_stubslib"],
+}
+
 cc_prebuilt_library_shared {
     name: "stubslib",
     prefer: false,
     visibility: ["//visibility:public"],
     apex_available: ["//apex_available:platform"],
+    stl: "none",
     compile_multilib: "both",
     stubs: {
         versions: [
@@ -2015,6 +2205,7 @@ cc_prebuilt_library_shared {
             "3",
             "current",
         ],
+        symbol_file: "stubslib.map.txt",
     },
     arch: {
         arm64: {
@@ -2023,6 +2214,9 @@ cc_prebuilt_library_shared {
         arm: {
             srcs: ["arm/lib/stubslib.so"],
         },
+    },
+    strip: {
+        none: true,
     },
 }
 `))
@@ -2056,6 +2250,11 @@ func TestDeviceAndHostSnapshotWithStubsLibrary(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_stubslib"],
+}
+
 cc_prebuilt_library_shared {
     name: "stubslib",
     prefer: false,
@@ -2070,6 +2269,7 @@ cc_prebuilt_library_shared {
             "3",
             "current",
         ],
+        symbol_file: "stubslib.map.txt",
     },
     target: {
         host: {
@@ -2089,6 +2289,9 @@ cc_prebuilt_library_shared {
             enabled: true,
             srcs: ["linux_glibc/x86/lib/stubslib.so"],
         },
+    },
+    strip: {
+        none: true,
     },
 }
 `),
@@ -2113,6 +2316,11 @@ func TestUniqueHostSoname(t *testing.T) {
 	CheckSnapshot(t, result, "mysdk", "",
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
+
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_mylib"],
+}
 
 cc_prebuilt_library_shared {
     name: "mylib",
@@ -2140,6 +2348,9 @@ cc_prebuilt_library_shared {
             enabled: true,
             srcs: ["linux_glibc/x86/lib/mylib-host.so"],
         },
+    },
+    strip: {
+        none: true,
     },
 }
 `),
@@ -2178,6 +2389,11 @@ func TestNoSanitizerMembers(t *testing.T) {
 		checkAndroidBpContents(`
 // This is auto-generated. DO NOT EDIT.
 
+apex_contributions_defaults {
+    name: "mysdk.contributions",
+    contents: ["prebuilt_mynativelib"],
+}
+
 cc_prebuilt_library_shared {
     name: "mynativelib",
     prefer: false,
@@ -2192,6 +2408,9 @@ cc_prebuilt_library_shared {
         arm: {
             srcs: ["arm/lib/mynativelib.so"],
         },
+    },
+    strip: {
+        none: true,
     },
 }
 `),
