@@ -389,7 +389,7 @@ type commonProperties struct {
 	Init_rc []string `android:"arch_variant,path"`
 
 	// VINTF manifest fragments to be installed if this module is installed
-	Vintf_fragments []string `android:"path"`
+	Vintf_fragments proptools.Configurable[[]string] `android:"path"`
 
 	// names of other modules to install if this module is installed
 	Required proptools.Configurable[[]string] `android:"arch_variant"`
@@ -1853,7 +1853,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 				}
 			}
 
-			m.vintfFragmentsPaths = PathsForModuleSrc(ctx, m.commonProperties.Vintf_fragments)
+			m.vintfFragmentsPaths = PathsForModuleSrc(ctx, m.commonProperties.Vintf_fragments.GetOrDefault(m.ConfigurableEvaluator(ctx), nil))
 			vintfDir := PathForModuleInstall(ctx, "etc", "vintf", "manifest")
 			for _, src := range m.vintfFragmentsPaths {
 				installedVintfFragment := vintfDir.Join(ctx, src.Base())
@@ -2213,6 +2213,9 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 		switch variable {
 		case "debuggable":
 			return proptools.ConfigurableValueBool(ctx.Config().Debuggable())
+		case "use_debug_art":
+			// TODO(b/234351700): Remove once ART does not have separated debug APEX
+			return proptools.ConfigurableValueBool(ctx.Config().UseDebugArt())
 		default:
 			// TODO(b/323382414): Might add these on a case-by-case basis
 			ctx.OtherModulePropertyErrorf(m, property, fmt.Sprintf("TODO(b/323382414): Product variable %q is not yet supported in selects", variable))
