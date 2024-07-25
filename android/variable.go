@@ -239,8 +239,6 @@ type ProductVariables struct {
 
 	VendorApiLevel *string `json:",omitempty"`
 
-	RecoverySnapshotVersion *string `json:",omitempty"`
-
 	DeviceSecondaryArch        *string  `json:",omitempty"`
 	DeviceSecondaryArchVariant *string  `json:",omitempty"`
 	DeviceSecondaryCpuVariant  *string  `json:",omitempty"`
@@ -372,20 +370,6 @@ type ProductVariables struct {
 	NamespacesToExport []string `json:",omitempty"`
 
 	PgoAdditionalProfileDirs []string `json:",omitempty"`
-
-	VndkSnapshotBuildArtifacts *bool `json:",omitempty"`
-
-	DirectedVendorSnapshot bool            `json:",omitempty"`
-	VendorSnapshotModules  map[string]bool `json:",omitempty"`
-
-	DirectedRecoverySnapshot bool            `json:",omitempty"`
-	RecoverySnapshotModules  map[string]bool `json:",omitempty"`
-
-	VendorSnapshotDirsIncluded   []string `json:",omitempty"`
-	VendorSnapshotDirsExcluded   []string `json:",omitempty"`
-	RecoverySnapshotDirsExcluded []string `json:",omitempty"`
-	RecoverySnapshotDirsIncluded []string `json:",omitempty"`
-	HostFakeSnapshotEnabled      bool     `json:",omitempty"`
 
 	MultitreeUpdateMeta bool `json:",omitempty"`
 

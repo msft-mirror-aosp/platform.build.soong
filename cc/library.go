@@ -428,6 +428,9 @@ type libraryDecorator struct {
 	*baseInstaller
 
 	apiListCoverageXmlPath android.ModuleOutPath
+
+	// Path to the file containing the APIs exported by this library
+	stubsSymbolFilePath android.Path
 }
 
 // linkerProps returns the list of properties structs relevant for this library. (For example, if
@@ -596,6 +599,7 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 			ctx.PropertyErrorf("symbol_file", "%q doesn't have .map.txt suffix", symbolFile)
 			return Objects{}
 		}
+		library.stubsSymbolFilePath = android.PathForModuleSrc(ctx, symbolFile)
 		// b/239274367 --apex and --systemapi filters symbols tagged with # apex and #
 		// systemapi, respectively. The former is for symbols defined in platform libraries
 		// and the latter is for symbols defined in APEXes.
