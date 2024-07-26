@@ -661,7 +661,7 @@ func runSoong(ctx Context, config Config) {
 		}
 
 		ninjaArgs = append(ninjaArgs, targets...)
-		ninjaCmd := config.PrebuiltBuildTool("ninja")
+		ninjaCmd := config.NinjaBin()
 		if config.useN2 {
 			ninjaCmd = config.PrebuiltBuildTool("n2")
 		}

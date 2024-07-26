@@ -49,7 +49,7 @@ func runNinjaForBuild(ctx Context, config Config) {
 	nr := status.NewNinjaReader(ctx, ctx.Status.StartTool(), fifo)
 	defer nr.Close()
 
-	executable := config.PrebuiltBuildTool("ninja")
+	executable := config.NinjaBin()
 	args := []string{
 		"-d", "keepdepfile",
 		"-d", "keeprsp",

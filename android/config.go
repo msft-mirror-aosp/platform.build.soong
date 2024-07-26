@@ -1200,6 +1200,10 @@ func (c *config) UseGoma() bool {
 	return Bool(c.productVariables.UseGoma)
 }
 
+func (c *config) UseABFS() bool {
+	return Bool(c.productVariables.UseABFS)
+}
+
 func (c *config) UseRBE() bool {
 	return Bool(c.productVariables.UseRBE)
 }
