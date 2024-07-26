@@ -19,8 +19,11 @@
 import argparse
 import contextlib
 import json
+import os
 import subprocess
 import sys
+
+TEST_KEY_DIR = "build/make/target/product/security"
 
 def get_build_variant(product_config):
   if product_config["Eng"]:
@@ -185,7 +188,7 @@ def generate_build_info(args):
 
     # Dev. branches should have DISPLAY_BUILD_NUMBER set
     if config["DisplayBuildNumber"]:
-      print(f"ro.build.display.id?={config['BuildId']} {config['BuildNumber']} {config['BuildKeys']}")
+      print(f"ro.build.display.id?={config['BuildId']}.{config['BuildNumber']} {config['BuildKeys']}")
     else:
       print(f"ro.build.display.id?={config['BuildId']} {config['BuildKeys']}")
   else:

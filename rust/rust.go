@@ -37,18 +37,22 @@ var pctx = android.NewPackageContext("android/soong/rust")
 
 func init() {
 	android.RegisterModuleType("rust_defaults", defaultsFactory)
-	android.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("rust_libraries", LibraryMutator).Parallel()
-		ctx.BottomUp("rust_stdlinkage", LibstdMutator).Parallel()
-		ctx.BottomUp("rust_begin", BeginMutator).Parallel()
-	})
-	android.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("rust_sanitizers", rustSanitizerRuntimeMutator).Parallel()
-	})
+	android.PreDepsMutators(registerPreDepsMutators)
+	android.PostDepsMutators(registerPostDepsMutators)
 	pctx.Import("android/soong/android")
 	pctx.Import("android/soong/rust/config")
 	pctx.ImportAs("cc_config", "android/soong/cc/config")
 	android.InitRegistrationContext.RegisterParallelSingletonType("kythe_rust_extract", kytheExtractRustFactory)
+}
+
+func registerPreDepsMutators(ctx android.RegisterMutatorsContext) {
+	ctx.Transition("rust_libraries", &libraryTransitionMutator{})
+	ctx.Transition("rust_stdlinkage", &libstdTransitionMutator{})
+	ctx.BottomUp("rust_begin", BeginMutator).Parallel()
+}
+
+func registerPostDepsMutators(ctx android.RegisterMutatorsContext) {
+	ctx.BottomUp("rust_sanitizers", rustSanitizerRuntimeMutator).Parallel()
 }
 
 type Flags struct {
@@ -420,7 +424,7 @@ type PathDeps struct {
 	depFlags     []string
 	depLinkFlags []string
 
-	// linkDirs are link paths passed via -L to rustc. linkObjects are objects passed directly to the linker.
+	// linkDirs are link paths passed via -L to rustc. linkObjects are objects passed directly to the linker
 	// Both of these are exported and propagate to dependencies.
 	linkDirs    []string
 	linkObjects []string
@@ -442,9 +446,6 @@ type PathDeps struct {
 	// Paths to generated source files
 	SrcDeps          android.Paths
 	srcProviderFiles android.Paths
-
-	// Used by Generated Libraries
-	depExportedRlibs []cc.RustRlibDep
 }
 
 type RustLibraries []RustLibrary
@@ -465,6 +466,7 @@ type xref interface {
 
 type flagExporter struct {
 	linkDirs    []string
+	ccLinkDirs  []string
 	linkObjects []string
 }
 
@@ -503,7 +505,7 @@ func (mod *Module) isCoverageVariant() bool {
 
 var _ cc.Coverage = (*Module)(nil)
 
-func (mod *Module) IsNativeCoverageNeeded(ctx android.IncomingTransitionContext) bool {
+func (mod *Module) IsNativeCoverageNeeded(ctx cc.IsNativeCoverageNeededContext) bool {
 	return mod.coverage != nil && mod.coverage.Properties.NeedCoverageVariant
 }
 
@@ -656,6 +658,24 @@ func (mod *Module) BuildStaticVariant() bool {
 		}
 	}
 	panic(fmt.Errorf("BuildStaticVariant called on non-library module: %q", mod.BaseModuleName()))
+}
+
+func (mod *Module) BuildRlibVariant() bool {
+	if mod.compiler != nil {
+		if library, ok := mod.compiler.(libraryInterface); ok {
+			return library.buildRlib()
+		}
+	}
+	panic(fmt.Errorf("BuildRlibVariant called on non-library module: %q", mod.BaseModuleName()))
+}
+
+func (mod *Module) IsRustFFI() bool {
+	if mod.compiler != nil {
+		if library, ok := mod.compiler.(libraryInterface); ok {
+			return library.isFFILibrary()
+		}
+	}
+	return false
 }
 
 func (mod *Module) BuildSharedVariant() bool {
@@ -1091,7 +1111,6 @@ var (
 	rlibDepTag          = dependencyTag{name: "rlibTag", library: true}
 	dylibDepTag         = dependencyTag{name: "dylib", library: true, dynamic: true}
 	procMacroDepTag     = dependencyTag{name: "procMacro", procMacro: true}
-	testPerSrcDepTag    = dependencyTag{name: "rust_unit_tests"}
 	sourceDepTag        = dependencyTag{name: "source"}
 	dataLibDepTag       = dependencyTag{name: "data lib"}
 	dataBinDepTag       = dependencyTag{name: "data bin"}
@@ -1113,10 +1132,11 @@ type autoDep struct {
 }
 
 var (
-	rlibVariation  = "rlib"
-	dylibVariation = "dylib"
-	rlibAutoDep    = autoDep{variation: rlibVariation, depTag: rlibDepTag}
-	dylibAutoDep   = autoDep{variation: dylibVariation, depTag: dylibDepTag}
+	sourceVariation = "source"
+	rlibVariation   = "rlib"
+	dylibVariation  = "dylib"
+	rlibAutoDep     = autoDep{variation: rlibVariation, depTag: rlibDepTag}
+	dylibAutoDep    = autoDep{variation: dylibVariation, depTag: dylibDepTag}
 )
 
 type autoDeppable interface {
@@ -1237,7 +1257,6 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	ctx.VisitDirectDeps(func(dep android.Module) {
 		depName := ctx.OtherModuleName(dep)
 		depTag := ctx.OtherModuleDependencyTag(dep)
-
 		if _, exists := skipModuleList[depName]; exists {
 			return
 		}
@@ -1250,8 +1269,8 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			//Handle Rust Modules
 			makeLibName := rustMakeLibName(ctx, mod, rustDep, depName+rustDep.Properties.RustSubName)
 
-			switch depTag {
-			case dylibDepTag:
+			switch {
+			case depTag == dylibDepTag:
 				dylib, ok := rustDep.compiler.(libraryInterface)
 				if !ok || !dylib.dylib() {
 					ctx.ModuleErrorf("mod %q not an dylib library", depName)
@@ -1261,8 +1280,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				mod.Properties.AndroidMkDylibs = append(mod.Properties.AndroidMkDylibs, makeLibName)
 				mod.Properties.SnapshotDylibs = append(mod.Properties.SnapshotDylibs, cc.BaseLibName(depName))
 
-			case rlibDepTag:
-
+			case depTag == rlibDepTag:
 				rlib, ok := rustDep.compiler.(libraryInterface)
 				if !ok || !rlib.rlib() {
 					ctx.ModuleErrorf("mod %q not an rlib library", makeLibName)
@@ -1277,16 +1295,25 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				depPaths.depIncludePaths = append(depPaths.depIncludePaths, exportedInfo.IncludeDirs...)
 				depPaths.exportedLinkDirs = append(depPaths.exportedLinkDirs, linkPathFromFilePath(rustDep.OutputFile().Path()))
 
-			case procMacroDepTag:
+			case depTag == procMacroDepTag:
 				directProcMacroDeps = append(directProcMacroDeps, rustDep)
 				mod.Properties.AndroidMkProcMacroLibs = append(mod.Properties.AndroidMkProcMacroLibs, makeLibName)
 				// proc_macro link dirs need to be exported, so collect those here.
 				depPaths.exportedLinkDirs = append(depPaths.exportedLinkDirs, linkPathFromFilePath(rustDep.OutputFile().Path()))
 
-			case sourceDepTag:
+			case depTag == sourceDepTag:
 				if _, ok := mod.sourceProvider.(*protobufDecorator); ok {
 					collectIncludedProtos(mod, rustDep)
 				}
+			case cc.IsStaticDepTag(depTag):
+				// Rust FFI rlibs should not be declared in a Rust modules
+				// "static_libs" list as we can't handle them properly at the
+				// moment (for example, they only produce an rlib-std variant).
+				// Instead, a normal rust_library variant should be used.
+				ctx.PropertyErrorf("static_libs",
+					"found '%s' in static_libs; use a rust_library module in rustlibs instead of a rust_ffi module in static_libs",
+					depName)
+
 			}
 
 			transitiveAndroidMkSharedLibs = append(transitiveAndroidMkSharedLibs, rustDep.transitiveAndroidMkSharedLibs)
@@ -1591,7 +1618,6 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	}
 
 	rlibDepVariations := commonDepVariations
-	rlibDepVariations = append(rlibDepVariations, blueprint.Variation{Mutator: "link", Variation: ""})
 
 	if lib, ok := mod.compiler.(libraryInterface); !ok || !lib.sysroot() {
 		rlibDepVariations = append(rlibDepVariations,
@@ -1607,7 +1633,6 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 	// dylibs
 	dylibDepVariations := append(commonDepVariations, blueprint.Variation{Mutator: "rust_libraries", Variation: dylibVariation})
-	dylibDepVariations = append(dylibDepVariations, blueprint.Variation{Mutator: "link", Variation: ""})
 
 	for _, lib := range deps.Dylibs {
 		actx.AddVariationDependencies(dylibDepVariations, dylibDepTag, lib)
@@ -1628,7 +1653,6 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 					// otherwise select the rlib variant.
 					autoDepVariations := append(commonDepVariations,
 						blueprint.Variation{Mutator: "rust_libraries", Variation: autoDep.variation})
-					autoDepVariations = append(autoDepVariations, blueprint.Variation{Mutator: "link", Variation: ""})
 					if actx.OtherModuleDependencyVariantExists(autoDepVariations, lib) {
 						actx.AddVariationDependencies(autoDepVariations, autoDep.depTag, lib)
 
@@ -1642,8 +1666,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		} else if _, ok := mod.sourceProvider.(*protobufDecorator); ok {
 			for _, lib := range deps.Rustlibs {
 				srcProviderVariations := append(commonDepVariations,
-					blueprint.Variation{Mutator: "rust_libraries", Variation: "source"})
-				srcProviderVariations = append(srcProviderVariations, blueprint.Variation{Mutator: "link", Variation: ""})
+					blueprint.Variation{Mutator: "rust_libraries", Variation: sourceVariation})
 
 				// Only add rustlib dependencies if they're source providers themselves.
 				// This is used to track which crate names need to be added to the source generated
@@ -1659,7 +1682,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	if deps.Stdlibs != nil {
 		if mod.compiler.stdLinkage(ctx) == RlibLinkage {
 			for _, lib := range deps.Stdlibs {
-				actx.AddVariationDependencies(append(commonDepVariations, []blueprint.Variation{{Mutator: "rust_libraries", Variation: "rlib"}, {Mutator: "link", Variation: ""}}...),
+				actx.AddVariationDependencies(append(commonDepVariations, []blueprint.Variation{{Mutator: "rust_libraries", Variation: "rlib"}}...),
 					rlibDepTag, lib)
 			}
 		} else {
