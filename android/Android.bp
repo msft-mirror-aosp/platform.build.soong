@@ -93,6 +93,7 @@ bootstrap_go_package {
         "register.go",
         "rule_builder.go",
         "sandbox.go",
+        "sbom.go",
         "sdk.go",
         "sdk_version.go",
         "shared_properties.go",
