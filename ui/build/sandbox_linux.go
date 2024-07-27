@@ -200,6 +200,9 @@ func (c *Cmd) wrapSandbox() {
 		// Only log important warnings / errors
 		"-q",
 	}
+	if c.config.UseABFS() {
+		sandboxArgs = append(sandboxArgs, "-B", "{ABFS_DIR}")
+	}
 
 	// Mount srcDir RW allowlists as Read-Write
 	if len(c.config.sandboxConfig.SrcDirRWAllowlist()) > 0 && !c.config.sandboxConfig.SrcDirIsRO() {
