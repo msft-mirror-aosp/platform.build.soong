@@ -86,7 +86,7 @@ type apexBundleProperties struct {
 
 	// AndroidManifest.xml file used for the zip container of this APEX bundle. If unspecified,
 	// a default one is automatically generated.
-	AndroidManifest *string `android:"path"`
+	AndroidManifest proptools.Configurable[string] `android:"path,replace_instead_of_append"`
 
 	// Determines the file contexts file for setting the security contexts to files in this APEX
 	// bundle. For platform APEXes, this should points to a file under /system/sepolicy Default:
@@ -104,7 +104,7 @@ type apexBundleProperties struct {
 	// path_or_glob is a path or glob pattern for a file or set of files,
 	// uid/gid are numerial values of user ID and group ID, mode is octal value
 	// for the file mode, and cap is hexadecimal value for the capability.
-	Canned_fs_config *string `android:"path"`
+	Canned_fs_config proptools.Configurable[string] `android:"path,replace_instead_of_append"`
 
 	ApexNativeDependencies
 
@@ -117,7 +117,8 @@ type apexBundleProperties struct {
 	Bootclasspath_fragments []string
 
 	// List of systemserverclasspath fragments that are embedded inside this APEX bundle.
-	Systemserverclasspath_fragments []string
+	Systemserverclasspath_fragments        proptools.Configurable[[]string]
+	ResolvedSystemserverclasspathFragments []string `blueprint:"mutated"`
 
 	// List of java libraries that are embedded inside this APEX bundle.
 	Java_libs []string
@@ -214,7 +215,8 @@ type ApexNativeDependencies struct {
 	Rust_dyn_libs []string
 
 	// List of native executables that are embedded inside this APEX.
-	Binaries []string
+	Binaries         proptools.Configurable[[]string]
+	ResolvedBinaries []string `blueprint:"mutated"`
 
 	// List of native tests that are embedded inside this APEX.
 	Tests []string
@@ -223,7 +225,8 @@ type ApexNativeDependencies struct {
 	Filesystems []string
 
 	// List of prebuilt_etcs that are embedded inside this APEX bundle.
-	Prebuilts []string
+	Prebuilts         proptools.Configurable[[]string]
+	ResolvedPrebuilts []string `blueprint:"mutated"`
 
 	// List of native libraries to exclude from this APEX.
 	Exclude_native_shared_libs []string
@@ -248,14 +251,14 @@ type ApexNativeDependencies struct {
 }
 
 // Merge combines another ApexNativeDependencies into this one
-func (a *ApexNativeDependencies) Merge(b ApexNativeDependencies) {
+func (a *ApexNativeDependencies) Merge(ctx android.BaseMutatorContext, b ApexNativeDependencies) {
 	a.Native_shared_libs = append(a.Native_shared_libs, b.Native_shared_libs...)
 	a.Jni_libs = append(a.Jni_libs, b.Jni_libs...)
 	a.Rust_dyn_libs = append(a.Rust_dyn_libs, b.Rust_dyn_libs...)
-	a.Binaries = append(a.Binaries, b.Binaries...)
+	a.ResolvedBinaries = append(a.ResolvedBinaries, b.Binaries.GetOrDefault(ctx.Module().ConfigurableEvaluator(ctx), nil)...)
 	a.Tests = append(a.Tests, b.Tests...)
 	a.Filesystems = append(a.Filesystems, b.Filesystems...)
-	a.Prebuilts = append(a.Prebuilts, b.Prebuilts...)
+	a.ResolvedPrebuilts = append(a.ResolvedPrebuilts, b.Prebuilts.GetOrDefault(ctx.Module().ConfigurableEvaluator(ctx), nil)...)
 
 	a.Exclude_native_shared_libs = append(a.Exclude_native_shared_libs, b.Exclude_native_shared_libs...)
 	a.Exclude_jni_libs = append(a.Exclude_jni_libs, b.Exclude_jni_libs...)
@@ -331,10 +334,10 @@ type apexArchBundleProperties struct {
 // base apex.
 type overridableProperties struct {
 	// List of APKs that are embedded inside this APEX.
-	Apps []string
+	Apps proptools.Configurable[[]string]
 
 	// List of prebuilt files that are embedded inside this APEX bundle.
-	Prebuilts []string
+	Prebuilts proptools.Configurable[[]string]
 
 	// List of BPF programs inside this APEX bundle.
 	Bpfs []string
@@ -708,7 +711,7 @@ func addDependenciesForNativeModules(ctx android.BottomUpMutatorContext, nativeM
 	// this module. This is required since arch variant of an APEX bundle is 'common' but it is
 	// 'arm' or 'arm64' for native shared libs.
 	ctx.AddFarVariationDependencies(binVariations, executableTag,
-		android.RemoveListFromList(nativeModules.Binaries, nativeModules.Exclude_binaries)...)
+		android.RemoveListFromList(nativeModules.ResolvedBinaries, nativeModules.Exclude_binaries)...)
 	ctx.AddFarVariationDependencies(binVariations, testTag,
 		android.RemoveListFromList(nativeModules.Tests, nativeModules.Exclude_tests)...)
 	ctx.AddFarVariationDependencies(libVariations, jniLibTag,
@@ -720,7 +723,7 @@ func addDependenciesForNativeModules(ctx android.BottomUpMutatorContext, nativeM
 	ctx.AddFarVariationDependencies(target.Variations(), fsTag,
 		android.RemoveListFromList(nativeModules.Filesystems, nativeModules.Exclude_filesystems)...)
 	ctx.AddFarVariationDependencies(target.Variations(), prebuiltTag,
-		android.RemoveListFromList(nativeModules.Prebuilts, nativeModules.Exclude_prebuilts)...)
+		android.RemoveListFromList(nativeModules.ResolvedPrebuilts, nativeModules.Exclude_prebuilts)...)
 }
 
 func (a *apexBundle) combineProperties(ctx android.BottomUpMutatorContext) {
@@ -775,20 +778,19 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 		// Add native modules targeting both ABIs. When multilib.* is omitted for
 		// native_shared_libs/jni_libs/tests, it implies multilib.both
-		deps.Merge(a.properties.Multilib.Both)
-		deps.Merge(ApexNativeDependencies{
+		deps.Merge(ctx, a.properties.Multilib.Both)
+		deps.Merge(ctx, ApexNativeDependencies{
 			Native_shared_libs: a.properties.Native_shared_libs,
 			Tests:              a.properties.Tests,
 			Jni_libs:           a.properties.Jni_libs,
-			Binaries:           nil,
 		})
 
 		// Add native modules targeting the first ABI When multilib.* is omitted for
 		// binaries, it implies multilib.first
 		isPrimaryAbi := i == 0
 		if isPrimaryAbi {
-			deps.Merge(a.properties.Multilib.First)
-			deps.Merge(ApexNativeDependencies{
+			deps.Merge(ctx, a.properties.Multilib.First)
+			deps.Merge(ctx, ApexNativeDependencies{
 				Native_shared_libs: nil,
 				Tests:              nil,
 				Jni_libs:           nil,
@@ -799,27 +801,27 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 		// Add native modules targeting either 32-bit or 64-bit ABI
 		switch target.Arch.ArchType.Multilib {
 		case "lib32":
-			deps.Merge(a.properties.Multilib.Lib32)
-			deps.Merge(a.properties.Multilib.Prefer32)
+			deps.Merge(ctx, a.properties.Multilib.Lib32)
+			deps.Merge(ctx, a.properties.Multilib.Prefer32)
 		case "lib64":
-			deps.Merge(a.properties.Multilib.Lib64)
+			deps.Merge(ctx, a.properties.Multilib.Lib64)
 			if !has32BitTarget {
-				deps.Merge(a.properties.Multilib.Prefer32)
+				deps.Merge(ctx, a.properties.Multilib.Prefer32)
 			}
 		}
 
 		// Add native modules targeting a specific arch variant
 		switch target.Arch.ArchType {
 		case android.Arm:
-			deps.Merge(a.archProperties.Arch.Arm.ApexNativeDependencies)
+			deps.Merge(ctx, a.archProperties.Arch.Arm.ApexNativeDependencies)
 		case android.Arm64:
-			deps.Merge(a.archProperties.Arch.Arm64.ApexNativeDependencies)
+			deps.Merge(ctx, a.archProperties.Arch.Arm64.ApexNativeDependencies)
 		case android.Riscv64:
-			deps.Merge(a.archProperties.Arch.Riscv64.ApexNativeDependencies)
+			deps.Merge(ctx, a.archProperties.Arch.Riscv64.ApexNativeDependencies)
 		case android.X86:
-			deps.Merge(a.archProperties.Arch.X86.ApexNativeDependencies)
+			deps.Merge(ctx, a.archProperties.Arch.X86.ApexNativeDependencies)
 		case android.X86_64:
-			deps.Merge(a.archProperties.Arch.X86_64.ApexNativeDependencies)
+			deps.Merge(ctx, a.archProperties.Arch.X86_64.ApexNativeDependencies)
 		default:
 			panic(fmt.Errorf("unsupported arch %v\n", ctx.Arch().ArchType))
 		}
@@ -833,11 +835,13 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 		}
 	}
 
+	a.properties.ResolvedSystemserverclasspathFragments = a.properties.Systemserverclasspath_fragments.GetOrDefault(a.ConfigurableEvaluator(ctx), nil)
+
 	// Common-arch dependencies come next
 	commonVariation := ctx.Config().AndroidCommonTarget.Variations()
 	ctx.AddFarVariationDependencies(commonVariation, rroTag, a.properties.Rros...)
 	ctx.AddFarVariationDependencies(commonVariation, bcpfTag, a.properties.Bootclasspath_fragments...)
-	ctx.AddFarVariationDependencies(commonVariation, sscpfTag, a.properties.Systemserverclasspath_fragments...)
+	ctx.AddFarVariationDependencies(commonVariation, sscpfTag, a.properties.ResolvedSystemserverclasspathFragments...)
 	ctx.AddFarVariationDependencies(commonVariation, javaLibTag, a.properties.Java_libs...)
 	ctx.AddFarVariationDependencies(commonVariation, fsTag, a.properties.Filesystems...)
 	ctx.AddFarVariationDependencies(commonVariation, compatConfigTag, a.properties.Compat_configs...)
@@ -850,9 +854,9 @@ func (a *apexBundle) OverridablePropertiesDepsMutator(ctx android.BottomUpMutato
 	}
 
 	commonVariation := ctx.Config().AndroidCommonTarget.Variations()
-	ctx.AddFarVariationDependencies(commonVariation, androidAppTag, a.overridableProperties.Apps...)
+	ctx.AddFarVariationDependencies(commonVariation, androidAppTag, a.overridableProperties.Apps.GetOrDefault(a.ConfigurableEvaluator(ctx), nil)...)
 	ctx.AddFarVariationDependencies(commonVariation, bpfTag, a.overridableProperties.Bpfs...)
-	if prebuilts := a.overridableProperties.Prebuilts; len(prebuilts) > 0 {
+	if prebuilts := a.overridableProperties.Prebuilts.GetOrDefault(a.ConfigurableEvaluator(ctx), nil); len(prebuilts) > 0 {
 		// For prebuilt_etc, use the first variant (64 on 64/32bit device, 32 on 32bit device)
 		// regardless of the TARGET_PREFER_* setting. See b/144532908
 		arches := ctx.DeviceConfig().Arches()
@@ -1480,7 +1484,6 @@ func (a *apexBundle) AddSanitizerDependencies(ctx android.BottomUpMutatorContext
 					Native_shared_libs: []string{"libclang_rt.hwasan"},
 					Tests:              nil,
 					Jni_libs:           nil,
-					Binaries:           nil,
 				}, target, imageVariation)
 				break
 			}
@@ -2794,7 +2797,7 @@ func isStaticExecutableAllowed(apex string, exec string) bool {
 func (a *apexBundle) IDEInfo(dpInfo *android.IdeInfo) {
 	dpInfo.Deps = append(dpInfo.Deps, a.properties.Java_libs...)
 	dpInfo.Deps = append(dpInfo.Deps, a.properties.Bootclasspath_fragments...)
-	dpInfo.Deps = append(dpInfo.Deps, a.properties.Systemserverclasspath_fragments...)
+	dpInfo.Deps = append(dpInfo.Deps, a.properties.ResolvedSystemserverclasspathFragments...)
 }
 
 var (
