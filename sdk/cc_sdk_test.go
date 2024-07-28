@@ -2205,6 +2205,7 @@ cc_prebuilt_library_shared {
             "3",
             "current",
         ],
+        symbol_file: "stubslib.map.txt",
     },
     arch: {
         arm64: {
@@ -2268,6 +2269,7 @@ cc_prebuilt_library_shared {
             "3",
             "current",
         ],
+        symbol_file: "stubslib.map.txt",
     },
     target: {
         host: {

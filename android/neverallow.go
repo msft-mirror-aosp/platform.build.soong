@@ -212,7 +212,7 @@ func createCcSdkVariantRules() []Rule {
 
 func createCcStubsRule() Rule {
 	ccStubsImplementationInstallableProjectsAllowedList := []string{
-		"packages/modules/Virtualization/vm_payload",
+		"packages/modules/Virtualization/libs/libvm_payload",
 	}
 
 	return NeverAllow().

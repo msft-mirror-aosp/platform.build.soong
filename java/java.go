@@ -269,7 +269,7 @@ type JavaInfo struct {
 	ImplementationAndResourcesJars android.Paths
 
 	// ImplementationJars is a list of jars that contain the implementations of classes in the
-	//module.
+	// module.
 	ImplementationJars android.Paths
 
 	// ResourceJars is a list of jars that contain the resources included in the module.
@@ -2039,12 +2039,17 @@ type JavaApiLibraryProperties struct {
 	// List of aconfig_declarations module names that the stubs generated in this module
 	// depend on.
 	Aconfig_declarations []string
+
+	// List of hard coded filegroups containing Metalava config files that are passed to every
+	// Metalava invocation that this module performs. See addMetalavaConfigFilesToCmd.
+	ConfigFiles []string `android:"path" blueprint:"mutated"`
 }
 
 func ApiLibraryFactory() android.Module {
 	module := &ApiLibrary{}
-	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	module.AddProperties(&module.properties)
+	module.properties.ConfigFiles = getMetalavaConfigFilegroupReference()
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	module.initModuleAndImport(module)
 	android.InitDefaultableModule(module)
 	return module
@@ -2060,7 +2065,7 @@ func (al *ApiLibrary) StubsJar() android.Path {
 
 func metalavaStubCmd(ctx android.ModuleContext, rule *android.RuleBuilder,
 	srcs android.Paths, homeDir android.WritablePath,
-	classpath android.Paths) *android.RuleBuilderCommand {
+	classpath android.Paths, configFiles android.Paths) *android.RuleBuilderCommand {
 	rule.Command().Text("rm -rf").Flag(homeDir.String())
 	rule.Command().Text("mkdir -p").Flag(homeDir.String())
 
@@ -2098,6 +2103,8 @@ func metalavaStubCmd(ctx android.ModuleContext, rule *android.RuleBuilder,
 		FlagWithArg("--hide ", "UnresolvedImport").
 		FlagWithArg("--hide ", "InvalidNullabilityOverride").
 		FlagWithArg("--hide ", "ChangedDefault")
+
+	addMetalavaConfigFilesToCmd(cmd, configFiles)
 
 	if len(classpath) == 0 {
 		// The main purpose of the `--api-class-resolution api` option is to force metalava to ignore
@@ -2310,7 +2317,9 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		ctx.ModuleErrorf("Error: %s has an empty api file.", ctx.ModuleName())
 	}
 
-	cmd := metalavaStubCmd(ctx, rule, srcFiles, homeDir, systemModulesPaths)
+	configFiles := android.PathsForModuleSrc(ctx, al.properties.ConfigFiles)
+
+	cmd := metalavaStubCmd(ctx, rule, srcFiles, homeDir, systemModulesPaths, configFiles)
 
 	al.stubsFlags(ctx, cmd, stubsDir)
 
