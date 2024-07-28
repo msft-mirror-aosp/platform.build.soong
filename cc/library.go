@@ -64,7 +64,7 @@ type LibraryProperties struct {
 	Stubs struct {
 		// Relative path to the symbol map. The symbol map provides the list of
 		// symbols that are exported for stubs variant of this library.
-		Symbol_file *string `android:"path"`
+		Symbol_file *string `android:"path,arch_variant"`
 
 		// List versions to generate stubs libs for. The version name "current" is always
 		// implicitly added.
@@ -75,7 +75,7 @@ type LibraryProperties struct {
 		// implementation is made available by some other means, e.g. in a Microdroid
 		// virtual machine.
 		Implementation_installable *bool
-	}
+	} `android:"arch_variant"`
 
 	// set the name of the output
 	Stem *string `android:"arch_variant"`
@@ -118,7 +118,7 @@ type LibraryProperties struct {
 
 	// If this is an LLNDK library, properties to describe the LLNDK stubs.  Will be copied from
 	// the module pointed to by llndk_stubs if it is set.
-	Llndk llndkLibraryProperties
+	Llndk llndkLibraryProperties `android:"arch_variant"`
 
 	// If this is a vendor public library, properties to describe the vendor public library stubs.
 	Vendor_public_library vendorPublicLibraryProperties
@@ -428,6 +428,9 @@ type libraryDecorator struct {
 	*baseInstaller
 
 	apiListCoverageXmlPath android.ModuleOutPath
+
+	// Path to the file containing the APIs exported by this library
+	stubsSymbolFilePath android.Path
 }
 
 // linkerProps returns the list of properties structs relevant for this library. (For example, if
@@ -596,6 +599,7 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 			ctx.PropertyErrorf("symbol_file", "%q doesn't have .map.txt suffix", symbolFile)
 			return Objects{}
 		}
+		library.stubsSymbolFilePath = android.PathForModuleSrc(ctx, symbolFile)
 		// b/239274367 --apex and --systemapi filters symbols tagged with # apex and #
 		// systemapi, respectively. The former is for symbols defined in platform libraries
 		// and the latter is for symbols defined in APEXes.
