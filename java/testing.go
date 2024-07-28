@@ -52,6 +52,8 @@ var PrepareForTestWithJavaBuildComponents = android.GroupFixturePreparers(
 	android.MockFS{
 		// Needed for linter used by java_library.
 		"build/soong/java/lint_defaults.txt": nil,
+		// Needed for java components that invoke Metalava.
+		"build/soong/java/metalava/Android.bp": []byte(`filegroup {name: "metalava-config-files"}`),
 		// Needed for apps that do not provide their own.
 		"build/make/target/product/security": nil,
 		// Required to generate Java used-by API coverage

@@ -48,10 +48,10 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("cc_defaults", defaultsFactory)
 
 	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("sdk", sdkMutator).Parallel()
+		ctx.Transition("sdk", &sdkTransitionMutator{})
 		ctx.BottomUp("llndk", llndkMutator).Parallel()
-		ctx.BottomUp("link", LinkageMutator).Parallel()
-		ctx.BottomUp("version", versionMutator).Parallel()
+		ctx.Transition("link", &linkageTransitionMutator{})
+		ctx.Transition("version", &versionTransitionMutator{})
 		ctx.BottomUp("begin", BeginMutator).Parallel()
 	})
 
@@ -4077,6 +4077,13 @@ func (c *Module) BaseModuleName() string {
 		return smn.sourceModuleName()
 	}
 	return c.ModuleBase.BaseModuleName()
+}
+
+func (c *Module) stubsSymbolFilePath() android.Path {
+	if library, ok := c.linker.(*libraryDecorator); ok {
+		return library.stubsSymbolFilePath
+	}
+	return android.OptionalPath{}.Path()
 }
 
 var Bool = proptools.Bool

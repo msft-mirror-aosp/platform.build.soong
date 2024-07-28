@@ -269,7 +269,7 @@ type JavaInfo struct {
 	ImplementationAndResourcesJars android.Paths
 
 	// ImplementationJars is a list of jars that contain the implementations of classes in the
-	//module.
+	// module.
 	ImplementationJars android.Paths
 
 	// ResourceJars is a list of jars that contain the resources included in the module.
@@ -441,6 +441,30 @@ var (
 	usesLibCompat28OptTag   = makeUsesLibraryDependencyTag(28, true)
 	usesLibCompat29ReqTag   = makeUsesLibraryDependencyTag(29, false)
 	usesLibCompat30OptTag   = makeUsesLibraryDependencyTag(30, true)
+)
+
+// A list of tags for deps used for compiling a module.
+// Any dependency tags that modifies the following properties of `deps` in `Module.collectDeps` should be
+// added to this list:
+// - bootClasspath
+// - classpath
+// - java9Classpath
+// - systemModules
+// - kotlin deps...
+var (
+	compileDependencyTags = []blueprint.DependencyTag{
+		sdkLibTag,
+		libTag,
+		staticLibTag,
+		bootClasspathTag,
+		systemModulesTag,
+		java9LibTag,
+		kotlinStdlibTag,
+		kotlinAnnotationsTag,
+		kotlinPluginTag,
+		syspropPublicStubDepTag,
+		instrumentationForTag,
+	}
 )
 
 func IsLibDepTag(depTag blueprint.DependencyTag) bool {
@@ -2015,12 +2039,17 @@ type JavaApiLibraryProperties struct {
 	// List of aconfig_declarations module names that the stubs generated in this module
 	// depend on.
 	Aconfig_declarations []string
+
+	// List of hard coded filegroups containing Metalava config files that are passed to every
+	// Metalava invocation that this module performs. See addMetalavaConfigFilesToCmd.
+	ConfigFiles []string `android:"path" blueprint:"mutated"`
 }
 
 func ApiLibraryFactory() android.Module {
 	module := &ApiLibrary{}
-	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	module.AddProperties(&module.properties)
+	module.properties.ConfigFiles = getMetalavaConfigFilegroupReference()
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	module.initModuleAndImport(module)
 	android.InitDefaultableModule(module)
 	return module
@@ -2036,7 +2065,7 @@ func (al *ApiLibrary) StubsJar() android.Path {
 
 func metalavaStubCmd(ctx android.ModuleContext, rule *android.RuleBuilder,
 	srcs android.Paths, homeDir android.WritablePath,
-	classpath android.Paths) *android.RuleBuilderCommand {
+	classpath android.Paths, configFiles android.Paths) *android.RuleBuilderCommand {
 	rule.Command().Text("rm -rf").Flag(homeDir.String())
 	rule.Command().Text("mkdir -p").Flag(homeDir.String())
 
@@ -2074,6 +2103,8 @@ func metalavaStubCmd(ctx android.ModuleContext, rule *android.RuleBuilder,
 		FlagWithArg("--hide ", "UnresolvedImport").
 		FlagWithArg("--hide ", "InvalidNullabilityOverride").
 		FlagWithArg("--hide ", "ChangedDefault")
+
+	addMetalavaConfigFilesToCmd(cmd, configFiles)
 
 	if len(classpath) == 0 {
 		// The main purpose of the `--api-class-resolution api` option is to force metalava to ignore
@@ -2286,7 +2317,9 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		ctx.ModuleErrorf("Error: %s has an empty api file.", ctx.ModuleName())
 	}
 
-	cmd := metalavaStubCmd(ctx, rule, srcFiles, homeDir, systemModulesPaths)
+	configFiles := android.PathsForModuleSrc(ctx, al.properties.ConfigFiles)
+
+	cmd := metalavaStubCmd(ctx, rule, srcFiles, homeDir, systemModulesPaths, configFiles)
 
 	al.stubsFlags(ctx, cmd, stubsDir)
 
@@ -2386,9 +2419,34 @@ func (al *ApiLibrary) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiL
 	return android.FutureApiLevel
 }
 
+func (al *ApiLibrary) IDEInfo(i *android.IdeInfo) {
+	i.Deps = append(i.Deps, al.ideDeps()...)
+	i.Libs = append(i.Libs, al.properties.Libs...)
+	i.Static_libs = append(i.Static_libs, al.properties.Static_libs...)
+	i.SrcJars = append(i.SrcJars, al.stubsSrcJar.String())
+}
+
+// deps of java_api_library for module_bp_java_deps.json
+func (al *ApiLibrary) ideDeps() []string {
+	ret := []string{}
+	ret = append(ret, al.properties.Libs...)
+	ret = append(ret, al.properties.Static_libs...)
+	if al.properties.System_modules != nil {
+		ret = append(ret, proptools.String(al.properties.System_modules))
+	}
+	if al.properties.Full_api_surface_stub != nil {
+		ret = append(ret, proptools.String(al.properties.Full_api_surface_stub))
+	}
+	// Other non java_library dependencies like java_api_contribution are ignored for now.
+	return ret
+}
+
 // implement the following interfaces for hiddenapi processing
 var _ hiddenAPIModule = (*ApiLibrary)(nil)
 var _ UsesLibraryDependency = (*ApiLibrary)(nil)
+
+// implement the following interface for IDE completion.
+var _ android.IDEInfo = (*ApiLibrary)(nil)
 
 //
 // Java prebuilts

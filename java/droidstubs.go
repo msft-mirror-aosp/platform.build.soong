@@ -197,6 +197,10 @@ type DroidstubsProperties struct {
 	// a list of aconfig_declarations module names that the stubs generated in this module
 	// depend on.
 	Aconfig_declarations []string
+
+	// List of hard coded filegroups containing Metalava config files that are passed to every
+	// Metalava invocation that this module performs. See addMetalavaConfigFilesToCmd.
+	ConfigFiles []string `android:"path" blueprint:"mutated"`
 }
 
 // Used by xsd_config
@@ -259,6 +263,7 @@ func DroidstubsFactory() android.Module {
 
 	module.AddProperties(&module.properties,
 		&module.Javadoc.properties)
+	module.properties.ConfigFiles = getMetalavaConfigFilegroupReference()
 	module.initModuleAndImport(module)
 
 	InitDroiddocModule(module, android.HostAndDeviceSupported)
@@ -279,6 +284,7 @@ func DroidstubsHostFactory() android.Module {
 	module.AddProperties(&module.properties,
 		&module.Javadoc.properties)
 
+	module.properties.ConfigFiles = getMetalavaConfigFilegroupReference()
 	InitDroiddocModule(module, android.HostSupported)
 	return module
 }
@@ -694,7 +700,7 @@ func metalavaUseRbe(ctx android.ModuleContext) bool {
 }
 
 func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, srcs android.Paths,
-	srcJarList android.Path, homeDir android.WritablePath, params stubsCommandConfigParams) *android.RuleBuilderCommand {
+	srcJarList android.Path, homeDir android.WritablePath, params stubsCommandConfigParams, configFiles android.Paths) *android.RuleBuilderCommand {
 	rule.Command().Text("rm -rf").Flag(homeDir.String())
 	rule.Command().Text("mkdir -p").Flag(homeDir.String())
 
@@ -738,7 +744,24 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, srcs andr
 
 	cmd.Flag(config.MetalavaFlags)
 
+	addMetalavaConfigFilesToCmd(cmd, configFiles)
+
 	return cmd
+}
+
+// MetalavaConfigFilegroup is the name of the filegroup in build/soong/java/metalava that lists
+// the configuration files to pass to Metalava.
+const MetalavaConfigFilegroup = "metalava-config-files"
+
+// Get a reference to the MetalavaConfigFilegroup suitable for use in a property.
+func getMetalavaConfigFilegroupReference() []string {
+	return []string{":" + MetalavaConfigFilegroup}
+}
+
+// addMetalavaConfigFilesToCmd adds --config-file options to use the config files list in the
+// MetalavaConfigFilegroup filegroup.
+func addMetalavaConfigFilesToCmd(cmd *android.RuleBuilderCommand, configFiles android.Paths) {
+	cmd.FlagForEachInput("--config-file ", configFiles)
 }
 
 // Pass flagged apis related flags to metalava. When aconfig_declarations property is not
@@ -812,7 +835,10 @@ func (d *Droidstubs) commonMetalavaStubCmd(ctx android.ModuleContext, rule *andr
 	srcJarList := zipSyncCmd(ctx, rule, params.srcJarDir, d.Javadoc.srcJars)
 
 	homeDir := android.PathForModuleOut(ctx, params.stubConfig.stubsType.String(), "home")
-	cmd := metalavaCmd(ctx, rule, d.Javadoc.srcFiles, srcJarList, homeDir, params.stubConfig)
+
+	configFiles := android.PathsForModuleSrc(ctx, d.properties.ConfigFiles)
+
+	cmd := metalavaCmd(ctx, rule, d.Javadoc.srcFiles, srcJarList, homeDir, params.stubConfig, configFiles)
 	cmd.Implicits(d.Javadoc.implicits)
 
 	d.stubsFlags(ctx, cmd, params.stubsDir, params.stubConfig.stubsType, params.stubConfig.checkApi)

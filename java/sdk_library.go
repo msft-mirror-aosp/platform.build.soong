@@ -1516,6 +1516,13 @@ func (module *SdkLibrary) ComponentDepsMutator(ctx android.BottomUpMutatorContex
 
 // Add other dependencies as normal.
 func (module *SdkLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
+	// If the module does not create an implementation library or defaults to stubs,
+	// mark the top level sdk library as stubs module as the module will provide stubs via
+	// "magic" when listed as a dependency in the Android.bp files.
+	notCreateImplLib := proptools.Bool(module.sdkLibraryProperties.Api_only)
+	preferStubs := proptools.Bool(module.sdkLibraryProperties.Default_to_stubs)
+	module.properties.Is_stubs_module = proptools.BoolPtr(notCreateImplLib || preferStubs)
+
 	var missingApiModules []string
 	for _, apiScope := range module.getGeneratedApiScopes(ctx) {
 		if apiScope.unstable {
