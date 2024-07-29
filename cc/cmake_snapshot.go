@@ -69,6 +69,7 @@ var ignoredSystemLibs []string = []string{
 	"libc",
 	"libc++",
 	"libc++_static",
+	"libc++demangle",
 	"libc_musl",
 	"libc_musl_crtbegin_so",
 	"libc_musl_crtbegin_static",
@@ -96,9 +97,6 @@ type LibraryMappingProperty struct {
 }
 
 type CmakeSnapshotProperties struct {
-	// TODO: remove
-	Modules []string
-
 	// Host modules to add to the snapshot package. Their dependencies are pulled in automatically.
 	Modules_host []string
 
@@ -289,7 +287,6 @@ func (m *CmakeSnapshot) DepsMutator(ctx android.BottomUpMutatorContext) {
 	deviceVendorVariations := append(deviceVariations, blueprint.Variation{"image", "vendor"})
 	hostVariations := ctx.Config().BuildOSTarget.Variations()
 
-	ctx.AddVariationDependencies(hostVariations, cmakeSnapshotModuleTag, m.Properties.Modules...)
 	ctx.AddVariationDependencies(hostVariations, cmakeSnapshotModuleTag, m.Properties.Modules_host...)
 	ctx.AddVariationDependencies(deviceSystemVariations, cmakeSnapshotModuleTag, m.Properties.Modules_system...)
 	ctx.AddVariationDependencies(deviceVendorVariations, cmakeSnapshotModuleTag, m.Properties.Modules_vendor...)
@@ -350,8 +347,11 @@ func (m *CmakeSnapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		if slices.Contains(ignoredSystemLibs, moduleName) {
 			return false // system libs built in-tree for Android
 		}
+		if dep.IsPrebuilt() {
+			return false // prebuilts are not supported
+		}
 		if dep.compiler == nil {
-			return false // unsupported module type (e.g. prebuilt)
+			return false // unsupported module type
 		}
 		isAidlModule := dep.compiler.baseCompilerProps().AidlInterface.Lang != ""
 

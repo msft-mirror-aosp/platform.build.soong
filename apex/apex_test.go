@@ -5244,7 +5244,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		myApex := ctx.ModuleForTests("myapex", "android_common_myapex").Module()
 
 		overrideNames := []string{
-			"myapex",
+			"",
 			"myjavalib.myapex",
 			"libfoo.myapex",
 			"libbar.myapex",
@@ -5728,7 +5728,6 @@ func TestApexWithTests(t *testing.T) {
 			updatable: false,
 			tests: [
 				"mytest",
-				"mytests",
 			],
 		}
 
@@ -5771,25 +5770,6 @@ func TestApexWithTests(t *testing.T) {
 				"testdata/baz"
 			],
 		}
-
-		cc_test {
-			name: "mytests",
-			gtest: false,
-			srcs: [
-				"mytest1.cpp",
-				"mytest2.cpp",
-				"mytest3.cpp",
-			],
-			test_per_src: true,
-			relative_install_path: "test",
-			system_shared_libs: [],
-			static_executable: true,
-			stl: "none",
-			data: [
-				":fg",
-				":fg2",
-			],
-		}
 	`)
 
 	apexRule := ctx.ModuleForTests("myapex", "android_common_myapex").Rule("apexRule")
@@ -5803,11 +5783,6 @@ func TestApexWithTests(t *testing.T) {
 	ensureContains(t, copyCmds, "image.apex/bin/test/baz")
 	ensureContains(t, copyCmds, "image.apex/bin/test/bar/baz")
 
-	// Ensure that test deps built with `test_per_src` are copied into apex.
-	ensureContains(t, copyCmds, "image.apex/bin/test/mytest1")
-	ensureContains(t, copyCmds, "image.apex/bin/test/mytest2")
-	ensureContains(t, copyCmds, "image.apex/bin/test/mytest3")
-
 	// Ensure the module is correctly translated.
 	bundle := ctx.ModuleForTests("myapex", "android_common_myapex").Module().(*apexBundle)
 	data := android.AndroidMkDataForTest(t, ctx, bundle)
@@ -5817,9 +5792,6 @@ func TestApexWithTests(t *testing.T) {
 	data.Custom(&builder, name, prefix, "", data)
 	androidMk := builder.String()
 	ensureContains(t, androidMk, "LOCAL_MODULE := mytest.myapex\n")
-	ensureContains(t, androidMk, "LOCAL_MODULE := mytest1.myapex\n")
-	ensureContains(t, androidMk, "LOCAL_MODULE := mytest2.myapex\n")
-	ensureContains(t, androidMk, "LOCAL_MODULE := mytest3.myapex\n")
 	ensureContains(t, androidMk, "LOCAL_MODULE := myapex\n")
 }
 
@@ -7054,7 +7026,6 @@ func TestLegacyAndroid10Support(t *testing.T) {
 	module := ctx.ModuleForTests("myapex", "android_common_myapex")
 	args := module.Rule("apexRule").Args
 	ensureContains(t, args["opt_flags"], "--manifest_json "+module.Output("apex_manifest.json").Output.String())
-	ensureNotContains(t, args["opt_flags"], "--no_hashtree")
 
 	// The copies of the libraries in the apex should have one more dependency than
 	// the ones outside the apex, namely the unwinder. Ideally we should check
@@ -11322,13 +11293,6 @@ func TestBootDexJarsMultipleApexPrebuilts(t *testing.T) {
 // Test that product packaging installs the selected mainline module (either source or a specific prebuilt)
 // RELEASE_APEX_CONTIRBUTIONS_* build flags will be used to select the correct prebuilt for a specific release config
 func TestInstallationRulesForMultipleApexPrebuilts(t *testing.T) {
-	// check that the LOCAL_MODULE in the generated mk file matches the name used in PRODUCT_PACKAGES
-	// Since the name used in PRODUCT_PACKAGES does not contain prebuilt_ prefix, LOCAL_MODULE should not contain any prefix either
-	checkLocalModuleName := func(t *testing.T, ctx *android.TestContext, soongApexModuleName string, expectedLocalModuleName string) {
-		// Variations are created based on apex_name
-		entries := android.AndroidMkEntriesForTest(t, ctx, ctx.ModuleForTests(soongApexModuleName, "android_common_com.android.foo").Module())
-		android.AssertStringEquals(t, "LOCAL_MODULE of the prebuilt apex must match the name listed in PRODUCT_PACKAGES", expectedLocalModuleName, entries[0].EntryMap["LOCAL_MODULE"][0])
-	}
 	// for a mainline module family, check that only the flagged soong module is visible to make
 	checkHideFromMake := func(t *testing.T, ctx *android.TestContext, visibleModuleName string, hiddenModuleNames []string) {
 		variation := func(moduleName string) string {
@@ -11383,7 +11347,7 @@ func TestInstallationRulesForMultipleApexPrebuilts(t *testing.T) {
 		prebuilt_apex {
 			name: "com.google.android.foo.v2",
 			apex_name: "com.android.foo",
-			source_apex_name: "com.google.android.foo", // source_apex_name becomes LOCAL_MODULE in the generated mk file
+			source_apex_name: "com.google.android.foo",
 			src: "com.android.foo-arm.apex",
 			prefer: true, // prefer is set to true on both the prebuilts to induce an error if flagging is not present
 		}
@@ -11468,11 +11432,6 @@ func TestInstallationRulesForMultipleApexPrebuilts(t *testing.T) {
 			return
 		}
 		ctx := testApex(t, bp, preparer)
-
-		// Check that the LOCAL_MODULE of the two prebuilts is com.android.foo
-		// This ensures that product packaging can pick them for installation if it has been flagged by apex_contributions
-		checkLocalModuleName(t, ctx, "prebuilt_com.google.android.foo", "com.google.android.foo")
-		checkLocalModuleName(t, ctx, "prebuilt_com.google.android.foo.v2", "com.google.android.foo")
 
 		// Check that
 		// 1. The contents of the selected apex_contributions are visible to make
@@ -11748,4 +11707,139 @@ func TestOverrideApexWithPrebuiltApexPreferred(t *testing.T) {
 	`)
 
 	java.CheckModuleHasDependency(t, res.TestContext, "myoverrideapex", "android_common_myoverrideapex_myoverrideapex", "foo")
+}
+
+func TestUpdatableApexMinSdkVersionCurrent(t *testing.T) {
+	testApexError(t, `"myapex" .*: updatable: updatable APEXes should not set min_sdk_version to current. Please use a finalized API level or a recognized in-development codename`, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			updatable: true,
+			min_sdk_version: "current",
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`)
+}
+
+func TestPrebuiltStubNoinstall(t *testing.T) {
+	testFunc := func(t *testing.T, expectLibfooOnSystemLib bool, fs android.MockFS) {
+		result := android.GroupFixturePreparers(
+			prepareForApexTest,
+			android.PrepareForTestWithAndroidMk,
+			android.PrepareForTestWithMakevars,
+			android.FixtureMergeMockFs(fs),
+		).RunTest(t)
+
+		ldRule := result.ModuleForTests("installedlib", "android_arm64_armv8-a_shared").Rule("ld")
+		android.AssertStringDoesContain(t, "", ldRule.Args["libFlags"], "android_arm64_armv8-a_shared/libfoo.so")
+
+		installRules := result.InstallMakeRulesForTesting(t)
+
+		var installedlibRule *android.InstallMakeRule
+		for i, rule := range installRules {
+			if rule.Target == "out/target/product/test_device/system/lib/installedlib.so" {
+				if installedlibRule != nil {
+					t.Errorf("Duplicate install rules for %s", rule.Target)
+				}
+				installedlibRule = &installRules[i]
+			}
+		}
+		if installedlibRule == nil {
+			t.Errorf("No install rule found for installedlib")
+			return
+		}
+
+		if expectLibfooOnSystemLib {
+			android.AssertStringListContains(t,
+				"installedlib doesn't have install dependency on libfoo impl",
+				installedlibRule.OrderOnlyDeps,
+				"out/target/product/test_device/system/lib/libfoo.so")
+		} else {
+			android.AssertStringListDoesNotContain(t,
+				"installedlib has install dependency on libfoo stub",
+				installedlibRule.Deps,
+				"out/target/product/test_device/system/lib/libfoo.so")
+			android.AssertStringListDoesNotContain(t,
+				"installedlib has order-only install dependency on libfoo stub",
+				installedlibRule.OrderOnlyDeps,
+				"out/target/product/test_device/system/lib/libfoo.so")
+		}
+	}
+
+	prebuiltLibfooBp := []byte(`
+		cc_prebuilt_library {
+			name: "libfoo",
+			prefer: true,
+			srcs: ["libfoo.so"],
+			stubs: {
+				versions: ["1"],
+			},
+			apex_available: ["apexfoo"],
+		}
+	`)
+
+	apexfooBp := []byte(`
+		apex {
+			name: "apexfoo",
+			key: "apexfoo.key",
+			native_shared_libs: ["libfoo"],
+			updatable: false,
+			compile_multilib: "both",
+		}
+		apex_key {
+			name: "apexfoo.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`)
+
+	installedlibBp := []byte(`
+		cc_library {
+			name: "installedlib",
+			shared_libs: ["libfoo"],
+		}
+	`)
+
+	t.Run("prebuilt stub (without source): no install", func(t *testing.T) {
+		testFunc(
+			t,
+			/*expectLibfooOnSystemLib=*/ false,
+			android.MockFS{
+				"prebuilts/module_sdk/art/current/Android.bp": prebuiltLibfooBp,
+				"apexfoo/Android.bp":                          apexfooBp,
+				"system/sepolicy/apex/apexfoo-file_contexts":  nil,
+				"Android.bp": installedlibBp,
+			},
+		)
+	})
+
+	disabledSourceLibfooBp := []byte(`
+		cc_library {
+			name: "libfoo",
+			enabled: false,
+			stubs: {
+				versions: ["1"],
+			},
+			apex_available: ["apexfoo"],
+		}
+	`)
+
+	t.Run("prebuilt stub (with disabled source): no install", func(t *testing.T) {
+		testFunc(
+			t,
+			/*expectLibfooOnSystemLib=*/ false,
+			android.MockFS{
+				"prebuilts/module_sdk/art/current/Android.bp": prebuiltLibfooBp,
+				"impl/Android.bp":                            disabledSourceLibfooBp,
+				"apexfoo/Android.bp":                         apexfooBp,
+				"system/sepolicy/apex/apexfoo-file_contexts": nil,
+				"Android.bp":                                 installedlibBp,
+			},
+		)
+	})
 }

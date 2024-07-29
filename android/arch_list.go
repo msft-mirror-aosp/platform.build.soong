@@ -16,7 +16,6 @@ package android
 
 var archVariants = map[ArchType][]string{
 	Arm: {
-		"armv7-a",
 		"armv7-a-neon",
 		"armv8-a",
 		"armv8-2a",
@@ -103,6 +102,7 @@ var cpuVariants = map[ArchType][]string{
 		"kryo385",
 		"exynos-m1",
 		"exynos-m2",
+		"oryon",
 	},
 	X86:    {},
 	X86_64: {},

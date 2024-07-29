@@ -1060,6 +1060,22 @@ func (c *config) DefaultAppCertificate(ctx PathContext) (pem, key SourcePath) {
 	return defaultDir.Join(ctx, "testkey.x509.pem"), defaultDir.Join(ctx, "testkey.pk8")
 }
 
+func (c *config) ExtraOtaKeys(ctx PathContext, recovery bool) []SourcePath {
+	var otaKeys []string
+	if recovery {
+		otaKeys = c.productVariables.ExtraOtaRecoveryKeys
+	} else {
+		otaKeys = c.productVariables.ExtraOtaKeys
+	}
+
+	otaPaths := make([]SourcePath, len(otaKeys))
+	for i, key := range otaKeys {
+		otaPaths[i] = PathForSource(ctx, key+".x509.pem")
+	}
+
+	return otaPaths
+}
+
 func (c *config) BuildKeys() string {
 	defaultCert := String(c.productVariables.DefaultAppCertificate)
 	if defaultCert == "" || defaultCert == filepath.Join(testKeyDir, "testkey") {
@@ -1182,6 +1198,10 @@ func (c *config) Android64() bool {
 
 func (c *config) UseGoma() bool {
 	return Bool(c.productVariables.UseGoma)
+}
+
+func (c *config) UseABFS() bool {
+	return Bool(c.productVariables.UseABFS)
 }
 
 func (c *config) UseRBE() bool {
@@ -1345,10 +1365,6 @@ func (c *config) FrameworksBaseDirExists(ctx PathGlobContext) bool {
 	return ExistentPathForSource(ctx, "frameworks", "base", "Android.bp").Valid()
 }
 
-func (c *config) VndkSnapshotBuildArtifacts() bool {
-	return Bool(c.productVariables.VndkSnapshotBuildArtifacts)
-}
-
 func (c *config) HasMultilibConflict(arch ArchType) bool {
 	return c.multilibConflicts[arch]
 }
@@ -1410,10 +1426,6 @@ func (c *deviceConfig) VendorPath() string {
 		return *c.config.productVariables.VendorPath
 	}
 	return "vendor"
-}
-
-func (c *deviceConfig) RecoverySnapshotVersion() string {
-	return String(c.config.productVariables.RecoverySnapshotVersion)
 }
 
 func (c *deviceConfig) CurrentApiLevelForVendorModules() string {
@@ -1793,22 +1805,6 @@ func (c *deviceConfig) IsPartnerTrebleSepolicyTestEnabled() bool {
 	return c.SystemExtSepolicyPrebuiltApiDir() != "" || c.ProductSepolicyPrebuiltApiDir() != ""
 }
 
-func (c *deviceConfig) DirectedVendorSnapshot() bool {
-	return c.config.productVariables.DirectedVendorSnapshot
-}
-
-func (c *deviceConfig) VendorSnapshotModules() map[string]bool {
-	return c.config.productVariables.VendorSnapshotModules
-}
-
-func (c *deviceConfig) DirectedRecoverySnapshot() bool {
-	return c.config.productVariables.DirectedRecoverySnapshot
-}
-
-func (c *deviceConfig) RecoverySnapshotModules() map[string]bool {
-	return c.config.productVariables.RecoverySnapshotModules
-}
-
 func createDirsMap(previous map[string]bool, dirs []string) (map[string]bool, error) {
 	var ret = make(map[string]bool)
 	for _, dir := range dirs {
@@ -1833,40 +1829,6 @@ func (c *deviceConfig) createDirsMapOnce(onceKey OnceKey, previous map[string]bo
 		return nil
 	}
 	return dirMap.(map[string]bool)
-}
-
-var vendorSnapshotDirsExcludedKey = NewOnceKey("VendorSnapshotDirsExcludedMap")
-
-func (c *deviceConfig) VendorSnapshotDirsExcludedMap() map[string]bool {
-	return c.createDirsMapOnce(vendorSnapshotDirsExcludedKey, nil,
-		c.config.productVariables.VendorSnapshotDirsExcluded)
-}
-
-var vendorSnapshotDirsIncludedKey = NewOnceKey("VendorSnapshotDirsIncludedMap")
-
-func (c *deviceConfig) VendorSnapshotDirsIncludedMap() map[string]bool {
-	excludedMap := c.VendorSnapshotDirsExcludedMap()
-	return c.createDirsMapOnce(vendorSnapshotDirsIncludedKey, excludedMap,
-		c.config.productVariables.VendorSnapshotDirsIncluded)
-}
-
-var recoverySnapshotDirsExcludedKey = NewOnceKey("RecoverySnapshotDirsExcludedMap")
-
-func (c *deviceConfig) RecoverySnapshotDirsExcludedMap() map[string]bool {
-	return c.createDirsMapOnce(recoverySnapshotDirsExcludedKey, nil,
-		c.config.productVariables.RecoverySnapshotDirsExcluded)
-}
-
-var recoverySnapshotDirsIncludedKey = NewOnceKey("RecoverySnapshotDirsIncludedMap")
-
-func (c *deviceConfig) RecoverySnapshotDirsIncludedMap() map[string]bool {
-	excludedMap := c.RecoverySnapshotDirsExcludedMap()
-	return c.createDirsMapOnce(recoverySnapshotDirsIncludedKey, excludedMap,
-		c.config.productVariables.RecoverySnapshotDirsIncluded)
-}
-
-func (c *deviceConfig) HostFakeSnapshotEnabled() bool {
-	return c.config.productVariables.HostFakeSnapshotEnabled
 }
 
 func (c *deviceConfig) ShippingApiLevel() ApiLevel {
@@ -2115,4 +2077,12 @@ func (c *config) BoardUseVbmetaDigestInFingerprint() bool {
 
 func (c *config) OemProperties() []string {
 	return c.productVariables.OemProperties
+}
+
+func (c *config) UseDebugArt() bool {
+	if c.productVariables.ArtTargetIncludeDebugBuild != nil {
+		return Bool(c.productVariables.ArtTargetIncludeDebugBuild)
+	}
+
+	return Bool(c.productVariables.Eng)
 }

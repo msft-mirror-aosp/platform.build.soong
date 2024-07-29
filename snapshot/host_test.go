@@ -107,17 +107,6 @@ var prepareForHostModTest = android.GroupFixturePreparers(
 var prepareForFakeHostTest = android.GroupFixturePreparers(
 	prepareForHostTest,
 	android.FixtureWithRootAndroidBp(hostTestBp),
-	android.FixtureRegisterWithContext(func(ctx android.RegistrationContext) {
-		registerHostSnapshotComponents(ctx)
-	}),
-)
-
-// Prepare for fake host snapshot test enabled
-var prepareForFakeHostTestEnabled = android.GroupFixturePreparers(
-	prepareForFakeHostTest,
-	android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-		variables.HostFakeSnapshotEnabled = true
-	}),
 )
 
 // Validate that a hostSnapshot object is created containing zip files and JSON file
@@ -139,32 +128,4 @@ func TestHostSnapshot(t *testing.T) {
 		}
 
 	}
-}
-
-// Validate fake host snapshot contains binary modules as well as the JSON meta file
-func TestFakeHostSnapshotEnable(t *testing.T) {
-	result := prepareForFakeHostTestEnabled.RunTest(t)
-	t.Helper()
-	bins := []string{"foo", "bar"}
-	ctx := result.TestContext.SingletonForTests("host-fake-snapshot")
-	if ctx.MaybeOutput(filepath.Join("host-fake-snapshot", "host_snapshot.json")).Rule == nil {
-		t.Error("Manifest file not found")
-	}
-	for _, bin := range bins {
-		if ctx.MaybeOutput(filepath.Join("host-fake-snapshot", hostTestBinOut(bin))).Rule == nil {
-			t.Error("Binary file ", bin, "not found")
-		}
-
-	}
-}
-
-// Validate not fake host snapshot if HostFakeSnapshotEnabled has not been set to true
-func TestFakeHostSnapshotDisable(t *testing.T) {
-	result := prepareForFakeHostTest.RunTest(t)
-	t.Helper()
-	ctx := result.TestContext.SingletonForTests("host-fake-snapshot")
-	if len(ctx.AllOutputs()) != 0 {
-		t.Error("Fake host snapshot not empty when disabled")
-	}
-
 }
