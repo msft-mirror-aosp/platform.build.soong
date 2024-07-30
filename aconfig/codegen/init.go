@@ -32,7 +32,6 @@ var (
 				`    --mode ${mode}` +
 				`    --cache ${in}` +
 				`    --out ${out}.tmp` +
-				`    --allow-instrumentation ${debug}` +
 				` && $soong_zip -write_if_changed -jar -o ${out} -C ${out}.tmp -D ${out}.tmp` +
 				` && rm -rf ${out}.tmp`,
 			CommandDeps: []string{
@@ -40,7 +39,7 @@ var (
 				"$soong_zip",
 			},
 			Restat: true,
-		}, "mode", "debug")
+		}, "mode")
 
 	// For cc_aconfig_library: Generate C++ library
 	cppRule = pctx.AndroidStaticRule("cc_aconfig_library",

@@ -20,7 +20,6 @@ import (
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
-	"strconv"
 )
 
 type declarationsTagType struct {
@@ -72,7 +71,6 @@ func (callbacks *JavaAconfigDeclarationsLibraryCallbacks) DepsMutator(module *ja
 		module.AddSharedLibrary("aconfig-annotations-lib")
 		// TODO(b/303773055): Remove the annotation after access issue is resolved.
 		module.AddSharedLibrary("unsupportedappusage")
-		module.AddSharedLibrary("aconfig_storage_reader_java")
 	}
 }
 
@@ -104,8 +102,7 @@ func (callbacks *JavaAconfigDeclarationsLibraryCallbacks) GenerateSourceJarBuild
 		Output:      srcJarPath,
 		Description: "aconfig.srcjar",
 		Args: map[string]string{
-			"mode":  mode,
-			"debug": strconv.FormatBool(ctx.Config().ReleaseReadFromNewStorage()),
+			"mode": mode,
 		},
 	})
 
