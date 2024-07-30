@@ -1195,6 +1195,10 @@ func (c *config) UseGoma() bool {
 	return Bool(c.productVariables.UseGoma)
 }
 
+func (c *config) UseABFS() bool {
+	return Bool(c.productVariables.UseABFS)
+}
+
 func (c *config) UseRBE() bool {
 	return Bool(c.productVariables.UseRBE)
 }
@@ -2076,4 +2080,12 @@ func (c *config) UseDebugArt() bool {
 	}
 
 	return Bool(c.productVariables.Eng)
+}
+
+func (c *config) SystemPropFiles(ctx PathContext) Paths {
+	return PathsForSource(ctx, c.productVariables.SystemPropFiles)
+}
+
+func (c *config) EnableUffdGc() string {
+	return String(c.productVariables.EnableUffdGc)
 }
