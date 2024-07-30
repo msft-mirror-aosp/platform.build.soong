@@ -269,7 +269,7 @@ type JavaInfo struct {
 	ImplementationAndResourcesJars android.Paths
 
 	// ImplementationJars is a list of jars that contain the implementations of classes in the
-	//module.
+	// module.
 	ImplementationJars android.Paths
 
 	// ResourceJars is a list of jars that contain the resources included in the module.
@@ -441,6 +441,30 @@ var (
 	usesLibCompat28OptTag   = makeUsesLibraryDependencyTag(28, true)
 	usesLibCompat29ReqTag   = makeUsesLibraryDependencyTag(29, false)
 	usesLibCompat30OptTag   = makeUsesLibraryDependencyTag(30, true)
+)
+
+// A list of tags for deps used for compiling a module.
+// Any dependency tags that modifies the following properties of `deps` in `Module.collectDeps` should be
+// added to this list:
+// - bootClasspath
+// - classpath
+// - java9Classpath
+// - systemModules
+// - kotlin deps...
+var (
+	compileDependencyTags = []blueprint.DependencyTag{
+		sdkLibTag,
+		libTag,
+		staticLibTag,
+		bootClasspathTag,
+		systemModulesTag,
+		java9LibTag,
+		kotlinStdlibTag,
+		kotlinAnnotationsTag,
+		kotlinPluginTag,
+		syspropPublicStubDepTag,
+		instrumentationForTag,
+	}
 )
 
 func IsLibDepTag(depTag blueprint.DependencyTag) bool {
@@ -977,6 +1001,8 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		TestOnly:       Bool(j.sourceProperties.Test_only),
 		TopLevelTarget: j.sourceProperties.Top_level_test_target,
 	})
+
+	setOutputFiles(ctx, j.Module)
 }
 
 func (j *Library) setInstallRules(ctx android.ModuleContext, installModuleName string) {
@@ -1356,7 +1382,7 @@ func (j *JavaTestImport) InstallInTestcases() bool {
 	return true
 }
 
-func (j *TestHost) IsNativeCoverageNeeded(ctx android.IncomingTransitionContext) bool {
+func (j *TestHost) IsNativeCoverageNeeded(ctx cc.IsNativeCoverageNeededContext) bool {
 	return ctx.DeviceConfig().NativeCoverageEnabled()
 }
 
@@ -1501,7 +1527,7 @@ func (j *TestHost) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		InstalledFiles:      j.data,
 		OutputFile:          j.outputFile,
 		TestConfig:          j.testConfig,
-		RequiredModuleNames: j.RequiredModuleNames(),
+		RequiredModuleNames: j.RequiredModuleNames(ctx),
 		TestSuites:          j.testProperties.Test_suites,
 		IsHost:              true,
 		LocalSdkVersion:     j.sdkVersion.String(),
@@ -1510,6 +1536,7 @@ func (j *TestHost) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 }
 
 func (j *Test) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	checkMinSdkVersionMts(ctx, j.MinSdkVersion(ctx))
 	j.generateAndroidBuildActionsWithConfig(ctx, nil)
 	android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 }
@@ -1835,6 +1862,8 @@ func (j *Binary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		// libraries.  This is verified by TestBinary.
 		j.binaryFile = ctx.InstallExecutable(android.PathForModuleInstall(ctx, "bin"),
 			ctx.ModuleName()+ext, j.wrapperFile)
+
+		setOutputFiles(ctx, j.Library.Module)
 	}
 }
 
@@ -2010,12 +2039,17 @@ type JavaApiLibraryProperties struct {
 	// List of aconfig_declarations module names that the stubs generated in this module
 	// depend on.
 	Aconfig_declarations []string
+
+	// List of hard coded filegroups containing Metalava config files that are passed to every
+	// Metalava invocation that this module performs. See addMetalavaConfigFilesToCmd.
+	ConfigFiles []string `android:"path" blueprint:"mutated"`
 }
 
 func ApiLibraryFactory() android.Module {
 	module := &ApiLibrary{}
-	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	module.AddProperties(&module.properties)
+	module.properties.ConfigFiles = getMetalavaConfigFilegroupReference()
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	module.initModuleAndImport(module)
 	android.InitDefaultableModule(module)
 	return module
@@ -2031,7 +2065,7 @@ func (al *ApiLibrary) StubsJar() android.Path {
 
 func metalavaStubCmd(ctx android.ModuleContext, rule *android.RuleBuilder,
 	srcs android.Paths, homeDir android.WritablePath,
-	classpath android.Paths) *android.RuleBuilderCommand {
+	classpath android.Paths, configFiles android.Paths) *android.RuleBuilderCommand {
 	rule.Command().Text("rm -rf").Flag(homeDir.String())
 	rule.Command().Text("mkdir -p").Flag(homeDir.String())
 
@@ -2069,6 +2103,8 @@ func metalavaStubCmd(ctx android.ModuleContext, rule *android.RuleBuilder,
 		FlagWithArg("--hide ", "UnresolvedImport").
 		FlagWithArg("--hide ", "InvalidNullabilityOverride").
 		FlagWithArg("--hide ", "ChangedDefault")
+
+	addMetalavaConfigFilesToCmd(cmd, configFiles)
 
 	if len(classpath) == 0 {
 		// The main purpose of the `--api-class-resolution api` option is to force metalava to ignore
@@ -2180,7 +2216,7 @@ func (al *ApiLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 // Map where key is the api scope name and value is the int value
 // representing the order of the api scope, narrowest to the widest
-var scopeOrderMap = allApiScopes.MapToIndex(
+var scopeOrderMap = AllApiScopes.MapToIndex(
 	func(s *apiScope) string { return s.name })
 
 func (al *ApiLibrary) sortApiFilesByApiScope(ctx android.ModuleContext, srcFilesInfo []JavaApiImportInfo) []JavaApiImportInfo {
@@ -2281,14 +2317,16 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		ctx.ModuleErrorf("Error: %s has an empty api file.", ctx.ModuleName())
 	}
 
-	cmd := metalavaStubCmd(ctx, rule, srcFiles, homeDir, systemModulesPaths)
+	configFiles := android.PathsForModuleSrc(ctx, al.properties.ConfigFiles)
+
+	cmd := metalavaStubCmd(ctx, rule, srcFiles, homeDir, systemModulesPaths, configFiles)
 
 	al.stubsFlags(ctx, cmd, stubsDir)
 
-	migratingNullability := String(al.properties.Previous_api) != ""
-	if migratingNullability {
-		previousApi := android.PathForModuleSrc(ctx, String(al.properties.Previous_api))
-		cmd.FlagWithInput("--migrate-nullness ", previousApi)
+	previousApi := String(al.properties.Previous_api)
+	if previousApi != "" {
+		previousApiFiles := android.PathsForModuleSrc(ctx, []string{previousApi})
+		cmd.FlagForEachInput("--migrate-nullness ", previousApiFiles)
 	}
 
 	al.addValidation(ctx, cmd, al.validationPaths)
@@ -2381,9 +2419,34 @@ func (al *ApiLibrary) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiL
 	return android.FutureApiLevel
 }
 
+func (al *ApiLibrary) IDEInfo(i *android.IdeInfo) {
+	i.Deps = append(i.Deps, al.ideDeps()...)
+	i.Libs = append(i.Libs, al.properties.Libs...)
+	i.Static_libs = append(i.Static_libs, al.properties.Static_libs...)
+	i.SrcJars = append(i.SrcJars, al.stubsSrcJar.String())
+}
+
+// deps of java_api_library for module_bp_java_deps.json
+func (al *ApiLibrary) ideDeps() []string {
+	ret := []string{}
+	ret = append(ret, al.properties.Libs...)
+	ret = append(ret, al.properties.Static_libs...)
+	if al.properties.System_modules != nil {
+		ret = append(ret, proptools.String(al.properties.System_modules))
+	}
+	if al.properties.Full_api_surface_stub != nil {
+		ret = append(ret, proptools.String(al.properties.Full_api_surface_stub))
+	}
+	// Other non java_library dependencies like java_api_contribution are ignored for now.
+	return ret
+}
+
 // implement the following interfaces for hiddenapi processing
 var _ hiddenAPIModule = (*ApiLibrary)(nil)
 var _ UsesLibraryDependency = (*ApiLibrary)(nil)
+
+// implement the following interface for IDE completion.
+var _ android.IDEInfo = (*ApiLibrary)(nil)
 
 //
 // Java prebuilts
@@ -2751,6 +2814,9 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		StubsLinkType:                  j.stubsLinkType,
 		// TODO(b/289117800): LOCAL_ACONFIG_FILES for prebuilts
 	})
+
+	ctx.SetOutputFiles(android.Paths{j.combinedImplementationFile}, "")
+	ctx.SetOutputFiles(android.Paths{j.combinedImplementationFile}, ".jar")
 }
 
 func (j *Import) maybeInstall(ctx android.ModuleContext, jarName string, outputFile android.Path) {
@@ -2770,17 +2836,6 @@ func (j *Import) maybeInstall(ctx android.ModuleContext, jarName string, outputF
 	}
 	ctx.InstallFile(installDir, jarName, outputFile)
 }
-
-func (j *Import) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "", ".jar":
-		return android.Paths{j.combinedImplementationFile}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
-}
-
-var _ android.OutputFileProducer = (*Import)(nil)
 
 func (j *Import) HeaderJars() android.Paths {
 	return android.PathsIfNonNil(j.combinedHeaderFile)

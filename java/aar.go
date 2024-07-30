@@ -440,7 +440,8 @@ func (a *aapt) buildActions(ctx android.ModuleContext, opts aaptBuildActionOptio
 	var compiledResDirs []android.Paths
 	for _, dir := range resDirs {
 		a.resourceFiles = append(a.resourceFiles, dir.files...)
-		compiledResDirs = append(compiledResDirs, aapt2Compile(ctx, dir.dir, dir.files, compileFlags, a.filterProduct()).Paths())
+		compiledResDirs = append(compiledResDirs, aapt2Compile(ctx, dir.dir, dir.files,
+			compileFlags, a.filterProduct(), opts.aconfigTextFiles).Paths())
 	}
 
 	for i, zip := range resZips {
@@ -499,7 +500,8 @@ func (a *aapt) buildActions(ctx android.ModuleContext, opts aaptBuildActionOptio
 	}
 
 	for _, dir := range overlayDirs {
-		compiledOverlay = append(compiledOverlay, aapt2Compile(ctx, dir.dir, dir.files, compileFlags, a.filterProduct()).Paths()...)
+		compiledOverlay = append(compiledOverlay, aapt2Compile(ctx, dir.dir, dir.files,
+			compileFlags, a.filterProduct(), opts.aconfigTextFiles).Paths()...)
 	}
 
 	var splitPackages android.WritablePaths
@@ -798,18 +800,6 @@ type AndroidLibrary struct {
 	aarFile android.WritablePath
 }
 
-var _ android.OutputFileProducer = (*AndroidLibrary)(nil)
-
-// For OutputFileProducer interface
-func (a *AndroidLibrary) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case ".aar":
-		return []android.Path{a.aarFile}, nil
-	default:
-		return a.Library.OutputFiles(tag)
-	}
-}
-
 var _ AndroidLibraryDependency = (*AndroidLibrary)(nil)
 
 func (a *AndroidLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -831,12 +821,13 @@ func (a *AndroidLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 	if a.usesLibrary.shouldDisableDexpreopt {
 		a.dexpreopter.disableDexpreopt()
 	}
+	aconfigTextFilePaths := getAconfigFilePaths(ctx)
 	a.aapt.buildActions(ctx,
 		aaptBuildActionOptions{
 			sdkContext:                     android.SdkContext(a),
 			classLoaderContexts:            a.classLoaderContexts,
 			enforceDefaultTargetSdkVersion: false,
-			aconfigTextFiles:               getAconfigFilePaths(ctx),
+			aconfigTextFiles:               aconfigTextFilePaths,
 			usesLibrary:                    &a.usesLibrary,
 		},
 	)
@@ -906,6 +897,17 @@ func (a *AndroidLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 			JniPackages: prebuiltJniPackages,
 		})
 	}
+
+	android.SetProvider(ctx, FlagsPackagesProvider, FlagsPackages{
+		AconfigTextFiles: aconfigTextFilePaths,
+	})
+
+	a.setOutputFiles(ctx)
+}
+
+func (a *AndroidLibrary) setOutputFiles(ctx android.ModuleContext) {
+	ctx.SetOutputFiles([]android.Path{a.aarFile}, ".aar")
+	setOutputFiles(ctx, a.Library.Module)
 }
 
 func (a *AndroidLibrary) IDEInfo(dpInfo *android.IdeInfo) {
@@ -1014,20 +1016,6 @@ type AARImport struct {
 
 	usesLibrary
 	classLoaderContexts dexpreopt.ClassLoaderContextMap
-}
-
-var _ android.OutputFileProducer = (*AARImport)(nil)
-
-// For OutputFileProducer interface
-func (a *AARImport) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case ".aar":
-		return []android.Path{a.aarPath}, nil
-	case "":
-		return []android.Path{a.implementationAndResourcesJarFile}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
 }
 
 func (a *AARImport) SdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
@@ -1383,6 +1371,9 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	android.SetProvider(ctx, JniPackageProvider, JniPackageInfo{
 		JniPackages: a.jniPackages,
 	})
+
+	ctx.SetOutputFiles([]android.Path{a.implementationAndResourcesJarFile}, "")
+	ctx.SetOutputFiles([]android.Path{a.aarPath}, ".aar")
 }
 
 func (a *AARImport) HeaderJars() android.Paths {

@@ -292,9 +292,17 @@ python_binary_host {
 }
 
 python_binary_host {
-    name: "buildinfo",
-    main: "buildinfo.py",
-    srcs: ["buildinfo.py"],
+    name: "merge_json",
+    main: "merge_json.py",
+    srcs: [
+        "merge_json.py",
+    ],
+}
+
+python_binary_host {
+    name: "gen_build_prop",
+    main: "gen_build_prop.py",
+    srcs: ["gen_build_prop.py"],
 }
 
 python_binary_host {

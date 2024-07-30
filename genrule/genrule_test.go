@@ -694,7 +694,7 @@ func TestGenruleDefaults(t *testing.T) {
 	android.AssertStringEquals(t, "cmd", expectedCmd, gen.rawCommands[0])
 
 	expectedSrcs := []string{"in1"}
-	android.AssertDeepEquals(t, "srcs", expectedSrcs, gen.properties.Srcs)
+	android.AssertDeepEquals(t, "srcs", expectedSrcs, gen.properties.ResolvedSrcs)
 }
 
 func TestGenruleAllowMissingDependencies(t *testing.T) {
@@ -1253,12 +1253,6 @@ func outputProducerFactory() android.Module {
 func (t *testOutputProducer) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	t.outputFile = ctx.InstallFile(android.PathForModuleInstall(ctx, "bin"), ctx.ModuleName(), android.PathForOutput(ctx, ctx.ModuleName()))
 }
-
-func (t *testOutputProducer) OutputFiles(tag string) (android.Paths, error) {
-	return android.Paths{t.outputFile}, nil
-}
-
-var _ android.OutputFileProducer = (*testOutputProducer)(nil)
 
 type useSource struct {
 	android.ModuleBase

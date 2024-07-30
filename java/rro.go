@@ -150,12 +150,13 @@ func (r *RuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleC
 		aaptLinkFlags = append(aaptLinkFlags,
 			"--rename-overlay-category "+*r.overridableProperties.Category)
 	}
+	aconfigTextFilePaths := getAconfigFilePaths(ctx)
 	r.aapt.buildActions(ctx,
 		aaptBuildActionOptions{
 			sdkContext:                     r,
 			enforceDefaultTargetSdkVersion: false,
 			extraLinkFlags:                 aaptLinkFlags,
-			aconfigTextFiles:               getAconfigFilePaths(ctx),
+			aconfigTextFiles:               aconfigTextFilePaths,
 		},
 	)
 
@@ -176,6 +177,10 @@ func (r *RuntimeResourceOverlay) GenerateAndroidBuildActions(ctx android.ModuleC
 	partition := rroPartition(ctx)
 	r.installDir = android.PathForModuleInPartitionInstall(ctx, partition, "overlay", String(r.properties.Theme))
 	ctx.InstallFile(r.installDir, r.outputFile.Base(), r.outputFile)
+
+	android.SetProvider(ctx, FlagsPackagesProvider, FlagsPackages{
+		AconfigTextFiles: aconfigTextFilePaths,
+	})
 }
 
 func (r *RuntimeResourceOverlay) SdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {

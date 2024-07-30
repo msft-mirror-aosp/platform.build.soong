@@ -50,10 +50,10 @@ type BaseCompilerProperties struct {
 	Exclude_srcs []string `android:"path,arch_variant"`
 
 	// list of module-specific flags that will be used for C and C++ compiles.
-	Cflags []string `android:"arch_variant"`
+	Cflags proptools.Configurable[[]string] `android:"arch_variant"`
 
 	// list of module-specific flags that will be used for C++ compiles
-	Cppflags []string `android:"arch_variant"`
+	Cppflags proptools.Configurable[[]string] `android:"arch_variant"`
 
 	// list of module-specific flags that will be used for C compiles
 	Conlyflags []string `android:"arch_variant"`
@@ -98,10 +98,10 @@ type BaseCompilerProperties struct {
 
 	// list of generated headers to add to the include path. These are the names
 	// of genrule modules.
-	Generated_headers []string `android:"arch_variant,variant_prepend"`
+	Generated_headers proptools.Configurable[[]string] `android:"arch_variant,variant_prepend"`
 
 	// pass -frtti instead of -fno-rtti
-	Rtti *bool
+	Rtti *bool `android:"arch_variant"`
 
 	// C standard version to use. Can be a specific version (such as "gnu11"),
 	// "experimental" (which will use draft versions like C1x when available),
@@ -171,12 +171,6 @@ type BaseCompilerProperties struct {
 		// Renderscript API level to target
 		Target_api *string
 	}
-
-	Debug, Release struct {
-		// list of module-specific flags that will be used for C and C++ compiles in debug or
-		// release builds
-		Cflags []string `android:"arch_variant"`
-	} `android:"arch_variant"`
 
 	Target struct {
 		Vendor, Product struct {
@@ -274,7 +268,7 @@ func (compiler *baseCompiler) Srcs() android.Paths {
 }
 
 func (compiler *baseCompiler) appendCflags(flags []string) {
-	compiler.Properties.Cflags = append(compiler.Properties.Cflags, flags...)
+	compiler.Properties.Cflags.AppendSimpleValue(flags)
 }
 
 func (compiler *baseCompiler) appendAsflags(flags []string) {
@@ -302,7 +296,7 @@ func (compiler *baseCompiler) compilerInit(ctx BaseModuleContext) {}
 func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 	deps.GeneratedSources = append(deps.GeneratedSources, compiler.Properties.Generated_sources...)
 	deps.GeneratedSources = removeListFromList(deps.GeneratedSources, compiler.Properties.Exclude_generated_sources)
-	deps.GeneratedHeaders = append(deps.GeneratedHeaders, compiler.Properties.Generated_headers...)
+	deps.GeneratedHeaders = append(deps.GeneratedHeaders, compiler.Properties.Generated_headers.GetOrDefault(ctx, nil)...)
 	deps.AidlLibs = append(deps.AidlLibs, compiler.Properties.Aidl.Libs...)
 
 	android.ProtoDeps(ctx, &compiler.Proto)
@@ -372,8 +366,10 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 	compiler.srcsBeforeGen = android.PathsForModuleSrcExcludes(ctx, compiler.Properties.Srcs, compiler.Properties.Exclude_srcs)
 	compiler.srcsBeforeGen = append(compiler.srcsBeforeGen, deps.GeneratedSources...)
 
-	CheckBadCompilerFlags(ctx, "cflags", compiler.Properties.Cflags)
-	CheckBadCompilerFlags(ctx, "cppflags", compiler.Properties.Cppflags)
+	cflags := compiler.Properties.Cflags.GetOrDefault(ctx, nil)
+	cppflags := compiler.Properties.Cppflags.GetOrDefault(ctx, nil)
+	CheckBadCompilerFlags(ctx, "cflags", cflags)
+	CheckBadCompilerFlags(ctx, "cppflags", cppflags)
 	CheckBadCompilerFlags(ctx, "conlyflags", compiler.Properties.Conlyflags)
 	CheckBadCompilerFlags(ctx, "asflags", compiler.Properties.Asflags)
 	CheckBadCompilerFlags(ctx, "vendor.cflags", compiler.Properties.Target.Vendor.Cflags)
@@ -385,8 +381,8 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 
 	esc := proptools.NinjaAndShellEscapeList
 
-	flags.Local.CFlags = append(flags.Local.CFlags, esc(compiler.Properties.Cflags)...)
-	flags.Local.CppFlags = append(flags.Local.CppFlags, esc(compiler.Properties.Cppflags)...)
+	flags.Local.CFlags = append(flags.Local.CFlags, esc(cflags)...)
+	flags.Local.CppFlags = append(flags.Local.CppFlags, esc(cppflags)...)
 	flags.Local.ConlyFlags = append(flags.Local.ConlyFlags, esc(compiler.Properties.Conlyflags)...)
 	flags.Local.AsFlags = append(flags.Local.AsFlags, esc(compiler.Properties.Asflags)...)
 	flags.Local.YasmFlags = append(flags.Local.YasmFlags, esc(compiler.Properties.Asflags)...)
@@ -478,11 +474,6 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		ctx.ModuleErrorf("%s", err)
 	}
 
-	CheckBadCompilerFlags(ctx, "release.cflags", compiler.Properties.Release.Cflags)
-
-	// TODO: debug
-	flags.Local.CFlags = append(flags.Local.CFlags, esc(compiler.Properties.Release.Cflags)...)
-
 	if !ctx.DeviceConfig().BuildBrokenClangCFlags() && len(compiler.Properties.Clang_cflags) != 0 {
 		ctx.PropertyErrorf("clang_cflags", "property is deprecated, see Changes.md file")
 	} else {
@@ -549,12 +540,10 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		flags.Global.CommonFlags = append(flags.Global.CommonFlags, "${config.ExternalCflags}")
 	}
 
-	if tc.Bionic() {
-		if Bool(compiler.Properties.Rtti) {
-			flags.Local.CppFlags = append(flags.Local.CppFlags, "-frtti")
-		} else {
-			flags.Local.CppFlags = append(flags.Local.CppFlags, "-fno-rtti")
-		}
+	if Bool(compiler.Properties.Rtti) {
+		flags.Local.CppFlags = append(flags.Local.CppFlags, "-frtti")
+	} else {
+		flags.Local.CppFlags = append(flags.Local.CppFlags, "-fno-rtti")
 	}
 
 	flags.Global.AsFlags = append(flags.Global.AsFlags, "${config.CommonGlobalAsflags}")
@@ -693,6 +682,11 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 		flags.Local.CFlags = append(flags.Local.CFlags, "-fopenmp")
 	}
 
+	if ctx.optimizeForSize() {
+		flags.Local.CFlags = append(flags.Local.CFlags, "-Oz")
+		flags.Local.LdFlags = append(flags.Local.LdFlags, "-Wl,-mllvm,-enable-ml-inliner=release")
+	}
+
 	// Exclude directories from manual binder interface allowed list.
 	//TODO(b/145621474): Move this check into IInterface.h when clang-tidy no longer uses absolute paths.
 	if android.HasAnyPrefix(ctx.ModuleDir(), allowedManualInterfacePaths) {
@@ -801,9 +795,6 @@ type RustBindgenClangProperties struct {
 	// be added to the include path using -I
 	Local_include_dirs []string `android:"arch_variant,variant_prepend"`
 
-	// list of Rust static libraries.
-	Static_rlibs []string `android:"arch_variant,variant_prepend"`
-
 	// list of static libraries that provide headers for this binding.
 	Static_libs []string `android:"arch_variant,variant_prepend"`
 
@@ -814,11 +805,11 @@ type RustBindgenClangProperties struct {
 	Header_libs []string `android:"arch_variant,variant_prepend"`
 
 	// list of clang flags required to correctly interpret the headers.
-	Cflags []string `android:"arch_variant"`
+	Cflags proptools.Configurable[[]string] `android:"arch_variant"`
 
 	// list of c++ specific clang flags required to correctly interpret the headers.
 	// This is provided primarily to make sure cppflags defined in cc_defaults are pulled in.
-	Cppflags []string `android:"arch_variant"`
+	Cppflags proptools.Configurable[[]string] `android:"arch_variant"`
 
 	// C standard version to use. Can be a specific version (such as "gnu11"),
 	// "experimental" (which will use draft versions like C1x when available),

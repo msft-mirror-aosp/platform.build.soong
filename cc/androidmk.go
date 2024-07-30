@@ -104,16 +104,6 @@ func (c *Module) AndroidMkEntries() []android.AndroidMkEntries {
 					entries.AddStrings("LOCAL_RUNTIME_LIBRARIES", c.Properties.AndroidMkRuntimeLibs...)
 				}
 				entries.SetString("LOCAL_SOONG_LINK_TYPE", c.makeLinkType)
-				if c.InVendorOrProduct() {
-					if c.IsVndk() && !c.static() {
-						entries.SetString("LOCAL_SOONG_VNDK_VERSION", c.VndkVersion())
-						// VNDK libraries available to vendor are not installed because
-						// they are packaged in VNDK APEX and installed by APEX packages (apex/apex.go)
-						if !c.IsVndkExt() {
-							entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", true)
-						}
-					}
-				}
 				if c.InVendor() {
 					entries.SetBool("LOCAL_IN_VENDOR", true)
 				} else if c.InProduct() {
@@ -361,9 +351,6 @@ func (test *testBinary) AndroidMkEntries(ctx AndroidMkContext, entries *android.
 	ctx.subAndroidMk(entries, test.testDecorator)
 
 	entries.Class = "NATIVE_TESTS"
-	if Bool(test.Properties.Test_per_src) {
-		entries.SubName = "_" + String(test.binaryDecorator.Properties.Stem)
-	}
 	entries.ExtraEntries = append(entries.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 		if test.testConfig != nil {
 			entries.SetString("LOCAL_FULL_TEST_CONFIG", test.testConfig.String())

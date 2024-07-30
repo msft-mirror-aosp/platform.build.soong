@@ -59,7 +59,7 @@ type vbmetaProperties struct {
 
 	// List of filesystem modules that this vbmeta has descriptors for. The filesystem modules
 	// have to be signed (use_avb: true).
-	Partitions []string
+	Partitions proptools.Configurable[[]string]
 
 	// List of chained partitions that this vbmeta deletages the verification.
 	Chained_partitions []chainedPartitionProperties
@@ -110,7 +110,7 @@ type vbmetaDep struct {
 var vbmetaPartitionDep = vbmetaDep{kind: "partition"}
 
 func (v *vbmeta) DepsMutator(ctx android.BottomUpMutatorContext) {
-	ctx.AddDependency(ctx.Module(), vbmetaPartitionDep, v.properties.Partitions...)
+	ctx.AddDependency(ctx.Module(), vbmetaPartitionDep, v.properties.Partitions.GetOrDefault(ctx, nil)...)
 }
 
 func (v *vbmeta) installFileName() string {
@@ -211,6 +211,8 @@ func (v *vbmeta) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	v.installDir = android.PathForModuleInstall(ctx, "etc")
 	ctx.InstallFile(v.installDir, v.installFileName(), v.output)
+
+	ctx.SetOutputFiles([]android.Path{v.output}, "")
 }
 
 // Returns the embedded shell command that prints the rollback index
@@ -287,14 +289,4 @@ func (v *vbmeta) OutputPath() android.Path {
 
 func (v *vbmeta) SignedOutputPath() android.Path {
 	return v.OutputPath() // vbmeta is always signed
-}
-
-var _ android.OutputFileProducer = (*vbmeta)(nil)
-
-// Implements android.OutputFileProducer
-func (v *vbmeta) OutputFiles(tag string) (android.Paths, error) {
-	if tag == "" {
-		return []android.Path{v.output}, nil
-	}
-	return nil, fmt.Errorf("unsupported module reference tag %q", tag)
 }

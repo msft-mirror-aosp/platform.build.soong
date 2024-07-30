@@ -20,6 +20,8 @@ import (
 
 	"android/soong/android"
 	"android/soong/multitree"
+
+	"github.com/google/blueprint/proptools"
 )
 
 var (
@@ -122,7 +124,7 @@ func (d *apiLibraryDecorator) Name(basename string) string {
 // The directories are not guaranteed to exist during Soong analysis.
 func (d *apiLibraryDecorator) exportIncludes(ctx ModuleContext) {
 	exporterProps := d.flagExporter.Properties
-	for _, dir := range exporterProps.Export_include_dirs {
+	for _, dir := range exporterProps.Export_include_dirs.GetOrDefault(ctx, nil) {
 		d.dirs = append(d.dirs, android.MaybeExistentPathForSource(ctx, ctx.ModuleDir(), dir))
 	}
 	// system headers
@@ -178,16 +180,21 @@ func (d *apiLibraryDecorator) link(ctx ModuleContext, flags Flags, deps PathDeps
 				in = variantMod.Src()
 
 				// Copy LLDNK properties to cc_api_library module
-				d.libraryDecorator.flagExporter.Properties.Export_include_dirs = append(
-					d.libraryDecorator.flagExporter.Properties.Export_include_dirs,
+				exportIncludeDirs := append(d.libraryDecorator.flagExporter.Properties.Export_include_dirs.GetOrDefault(ctx, nil),
 					variantMod.exportProperties.Export_include_dirs...)
+				d.libraryDecorator.flagExporter.Properties.Export_include_dirs = proptools.NewConfigurable[[]string](
+					nil,
+					[]proptools.ConfigurableCase[[]string]{
+						proptools.NewConfigurableCase[[]string](nil, &exportIncludeDirs),
+					},
+				)
 
 				// Export headers as system include dirs if specified. Mostly for libc
 				if Bool(variantMod.exportProperties.Export_headers_as_system) {
 					d.libraryDecorator.flagExporter.Properties.Export_system_include_dirs = append(
 						d.libraryDecorator.flagExporter.Properties.Export_system_include_dirs,
-						d.libraryDecorator.flagExporter.Properties.Export_include_dirs...)
-					d.libraryDecorator.flagExporter.Properties.Export_include_dirs = nil
+						d.libraryDecorator.flagExporter.Properties.Export_include_dirs.GetOrDefault(ctx, nil)...)
+					d.libraryDecorator.flagExporter.Properties.Export_include_dirs = proptools.NewConfigurable[[]string](nil, nil)
 				}
 			}
 		}
@@ -296,7 +303,7 @@ func (d *apiLibraryDecorator) hasStubsVariants() bool {
 	return d.hasApexStubs()
 }
 
-func (d *apiLibraryDecorator) stubsVersions(ctx android.BaseMutatorContext) []string {
+func (d *apiLibraryDecorator) stubsVersions(ctx android.BaseModuleContext) []string {
 	m, ok := ctx.Module().(*Module)
 
 	if !ok {
@@ -487,6 +494,12 @@ func BuildApiVariantName(baseName string, variant string, version string) string
 
 // Implement ImageInterface to generate image variants
 func (v *CcApiVariant) ImageMutatorBegin(ctx android.BaseModuleContext) {}
+func (v *CcApiVariant) VendorVariantNeeded(ctx android.BaseModuleContext) bool {
+	return String(v.properties.Variant) == "llndk"
+}
+func (v *CcApiVariant) ProductVariantNeeded(ctx android.BaseModuleContext) bool {
+	return String(v.properties.Variant) == "llndk"
+}
 func (v *CcApiVariant) CoreVariantNeeded(ctx android.BaseModuleContext) bool {
 	return inList(String(v.properties.Variant), []string{"ndk", "apex"})
 }
@@ -494,15 +507,6 @@ func (v *CcApiVariant) RamdiskVariantNeeded(ctx android.BaseModuleContext) bool 
 func (v *CcApiVariant) VendorRamdiskVariantNeeded(ctx android.BaseModuleContext) bool { return false }
 func (v *CcApiVariant) DebugRamdiskVariantNeeded(ctx android.BaseModuleContext) bool  { return false }
 func (v *CcApiVariant) RecoveryVariantNeeded(ctx android.BaseModuleContext) bool      { return false }
-func (v *CcApiVariant) ExtraImageVariations(ctx android.BaseModuleContext) []string {
-	var variations []string
-
-	if String(v.properties.Variant) == "llndk" {
-		variations = append(variations, VendorVariation)
-		variations = append(variations, ProductVariation)
-	}
-
-	return variations
-}
-func (v *CcApiVariant) SetImageVariation(ctx android.BaseModuleContext, variation string, module android.Module) {
+func (v *CcApiVariant) ExtraImageVariations(ctx android.BaseModuleContext) []string   { return nil }
+func (v *CcApiVariant) SetImageVariation(ctx android.BaseModuleContext, variation string) {
 }
