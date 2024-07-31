@@ -388,7 +388,9 @@ func TestClasspath(t *testing.T) {
 		},
 	}
 
+	t.Parallel()
 	t.Run("basic", func(t *testing.T) {
+		t.Parallel()
 		testClasspathTestCases(t, classpathTestcases, false)
 	})
 
@@ -404,6 +406,7 @@ func testClasspathTestCases(t *testing.T, classpathTestcases []classpathTestCase
 		}
 
 		t.Run(testcase.name, func(t *testing.T) {
+			t.Parallel()
 			moduleType := "java_library"
 			if testcase.moduleType != "" {
 				moduleType = testcase.moduleType

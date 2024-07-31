@@ -91,6 +91,10 @@ type CommonProperties struct {
 	// if not blank, run jarjar using the specified rules file
 	Jarjar_rules *string `android:"path,arch_variant"`
 
+	// java class names to rename with jarjar when a reverse dependency has a jarjar_prefix
+	// property.
+	Jarjar_rename []string
+
 	// if not blank, used as prefix to generate repackage rule
 	Jarjar_prefix *string
 
@@ -547,6 +551,22 @@ type Module struct {
 	// java_aconfig_library or java_library modules that are statically linked
 	// to this module. Does not contain cache files from all transitive dependencies.
 	aconfigCacheFiles android.Paths
+
+	// List of soong module dependencies required to compile the current module.
+	// This information is printed out to `Dependencies` field in module_bp_java_deps.json
+	compileDepNames []string
+}
+
+var _ android.InstallableModule = (*Module)(nil)
+
+// To satisfy the InstallableModule interface
+func (j *Module) EnforceApiContainerChecks() bool {
+	return true
+}
+
+// Overrides android.ModuleBase.InstallInProduct()
+func (j *Module) InstallInProduct() bool {
+	return j.ProductSpecific()
 }
 
 func (j *Module) CheckStableSdkVersion(ctx android.BaseModuleContext) error {
@@ -649,34 +669,20 @@ func (j *Module) provideHiddenAPIPropertyInfo(ctx android.ModuleContext) {
 	android.SetProvider(ctx, hiddenAPIPropertyInfoProvider, hiddenAPIInfo)
 }
 
-func (j *Module) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return append(android.Paths{j.outputFile}, j.extraOutputFiles...), nil
-	case android.DefaultDistTag:
-		return android.Paths{j.outputFile}, nil
-	case ".jar":
-		return android.Paths{j.implementationAndResourcesJar}, nil
-	case ".hjar":
-		return android.Paths{j.headerJarFile}, nil
-	case ".proguard_map":
-		if j.dexer.proguardDictionary.Valid() {
-			return android.Paths{j.dexer.proguardDictionary.Path()}, nil
-		}
-		return nil, fmt.Errorf("%q was requested, but no output file was found.", tag)
-	case ".generated_srcjars":
-		return j.properties.Generated_srcjars, nil
-	case ".lint":
-		if j.linter.outputs.xml != nil {
-			return android.Paths{j.linter.outputs.xml}, nil
-		}
-		return nil, fmt.Errorf("%q was requested, but no output file was found.", tag)
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
+// helper method for java modules to set OutputFilesProvider
+func setOutputFiles(ctx android.ModuleContext, m Module) {
+	ctx.SetOutputFiles(append(android.Paths{m.outputFile}, m.extraOutputFiles...), "")
+	ctx.SetOutputFiles(android.Paths{m.outputFile}, android.DefaultDistTag)
+	ctx.SetOutputFiles(android.Paths{m.implementationAndResourcesJar}, ".jar")
+	ctx.SetOutputFiles(android.Paths{m.headerJarFile}, ".hjar")
+	if m.dexer.proguardDictionary.Valid() {
+		ctx.SetOutputFiles(android.Paths{m.dexer.proguardDictionary.Path()}, ".proguard_map")
+	}
+	ctx.SetOutputFiles(m.properties.Generated_srcjars, ".generated_srcjars")
+	if m.linter.outputs.xml != nil {
+		ctx.SetOutputFiles(android.Paths{m.linter.outputs.xml}, ".lint")
 	}
 }
-
-var _ android.OutputFileProducer = (*Module)(nil)
 
 func InitJavaModule(module android.DefaultableModule, hod android.HostOrDeviceSupported) {
 	initJavaModule(module, hod, false)
@@ -2058,10 +2064,7 @@ func (j *Module) IDEInfo(dpInfo *android.IdeInfo) {
 }
 
 func (j *Module) CompilerDeps() []string {
-	jdeps := []string{}
-	jdeps = append(jdeps, j.properties.Libs...)
-	jdeps = append(jdeps, j.properties.Static_libs...)
-	return jdeps
+	return j.compileDepNames
 }
 
 func (j *Module) hasCode(ctx android.ModuleContext) bool {
@@ -2405,6 +2408,11 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			}
 		}
 
+		if android.InList(tag, compileDependencyTags) {
+			// Add the dependency name to compileDepNames so that it can be recorded in module_bp_java_deps.json
+			j.compileDepNames = append(j.compileDepNames, otherName)
+		}
+
 		addCLCFromDep(ctx, module, j.classLoaderContexts)
 		addMissingOptionalUsesLibsFromDep(ctx, module, &j.usesLibrary)
 	})
@@ -2646,8 +2654,7 @@ func (module *Module) collectJarJarRules(ctx android.ModuleContext) *JarJarProvi
 	// Gather repackage information from deps
 	result := collectDirectDepsProviders(ctx)
 
-	// Update that with entries we've stored for ourself
-	for orig, renamed := range module.jarjarRenameRules {
+	add := func(orig string, renamed string) {
 		if result == nil {
 			result = &JarJarProviderData{
 				Rename: make(map[string]string),
@@ -2656,10 +2663,20 @@ func (module *Module) collectJarJarRules(ctx android.ModuleContext) *JarJarProvi
 		if renamed != "" {
 			if preexisting, exists := (*result).Rename[orig]; exists && preexisting != renamed {
 				ctx.ModuleErrorf("Conflicting jarjar rules inherited for class: %s (%s and %s)", orig, renamed, preexisting)
-				continue
+				return
 			}
 		}
 		(*result).Rename[orig] = renamed
+	}
+
+	// Update that with entries we've stored for ourself
+	for orig, renamed := range module.jarjarRenameRules {
+		add(orig, renamed)
+	}
+
+	// Update that with entries given in the jarjar_rename property.
+	for _, orig := range module.properties.Jarjar_rename {
+		add(orig, "")
 	}
 
 	// If there are no renamings, then jarjar_prefix does nothing, so skip the extra work.
