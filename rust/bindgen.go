@@ -29,7 +29,7 @@ var (
 	defaultBindgenFlags = []string{""}
 
 	// bindgen should specify its own Clang revision so updating Clang isn't potentially blocked on bindgen failures.
-	bindgenClangVersion = "clang-r522817"
+	bindgenClangVersion = "clang-r530567"
 
 	_ = pctx.VariableFunc("bindgenClangVersion", func(ctx android.PackageVarContext) string {
 		if override := ctx.Config().Getenv("LLVM_BINDGEN_PREBUILTS_VERSION"); override != "" {
@@ -285,7 +285,7 @@ func (b *bindgenDecorator) GenerateSource(ctx ModuleContext, deps PathDeps) andr
 	if isCpp {
 		cflags = append(cflags, "-x c++")
 		// Add any C++ only flags.
-		cflags = append(cflags, esc(b.ClangProperties.Cppflags)...)
+		cflags = append(cflags, esc(b.ClangProperties.Cppflags.GetOrDefault(ctx, nil))...)
 	} else {
 		cflags = append(cflags, "-x c")
 	}

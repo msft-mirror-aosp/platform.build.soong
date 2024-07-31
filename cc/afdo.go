@@ -176,6 +176,9 @@ func (a *afdoTransitionMutator) IncomingTransition(ctx android.IncomingTransitio
 
 func (a *afdoTransitionMutator) Mutate(ctx android.BottomUpMutatorContext, variation string) {
 	if m, ok := ctx.Module().(*Module); ok && m.afdo != nil {
+		if !m.Enabled(ctx) {
+			return
+		}
 		if variation == "" {
 			// The empty variation is either a module that has enabled AFDO for itself, or the non-AFDO
 			// variant of a dependency.

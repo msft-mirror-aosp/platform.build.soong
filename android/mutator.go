@@ -400,6 +400,12 @@ type IncomingTransitionContext interface {
 	Config() Config
 
 	DeviceConfig() DeviceConfig
+
+	// IsAddingDependency returns true if the transition is being called while adding a dependency
+	// after the transition mutator has already run, or false if it is being called when the transition
+	// mutator is running.  This should be used sparingly, all uses will have to be removed in order
+	// to support creating variants on demand.
+	IsAddingDependency() bool
 }
 
 type OutgoingTransitionContext interface {
@@ -572,6 +578,10 @@ func (c *incomingTransitionContextImpl) Config() Config {
 
 func (c *incomingTransitionContextImpl) DeviceConfig() DeviceConfig {
 	return DeviceConfig{c.bp.Config().(Config).deviceConfig}
+}
+
+func (c *incomingTransitionContextImpl) IsAddingDependency() bool {
+	return c.bp.IsAddingDependency()
 }
 
 func (c *incomingTransitionContextImpl) provider(provider blueprint.AnyProviderKey) (any, bool) {
