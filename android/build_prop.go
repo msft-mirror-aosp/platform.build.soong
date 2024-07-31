@@ -31,6 +31,10 @@ type buildPropProperties struct {
 	// properties in prop_files.
 	Block_list []string
 
+	// Path to the input prop files. The contents of the files are directly
+	// emitted to the output
+	Prop_files []string `android:"path"`
+
 	// Files to be appended at the end of build.prop. These files are appended after
 	// post_process_props without any further checking.
 	Footer_files []string `android:"path"`
@@ -52,34 +56,10 @@ func (p *buildPropModule) stem() string {
 	return proptools.StringDefault(p.properties.Stem, "build.prop")
 }
 
-func (p *buildPropModule) propFiles(ctx ModuleContext) Paths {
-	partition := p.PartitionTag(ctx.DeviceConfig())
-	if partition == "system" {
-		return ctx.Config().SystemPropFiles(ctx)
-	}
-	return nil
-}
-
-func shouldAddBuildThumbprint(config Config) bool {
-	knownOemProperties := []string{
-		"ro.product.brand",
-		"ro.product.name",
-		"ro.product.device",
-	}
-
-	for _, knownProp := range knownOemProperties {
-		if InList(knownProp, config.OemProperties()) {
-			return true
-		}
-	}
-	return false
-}
-
 func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 	p.outputFilePath = PathForModuleOut(ctx, "build.prop").OutputPath
 	if !ctx.Config().KatiEnabled() {
 		WriteFileRule(ctx, p.outputFilePath, "# no build.prop if kati is disabled")
-		ctx.SetOutputFiles(Paths{p.outputFilePath}, "")
 		return
 	}
 
@@ -113,7 +93,6 @@ func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 	cmd.FlagWithInput("--platform-preview-sdk-fingerprint-file=", ApiFingerprintPath(ctx))
 	cmd.FlagWithInput("--product-config=", PathForModuleSrc(ctx, proptools.String(p.properties.Product_config)))
 	cmd.FlagWithArg("--partition=", partition)
-	cmd.FlagForEachInput("--prop-files=", ctx.Config().SystemPropFiles(ctx))
 	cmd.FlagWithOutput("--out=", p.outputFilePath)
 
 	postProcessCmd := rule.Command().BuiltTool("post_process_props")
@@ -121,12 +100,7 @@ func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 		postProcessCmd.Flag("--allow-dup")
 	}
 	postProcessCmd.FlagWithArg("--sdk-version ", config.PlatformSdkVersion().String())
-	if ctx.Config().EnableUffdGc() == "default" {
-		postProcessCmd.FlagWithInput("--kernel-version-file-for-uffd-gc ", PathForOutput(ctx, "dexpreopt/kernel_version_for_uffd_gc.txt"))
-	} else {
-		// still need to pass an empty string to kernel-version-file-for-uffd-gc
-		postProcessCmd.FlagWithArg("--kernel-version-file-for-uffd-gc ", `""`)
-	}
+	postProcessCmd.FlagWithInput("--kernel-version-file-for-uffd-gc ", PathForOutput(ctx, "dexpreopt/kernel_version_for_uffd_gc.txt"))
 	postProcessCmd.Text(p.outputFilePath.String())
 	postProcessCmd.Flags(p.properties.Block_list)
 
@@ -138,19 +112,6 @@ func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 	ctx.InstallFile(p.installPath, p.stem(), p.outputFilePath)
 
 	ctx.SetOutputFiles(Paths{p.outputFilePath}, "")
-}
-
-func (p *buildPropModule) AndroidMkEntries() []AndroidMkEntries {
-	return []AndroidMkEntries{{
-		Class:      "ETC",
-		OutputFile: OptionalPathForPath(p.outputFilePath),
-		ExtraEntries: []AndroidMkExtraEntriesFunc{
-			func(ctx AndroidMkExtraEntriesContext, entries *AndroidMkEntries) {
-				entries.SetString("LOCAL_MODULE_PATH", p.installPath.String())
-				entries.SetString("LOCAL_INSTALLED_MODULE_STEM", p.outputFilePath.Base())
-			},
-		},
-	}}
 }
 
 // build_prop module generates {partition}/build.prop file. At first common build properties are
