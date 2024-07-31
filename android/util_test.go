@@ -818,3 +818,52 @@ func TestReverseSlice(t *testing.T) {
 		})
 	}
 }
+
+var hasIntersectionTestCases = []struct {
+	name     string
+	l1       []string
+	l2       []string
+	expected bool
+}{
+	{
+		name:     "empty",
+		l1:       []string{"a", "b", "c"},
+		l2:       []string{},
+		expected: false,
+	},
+	{
+		name:     "both empty",
+		l1:       []string{},
+		l2:       []string{},
+		expected: false,
+	},
+	{
+		name:     "identical",
+		l1:       []string{"a", "b", "c"},
+		l2:       []string{"a", "b", "c"},
+		expected: true,
+	},
+	{
+		name:     "duplicates",
+		l1:       []string{"a", "a", "a"},
+		l2:       []string{"a", "b", "c"},
+		expected: true,
+	},
+	{
+		name:     "duplicates with no intersection",
+		l1:       []string{"d", "d", "d", "d"},
+		l2:       []string{"a", "b", "c"},
+		expected: false,
+	},
+}
+
+func TestHasIntersection(t *testing.T) {
+	for _, testCase := range hasIntersectionTestCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			hasIntersection := HasIntersection(testCase.l1, testCase.l2)
+			if !reflect.DeepEqual(hasIntersection, testCase.expected) {
+				t.Errorf("expected %#v, got %#v", testCase.expected, hasIntersection)
+			}
+		})
+	}
+}

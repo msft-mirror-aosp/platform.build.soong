@@ -29,8 +29,12 @@ import (
 )
 
 func init() {
-	android.RegisterModuleType("android_robolectric_test", RobolectricTestFactory)
-	android.RegisterModuleType("android_robolectric_runtimes", robolectricRuntimesFactory)
+	RegisterRobolectricBuildComponents(android.InitRegistrationContext)
+}
+
+func RegisterRobolectricBuildComponents(ctx android.RegistrationContext) {
+	ctx.RegisterModuleType("android_robolectric_test", RobolectricTestFactory)
+	ctx.RegisterModuleType("android_robolectric_runtimes", robolectricRuntimesFactory)
 }
 
 var robolectricDefaultLibs = []string{
@@ -74,6 +78,8 @@ type robolectricProperties struct {
 
 	// Use strict mode to limit access of Robolectric API directly. See go/roboStrictMode
 	Strict_mode *bool
+
+	Jni_libs []string
 }
 
 type robolectricTest struct {
@@ -137,6 +143,10 @@ func (r *robolectricTest) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 	ctx.AddFarVariationDependencies(ctx.Config().BuildOSCommonTarget.Variations(),
 		roboRuntimesTag, "robolectric-android-all-prebuilts")
+
+	for _, lib := range r.robolectricProperties.Jni_libs {
+		ctx.AddVariationDependencies(ctx.Config().BuildOSTarget.Variations(), jniLibTag, lib)
+	}
 }
 
 func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -268,6 +278,12 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 	for _, data := range android.PathsForModuleSrc(ctx, r.testProperties.Data) {
 		installedData := ctx.InstallFile(installPath, data.Rel(), data)
 		installDeps = append(installDeps, installedData)
+	}
+
+	soInstallPath := installPath.Join(ctx, getLibPath(r.forceArchType))
+	for _, jniLib := range collectTransitiveJniDeps(ctx) {
+		installJni := ctx.InstallFile(soInstallPath, jniLib.path.Base(), jniLib.path)
+		installDeps = append(installDeps, installJni)
 	}
 
 	r.installFile = ctx.InstallFile(installPath, ctx.ModuleName()+".jar", r.combinedJar, installDeps...)

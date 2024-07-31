@@ -138,7 +138,6 @@ func makeVarsProvider(ctx android.MakeVarsContext) {
 	ctx.Strict("CLANG_COVERAGE_HWASAN_FLAGS", strings.Join(clangCoverageHWASanFlags, " "))
 
 	ctx.Strict("ADDRESS_SANITIZER_CONFIG_EXTRA_CFLAGS", strings.Join(asanCflags, " "))
-	ctx.Strict("ADDRESS_SANITIZER_CONFIG_EXTRA_LDFLAGS", strings.Join(asanLdflags, " "))
 
 	ctx.Strict("HWADDRESS_SANITIZER_CONFIG_EXTRA_CFLAGS", strings.Join(hwasanCflags, " "))
 	ctx.Strict("HWADDRESS_SANITIZER_GLOBAL_OPTIONS", strings.Join(hwasanGlobalOptions, ","))
