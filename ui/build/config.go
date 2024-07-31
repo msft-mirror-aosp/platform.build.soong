@@ -121,6 +121,10 @@ type configImpl struct {
 	// There's quite a bit of overlap with module-info.json and soong module graph. We
 	// could consider merging them.
 	moduleDebugFile string
+
+	// Whether to use n2 instead of ninja.  This is controlled with the
+	// environment variable SOONG_USE_N2
+	useN2 bool
 }
 
 type NinjaWeightListSource uint
@@ -283,6 +287,10 @@ func NewConfig(ctx Context, args ...string) Config {
 		ret.moduleDebugFile, _ = filepath.Abs(shared.JoinPath(ret.SoongOutDir(), "soong-debug-info.json"))
 	}
 
+	if os.Getenv("SOONG_USE_N2") == "true" {
+		ret.useN2 = true
+	}
+
 	ret.environ.Unset(
 		// We're already using it
 		"USE_SOONG_UI",
@@ -313,6 +321,7 @@ func NewConfig(ctx Context, args ...string) Config {
 		"DISPLAY",
 		"GREP_OPTIONS",
 		"JAVAC",
+		"LEX",
 		"NDK_ROOT",
 		"POSIXLY_CORRECT",
 
@@ -338,6 +347,9 @@ func NewConfig(ctx Context, args ...string) Config {
 
 		// We read it here already, don't let others share in the fun
 		"GENERATE_SOONG_DEBUG",
+
+		// Use config.useN2 instead.
+		"SOONG_USE_N2",
 	)
 
 	if ret.UseGoma() || ret.ForceUseGoma() {
@@ -1258,7 +1270,23 @@ func (c *configImpl) canSupportRBE() bool {
 	if !c.StubbyExists() && strings.Contains(authType, "use_google_prod_creds") {
 		return false
 	}
+	if c.UseABFS() {
+		return false
+	}
 	return true
+}
+
+func (c *configImpl) UseABFS() bool {
+	if v, ok := c.environ.Get("NO_ABFS"); ok {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v == "true" || v == "1" {
+			return false
+		}
+	}
+
+	abfsBox := c.PrebuiltBuildTool("abfsbox")
+	err := exec.Command(abfsBox, "hash", srcDirFileCheck).Run()
+	return err == nil
 }
 
 func (c *configImpl) UseRBE() bool {
@@ -1571,6 +1599,23 @@ func (c *configImpl) HostPrebuiltTag() string {
 	} else {
 		panic("Unsupported OS")
 	}
+}
+
+func (c *configImpl) KatiBin() string {
+	binName := "ckati"
+	if c.UseABFS() {
+		binName = "ckati-wrap"
+	}
+
+	return c.PrebuiltBuildTool(binName)
+}
+
+func (c *configImpl) NinjaBin() string {
+	binName := "ninja"
+	if c.UseABFS() {
+		binName = "ninjago"
+	}
+	return c.PrebuiltBuildTool(binName)
 }
 
 func (c *configImpl) PrebuiltBuildTool(name string) string {

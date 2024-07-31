@@ -212,7 +212,7 @@ func createCcSdkVariantRules() []Rule {
 
 func createCcStubsRule() Rule {
 	ccStubsImplementationInstallableProjectsAllowedList := []string{
-		"packages/modules/Virtualization/vm_payload",
+		"packages/modules/Virtualization/libs/libvm_payload",
 	}
 
 	return NeverAllow().
@@ -237,6 +237,7 @@ func createInitFirstStageRules() []Rule {
 			Without("name", "init_first_stage").
 			Without("name", "init_first_stage.microdroid").
 			With("install_in_root", "true").
+			NotModuleType("prebuilt_root").
 			Because("install_in_root is only for init_first_stage."),
 	}
 }

@@ -538,9 +538,6 @@ type sdkLibraryProperties struct {
 	// of the API.
 	Api_packages []string
 
-	// list of package names that must be hidden from the API
-	Hidden_api_packages []string
-
 	// the relative path to the directory containing the api specification files.
 	// Defaults to "api".
 	Api_dir *string
@@ -663,6 +660,10 @@ type sdkLibraryProperties struct {
 	// a list of aconfig_declarations module names that the stubs generated in this module
 	// depend on.
 	Aconfig_declarations []string
+
+	// Determines if the module generates the stubs from the api signature files
+	// instead of the source Java files. Defaults to true.
+	Build_from_text_stub *bool
 
 	// TODO: determines whether to create HTML doc or not
 	// Html_doc *bool
@@ -1086,57 +1087,26 @@ var tagSplitter = func() *regexp.Regexp {
 	return regexp.MustCompile(fmt.Sprintf(`^\.(%s)\.(%s)$`, scopesRegexp, componentsRegexp))
 }()
 
-// For OutputFileProducer interface
-//
-// .<scope>.<component name>, for all ComponentNames (for example: .public.removed-api.txt)
-func (c *commonToSdkLibraryAndImport) commonOutputFiles(tag string) (android.Paths, error) {
-	if groups := tagSplitter.FindStringSubmatch(tag); groups != nil {
-		scopeName := groups[1]
-		component := groups[2]
-
-		if scope, ok := scopeByName[scopeName]; ok {
-			paths := c.findScopePaths(scope)
-			if paths == nil {
-				return nil, fmt.Errorf("%q does not provide api scope %s", c.module.RootLibraryName(), scopeName)
-			}
-
-			switch component {
-			case stubsSourceComponentName:
-				if paths.stubsSrcJar.Valid() {
-					return android.Paths{paths.stubsSrcJar.Path()}, nil
-				}
-
-			case apiTxtComponentName:
-				if paths.currentApiFilePath.Valid() {
-					return android.Paths{paths.currentApiFilePath.Path()}, nil
-				}
-
-			case removedApiTxtComponentName:
-				if paths.removedApiFilePath.Valid() {
-					return android.Paths{paths.removedApiFilePath.Path()}, nil
-				}
-
-			case annotationsComponentName:
-				if paths.annotationsZip.Valid() {
-					return android.Paths{paths.annotationsZip.Path()}, nil
-				}
-			}
-
-			return nil, fmt.Errorf("%s not available for api scope %s", component, scopeName)
-		} else {
-			return nil, fmt.Errorf("unknown scope %s in %s", scope, tag)
+func (module *commonToSdkLibraryAndImport) setOutputFiles(ctx android.ModuleContext) {
+	if module.doctagPaths != nil {
+		ctx.SetOutputFiles(module.doctagPaths, ".doctags")
+	}
+	for _, scopeName := range android.SortedKeys(scopeByName) {
+		paths := module.findScopePaths(scopeByName[scopeName])
+		if paths == nil {
+			continue
 		}
-
-	} else {
-		switch tag {
-		case ".doctags":
-			if c.doctagPaths != nil {
-				return c.doctagPaths, nil
-			} else {
-				return nil, fmt.Errorf("no doctag_files specified on %s", c.module.RootLibraryName())
+		componentToOutput := map[string]android.OptionalPath{
+			stubsSourceComponentName:   paths.stubsSrcJar,
+			apiTxtComponentName:        paths.currentApiFilePath,
+			removedApiTxtComponentName: paths.removedApiFilePath,
+			annotationsComponentName:   paths.annotationsZip,
+		}
+		for _, component := range android.SortedKeys(componentToOutput) {
+			if componentToOutput[component].Valid() {
+				ctx.SetOutputFiles(android.Paths{componentToOutput[component].Path()}, "."+scopeName+"."+component)
 			}
 		}
-		return nil, nil
 	}
 }
 
@@ -1550,6 +1520,13 @@ func (module *SdkLibrary) ComponentDepsMutator(ctx android.BottomUpMutatorContex
 
 // Add other dependencies as normal.
 func (module *SdkLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
+	// If the module does not create an implementation library or defaults to stubs,
+	// mark the top level sdk library as stubs module as the module will provide stubs via
+	// "magic" when listed as a dependency in the Android.bp files.
+	notCreateImplLib := proptools.Bool(module.sdkLibraryProperties.Api_only)
+	preferStubs := proptools.Bool(module.sdkLibraryProperties.Default_to_stubs)
+	module.properties.Is_stubs_module = proptools.BoolPtr(notCreateImplLib || preferStubs)
+
 	var missingApiModules []string
 	for _, apiScope := range module.getGeneratedApiScopes(ctx) {
 		if apiScope.unstable {
@@ -1577,20 +1554,6 @@ func (module *SdkLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 		m += "Please see the documentation of the prebuilt_apis module type (and a usage example in prebuilts/sdk) for a convenient way to generate these."
 		ctx.ModuleErrorf(m)
 	}
-}
-
-func (module *SdkLibrary) OutputFiles(tag string) (android.Paths, error) {
-	paths, err := module.commonOutputFiles(tag)
-	if paths != nil || err != nil {
-		return paths, err
-	}
-	if module.requiresRuntimeImplementationLibrary() {
-		return module.implLibraryModule.OutputFiles(tag)
-	}
-	if tag == "" {
-		return nil, nil
-	}
-	return nil, fmt.Errorf("unsupported module reference tag %q", tag)
 }
 
 func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -1702,6 +1665,10 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		}
 	}
 	android.SetProvider(ctx, android.AdditionalSdkInfoProvider, android.AdditionalSdkInfo{additionalSdkInfo})
+	module.setOutputFiles(ctx)
+	if module.requiresRuntimeImplementationLibrary() && module.implLibraryModule != nil {
+		setOutputFiles(ctx, module.implLibraryModule.Module)
+	}
 }
 
 func (module *SdkLibrary) BuiltInstalledForApex() []dexpreopterInstall {
@@ -2006,10 +1973,6 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 	droidstubsArgs := []string{}
 	if len(module.sdkLibraryProperties.Api_packages) != 0 {
 		droidstubsArgs = append(droidstubsArgs, "--stub-packages "+strings.Join(module.sdkLibraryProperties.Api_packages, ":"))
-	}
-	if len(module.sdkLibraryProperties.Hidden_api_packages) != 0 {
-		droidstubsArgs = append(droidstubsArgs,
-			android.JoinWithPrefix(module.sdkLibraryProperties.Hidden_api_packages, " --hide-package "))
 	}
 	droidstubsArgs = append(droidstubsArgs, module.sdkLibraryProperties.Droiddoc_options...)
 	disabledWarnings := []string{"HiddenSuperclass"}
@@ -2937,18 +2900,6 @@ func (module *SdkLibraryImport) MinSdkVersion(ctx android.EarlyModuleContext) an
 
 var _ hiddenAPIModule = (*SdkLibraryImport)(nil)
 
-func (module *SdkLibraryImport) OutputFiles(tag string) (android.Paths, error) {
-	paths, err := module.commonOutputFiles(tag)
-	if paths != nil || err != nil {
-		return paths, err
-	}
-	if module.implLibraryModule != nil {
-		return module.implLibraryModule.OutputFiles(tag)
-	} else {
-		return nil, nil
-	}
-}
-
 func (module *SdkLibraryImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	module.generateCommonBuildActions(ctx)
 
@@ -3030,6 +2981,11 @@ func (module *SdkLibraryImport) GenerateAndroidBuildActions(ctx android.ModuleCo
 				ctx.ModuleErrorf("internal error: no dex implementation jar available from prebuilt APEX %s", di.ApexModuleName())
 			}
 		}
+	}
+
+	module.setOutputFiles(ctx)
+	if module.implLibraryModule != nil {
+		setOutputFiles(ctx, module.implLibraryModule.Module)
 	}
 }
 

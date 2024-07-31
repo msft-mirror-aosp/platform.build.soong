@@ -704,8 +704,9 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 		optFlags = append(optFlags, "--override_apk_package_name "+manifestPackageName)
 	}
 
-	if a.properties.AndroidManifest != nil {
-		androidManifestFile := android.PathForModuleSrc(ctx, proptools.String(a.properties.AndroidManifest))
+	androidManifest := a.properties.AndroidManifest.GetOrDefault(ctx, "")
+	if androidManifest != "" {
+		androidManifestFile := android.PathForModuleSrc(ctx, androidManifest)
 
 		if a.testApex {
 			androidManifestFile = markManifestTestOnly(ctx, androidManifestFile)
@@ -765,18 +766,6 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 	builder.Build("notice_dir", "Building notice dir")
 	implicitInputs = append(implicitInputs, noticeAssetPath)
 	optFlags = append(optFlags, "--assets_dir "+filepath.Dir(noticeAssetPath.String()))
-
-	// Apexes which are supposed to be installed in builtin dirs(/system, etc)
-	// don't need hashtree for activation. Therefore, by removing hashtree from
-	// apex bundle (filesystem image in it, to be specific), we can save storage.
-	needHashTree := moduleMinSdkVersion.LessThanOrEqualTo(android.SdkVersion_Android10) ||
-		a.shouldGenerateHashtree()
-	if ctx.Config().ApexCompressionEnabled() && a.isCompressable() {
-		needHashTree = true
-	}
-	if !needHashTree {
-		optFlags = append(optFlags, "--no_hashtree")
-	}
 
 	if a.testOnlyShouldSkipPayloadSign() {
 		optFlags = append(optFlags, "--unsigned_payload")
@@ -1195,8 +1184,9 @@ func (a *apexBundle) buildCannedFsConfig(ctx android.ModuleContext, defaultReadO
 	}
 	// Custom fs_config is "appended" to the last so that entries from the file are preferred
 	// over default ones set above.
-	if a.properties.Canned_fs_config != nil {
-		cmd.Text("cat").Input(android.PathForModuleSrc(ctx, *a.properties.Canned_fs_config))
+	customFsConfig := a.properties.Canned_fs_config.GetOrDefault(ctx, "")
+	if customFsConfig != "" {
+		cmd.Text("cat").Input(android.PathForModuleSrc(ctx, customFsConfig))
 	}
 	cmd.Text(")").FlagWithOutput("> ", cannedFsConfig)
 	builder.Build("generateFsConfig", fmt.Sprintf("Generating canned fs config for %s", a.BaseModuleName()))

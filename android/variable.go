@@ -132,9 +132,11 @@ type variableProperties struct {
 				Keep_symbols                 *bool
 				Keep_symbols_and_debug_frame *bool
 			}
-			Static_libs       []string
-			Whole_static_libs []string
-			Shared_libs       []string
+			Static_libs         []string
+			Exclude_static_libs []string
+			Whole_static_libs   []string
+			Shared_libs         []string
+			Jni_libs            []string
 
 			Cmdline []string
 
@@ -237,8 +239,6 @@ type ProductVariables struct {
 
 	VendorApiLevel *string `json:",omitempty"`
 
-	RecoverySnapshotVersion *string `json:",omitempty"`
-
 	DeviceSecondaryArch        *string  `json:",omitempty"`
 	DeviceSecondaryArchVariant *string  `json:",omitempty"`
 	DeviceSecondaryCpuVariant  *string  `json:",omitempty"`
@@ -274,8 +274,10 @@ type ProductVariables struct {
 	AAPTPreferredConfig *string  `json:",omitempty"`
 	AAPTPrebuiltDPI     []string `json:",omitempty"`
 
-	DefaultAppCertificate           *string `json:",omitempty"`
-	MainlineSepolicyDevCertificates *string `json:",omitempty"`
+	DefaultAppCertificate           *string  `json:",omitempty"`
+	ExtraOtaKeys                    []string `json:",omitempty"`
+	ExtraOtaRecoveryKeys            []string `json:",omitempty"`
+	MainlineSepolicyDevCertificates *string  `json:",omitempty"`
 
 	AppsDefaultVersionName *string `json:",omitempty"`
 
@@ -292,6 +294,7 @@ type ProductVariables struct {
 	HostStaticBinaries           *bool    `json:",omitempty"`
 	Binder32bit                  *bool    `json:",omitempty"`
 	UseGoma                      *bool    `json:",omitempty"`
+	UseABFS                      *bool    `json:",omitempty"`
 	UseRBE                       *bool    `json:",omitempty"`
 	UseRBEJAVAC                  *bool    `json:",omitempty"`
 	UseRBER8                     *bool    `json:",omitempty"`
@@ -368,20 +371,6 @@ type ProductVariables struct {
 	NamespacesToExport []string `json:",omitempty"`
 
 	PgoAdditionalProfileDirs []string `json:",omitempty"`
-
-	VndkSnapshotBuildArtifacts *bool `json:",omitempty"`
-
-	DirectedVendorSnapshot bool            `json:",omitempty"`
-	VendorSnapshotModules  map[string]bool `json:",omitempty"`
-
-	DirectedRecoverySnapshot bool            `json:",omitempty"`
-	RecoverySnapshotModules  map[string]bool `json:",omitempty"`
-
-	VendorSnapshotDirsIncluded   []string `json:",omitempty"`
-	VendorSnapshotDirsExcluded   []string `json:",omitempty"`
-	RecoverySnapshotDirsExcluded []string `json:",omitempty"`
-	RecoverySnapshotDirsIncluded []string `json:",omitempty"`
-	HostFakeSnapshotEnabled      bool     `json:",omitempty"`
 
 	MultitreeUpdateMeta bool `json:",omitempty"`
 
@@ -516,6 +505,8 @@ type ProductVariables struct {
 	BoardUseVbmetaDigestInFingerprint *bool `json:",omitempty"`
 
 	OemProperties []string `json:",omitempty"`
+
+	ArtTargetIncludeDebugBuild *bool `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {
