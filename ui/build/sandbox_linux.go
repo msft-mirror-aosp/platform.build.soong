@@ -48,7 +48,11 @@ var (
 	}
 )
 
-const nsjailPath = "prebuilts/build-tools/linux-x86/bin/nsjail"
+const (
+	nsjailPath = "prebuilts/build-tools/linux-x86/bin/nsjail"
+	abfsSrcDir = "/src"
+	abfsOutDir = "/src/out"
+)
 
 var sandboxConfig struct {
 	once sync.Once
@@ -145,6 +149,22 @@ func (c *Cmd) sandboxSupported() bool {
 	return sandboxConfig.working
 }
 
+func (c *Cmd) srcDirArg() string {
+	if !c.config.UseABFS() {
+		return sandboxConfig.srcDir
+	}
+
+	return sandboxConfig.srcDir + ":" + abfsSrcDir
+}
+
+func (c *Cmd) outDirArg() string {
+	if !c.config.UseABFS() {
+		return sandboxConfig.outDir
+	}
+
+	return sandboxConfig.outDir + ":" + abfsOutDir
+}
+
 func (c *Cmd) wrapSandbox() {
 	wd, _ := os.Getwd()
 
@@ -188,10 +208,10 @@ func (c *Cmd) wrapSandbox() {
 		"-B", "/tmp",
 
 		// Mount source
-		c.config.sandboxConfig.SrcDirMountFlag(), sandboxConfig.srcDir,
+		c.config.sandboxConfig.SrcDirMountFlag(), c.srcDirArg(),
 
 		//Mount out dir as read-write
-		"-B", sandboxConfig.outDir,
+		"-B", c.outDirArg(),
 
 		// Disable newcgroup for now, since it may require newer kernels
 		// TODO: try out cgroups
