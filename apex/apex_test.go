@@ -8992,6 +8992,30 @@ func TestCompressedApex(t *testing.T) {
 	ensureContains(t, androidMk, "LOCAL_MODULE_STEM := myapex.capex\n")
 }
 
+func TestApexSet_ShouldRespectCompressedApexFlag(t *testing.T) {
+	for _, compressionEnabled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("compressionEnabled=%v", compressionEnabled), func(t *testing.T) {
+			ctx := testApex(t, `
+				apex_set {
+					name: "com.company.android.myapex",
+					apex_name: "com.android.myapex",
+					set: "company-myapex.apks",
+				}
+			`, android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+				variables.CompressedApex = proptools.BoolPtr(compressionEnabled)
+			}),
+			)
+
+			build := ctx.ModuleForTests("com.company.android.myapex", "android_common_com.android.myapex").Output("com.company.android.myapex.apex")
+			if compressionEnabled {
+				ensureEquals(t, build.Rule.String(), "android/soong/android.Cp")
+			} else {
+				ensureEquals(t, build.Rule.String(), "android/apex.decompressApex")
+			}
+		})
+	}
+}
+
 func TestPreferredPrebuiltSharedLibDep(t *testing.T) {
 	ctx := testApex(t, `
 		apex {
