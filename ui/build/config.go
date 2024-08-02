@@ -1341,8 +1341,7 @@ func (c *configImpl) rbeDownloadTmpDir() string {
 }
 
 func (c *configImpl) rbeTmpDir() string {
-	buildTmpDir := shared.TempDirForOutDir(c.SoongOutDir())
-	return filepath.Join(buildTmpDir, "rbe")
+	return filepath.Join(c.SoongOutDir(), "rbe")
 }
 
 func (c *configImpl) rbeCacheDir() string {
