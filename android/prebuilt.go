@@ -61,7 +61,7 @@ var _ ExcludeFromApexContentsTag = PrebuiltDepTag
 type UserSuppliedPrebuiltProperties struct {
 	// When prefer is set to true the prebuilt will be used instead of any source module with
 	// a matching name.
-	Prefer *bool `android:"arch_variant"`
+	Prefer proptools.Configurable[bool] `android:"arch_variant,replace_instead_of_append"`
 
 	// When specified this names a Soong config variable that controls the prefer property.
 	//
@@ -148,11 +148,7 @@ func PrebuiltNameFromSource(name string) string {
 }
 
 func (p *Prebuilt) ForcePrefer() {
-	p.properties.Prefer = proptools.BoolPtr(true)
-}
-
-func (p *Prebuilt) Prefer() bool {
-	return proptools.Bool(p.properties.Prefer)
+	p.properties.Prefer = NewSimpleConfigurable(true)
 }
 
 // SingleSourcePathFromSupplier invokes the supplied supplier for the current module in the
@@ -707,7 +703,7 @@ func (p *Prebuilt) usePrebuilt(ctx BaseMutatorContext, source Module, prebuilt M
 	}
 
 	// TODO: use p.Properties.Name and ctx.ModuleDir to override preference
-	return Bool(p.properties.Prefer)
+	return p.properties.Prefer.GetOrDefault(ctx, false)
 }
 
 func (p *Prebuilt) SourceExists() bool {
