@@ -76,7 +76,7 @@ type aaptProperties struct {
 	// list of directories relative to the Blueprints file containing
 	// Android resources.  Defaults to ["res"] if a directory called res exists.
 	// Set to [] to disable the default.
-	Resource_dirs []string
+	Resource_dirs []string `android:"path"`
 
 	// list of zip files containing Android resources.
 	Resource_zips []string `android:"path"`
