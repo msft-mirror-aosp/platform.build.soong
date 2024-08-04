@@ -661,6 +661,10 @@ type sdkLibraryProperties struct {
 	// depend on.
 	Aconfig_declarations []string
 
+	// Determines if the module generates the stubs from the api signature files
+	// instead of the source Java files. Defaults to true.
+	Build_from_text_stub *bool
+
 	// TODO: determines whether to create HTML doc or not
 	// Html_doc *bool
 }

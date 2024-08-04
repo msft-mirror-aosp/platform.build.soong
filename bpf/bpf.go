@@ -148,6 +148,10 @@ func (bpf *bpf) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		"-no-canonical-prefixes",
 
 		"-O2",
+		"-Wall",
+		"-Werror",
+		"-Wextra",
+
 		"-isystem bionic/libc/include",
 		"-isystem bionic/libc/kernel/uapi",
 		// The architecture doesn't matter here, but asm/types.h is included by linux/types.h.
@@ -165,7 +169,7 @@ func (bpf *bpf) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	cflags = append(cflags, bpf.properties.Cflags...)
 
-	if proptools.Bool(bpf.properties.Btf) {
+	if proptools.BoolDefault(bpf.properties.Btf, true) {
 		cflags = append(cflags, "-g")
 		if runtime.GOOS != "darwin" {
 			cflags = append(cflags, "-fdebug-prefix-map=/proc/self/cwd=")
@@ -190,7 +194,7 @@ func (bpf *bpf) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			},
 		})
 
-		if proptools.Bool(bpf.properties.Btf) {
+		if proptools.BoolDefault(bpf.properties.Btf, true) {
 			objStripped := android.ObjPathWithExt(ctx, "", src, "o")
 			ctx.Build(pctx, android.BuildParams{
 				Rule:   stripRule,
