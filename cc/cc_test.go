@@ -2760,7 +2760,7 @@ func TestIncludeDirectoryOrdering(t *testing.T) {
 		"external/foo/libarm",
 		"external/foo/lib32",
 		"external/foo/libandroid_arm",
-		"defaults/cc/common/ndk_libc++_shared",
+		"defaults/cc/common/ndk_libc++_shared_include_dirs",
 	}
 
 	conly := []string{"-fPIC", "${config.CommonGlobalConlyflags}"}

@@ -1914,7 +1914,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 				return
 			}
 			cacheKey = &blueprint.BuildActionCacheKey{
-				Id:        ctx.bp.ModuleId(),
+				Id:        ctx.bp.ModuleCacheKey(),
 				InputHash: hash,
 			}
 		}
