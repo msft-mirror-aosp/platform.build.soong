@@ -14,7 +14,7 @@
 
 package android
 
-// ImageInterface is implemented by modules that need to be split by the imageMutator.
+// ImageInterface is implemented by modules that need to be split by the imageTransitionMutator.
 type ImageInterface interface {
 	// ImageMutatorBegin is called before any other method in the ImageInterface.
 	ImageMutatorBegin(ctx BaseModuleContext)
@@ -81,17 +81,15 @@ const (
 	DebugRamdiskVariation string = "debug_ramdisk"
 )
 
-// imageMutator creates variants for modules that implement the ImageInterface that
+// imageTransitionMutator creates variants for modules that implement the ImageInterface that
 // allow them to build differently for each partition (recovery, core, vendor, etc.).
-func imageMutator(ctx BottomUpMutatorContext) {
-	if ctx.Os() != Android {
-		return
-	}
+type imageTransitionMutator struct{}
 
-	if m, ok := ctx.Module().(ImageInterface); ok {
+func (imageTransitionMutator) Split(ctx BaseModuleContext) []string {
+	var variations []string
+
+	if m, ok := ctx.Module().(ImageInterface); ctx.Os() == Android && ok {
 		m.ImageMutatorBegin(ctx)
-
-		var variations []string
 
 		if m.CoreVariantNeeded(ctx) {
 			variations = append(variations, CoreVariation)
@@ -117,15 +115,29 @@ func imageMutator(ctx BottomUpMutatorContext) {
 
 		extraVariations := m.ExtraImageVariations(ctx)
 		variations = append(variations, extraVariations...)
+	}
 
-		if len(variations) == 0 {
-			return
-		}
+	if len(variations) == 0 {
+		variations = append(variations, "")
+	}
 
-		mod := ctx.CreateVariations(variations...)
-		for i, v := range variations {
-			mod[i].base().setImageVariation(v)
-			mod[i].(ImageInterface).SetImageVariation(ctx, v)
-		}
+	return variations
+}
+
+func (imageTransitionMutator) OutgoingTransition(ctx OutgoingTransitionContext, sourceVariation string) string {
+	return sourceVariation
+}
+
+func (imageTransitionMutator) IncomingTransition(ctx IncomingTransitionContext, incomingVariation string) string {
+	if _, ok := ctx.Module().(ImageInterface); ctx.Os() != Android || !ok {
+		return CoreVariation
+	}
+	return incomingVariation
+}
+
+func (imageTransitionMutator) Mutate(ctx BottomUpMutatorContext, variation string) {
+	ctx.Module().base().setImageVariation(variation)
+	if m, ok := ctx.Module().(ImageInterface); ok {
+		m.SetImageVariation(ctx, variation)
 	}
 }

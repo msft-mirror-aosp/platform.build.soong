@@ -491,6 +491,11 @@ type dexpreoptBootJars struct {
 	// Build path to a config file that Soong writes for Make (to be used in makefiles that install
 	// the default boot image).
 	dexpreoptConfigForMake android.WritablePath
+
+	// Build path to the boot framework profile.
+	// This is used as the `OutputFile` in `AndroidMkEntries`.
+	// A non-nil value ensures that this singleton module does not get skipped in AndroidMkEntries processing.
+	bootFrameworkProfile android.WritablePath
 }
 
 func (dbj *dexpreoptBootJars) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -603,7 +608,8 @@ func (d *dexpreoptBootJars) GenerateAndroidBuildActions(ctx android.ModuleContex
 		installs := generateBootImage(ctx, config)
 		profileInstalls = append(profileInstalls, installs...)
 		if config == d.defaultBootImage {
-			_, installs := bootFrameworkProfileRule(ctx, config)
+			bootProfile, installs := bootFrameworkProfileRule(ctx, config)
+			d.bootFrameworkProfile = bootProfile
 			profileInstalls = append(profileInstalls, installs...)
 		}
 	}
@@ -613,7 +619,7 @@ func (d *dexpreoptBootJars) GenerateAndroidBuildActions(ctx android.ModuleContex
 			profileLicenseMetadataFile: android.OptionalPathForPath(ctx.LicenseMetadataFile()),
 		})
 		for _, install := range profileInstalls {
-			packageFile(ctx, install)
+			installFile(ctx, install)
 		}
 	}
 }
@@ -939,24 +945,21 @@ func packageFileForTargetImage(ctx android.ModuleContext, image *bootImageVarian
 	}
 
 	for _, install := range image.installs {
-		packageFile(ctx, install)
+		installFile(ctx, install)
 	}
 
 	for _, install := range image.vdexInstalls {
-		if image.target.Arch.ArchType.Name != ctx.DeviceConfig().DeviceArch() {
-			// Note that the vdex files are identical between architectures. If the target image is
-			// not for the primary architecture create symlinks to share the vdex of the primary
-			// architecture with the other architectures.
-			//
-			// Assuming that the install path has the architecture name with it, replace the
-			// architecture name with the primary architecture name to find the source vdex file.
-			installPath, relDir, name := getModuleInstallPathInfo(ctx, install.To)
-			if name != "" {
-				srcRelDir := strings.Replace(relDir, image.target.Arch.ArchType.Name, ctx.DeviceConfig().DeviceArch(), 1)
-				ctx.InstallSymlink(installPath.Join(ctx, relDir), name, installPath.Join(ctx, srcRelDir, name))
-			}
-		} else {
-			packageFile(ctx, install)
+		installPath, relDir, name := getModuleInstallPathInfo(ctx, install.To)
+		if name == "" {
+			continue
+		}
+		// Note that the vdex files are identical between architectures. Copy the vdex to a no arch directory
+		// and create symlinks for both the primary and secondary arches.
+		ctx.InstallSymlink(installPath.Join(ctx, relDir), name, installPath.Join(ctx, "framework", name))
+		if image.target.Arch.ArchType.Name == ctx.DeviceConfig().DeviceArch() {
+			// Copy the vdex from the primary arch to the no-arch directory
+			// e.g. /system/framework/$bootjar.vdex
+			ctx.InstallFile(installPath.Join(ctx, "framework"), name, install.From)
 		}
 	}
 }
@@ -1234,7 +1237,7 @@ func bootImageProfileRule(ctx android.ModuleContext, image *bootImageConfig) (an
 
 	profile := bootImageProfileRuleCommon(ctx, image.name, image.dexPathsDeps.Paths(), image.getAnyAndroidVariant().dexLocationsDeps)
 
-	if image == defaultBootImageConfig(ctx) {
+	if image == defaultBootImageConfig(ctx) && profile != nil {
 		rule := android.NewRuleBuilder(pctx, ctx)
 		rule.Install(profile, "/system/etc/boot-image.prof")
 		return profile, rule.Installs()
@@ -1379,4 +1382,13 @@ func (d *dexpreoptBootJars) MakeVars(ctx android.MakeVarsContext) {
 		}
 		ctx.Strict("DEXPREOPT_IMAGE_NAMES", strings.Join(getImageNames(), " "))
 	}
+}
+
+// Add one of the outputs in `OutputFile`
+// This ensures that this singleton module does not get skipped when writing out/soong/Android-*.mk
+func (d *dexpreoptBootJars) AndroidMkEntries() []android.AndroidMkEntries {
+	return []android.AndroidMkEntries{{
+		Class:      "ETC",
+		OutputFile: android.OptionalPathForPath(d.bootFrameworkProfile),
+	}}
 }
