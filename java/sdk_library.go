@@ -20,7 +20,6 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -1045,28 +1044,6 @@ const (
 
 	annotationsComponentName = "annotations.zip"
 )
-
-// A regular expression to match tags that reference a specific stubs component.
-//
-// It will only match if given a valid scope and a valid component. It is verfy strict
-// to ensure it does not accidentally match a similar looking tag that should be processed
-// by the embedded Library.
-var tagSplitter = func() *regexp.Regexp {
-	// Given a list of literal string items returns a regular expression that will
-	// match any one of the items.
-	choice := func(items ...string) string {
-		return `\Q` + strings.Join(items, `\E|\Q`) + `\E`
-	}
-
-	// Regular expression to match one of the scopes.
-	scopesRegexp := choice(allScopeNames...)
-
-	// Regular expression to match one of the components.
-	componentsRegexp := choice(stubsSourceComponentName, apiTxtComponentName, removedApiTxtComponentName, annotationsComponentName)
-
-	// Regular expression to match any combination of one scope and one component.
-	return regexp.MustCompile(fmt.Sprintf(`^\.(%s)\.(%s)$`, scopesRegexp, componentsRegexp))
-}()
 
 func (module *commonToSdkLibraryAndImport) setOutputFiles(ctx android.ModuleContext) {
 	if module.doctagPaths != nil {
