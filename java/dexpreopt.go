@@ -616,10 +616,8 @@ func getModuleInstallPathInfo(ctx android.ModuleContext, fullInstallPath string)
 	return installPath, relDir, installBase
 }
 
-// RuleBuilder.Install() adds output-to-install copy pairs to a list for Make. To share this
-// information with PackagingSpec in soong, call PackageFile for them.
-// The install path and the target install partition of the module must be the same.
-func packageFile(ctx android.ModuleContext, install android.RuleBuilderInstall) {
+// installFile will install the file if `install` path and the target install partition are the same.
+func installFile(ctx android.ModuleContext, install android.RuleBuilderInstall) {
 	installPath, relDir, name := getModuleInstallPathInfo(ctx, install.To)
 	// Empty name means the install partition is not for the target image.
 	// For the system image, files for "apex" and "system_other" are skipped here.
@@ -628,7 +626,7 @@ func packageFile(ctx android.ModuleContext, install android.RuleBuilderInstall) 
 	// TODO(b/320196894): Files for "system_other" are skipped because soong creates the system
 	// image only for now.
 	if name != "" {
-		ctx.PackageFile(installPath.Join(ctx, relDir), name, install.From)
+		ctx.InstallFile(installPath.Join(ctx, relDir), name, install.From)
 	}
 }
 
