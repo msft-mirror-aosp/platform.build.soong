@@ -432,7 +432,6 @@ var (
 	r8LibraryJarTag         = dependencyTag{name: "r8-libraryjar", runtimeLinked: true}
 	syspropPublicStubDepTag = dependencyTag{name: "sysprop public stub"}
 	javaApiContributionTag  = dependencyTag{name: "java-api-contribution"}
-	depApiSrcsTag           = dependencyTag{name: "dep-api-srcs"}
 	aconfigDeclarationTag   = dependencyTag{name: "aconfig-declaration"}
 	jniInstallTag           = dependencyTag{name: "jni install", runtimeLinked: true, installable: true}
 	binaryInstallTag        = dependencyTag{name: "binary install", runtimeLinked: true, installable: true}
@@ -2005,12 +2004,6 @@ type JavaApiLibraryProperties struct {
 	// merge zipped after metalava invocation
 	Static_libs []string
 
-	// Java Api library to provide the full API surface stub jar file.
-	// If this property is set, the stub jar of this module is created by
-	// extracting the compiled class files provided by the
-	// full_api_surface_stub module.
-	Full_api_surface_stub *string
-
 	// Version of previously released API file for compatibility check.
 	Previous_api *string `android:"path"`
 
@@ -2043,6 +2036,15 @@ type JavaApiLibraryProperties struct {
 	// List of hard coded filegroups containing Metalava config files that are passed to every
 	// Metalava invocation that this module performs. See addMetalavaConfigFilesToCmd.
 	ConfigFiles []string `android:"path" blueprint:"mutated"`
+
+	// If not blank, set to the version of the sdk to compile against.
+	// Defaults to an empty string, which compiles the module against the private platform APIs.
+	// Values are of one of the following forms:
+	// 1) numerical API level, "current", "none", or "core_platform"
+	// 2) An SDK kind with an API level: "<sdk kind>_<API level>"
+	// See build/soong/android/sdk_version.go for the complete and up to date list of SDK kinds.
+	// If the SDK kind is empty, it will be set to public.
+	Sdk_version *string
 }
 
 func ApiLibraryFactory() android.Module {
@@ -2141,40 +2143,6 @@ func (al *ApiLibrary) addValidation(ctx android.ModuleContext, cmd *android.Rule
 	}
 }
 
-// This method extracts the stub class files from the stub jar file provided
-// from full_api_surface_stub module instead of compiling the srcjar generated from invoking metalava.
-// This method is used because metalava can generate compilable from-text stubs only when
-// the codebase encompasses all classes listed in the input API text file, and a class can extend
-// a class that is not within the same API domain.
-func (al *ApiLibrary) extractApiSrcs(ctx android.ModuleContext, rule *android.RuleBuilder, stubsDir android.OptionalPath, fullApiSurfaceStubJar android.Path) {
-	classFilesList := android.PathForModuleOut(ctx, "metalava", "classes.txt")
-	unzippedSrcJarDir := android.PathForModuleOut(ctx, "metalava", "unzipDir")
-
-	rule.Command().
-		BuiltTool("list_files").
-		Text(stubsDir.String()).
-		FlagWithOutput("--out ", classFilesList).
-		FlagWithArg("--extensions ", ".java").
-		FlagWithArg("--root ", unzippedSrcJarDir.String()).
-		Flag("--classes")
-
-	rule.Command().
-		Text("unzip").
-		Flag("-q").
-		Input(fullApiSurfaceStubJar).
-		FlagWithArg("-d ", unzippedSrcJarDir.String())
-
-	rule.Command().
-		BuiltTool("soong_zip").
-		Flag("-jar").
-		Flag("-write_if_changed").
-		Flag("-ignore_missing_files").
-		Flag("-quiet").
-		FlagWithArg("-C ", unzippedSrcJarDir.String()).
-		FlagWithInput("-l ", classFilesList).
-		FlagWithOutput("-o ", al.stubsJarWithoutStaticLibs)
-}
-
 func (al *ApiLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 	apiContributions := al.properties.Api_contributions
 	addValidations := !ctx.Config().IsEnvTrue("DISABLE_STUB_VALIDATION") &&
@@ -2201,14 +2169,18 @@ func (al *ApiLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 			}
 		}
 	}
+	if ctx.Device() {
+		sdkDep := decodeSdkDep(ctx, android.SdkContext(al))
+		if sdkDep.useModule {
+			ctx.AddVariationDependencies(nil, systemModulesTag, sdkDep.systemModules)
+			ctx.AddVariationDependencies(nil, libTag, sdkDep.classpath...)
+			ctx.AddVariationDependencies(nil, bootClasspathTag, sdkDep.bootclasspath...)
+
+		}
+	}
 	ctx.AddVariationDependencies(nil, libTag, al.properties.Libs...)
 	ctx.AddVariationDependencies(nil, staticLibTag, al.properties.Static_libs...)
-	if al.properties.Full_api_surface_stub != nil {
-		ctx.AddVariationDependencies(nil, depApiSrcsTag, String(al.properties.Full_api_surface_stub))
-	}
-	if al.properties.System_modules != nil {
-		ctx.AddVariationDependencies(nil, systemModulesTag, String(al.properties.System_modules))
-	}
+
 	for _, aconfigDeclarationsName := range al.properties.Aconfig_declarations {
 		ctx.AddDependency(ctx.Module(), aconfigDeclarationTag, aconfigDeclarationsName)
 	}
@@ -2264,8 +2236,8 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	var srcFilesInfo []JavaApiImportInfo
 	var classPaths android.Paths
+	var bootclassPaths android.Paths
 	var staticLibs android.Paths
-	var depApiSrcsStubsJar android.Path
 	var systemModulesPaths android.Paths
 	ctx.VisitDirectDeps(func(dep android.Module) {
 		tag := ctx.OtherModuleDependencyTag(dep)
@@ -2279,12 +2251,12 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		case libTag:
 			provider, _ := android.OtherModuleProvider(ctx, dep, JavaInfoProvider)
 			classPaths = append(classPaths, provider.HeaderJars...)
+		case bootClasspathTag:
+			provider, _ := android.OtherModuleProvider(ctx, dep, JavaInfoProvider)
+			bootclassPaths = append(bootclassPaths, provider.HeaderJars...)
 		case staticLibTag:
 			provider, _ := android.OtherModuleProvider(ctx, dep, JavaInfoProvider)
 			staticLibs = append(staticLibs, provider.HeaderJars...)
-		case depApiSrcsTag:
-			provider, _ := android.OtherModuleProvider(ctx, dep, JavaInfoProvider)
-			depApiSrcsStubsJar = provider.HeaderJars[0]
 		case systemModulesTag:
 			module := dep.(SystemModulesProvider)
 			systemModulesPaths = append(systemModulesPaths, module.HeaderJars()...)
@@ -2319,7 +2291,10 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	configFiles := android.PathsForModuleSrc(ctx, al.properties.ConfigFiles)
 
-	cmd := metalavaStubCmd(ctx, rule, srcFiles, homeDir, systemModulesPaths, configFiles)
+	combinedPaths := append(([]android.Path)(nil), systemModulesPaths...)
+	combinedPaths = append(combinedPaths, classPaths...)
+	combinedPaths = append(combinedPaths, bootclassPaths...)
+	cmd := metalavaStubCmd(ctx, rule, srcFiles, homeDir, combinedPaths, configFiles)
 
 	al.stubsFlags(ctx, cmd, stubsDir)
 
@@ -2337,9 +2312,6 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	al.stubsJarWithoutStaticLibs = android.PathForModuleOut(ctx, "metalava", "stubs.jar")
 	al.stubsJar = android.PathForModuleOut(ctx, ctx.ModuleName(), fmt.Sprintf("%s.jar", ctx.ModuleName()))
 
-	if depApiSrcsStubsJar != nil {
-		al.extractApiSrcs(ctx, rule, stubsDir, depApiSrcsStubsJar)
-	}
 	rule.Command().
 		BuiltTool("soong_zip").
 		Flag("-write_if_changed").
@@ -2350,18 +2322,17 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	rule.Build("metalava", "metalava merged text")
 
-	if depApiSrcsStubsJar == nil {
-		var flags javaBuilderFlags
-		flags.javaVersion = getStubsJavaVersion()
-		flags.javacFlags = strings.Join(al.properties.Javacflags, " ")
-		flags.classpath = classpath(classPaths)
-		flags.bootClasspath = classpath(systemModulesPaths)
-
-		annoSrcJar := android.PathForModuleOut(ctx, ctx.ModuleName(), "anno.srcjar")
-
-		TransformJavaToClasses(ctx, al.stubsJarWithoutStaticLibs, 0, android.Paths{},
-			android.Paths{al.stubsSrcJar}, annoSrcJar, flags, android.Paths{})
+	javacFlags := javaBuilderFlags{
+		javaVersion:   getStubsJavaVersion(),
+		javacFlags:    strings.Join(al.properties.Javacflags, " "),
+		classpath:     classpath(classPaths),
+		bootClasspath: classpath(append(systemModulesPaths, bootclassPaths...)),
 	}
+
+	annoSrcJar := android.PathForModuleOut(ctx, ctx.ModuleName(), "anno.srcjar")
+
+	TransformJavaToClasses(ctx, al.stubsJarWithoutStaticLibs, 0, android.Paths{},
+		android.Paths{al.stubsSrcJar}, annoSrcJar, javacFlags, android.Paths{})
 
 	builder := android.NewRuleBuilder(pctx, ctx)
 	builder.Command().
@@ -2373,7 +2344,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// compile stubs to .dex for hiddenapi processing
 	dexParams := &compileDexParams{
-		flags:         javaBuilderFlags{},
+		flags:         javacFlags,
 		sdkVersion:    al.SdkVersion(ctx),
 		minSdkVersion: al.MinSdkVersion(ctx),
 		classesJar:    al.stubsJar,
@@ -2409,14 +2380,28 @@ func (al *ApiLibrary) ClassLoaderContexts() dexpreopt.ClassLoaderContextMap {
 	return nil
 }
 
-// java_api_library constitutes the sdk, and does not build against one
+// Most java_api_library constitues the sdk, but there are some java_api_library that
+// does not contribute to the api surface. Such modules are allowed to set sdk_version
+// other than "none"
 func (al *ApiLibrary) SdkVersion(ctx android.EarlyModuleContext) android.SdkSpec {
-	return android.SdkSpecNone
+	return android.SdkSpecFrom(ctx, proptools.String(al.properties.Sdk_version))
 }
 
 // java_api_library is always at "current". Return FutureApiLevel
 func (al *ApiLibrary) MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
-	return android.FutureApiLevel
+	return al.SdkVersion(ctx).ApiLevel
+}
+
+func (al *ApiLibrary) ReplaceMaxSdkVersionPlaceholder(ctx android.EarlyModuleContext) android.ApiLevel {
+	return al.SdkVersion(ctx).ApiLevel
+}
+
+func (al *ApiLibrary) SystemModules() string {
+	return proptools.String(al.properties.System_modules)
+}
+
+func (al *ApiLibrary) TargetSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel {
+	return al.SdkVersion(ctx).ApiLevel
 }
 
 func (al *ApiLibrary) IDEInfo(i *android.IdeInfo) {
@@ -2434,9 +2419,6 @@ func (al *ApiLibrary) ideDeps() []string {
 	if al.properties.System_modules != nil {
 		ret = append(ret, proptools.String(al.properties.System_modules))
 	}
-	if al.properties.Full_api_surface_stub != nil {
-		ret = append(ret, proptools.String(al.properties.Full_api_surface_stub))
-	}
 	// Other non java_library dependencies like java_api_contribution are ignored for now.
 	return ret
 }
@@ -2444,6 +2426,7 @@ func (al *ApiLibrary) ideDeps() []string {
 // implement the following interfaces for hiddenapi processing
 var _ hiddenAPIModule = (*ApiLibrary)(nil)
 var _ UsesLibraryDependency = (*ApiLibrary)(nil)
+var _ android.SdkContext = (*ApiLibrary)(nil)
 
 // implement the following interface for IDE completion.
 var _ android.IDEInfo = (*ApiLibrary)(nil)
