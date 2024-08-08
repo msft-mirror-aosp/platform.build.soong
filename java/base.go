@@ -1306,7 +1306,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			return
 		}
 
-		kotlinJarPath := j.repackageFlagsIfNecessary(ctx, kotlinJar.OutputPath, jarName, "kotlinc")
+		kotlinJarPath := j.repackageFlagsIfNecessary(ctx, kotlinJar, jarName, "kotlinc")
 
 		// Make javac rule depend on the kotlinc rule
 		flags.classpath = append(classpath{kotlinHeaderJar}, flags.classpath...)
@@ -1508,7 +1508,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	// Combine the classes built from sources, any manifests, and any static libraries into
 	// classes.jar. If there is only one input jar this step will be skipped.
-	var outputFile android.OutputPath
+	var outputFile android.Path
 
 	if len(jars) == 1 && !manifest.Valid() {
 		// Optimization: skip the combine step as there is nothing to do
@@ -1524,36 +1524,28 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		// to the copy rules.
 		stub, _ := moduleStubLinkType(ctx.ModuleName())
 
-		// Transform the single path to the jar into an OutputPath as that is required by the following
-		// code.
-		if moduleOutPath, ok := jars[0].(android.ModuleOutPath); ok && !stub {
-			// The path contains an embedded OutputPath so reuse that.
-			outputFile = moduleOutPath.OutputPath
-		} else if outputPath, ok := jars[0].(android.OutputPath); ok && !stub {
-			// The path is an OutputPath so reuse it directly.
-			outputFile = outputPath
-		} else {
-			// The file is not in the out directory so create an OutputPath into which it can be copied
-			// and which the following code can use to refer to it.
+		if stub {
 			combinedJar := android.PathForModuleOut(ctx, "combined", jarName)
 			ctx.Build(pctx, android.BuildParams{
 				Rule:   android.Cp,
 				Input:  jars[0],
 				Output: combinedJar,
 			})
-			outputFile = combinedJar.OutputPath
+			outputFile = combinedJar
+		} else {
+			outputFile = jars[0]
 		}
 	} else {
 		combinedJar := android.PathForModuleOut(ctx, "combined", jarName)
 		TransformJarsToJar(ctx, combinedJar, "for javac", jars, manifest,
 			false, nil, nil)
-		outputFile = combinedJar.OutputPath
+		outputFile = combinedJar
 	}
 
 	// jarjar implementation jar if necessary
 	if j.expandJarjarRules != nil {
 		// Transform classes.jar into classes-jarjar.jar
-		jarjarFile := android.PathForModuleOut(ctx, "jarjar", jarName).OutputPath
+		jarjarFile := android.PathForModuleOut(ctx, "jarjar", jarName)
 		TransformJarJar(ctx, jarjarFile, outputFile, j.expandJarjarRules)
 		outputFile = jarjarFile
 
@@ -1578,15 +1570,16 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		// will check that the jar only contains the permitted packages. The new location will become
 		// the output file of this module.
 		inputFile := outputFile
-		outputFile = android.PathForModuleOut(ctx, "package-check", jarName).OutputPath
+		packageCheckOutputFile := android.PathForModuleOut(ctx, "package-check", jarName)
 		ctx.Build(pctx, android.BuildParams{
 			Rule:   android.Cp,
 			Input:  inputFile,
-			Output: outputFile,
+			Output: packageCheckOutputFile,
 			// Make sure that any dependency on the output file will cause ninja to run the package check
 			// rule.
 			Validation: pkgckFile,
 		})
+		outputFile = packageCheckOutputFile
 
 		// Check packages and create a timestamp file when complete.
 		CheckJarPackages(ctx, pkgckFile, outputFile, j.properties.Permitted_packages)
@@ -1621,7 +1614,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	implementationAndResourcesJar := outputFile
 	if j.resourceJar != nil {
 		jars := android.Paths{j.resourceJar, implementationAndResourcesJar}
-		combinedJar := android.PathForModuleOut(ctx, "withres", jarName).OutputPath
+		combinedJar := android.PathForModuleOut(ctx, "withres", jarName)
 		TransformJarsToJar(ctx, combinedJar, "for resources", jars, manifest,
 			false, nil, nil)
 		implementationAndResourcesJar = combinedJar
@@ -1648,7 +1641,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 					android.PathForSource(ctx, "build/make/core/proguard.jacoco.flags"))
 			}
 			// Dex compilation
-			var dexOutputFile android.OutputPath
+			var dexOutputFile android.Path
 			params := &compileDexParams{
 				flags:         flags,
 				sdkVersion:    j.SdkVersion(ctx),
@@ -1675,17 +1668,17 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 			// If r8/d8 provides a profile that matches the optimized dex, use that for dexpreopt.
 			if dexArtProfileOutput != nil {
-				j.dexpreopter.SetRewrittenProfile(*dexArtProfileOutput)
+				j.dexpreopter.SetRewrittenProfile(dexArtProfileOutput)
 			}
 
 			// merge dex jar with resources if necessary
 			if j.resourceJar != nil {
 				jars := android.Paths{dexOutputFile, j.resourceJar}
-				combinedJar := android.PathForModuleOut(ctx, "dex-withres", jarName).OutputPath
+				combinedJar := android.PathForModuleOut(ctx, "dex-withres", jarName)
 				TransformJarsToJar(ctx, combinedJar, "for dex resources", jars, android.OptionalPath{},
 					false, nil, nil)
 				if *j.dexProperties.Uncompress_dex {
-					combinedAlignedJar := android.PathForModuleOut(ctx, "dex-withres-aligned", jarName).OutputPath
+					combinedAlignedJar := android.PathForModuleOut(ctx, "dex-withres-aligned", jarName)
 					TransformZipAlign(ctx, combinedAlignedJar, combinedJar, nil)
 					dexOutputFile = combinedAlignedJar
 				} else {
@@ -1845,7 +1838,7 @@ func enableErrorproneFlags(flags javaBuilderFlags) javaBuilderFlags {
 }
 
 func (j *Module) compileJavaClasses(ctx android.ModuleContext, jarName string, idx int,
-	srcFiles, srcJars android.Paths, flags javaBuilderFlags, extraJarDeps android.Paths) android.WritablePath {
+	srcFiles, srcJars android.Paths, flags javaBuilderFlags, extraJarDeps android.Paths) android.Path {
 
 	kzipName := pathtools.ReplaceExtension(jarName, "kzip")
 	annoSrcJar := android.PathForModuleOut(ctx, "javac", "anno.srcjar")
@@ -1855,7 +1848,7 @@ func (j *Module) compileJavaClasses(ctx android.ModuleContext, jarName string, i
 		jarName += strconv.Itoa(idx)
 	}
 
-	classes := android.PathForModuleOut(ctx, "javac", jarName).OutputPath
+	classes := android.PathForModuleOut(ctx, "javac", jarName)
 	TransformJavaToClasses(ctx, classes, idx, srcFiles, srcJars, annoSrcJar, flags, extraJarDeps)
 
 	if ctx.Config().EmitXrefRules() && ctx.Module() == ctx.PrimaryModule() {
@@ -1950,10 +1943,10 @@ func (j *Module) compileJavaHeader(ctx android.ModuleContext, srcFiles, srcJars 
 }
 
 func (j *Module) instrument(ctx android.ModuleContext, flags javaBuilderFlags,
-	classesJar android.Path, jarName string, specs string) android.OutputPath {
+	classesJar android.Path, jarName string, specs string) android.Path {
 
 	jacocoReportClassesFile := android.PathForModuleOut(ctx, "jacoco-report-classes", jarName)
-	instrumentedJar := android.PathForModuleOut(ctx, "jacoco", jarName).OutputPath
+	instrumentedJar := android.PathForModuleOut(ctx, "jacoco", jarName)
 
 	jacocoInstrumentJar(ctx, instrumentedJar, jacocoReportClassesFile, classesJar, specs)
 
@@ -2728,7 +2721,7 @@ func getJarJarRuleText(provider *JarJarProviderData) string {
 }
 
 // Repackage the flags if the jarjar rule txt for the flags is generated
-func (j *Module) repackageFlagsIfNecessary(ctx android.ModuleContext, infile android.WritablePath, jarName, info string) android.WritablePath {
+func (j *Module) repackageFlagsIfNecessary(ctx android.ModuleContext, infile android.Path, jarName, info string) android.Path {
 	if j.repackageJarjarRules == nil {
 		return infile
 	}

@@ -2762,7 +2762,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			setUncompressDex(ctx, &j.dexpreopter, &j.dexer)
 			j.dexpreopter.uncompressedDex = *j.dexProperties.Uncompress_dex
 
-			var dexOutputFile android.OutputPath
+			var dexOutputFile android.Path
 			dexParams := &compileDexParams{
 				flags:         flags,
 				sdkVersion:    j.SdkVersion(ctx),
