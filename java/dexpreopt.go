@@ -359,7 +359,7 @@ func (d *Dexpreopter) DexpreoptPrebuiltApexSystemServerJars(ctx android.ModuleCo
 	d.dexpreopt(ctx, libraryName, dexJarFile)
 }
 
-func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, libName string, dexJarFile android.WritablePath) {
+func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, libName string, dexJarFile android.Path) {
 	global := dexpreopt.GetGlobalConfig(ctx)
 
 	// TODO(b/148690468): The check on d.installPath is to bail out in cases where
