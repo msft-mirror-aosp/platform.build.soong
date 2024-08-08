@@ -428,7 +428,7 @@ func (d *dexer) addArtProfile(ctx android.ModuleContext, dexParams *compileDexPa
 }
 
 // Return the compiled dex jar and (optional) profile _after_ r8 optimization
-func (d *dexer) compileDex(ctx android.ModuleContext, dexParams *compileDexParams) (android.OutputPath, *android.OutputPath) {
+func (d *dexer) compileDex(ctx android.ModuleContext, dexParams *compileDexParams) (android.Path, android.Path) {
 
 	// Compile classes.jar into classes.dex and then javalib.jar
 	javalibJar := android.PathForModuleOut(ctx, "dex", dexParams.jarName).OutputPath
