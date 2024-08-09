@@ -98,8 +98,9 @@ func (h *hiddenAPI) initHiddenAPI(ctx android.ModuleContext, dexJar OptionalDexJ
 	// processing.
 	classesJars := android.Paths{classesJar}
 	ctx.VisitDirectDepsWithTag(hiddenApiAnnotationsTag, func(dep android.Module) {
-		javaInfo, _ := android.OtherModuleProvider(ctx, dep, JavaInfoProvider)
-		classesJars = append(classesJars, javaInfo.ImplementationJars...)
+		if javaInfo, ok := android.OtherModuleProvider(ctx, dep, JavaInfoProvider); ok {
+			classesJars = append(classesJars, javaInfo.ImplementationJars...)
+		}
 	})
 	h.classesJarPaths = classesJars
 
