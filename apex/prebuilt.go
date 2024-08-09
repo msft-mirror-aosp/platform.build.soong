@@ -43,9 +43,9 @@ var (
 		},
 		"abis", "allow-prereleased", "sdk-version", "skip-sdk-check")
 	decompressApex = pctx.StaticRule("decompressApex", blueprint.RuleParams{
-		Command:     `${deapexer} decompress --copy-if-uncompressed --input ${in} --output ${out}`,
+		Command:     `rm -rf $out && ${deapexer} decompress --copy-if-uncompressed --input ${in} --output ${out}`,
 		CommandDeps: []string{"${deapexer}"},
-		Description: "decompress",
+		Description: "decompress $out",
 	})
 )
 
