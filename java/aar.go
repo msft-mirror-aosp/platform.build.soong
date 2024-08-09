@@ -1348,7 +1348,7 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		a.headerJarFile = classpathFile
 	}
 
-	android.SetProvider(ctx, JavaInfoProvider, JavaInfo{
+	android.SetProvider(ctx, JavaInfoProvider, &JavaInfo{
 		HeaderJars:                     android.PathsIfNonNil(a.headerJarFile),
 		ResourceJars:                   android.PathsIfNonNil(resourceJarFile),
 		TransitiveLibsHeaderJars:       a.transitiveLibsHeaderJars,
@@ -1447,4 +1447,8 @@ func AARImportFactory() android.Module {
 	android.InitApexModule(module)
 	InitJavaModuleMultiTargets(module, android.DeviceSupported)
 	return module
+}
+
+func (a *AARImport) IDEInfo(dpInfo *android.IdeInfo) {
+	dpInfo.Jars = append(dpInfo.Jars, a.headerJarFile.String(), a.rJar.String())
 }
