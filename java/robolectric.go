@@ -214,12 +214,13 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 	}
 
 	handleLibDeps := func(dep android.Module, runtimeOnly bool) {
-		m, _ := android.OtherModuleProvider(ctx, dep, JavaInfoProvider)
 		if !runtimeOnly {
 			r.libs = append(r.libs, ctx.OtherModuleName(dep))
 		}
 		if !android.InList(ctx.OtherModuleName(dep), config.FrameworkLibraries) {
-			combinedJarJars = append(combinedJarJars, m.ImplementationAndResourcesJars...)
+			if m, ok := android.OtherModuleProvider(ctx, dep, JavaInfoProvider); ok {
+				combinedJarJars = append(combinedJarJars, m.ImplementationAndResourcesJars...)
+			}
 		}
 	}
 

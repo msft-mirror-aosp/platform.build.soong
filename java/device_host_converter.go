@@ -130,7 +130,7 @@ func (d *DeviceHostConverter) GenerateAndroidBuildActions(ctx android.ModuleCont
 		d.combinedHeaderJar = d.headerJars[0]
 	}
 
-	android.SetProvider(ctx, JavaInfoProvider, JavaInfo{
+	android.SetProvider(ctx, JavaInfoProvider, &JavaInfo{
 		HeaderJars:                     d.headerJars,
 		ImplementationAndResourcesJars: d.implementationAndResourceJars,
 		ImplementationJars:             d.implementationJars,
