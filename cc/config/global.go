@@ -339,6 +339,9 @@ var (
 
 		"-Wno-unused",
 		"-Wno-deprecated",
+
+		// http://b/315250603 temporarily disabled
+		"-Wno-error=format",
 	}
 
 	// Similar to noOverrideGlobalCflags, but applies only to third-party code
@@ -367,9 +370,6 @@ var (
 		"-Wno-gnu-offsetof-extensions",
 		// TODO: Enable this warning http://b/315245071
 		"-Wno-fortify-source",
-
-		// http://b/315250603 temporarily disabled
-		"-Wno-error=format",
 	}
 
 	llvmNextExtraCommonGlobalCflags = []string{
