@@ -101,6 +101,10 @@ func kotlinCompile(ctx android.ModuleContext, outputFile, headerOutputFile andro
 		commonSrcFilesArg = "--common_srcs " + commonSrcsList.String()
 	}
 
+	classpathRspFile := android.PathForModuleOut(ctx, "kotlinc", "classpath.rsp")
+	android.WriteFileRule(ctx, classpathRspFile, strings.Join(flags.kotlincClasspath.Strings(), " "))
+	deps = append(deps, classpathRspFile)
+
 	ctx.Build(pctx, android.BuildParams{
 		Rule:           kotlinc,
 		Description:    "kotlinc",
@@ -109,7 +113,7 @@ func kotlinCompile(ctx android.ModuleContext, outputFile, headerOutputFile andro
 		Inputs:         srcFiles,
 		Implicits:      deps,
 		Args: map[string]string{
-			"classpath":         flags.kotlincClasspath.FormJavaClassPath(""),
+			"classpath":         classpathRspFile.String(),
 			"kotlincFlags":      flags.kotlincFlags,
 			"commonSrcFilesArg": commonSrcFilesArg,
 			"srcJars":           strings.Join(srcJars.Strings(), " "),
@@ -205,6 +209,10 @@ func kotlinKapt(ctx android.ModuleContext, srcJarOutputFile, resJarOutputFile an
 	kotlinName := filepath.Join(ctx.ModuleDir(), ctx.ModuleSubDir(), ctx.ModuleName())
 	kotlinName = strings.ReplaceAll(kotlinName, "/", "__")
 
+	classpathRspFile := android.PathForModuleOut(ctx, "kapt", "classpath.rsp")
+	android.WriteFileRule(ctx, classpathRspFile, strings.Join(flags.kotlincClasspath.Strings(), "\n"))
+	deps = append(deps, classpathRspFile)
+
 	// First run kapt to generate .java stubs from .kt files
 	kaptStubsJar := android.PathForModuleOut(ctx, "kapt", "stubs.jar")
 	ctx.Build(pctx, android.BuildParams{
@@ -214,7 +222,7 @@ func kotlinKapt(ctx android.ModuleContext, srcJarOutputFile, resJarOutputFile an
 		Inputs:      srcFiles,
 		Implicits:   deps,
 		Args: map[string]string{
-			"classpath":         flags.kotlincClasspath.FormJavaClassPath(""),
+			"classpath":         classpathRspFile.String(),
 			"kotlincFlags":      flags.kotlincFlags,
 			"commonSrcFilesArg": commonSrcFilesArg,
 			"srcJars":           strings.Join(srcJars.Strings(), " "),
