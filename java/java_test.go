@@ -1342,12 +1342,12 @@ func TestJavaLibraryWithSystemModules(t *testing.T) {
 		}
 		`)
 
-	checkBootClasspathForSystemModule(t, ctx, "lib-with-source-system-modules", "/source-jar.jar")
+	checkBootClasspathForLibWithSystemModule(t, ctx, "lib-with-source-system-modules", "/source-jar.jar")
 
-	checkBootClasspathForSystemModule(t, ctx, "lib-with-prebuilt-system-modules", "/prebuilt-jar.jar")
+	checkBootClasspathForLibWithSystemModule(t, ctx, "lib-with-prebuilt-system-modules", "/prebuilt-jar.jar")
 }
 
-func checkBootClasspathForSystemModule(t *testing.T, ctx *android.TestContext, moduleName string, expectedSuffix string) {
+func checkBootClasspathForLibWithSystemModule(t *testing.T, ctx *android.TestContext, moduleName string, expectedSuffix string) {
 	javacRule := ctx.ModuleForTests(moduleName, "android_common").Rule("javac")
 	bootClasspath := javacRule.Args["bootClasspath"]
 	if strings.HasPrefix(bootClasspath, "--system ") && strings.HasSuffix(bootClasspath, expectedSuffix) {
@@ -2256,61 +2256,6 @@ func TestJavaApiLibraryStaticLibsLink(t *testing.T) {
 	}
 }
 
-func TestJavaApiLibraryFullApiSurfaceStub(t *testing.T) {
-	provider_bp_a := `
-	java_api_contribution {
-		name: "foo1",
-		api_file: "current.txt",
-		api_surface: "public",
-	}
-	`
-	provider_bp_b := `
-	java_api_contribution {
-		name: "foo2",
-		api_file: "current.txt",
-		api_surface: "public",
-	}
-	`
-	lib_bp_a := `
-	java_api_library {
-		name: "lib1",
-		api_surface: "public",
-		api_contributions: ["foo1", "foo2"],
-		stubs_type: "everything",
-	}
-	`
-
-	ctx := android.GroupFixturePreparers(
-		prepareForJavaTest,
-		android.FixtureMergeMockFs(
-			map[string][]byte{
-				"a/Android.bp": []byte(provider_bp_a),
-				"b/Android.bp": []byte(provider_bp_b),
-				"c/Android.bp": []byte(lib_bp_a),
-			},
-		),
-		android.FixtureMergeEnv(
-			map[string]string{
-				"DISABLE_STUB_VALIDATION": "true",
-			},
-		),
-	).RunTestWithBp(t, `
-		java_api_library {
-			name: "bar1",
-			api_surface: "public",
-			api_contributions: ["foo1"],
-			full_api_surface_stub: "lib1",
-			stubs_type: "everything",
-		}
-	`)
-
-	m := ctx.ModuleForTests("bar1", "android_common")
-	manifest := m.Output("metalava.sbox.textproto")
-	sboxProto := android.RuleBuilderSboxProtoForTests(t, ctx.TestContext, manifest)
-	manifestCommand := sboxProto.Commands[0].GetCommand()
-	android.AssertStringDoesContain(t, "Command expected to contain full_api_surface_stub output jar", manifestCommand, "lib1.jar")
-}
-
 func TestTransitiveSrcFiles(t *testing.T) {
 	ctx, _ := testJava(t, `
 		java_library {
@@ -2511,9 +2456,6 @@ func TestSdkLibraryProvidesSystemModulesToApiLibrary(t *testing.T) {
 		prepareForJavaTest,
 		PrepareForTestWithJavaSdkLibraryFiles,
 		FixtureWithLastReleaseApis("foo"),
-		android.FixtureModifyConfig(func(config android.Config) {
-			config.SetApiLibraries([]string{"foo"})
-		}),
 		android.FixtureMergeMockFs(
 			map[string][]byte{
 				"A.java": nil,
@@ -2534,12 +2476,8 @@ func TestSdkLibraryProvidesSystemModulesToApiLibrary(t *testing.T) {
 			system_modules: "baz",
 		}
 	`)
-	m := result.ModuleForTests(apiScopePublic.apiLibraryModuleName("foo"), "android_common")
-	manifest := m.Output("metalava.sbox.textproto")
-	sboxProto := android.RuleBuilderSboxProtoForTests(t, result.TestContext, manifest)
-	manifestCommand := sboxProto.Commands[0].GetCommand()
-	classPathFlag := "--classpath __SBOX_SANDBOX_DIR__/out/soong/.intermediates/bar/android_common/turbine-combined/bar.jar"
-	android.AssertStringDoesContain(t, "command expected to contain classpath flag", manifestCommand, classPathFlag)
+
+	checkBootClasspathForLibWithSystemModule(t, result.TestContext, apiScopePublic.apiLibraryModuleName("foo"), "/bar.jar")
 }
 
 func TestApiLibraryDroidstubsDependency(t *testing.T) {
@@ -2547,9 +2485,6 @@ func TestApiLibraryDroidstubsDependency(t *testing.T) {
 		prepareForJavaTest,
 		PrepareForTestWithJavaSdkLibraryFiles,
 		FixtureWithLastReleaseApis("foo"),
-		android.FixtureModifyConfig(func(config android.Config) {
-			config.SetApiLibraries([]string{"foo"})
-		}),
 		android.FixtureMergeMockFs(
 			map[string][]byte{
 				"A.java": nil,
@@ -2598,7 +2533,6 @@ func TestDisableFromTextStubForCoverageBuild(t *testing.T) {
 		PrepareForTestWithJacocoInstrumentation,
 		FixtureWithLastReleaseApis("foo"),
 		android.FixtureModifyConfig(func(config android.Config) {
-			config.SetApiLibraries([]string{"foo"})
 			config.SetBuildFromTextStub(true)
 		}),
 		android.FixtureModifyEnv(func(env map[string]string) {
