@@ -144,9 +144,6 @@ var (
 
 		// Make paths in deps files relative.
 		"-no-canonical-prefixes",
-
-		// http://b/315250603 temporarily disabled
-		"-Wno-error=format",
 	}
 
 	commonGlobalConlyflags = []string{}
@@ -342,6 +339,9 @@ var (
 
 		"-Wno-unused",
 		"-Wno-deprecated",
+
+		// http://b/315250603 temporarily disabled
+		"-Wno-error=format",
 	}
 
 	// Similar to noOverrideGlobalCflags, but applies only to third-party code

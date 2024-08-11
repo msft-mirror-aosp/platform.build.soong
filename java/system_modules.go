@@ -311,3 +311,11 @@ func (p *systemModulesInfoProperties) AddToPropertySet(ctx android.SdkMemberCont
 		propertySet.AddPropertyWithTag("libs", p.Libs, ctx.SnapshotBuilder().SdkMemberReferencePropertyTag(true))
 	}
 }
+
+// implement the following interface for IDE completion.
+var _ android.IDEInfo = (*SystemModules)(nil)
+
+func (s *SystemModules) IDEInfo(ideInfo *android.IdeInfo) {
+	ideInfo.Deps = append(ideInfo.Deps, s.properties.Libs...)
+	ideInfo.Libs = append(ideInfo.Libs, s.properties.Libs...)
+}

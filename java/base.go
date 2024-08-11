@@ -1206,6 +1206,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	var kotlinJars android.Paths
 	var kotlinHeaderJars android.Paths
+	var kotlinExtraJars android.Paths
 
 	// Prepend extraClasspathJars to classpath so that the resource processor R.jar comes before
 	// any dependencies so that it can override any non-final R classes from dependencies with the
@@ -1316,17 +1317,8 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 		kotlinJars = append(kotlinJars, kotlinJarPath)
 		kotlinHeaderJars = append(kotlinHeaderJars, kotlinHeaderJar)
-
-		// Jar kotlin classes into the final jar after javac
-		if BoolDefault(j.properties.Static_kotlin_stdlib, true) {
-			kotlinJars = append(kotlinJars, deps.kotlinStdlib...)
-			kotlinJars = append(kotlinJars, deps.kotlinAnnotations...)
-			kotlinHeaderJars = append(kotlinHeaderJars, deps.kotlinStdlib...)
-			kotlinHeaderJars = append(kotlinHeaderJars, deps.kotlinAnnotations...)
-		} else {
-			flags.dexClasspath = append(flags.dexClasspath, deps.kotlinStdlib...)
-			flags.dexClasspath = append(flags.dexClasspath, deps.kotlinAnnotations...)
-		}
+		kotlinExtraJars = append(kotlinExtraJars, deps.kotlinStdlib...)
+		kotlinExtraJars = append(kotlinExtraJars, deps.kotlinAnnotations...)
 	}
 
 	jars := slices.Clone(kotlinJars)
@@ -1344,7 +1336,11 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			// allow for the use of annotation processors that do function correctly
 			// with sharding enabled. See: b/77284273.
 		}
-		extraJars := append(slices.Clone(kotlinHeaderJars), extraCombinedJars...)
+		extraJars := slices.Clone(kotlinHeaderJars)
+		if BoolDefault(j.properties.Static_kotlin_stdlib, true) {
+			extraJars = append(extraJars, kotlinExtraJars...)
+		}
+		extraJars = append(extraJars, extraCombinedJars...)
 		var combinedHeaderJarFile android.Path
 		headerJarFileWithoutDepsOrJarjar, combinedHeaderJarFile =
 			j.compileJavaHeader(ctx, uniqueJavaFiles, srcJars, deps, flags, jarName, extraJars)
@@ -1420,6 +1416,13 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		if ctx.Failed() {
 			return
 		}
+	}
+
+	// Jar kotlin classes into the final jar after javac
+	if BoolDefault(j.properties.Static_kotlin_stdlib, true) {
+		jars = append(jars, kotlinExtraJars...)
+	} else {
+		flags.dexClasspath = append(flags.dexClasspath, kotlinExtraJars...)
 	}
 
 	jars = append(jars, extraCombinedJars...)
@@ -2221,6 +2224,11 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			deps.classpath = append(deps.classpath, sdkDep.jars...)
 			deps.dexClasspath = append(deps.dexClasspath, sdkDep.jars...)
 			deps.aidlPreprocess = sdkDep.aidl
+			// Add the sdk module dependency to `compileDepNames`.
+			// This ensures that the dependency is reported in `module_bp_java_deps.json`
+			// TODO (b/358608607): Move this to decodeSdkDep
+			sdkSpec := android.SdkContext(j).SdkVersion(ctx)
+			j.compileDepNames = append(j.compileDepNames, fmt.Sprintf("sdk_%s_%s_android", sdkSpec.Kind.String(), sdkSpec.ApiLevel.String()))
 		} else {
 			deps.aidlPreprocess = sdkDep.aidl
 		}
