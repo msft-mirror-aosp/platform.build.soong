@@ -486,21 +486,17 @@ func gatherRequiredDepsForTest() string {
 	}
 
 	extraApiLibraryModules := map[string]droidstubsStruct{
-		"android_stubs_current.from-text":                  publicDroidstubs,
-		"android_system_stubs_current.from-text":           systemDroidstubs,
-		"android_test_stubs_current.from-text":             testDroidstubs,
-		"android_module_lib_stubs_current.from-text":       moduleLibDroidstubs,
-		"android_module_lib_stubs_current_full.from-text":  moduleLibDroidstubs,
-		"android_system_server_stubs_current.from-text":    systemServerDroidstubs,
-		"core.current.stubs.from-text":                     publicDroidstubs,
-		"legacy.core.platform.api.stubs.from-text":         publicDroidstubs,
-		"stable.core.platform.api.stubs.from-text":         publicDroidstubs,
-		"core-lambda-stubs.from-text":                      publicDroidstubs,
-		"android-non-updatable.stubs.from-text":            publicDroidstubs,
-		"android-non-updatable.stubs.system.from-text":     systemDroidstubs,
-		"android-non-updatable.stubs.test.from-text":       testDroidstubs,
-		"android-non-updatable.stubs.module_lib.from-text": moduleLibDroidstubs,
-		"android-non-updatable.stubs.test_module_lib":      moduleLibDroidstubs,
+		"android_stubs_current.from-text":                 publicDroidstubs,
+		"android_system_stubs_current.from-text":          systemDroidstubs,
+		"android_test_stubs_current.from-text":            testDroidstubs,
+		"android_module_lib_stubs_current.from-text":      moduleLibDroidstubs,
+		"android_module_lib_stubs_current_full.from-text": moduleLibDroidstubs,
+		"android_system_server_stubs_current.from-text":   systemServerDroidstubs,
+		"core.current.stubs.from-text":                    publicDroidstubs,
+		"legacy.core.platform.api.stubs.from-text":        publicDroidstubs,
+		"stable.core.platform.api.stubs.from-text":        publicDroidstubs,
+		"core-lambda-stubs.from-text":                     publicDroidstubs,
+		"android-non-updatable.stubs.test_module_lib":     moduleLibDroidstubs,
 	}
 
 	for _, droidstubs := range droidstubsStructs {
@@ -529,6 +525,8 @@ func gatherRequiredDepsForTest() string {
 			name: "%s",
 			api_contributions: ["%s"],
 			stubs_type: "everything",
+			sdk_version: "none",
+			system_modules: "none",
 		}
         `, libName, droidstubs.name+".api.contribution")
 	}
