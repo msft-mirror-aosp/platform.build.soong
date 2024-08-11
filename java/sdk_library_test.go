@@ -35,9 +35,6 @@ func TestJavaSdkLibrary(t *testing.T) {
 			"29": {"foo"},
 			"30": {"bar", "barney", "baz", "betty", "foo", "fred", "quuz", "wilma"},
 		}),
-		android.FixtureModifyConfig(func(config android.Config) {
-			config.SetApiLibraries([]string{"foo"})
-		}),
 		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
 			variables.BuildFlags = map[string]string{
 				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
@@ -1589,9 +1586,6 @@ func TestJavaSdkLibrary_ApiLibrary(t *testing.T) {
 		prepareForJavaTest,
 		PrepareForTestWithJavaSdkLibraryFiles,
 		FixtureWithLastReleaseApis("foo"),
-		android.FixtureModifyConfig(func(config android.Config) {
-			config.SetApiLibraries([]string{"foo"})
-		}),
 	).RunTestWithBp(t, `
 		java_sdk_library {
 			name: "foo",
@@ -1610,36 +1604,30 @@ func TestJavaSdkLibrary_ApiLibrary(t *testing.T) {
 	`)
 
 	testCases := []struct {
-		scope              *apiScope
-		apiContributions   []string
-		fullApiSurfaceStub string
+		scope            *apiScope
+		apiContributions []string
 	}{
 		{
-			scope:              apiScopePublic,
-			apiContributions:   []string{"foo.stubs.source.api.contribution"},
-			fullApiSurfaceStub: "android_stubs_current",
+			scope:            apiScopePublic,
+			apiContributions: []string{"foo.stubs.source.api.contribution"},
 		},
 		{
-			scope:              apiScopeSystem,
-			apiContributions:   []string{"foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
-			fullApiSurfaceStub: "android_system_stubs_current",
+			scope:            apiScopeSystem,
+			apiContributions: []string{"foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
 		},
 		{
-			scope:              apiScopeTest,
-			apiContributions:   []string{"foo.stubs.source.test.api.contribution", "foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
-			fullApiSurfaceStub: "android_test_stubs_current",
+			scope:            apiScopeTest,
+			apiContributions: []string{"foo.stubs.source.test.api.contribution", "foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
 		},
 		{
-			scope:              apiScopeModuleLib,
-			apiContributions:   []string{"foo.stubs.source.module_lib.api.contribution", "foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
-			fullApiSurfaceStub: "android_module_lib_stubs_current_full.from-text",
+			scope:            apiScopeModuleLib,
+			apiContributions: []string{"foo.stubs.source.module_lib.api.contribution", "foo.stubs.source.system.api.contribution", "foo.stubs.source.api.contribution"},
 		},
 	}
 
 	for _, c := range testCases {
 		m := result.ModuleForTests(c.scope.apiLibraryModuleName("foo"), "android_common").Module().(*ApiLibrary)
 		android.AssertArrayString(t, "Module expected to contain api contributions", c.apiContributions, m.properties.Api_contributions)
-		android.AssertStringEquals(t, "Module expected to contain full api surface api library", c.fullApiSurfaceStub, *m.properties.Full_api_surface_stub)
 	}
 }
 
@@ -1709,9 +1697,6 @@ func TestSdkLibraryExportableStubsLibrary(t *testing.T) {
 		prepareForJavaTest,
 		PrepareForTestWithJavaSdkLibraryFiles,
 		FixtureWithLastReleaseApis("foo"),
-		android.FixtureModifyConfig(func(config android.Config) {
-			config.SetApiLibraries([]string{"foo"})
-		}),
 	).RunTestWithBp(t, `
 		aconfig_declarations {
 			name: "bar",
