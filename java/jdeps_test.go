@@ -103,3 +103,23 @@ func TestCollectJavaLibraryPropertiesAddJarjarRules(t *testing.T) {
 		t.Errorf("Library.IDEInfo() Jarjar_rules = %v, want %v", dpInfo.Jarjar_rules[0], expected)
 	}
 }
+
+func TestCollectJavaLibraryLinkingAgainstVersionedSdk(t *testing.T) {
+	ctx := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		FixtureWithPrebuiltApis(map[string][]string{
+			"29": {},
+		})).RunTestWithBp(t,
+		`
+		java_library {
+			name: "javalib",
+			srcs: ["foo.java"],
+			sdk_version: "29",
+		}
+	`)
+	module := ctx.ModuleForTests("javalib", "android_common").Module().(*Library)
+	dpInfo := &android.IdeInfo{}
+
+	module.IDEInfo(dpInfo)
+	android.AssertStringListContains(t, "IdeInfo.Deps should contain versioned sdk module", dpInfo.Deps, "sdk_public_29_android")
+}

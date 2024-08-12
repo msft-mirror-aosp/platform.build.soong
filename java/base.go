@@ -2224,6 +2224,11 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			deps.classpath = append(deps.classpath, sdkDep.jars...)
 			deps.dexClasspath = append(deps.dexClasspath, sdkDep.jars...)
 			deps.aidlPreprocess = sdkDep.aidl
+			// Add the sdk module dependency to `compileDepNames`.
+			// This ensures that the dependency is reported in `module_bp_java_deps.json`
+			// TODO (b/358608607): Move this to decodeSdkDep
+			sdkSpec := android.SdkContext(j).SdkVersion(ctx)
+			j.compileDepNames = append(j.compileDepNames, fmt.Sprintf("sdk_%s_%s_android", sdkSpec.Kind.String(), sdkSpec.ApiLevel.String()))
 		} else {
 			deps.aidlPreprocess = sdkDep.aidl
 		}
