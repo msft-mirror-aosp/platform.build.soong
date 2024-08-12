@@ -2022,16 +2022,20 @@ func (j *Module) ClassLoaderContexts() dexpreopt.ClassLoaderContextMap {
 
 // Collect information for opening IDE project files in java/jdeps.go.
 func (j *Module) IDEInfo(dpInfo *android.IdeInfo) {
-	dpInfo.Deps = append(dpInfo.Deps, j.CompilerDeps()...)
-	dpInfo.Srcs = append(dpInfo.Srcs, j.expandIDEInfoCompiledSrcs...)
-	dpInfo.SrcJars = append(dpInfo.SrcJars, j.compiledSrcJars.Strings()...)
-	dpInfo.Aidl_include_dirs = append(dpInfo.Aidl_include_dirs, j.deviceProperties.Aidl.Include_dirs...)
+	// jarjar rules will repackage the sources. To prevent misleading results, IdeInfo should contain the
+	// repackaged jar instead of the input sources.
 	if j.expandJarjarRules != nil {
 		dpInfo.Jarjar_rules = append(dpInfo.Jarjar_rules, j.expandJarjarRules.String())
+		dpInfo.Jars = append(dpInfo.Jars, j.headerJarFile.String())
+	} else {
+		dpInfo.Srcs = append(dpInfo.Srcs, j.expandIDEInfoCompiledSrcs...)
+		dpInfo.SrcJars = append(dpInfo.SrcJars, j.compiledSrcJars.Strings()...)
+		dpInfo.SrcJars = append(dpInfo.SrcJars, j.annoSrcJars.Strings()...)
 	}
+	dpInfo.Deps = append(dpInfo.Deps, j.CompilerDeps()...)
+	dpInfo.Aidl_include_dirs = append(dpInfo.Aidl_include_dirs, j.deviceProperties.Aidl.Include_dirs...)
 	dpInfo.Static_libs = append(dpInfo.Static_libs, j.properties.Static_libs...)
 	dpInfo.Libs = append(dpInfo.Libs, j.properties.Libs...)
-	dpInfo.SrcJars = append(dpInfo.SrcJars, j.annoSrcJars.Strings()...)
 }
 
 func (j *Module) CompilerDeps() []string {
@@ -2369,16 +2373,24 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			case bootClasspathTag:
 				// If a system modules dependency has been added to the bootclasspath
 				// then add its libs to the bootclasspath.
-				sm := module.(SystemModulesProvider)
-				deps.bootClasspath = append(deps.bootClasspath, sm.HeaderJars()...)
+				if sm, ok := android.OtherModuleProvider(ctx, module, SystemModulesProvider); ok {
+					depHeaderJars := sm.HeaderJars
+					deps.bootClasspath = append(deps.bootClasspath, depHeaderJars...)
+				} else {
+					ctx.PropertyErrorf("boot classpath dependency %q does not provide SystemModulesProvider",
+						ctx.OtherModuleName(module))
+				}
 
 			case systemModulesTag:
 				if deps.systemModules != nil {
 					panic("Found two system module dependencies")
 				}
-				sm := module.(SystemModulesProvider)
-				outputDir, outputDeps := sm.OutputDirAndDeps()
-				deps.systemModules = &systemModules{outputDir, outputDeps}
+				if sm, ok := android.OtherModuleProvider(ctx, module, SystemModulesProvider); ok {
+					deps.systemModules = &systemModules{sm.OutputDir, sm.OutputDirDeps}
+				} else {
+					ctx.PropertyErrorf("system modules dependency %q does not provide SystemModulesProvider",
+						ctx.OtherModuleName(module))
+				}
 
 			case instrumentationForTag:
 				ctx.PropertyErrorf("instrumentation_for", "dependency %q of type %q does not provide JavaInfo so is unsuitable for use with this property", ctx.OtherModuleName(module), ctx.OtherModuleType(module))

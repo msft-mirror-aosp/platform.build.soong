@@ -174,6 +174,16 @@ var PrepareForTestDisallowNonExistentPaths = FixtureModifyConfig(func(config Con
 	config.TestAllowNonExistentPaths = false
 })
 
+// PrepareForTestWithBuildFlag returns a FixturePreparer that sets the given flag to the given value.
+func PrepareForTestWithBuildFlag(flag, value string) FixturePreparer {
+	return FixtureModifyProductVariables(func(variables FixtureProductVariables) {
+		if variables.BuildFlags == nil {
+			variables.BuildFlags = make(map[string]string)
+		}
+		variables.BuildFlags[flag] = value
+	})
+}
+
 func NewTestArchContext(config Config) *TestContext {
 	ctx := NewTestContext(config)
 	ctx.preDeps = append(ctx.preDeps, registerArchMutator)
