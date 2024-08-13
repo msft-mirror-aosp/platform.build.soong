@@ -275,7 +275,7 @@ var (
 		"-Wno-zero-as-null-pointer-constant",        // http://b/68236239
 		"-Wno-deprecated-anon-enum-enum-conversion", // http://b/153746485
 		"-Wno-deprecated-enum-enum-conversion",
-		"-Wno-pessimizing-move", // http://b/154270751
+		"-Wno-error=pessimizing-move", // http://b/154270751
 		// New warnings to be fixed after clang-r399163
 		"-Wno-non-c-typedef-for-linkage", // http://b/161304145
 		// New warnings to be fixed after clang-r428724
@@ -368,6 +368,7 @@ var (
 		"-Wno-unqualified-std-cast-call",
 		"-Wno-array-parameter",
 		"-Wno-gnu-offsetof-extensions",
+		"-Wno-pessimizing-move",
 		// TODO: Enable this warning http://b/315245071
 		"-Wno-fortify-source",
 	}

@@ -2261,8 +2261,9 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				staticLibs = append(staticLibs, provider.HeaderJars...)
 			}
 		case systemModulesTag:
-			module := dep.(SystemModulesProvider)
-			systemModulesPaths = append(systemModulesPaths, module.HeaderJars()...)
+			if sm, ok := android.OtherModuleProvider(ctx, dep, SystemModulesProvider); ok {
+				systemModulesPaths = append(systemModulesPaths, sm.HeaderJars...)
+			}
 		case metalavaCurrentApiTimestampTag:
 			if currentApiTimestampProvider, ok := dep.(currentApiTimestampProvider); ok {
 				al.validationPaths = append(al.validationPaths, currentApiTimestampProvider.CurrentApiTimestamp())

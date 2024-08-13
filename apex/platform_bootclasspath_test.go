@@ -254,11 +254,7 @@ func TestPlatformBootclasspathDependencies(t *testing.T) {
 		java.FixtureWithLastReleaseApis("foo"),
 		java.PrepareForTestWithDexpreopt,
 		dexpreopt.FixtureDisableDexpreoptBootImages(false),
-		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.BuildFlags = map[string]string{
-				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
-			}
-		}),
+		android.PrepareForTestWithBuildFlag("RELEASE_HIDDEN_API_EXPORTABLE_STUBS", "true"),
 	).RunTestWithBp(t, `
 		apex {
 			name: "com.android.art",
@@ -429,10 +425,9 @@ func TestPlatformBootclasspath_AlwaysUsePrebuiltSdks(t *testing.T) {
 		java.PrepareForTestWithJavaSdkLibraryFiles,
 		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
 			variables.Always_use_prebuilt_sdks = proptools.BoolPtr(true)
-			variables.BuildFlags = map[string]string{
-				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
-			}
 		}),
+		android.PrepareForTestWithBuildFlag("RELEASE_HIDDEN_API_EXPORTABLE_STUBS", "true"),
+
 		java.FixtureWithPrebuiltApis(map[string][]string{
 			"current": {},
 			"30":      {"foo"},
@@ -935,11 +930,7 @@ func TestNonBootJarMissingInPrebuiltFragment(t *testing.T) {
 			PrepareForTestWithApexBuildComponents,
 			prepareForTestWithMyapex,
 			java.FixtureConfigureApexBootJars(tc.configuredBootJars...),
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_APEX_CONTRIBUTIONS_ART": "my_apex_contributions",
-				}
-			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ART", "my_apex_contributions"),
 		)
 		if tc.errorExpected {
 			fixture = fixture.ExtendWithErrorHandler(

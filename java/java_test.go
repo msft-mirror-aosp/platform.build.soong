@@ -2634,11 +2634,7 @@ func TestMultiplePrebuilts(t *testing.T) {
 	for _, tc := range testCases {
 		ctx := android.GroupFixturePreparers(
 			prepareForJavaTest,
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": "myapex_contributions",
-				}
-			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ADSERVICES", "myapex_contributions"),
 		).RunTestWithBp(t, fmt.Sprintf(bp, tc.selectedDependencyName))
 
 		// check that rdep gets the correct variation of dep
@@ -2708,11 +2704,7 @@ func TestMultiplePlatformCompatConfigPrebuilts(t *testing.T) {
 		ctx := android.GroupFixturePreparers(
 			prepareForJavaTest,
 			PrepareForTestWithPlatformCompatConfig,
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": "myapex_contributions",
-				}
-			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ADSERVICES", "myapex_contributions"),
 		).RunTestWithBp(t, fmt.Sprintf(bp, tc.selectedDependencyName))
 
 		mergedGlobalConfig := ctx.SingletonForTests("platform_compat_config_singleton").Output("compat_config/merged_compat_config.xml")

@@ -11298,11 +11298,7 @@ func TestBootDexJarsMultipleApexPrebuilts(t *testing.T) {
 				fs["platform/Test.java"] = nil
 			}),
 
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": tc.selectedApexContributions,
-				}
-			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ADSERVICES", tc.selectedApexContributions),
 		)
 		ctx := testDexpreoptWithApexes(t, bp, "", preparer, fragment)
 		checkBootDexJarPath(t, ctx, "framework-foo", tc.expectedBootJar)
@@ -11441,11 +11437,7 @@ func TestInstallationRulesForMultipleApexPrebuilts(t *testing.T) {
 			android.FixtureMergeMockFs(map[string][]byte{
 				"system/sepolicy/apex/com.android.foo-file_contexts": nil,
 			}),
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": tc.selectedApexContributions,
-				}
-			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ADSERVICES", tc.selectedApexContributions),
 		)
 		if tc.expectedError != "" {
 			preparer = preparer.ExtendWithErrorHandler(android.FixtureExpectsOneErrorPattern(tc.expectedError))
@@ -11561,11 +11553,7 @@ func TestInstallationRulesForMultipleApexPrebuiltsWithoutSource(t *testing.T) {
 			android.FixtureMergeMockFs(map[string][]byte{
 				"system/sepolicy/apex/com.android.adservices-file_contexts": nil,
 			}),
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": tc.selectedApexContributions,
-				}
-			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ADSERVICES", tc.selectedApexContributions),
 		)
 		ctx := testApex(t, bp, preparer)
 
