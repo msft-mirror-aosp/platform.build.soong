@@ -154,7 +154,7 @@ func TestPlatformBootclasspath_Fragments(t *testing.T) {
 	).RunTest(t)
 
 	pbcp := result.Module("platform-bootclasspath", "android_common")
-	info, _ := android.SingletonModuleProvider(result, pbcp, java.MonolithicHiddenAPIInfoProvider)
+	info, _ := android.OtherModuleProvider(result, pbcp, java.MonolithicHiddenAPIInfoProvider)
 
 	for _, category := range java.HiddenAPIFlagFileCategories {
 		name := category.PropertyName()
@@ -236,7 +236,7 @@ func TestPlatformBootclasspath_LegacyPrebuiltFragment(t *testing.T) {
 	)
 
 	pbcp := result.Module("myplatform-bootclasspath", "android_common")
-	info, _ := android.SingletonModuleProvider(result, pbcp, java.MonolithicHiddenAPIInfoProvider)
+	info, _ := android.OtherModuleProvider(result, pbcp, java.MonolithicHiddenAPIInfoProvider)
 
 	android.AssertArrayString(t, "stub flags", []string{"prebuilt-stub-flags.csv:out/soong/.intermediates/mybootclasspath-fragment/android_common_myapex/modular-hiddenapi/signature-patterns.csv"}, info.StubFlagSubsets.RelativeToTop())
 	android.AssertArrayString(t, "all flags", []string{"prebuilt-all-flags.csv:out/soong/.intermediates/mybootclasspath-fragment/android_common_myapex/modular-hiddenapi/signature-patterns.csv"}, info.FlagSubsets.RelativeToTop())
