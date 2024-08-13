@@ -1448,3 +1448,7 @@ func AARImportFactory() android.Module {
 	InitJavaModuleMultiTargets(module, android.DeviceSupported)
 	return module
 }
+
+func (a *AARImport) IDEInfo(dpInfo *android.IdeInfo) {
+	dpInfo.Jars = append(dpInfo.Jars, a.headerJarFile.String(), a.rJar.String())
+}

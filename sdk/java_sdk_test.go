@@ -45,11 +45,7 @@ var prepareForSdkTestWithJavaSdkLibrary = android.GroupFixturePreparers(
 	java.PrepareForTestWithJavaDefaultModules,
 	java.PrepareForTestWithJavaSdkLibraryFiles,
 	java.FixtureWithLastReleaseApis("myjavalib"),
-	android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-		variables.BuildFlags = map[string]string{
-			"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
-		}
-	}),
+	android.PrepareForTestWithBuildFlag("RELEASE_HIDDEN_API_EXPORTABLE_STUBS", "true"),
 )
 
 // Contains tests for SDK members provided by the java package.
@@ -666,11 +662,7 @@ func TestSnapshotWithJavaSystemModules(t *testing.T) {
 			"1": {"myjavalib"},
 			"2": {"myjavalib"},
 		}),
-		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.BuildFlags = map[string]string{
-				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
-			}
-		}),
+		android.PrepareForTestWithBuildFlag("RELEASE_HIDDEN_API_EXPORTABLE_STUBS", "true"),
 	).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",
@@ -1313,11 +1305,7 @@ java_sdk_library_import {
 func TestSnapshotWithJavaSdkLibrary_CompileDex(t *testing.T) {
 	result := android.GroupFixturePreparers(
 		prepareForSdkTestWithJavaSdkLibrary,
-		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.BuildFlags = map[string]string{
-				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
-			}
-		}),
+		android.PrepareForTestWithBuildFlag("RELEASE_HIDDEN_API_EXPORTABLE_STUBS", "true"),
 	).RunTestWithBp(t, `
 		sdk {
 			name: "mysdk",

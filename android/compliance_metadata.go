@@ -267,7 +267,7 @@ func (c *complianceMetadataSingleton) GenerateBuildActions(ctx SingletonContext)
 			writerToCsv(csvWriter, metadata)
 			return
 		}
-		if provider, ok := ctx.moduleProvider(module, ComplianceMetadataProvider); ok {
+		if provider, ok := ctx.otherModuleProvider(module, ComplianceMetadataProvider); ok {
 			metadataInfo := provider.(*ComplianceMetadataInfo)
 			rowId = rowId + 1
 			metadata := []string{strconv.Itoa(rowId)}

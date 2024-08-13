@@ -170,7 +170,7 @@ type androidMkExtraEntriesContext struct {
 }
 
 func (a *androidMkExtraEntriesContext) Provider(provider blueprint.AnyProviderKey) (any, bool) {
-	return a.ctx.moduleProvider(a.mod, provider)
+	return a.ctx.otherModuleProvider(a.mod, provider)
 }
 
 type AndroidMkExtraEntriesFunc func(ctx AndroidMkExtraEntriesContext, entries *AndroidMkEntries)
@@ -497,7 +497,7 @@ type fillInEntriesContext interface {
 	ModuleDir(module blueprint.Module) string
 	ModuleSubDir(module blueprint.Module) string
 	Config() Config
-	moduleProvider(module blueprint.Module, provider blueprint.AnyProviderKey) (any, bool)
+	otherModuleProvider(module blueprint.Module, provider blueprint.AnyProviderKey) (any, bool)
 	ModuleType(module blueprint.Module) string
 	OtherModulePropertyErrorf(module Module, property string, fmt string, args ...interface{})
 }
@@ -633,11 +633,11 @@ func (a *AndroidMkEntries) fillInEntries(ctx fillInEntriesContext, mod blueprint
 		}
 	}
 
-	if licenseMetadata, ok := SingletonModuleProvider(ctx, mod, LicenseMetadataProvider); ok {
+	if licenseMetadata, ok := OtherModuleProvider(ctx, mod, LicenseMetadataProvider); ok {
 		a.SetPath("LOCAL_SOONG_LICENSE_METADATA", licenseMetadata.LicenseMetadataPath)
 	}
 
-	if _, ok := SingletonModuleProvider(ctx, mod, ModuleInfoJSONProvider); ok {
+	if _, ok := OtherModuleProvider(ctx, mod, ModuleInfoJSONProvider); ok {
 		a.SetBool("LOCAL_SOONG_MODULE_INFO_JSON", true)
 	}
 
@@ -918,7 +918,7 @@ func translateAndroidModule(ctx SingletonContext, w io.Writer, moduleInfoJSONs *
 	}
 
 	if !data.Entries.disabled() {
-		if moduleInfoJSON, ok := SingletonModuleProvider(ctx, mod, ModuleInfoJSONProvider); ok {
+		if moduleInfoJSON, ok := OtherModuleProvider(ctx, mod, ModuleInfoJSONProvider); ok {
 			*moduleInfoJSONs = append(*moduleInfoJSONs, moduleInfoJSON)
 		}
 	}
@@ -960,7 +960,7 @@ func translateAndroidMkEntriesModule(ctx SingletonContext, w io.Writer, moduleIn
 	}
 
 	if len(entriesList) > 0 && !entriesList[0].disabled() {
-		if moduleInfoJSON, ok := SingletonModuleProvider(ctx, mod, ModuleInfoJSONProvider); ok {
+		if moduleInfoJSON, ok := OtherModuleProvider(ctx, mod, ModuleInfoJSONProvider); ok {
 			*moduleInfoJSONs = append(*moduleInfoJSONs, moduleInfoJSON)
 		}
 	}

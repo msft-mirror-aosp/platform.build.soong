@@ -574,11 +574,7 @@ func newOverrideSourceModule() Module {
 
 func TestPrebuiltErrorCannotListBothSourceAndPrebuiltInContributions(t *testing.T) {
 	selectMainlineModuleContritbutions := GroupFixturePreparers(
-		FixtureModifyProductVariables(func(variables FixtureProductVariables) {
-			variables.BuildFlags = map[string]string{
-				"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": "my_apex_contributions",
-			}
-		}),
+		PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ADSERVICES", "my_apex_contributions"),
 	)
 	testPrebuiltErrorWithFixture(t, `Found duplicate variations of the same module in apex_contributions: foo and prebuilt_foo. Please remove one of these`, `
 		source {

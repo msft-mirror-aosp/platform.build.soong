@@ -88,7 +88,7 @@ func (s *apexDepsInfoSingleton) GenerateBuildActions(ctx android.SingletonContex
 	updatableFlatLists := android.Paths{}
 	ctx.VisitAllModules(func(module android.Module) {
 		if binaryInfo, ok := module.(android.ApexBundleDepsInfoIntf); ok {
-			apexInfo, _ := android.SingletonModuleProvider(ctx, module, android.ApexInfoProvider)
+			apexInfo, _ := android.OtherModuleProvider(ctx, module, android.ApexInfoProvider)
 			if path := binaryInfo.FlatListPath(); path != nil {
 				if binaryInfo.Updatable() || apexInfo.Updatable {
 					updatableFlatLists = append(updatableFlatLists, path)
@@ -155,7 +155,7 @@ func (a *apexPrebuiltInfo) GenerateBuildActions(ctx android.SingletonContext) {
 	prebuiltInfos := []android.PrebuiltInfo{}
 
 	ctx.VisitAllModules(func(m android.Module) {
-		prebuiltInfo, exists := android.SingletonModuleProvider(ctx, m, android.PrebuiltInfoProvider)
+		prebuiltInfo, exists := android.OtherModuleProvider(ctx, m, android.PrebuiltInfoProvider)
 		// Use prebuiltInfoProvider to filter out non apex soong modules.
 		// Use HideFromMake to filter out the unselected variants of a specific apex.
 		if exists && !m.IsHideFromMake() {
