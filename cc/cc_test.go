@@ -3194,12 +3194,7 @@ func TestVendorSdkVersion(t *testing.T) {
 
 	ctx = android.GroupFixturePreparers(
 		prepareForCcTest,
-		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			if variables.BuildFlags == nil {
-				variables.BuildFlags = make(map[string]string)
-			}
-			variables.BuildFlags["RELEASE_BOARD_API_LEVEL_FROZEN"] = "true"
-		}),
+		android.PrepareForTestWithBuildFlag("RELEASE_BOARD_API_LEVEL_FROZEN", "true"),
 	).RunTestWithBp(t, bp)
 	testSdkVersionFlag("libfoo", "30")
 	testSdkVersionFlag("libbar", "29")
