@@ -21,12 +21,22 @@ import (
 	"github.com/google/blueprint"
 )
 
+// ----------------------------------------------------------------------------
+// Start of the definitions of exception functions and the lookup table.
+//
+// Functions cannot be used as a value passed in providers, because functions are not
+// hashable. As a workaround, the [exceptionHandleFuncLabel] enum values are passed using providers,
+// and the corresponding functions are called from [exceptionHandleFunctionsTable] map.
+// ----------------------------------------------------------------------------
+
+type exceptionHandleFunc func(ModuleContext, Module, Module) bool
+
 type StubsAvailableModule interface {
 	IsStubsModule() bool
 }
 
 // Returns true if the dependency module is a stubs module
-var depIsStubsModule = func(_ ModuleContext, _, dep Module) bool {
+var depIsStubsModule exceptionHandleFunc = func(_ ModuleContext, _, dep Module) bool {
 	if stubsModule, ok := dep.(StubsAvailableModule); ok {
 		return stubsModule.IsStubsModule()
 	}
@@ -41,12 +51,75 @@ const (
 	checkStubs exceptionHandleFuncLabel = iota
 )
 
-// Functions cannot be used as a value passed in providers, because functions are not
-// hashable. As a workaround, the exceptionHandleFunc enum values are passed using providers,
-// and the corresponding functions are called from this map.
-var exceptionHandleFunctionsTable = map[exceptionHandleFuncLabel]func(ModuleContext, Module, Module) bool{
+var exceptionHandleFunctionsTable = map[exceptionHandleFuncLabel]exceptionHandleFunc{
 	checkStubs: depIsStubsModule,
 }
+
+// ----------------------------------------------------------------------------
+// Start of the definitions of container determination functions.
+//
+// Similar to the above section, below defines the functions used to determine
+// the container of each modules.
+// ----------------------------------------------------------------------------
+
+type containerBoundaryFunc func(mctx ModuleContext) bool
+
+var vendorContainerBoundaryFunc containerBoundaryFunc = func(mctx ModuleContext) bool {
+	m, ok := mctx.Module().(ImageInterface)
+	return mctx.Module().InstallInVendor() || (ok && m.VendorVariantNeeded(mctx))
+}
+
+var systemContainerBoundaryFunc containerBoundaryFunc = func(mctx ModuleContext) bool {
+	module := mctx.Module()
+
+	return !module.InstallInTestcases() &&
+		!module.InstallInData() &&
+		!module.InstallInRamdisk() &&
+		!module.InstallInVendorRamdisk() &&
+		!module.InstallInDebugRamdisk() &&
+		!module.InstallInRecovery() &&
+		!module.InstallInVendor() &&
+		!module.InstallInOdm() &&
+		!module.InstallInProduct() &&
+		determineModuleKind(module.base(), mctx.blueprintBaseModuleContext()) == platformModule
+}
+
+var productContainerBoundaryFunc containerBoundaryFunc = func(mctx ModuleContext) bool {
+	m, ok := mctx.Module().(ImageInterface)
+	return mctx.Module().InstallInProduct() || (ok && m.ProductVariantNeeded(mctx))
+}
+
+var apexContainerBoundaryFunc containerBoundaryFunc = func(mctx ModuleContext) bool {
+	_, ok := ModuleProvider(mctx, AllApexInfoProvider)
+	return ok
+}
+
+var ctsContainerBoundaryFunc containerBoundaryFunc = func(mctx ModuleContext) bool {
+	props := mctx.Module().GetProperties()
+	for _, prop := range props {
+		val := reflect.ValueOf(prop).Elem()
+		if val.Kind() == reflect.Struct {
+			testSuites := val.FieldByName("Test_suites")
+			if testSuites.IsValid() && testSuites.Kind() == reflect.Slice && slices.Contains(testSuites.Interface().([]string), "cts") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Map of [*container] to the [containerBoundaryFunc]
+var containerBoundaryFunctionsTable = map[*container]containerBoundaryFunc{
+	VendorContainer:  vendorContainerBoundaryFunc,
+	SystemContainer:  systemContainerBoundaryFunc,
+	ProductContainer: productContainerBoundaryFunc,
+	ApexContainer:    apexContainerBoundaryFunc,
+	CtsContainer:     ctsContainerBoundaryFunc,
+}
+
+// ----------------------------------------------------------------------------
+// End of the definitions of container determination functions.
+// ----------------------------------------------------------------------------
 
 type InstallableModule interface {
 	EnforceApiContainerChecks() bool
@@ -77,6 +150,7 @@ var (
 		name:       VendorVariation,
 		restricted: nil,
 	}
+
 	SystemContainer = &container{
 		name: "system",
 		restricted: []restriction{
@@ -90,6 +164,7 @@ var (
 			},
 		},
 	}
+
 	ProductContainer = &container{
 		name: ProductVariation,
 		restricted: []restriction{
@@ -102,8 +177,10 @@ var (
 			},
 		},
 	}
+
 	ApexContainer = initializeApexContainer()
-	CtsContainer  = &container{
+
+	CtsContainer = &container{
 		name: "cts",
 		restricted: []restriction{
 			{
@@ -115,6 +192,14 @@ var (
 				allowedExceptions: []exceptionHandleFuncLabel{checkStubs},
 			},
 		},
+	}
+
+	allContainers = []*container{
+		VendorContainer,
+		SystemContainer,
+		ProductContainer,
+		ApexContainer,
+		CtsContainer,
 	}
 )
 
@@ -155,68 +240,38 @@ func (c *ContainersInfo) BelongingContainers() []*container {
 	return c.belongingContainers
 }
 
-var ContainersInfoProvider = blueprint.NewProvider[ContainersInfo]()
-
-// Determines if the module can be installed in the system partition or not.
-// Logic is identical to that of modulePartition(...) defined in paths.go
-func installInSystemPartition(ctx ModuleContext) bool {
-	module := ctx.Module()
-	return !module.InstallInTestcases() &&
-		!module.InstallInData() &&
-		!module.InstallInRamdisk() &&
-		!module.InstallInVendorRamdisk() &&
-		!module.InstallInDebugRamdisk() &&
-		!module.InstallInRecovery() &&
-		!module.InstallInVendor() &&
-		!module.InstallInOdm() &&
-		!module.InstallInProduct() &&
-		determineModuleKind(module.base(), ctx.blueprintBaseModuleContext()) == platformModule
+func (c *ContainersInfo) ApexNames() (ret []string) {
+	for _, apex := range c.belongingApexes {
+		ret = append(ret, apex.InApexModules...)
+	}
+	slices.Sort(ret)
+	return ret
 }
 
-func generateContainerInfo(ctx ModuleContext) ContainersInfo {
-	inSystem := installInSystemPartition(ctx)
-	inProduct := ctx.Module().InstallInProduct()
-	inVendor := ctx.Module().InstallInVendor()
-	inCts := false
-	inApex := false
-
-	if m, ok := ctx.Module().(ImageInterface); ok {
-		inProduct = inProduct || m.ProductVariantNeeded(ctx)
-		inVendor = inVendor || m.VendorVariantNeeded(ctx)
+// Returns true if any of the apex the module belongs to is updatable.
+func (c *ContainersInfo) UpdatableApex() bool {
+	for _, apex := range c.belongingApexes {
+		if apex.Updatable {
+			return true
+		}
 	}
+	return false
+}
 
-	props := ctx.Module().GetProperties()
-	for _, prop := range props {
-		val := reflect.ValueOf(prop).Elem()
-		if val.Kind() == reflect.Struct {
-			testSuites := val.FieldByName("Test_suites")
-			if testSuites.IsValid() && testSuites.Kind() == reflect.Slice && slices.Contains(testSuites.Interface().([]string), "cts") {
-				inCts = true
-			}
+var ContainersInfoProvider = blueprint.NewProvider[ContainersInfo]()
+
+func generateContainerInfo(ctx ModuleContext) ContainersInfo {
+	var containers []*container
+
+	for _, cnt := range allContainers {
+		if containerBoundaryFunctionsTable[cnt](ctx) {
+			containers = append(containers, cnt)
 		}
 	}
 
 	var belongingApexes []ApexInfo
 	if apexInfo, ok := ModuleProvider(ctx, AllApexInfoProvider); ok {
 		belongingApexes = apexInfo.ApexInfos
-		inApex = true
-	}
-
-	containers := []*container{}
-	if inSystem {
-		containers = append(containers, SystemContainer)
-	}
-	if inProduct {
-		containers = append(containers, ProductContainer)
-	}
-	if inVendor {
-		containers = append(containers, VendorContainer)
-	}
-	if inCts {
-		containers = append(containers, CtsContainer)
-	}
-	if inApex {
-		containers = append(containers, ApexContainer)
 	}
 
 	return ContainersInfo{

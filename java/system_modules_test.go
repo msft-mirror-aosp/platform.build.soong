@@ -25,7 +25,7 @@ func getModuleHeaderJarsAsRelativeToTopPaths(result *android.TestResult, moduleN
 	paths := []string{}
 	for _, moduleName := range moduleNames {
 		module := result.Module(moduleName, "android_common")
-		info, _ := android.SingletonModuleProvider(result, module, JavaInfoProvider)
+		info, _ := android.OtherModuleProvider(result, module, JavaInfoProvider)
 		paths = append(paths, info.HeaderJars.RelativeToTop().Strings()...)
 	}
 	return paths

@@ -47,7 +47,7 @@ var prepareForTsanTest = android.FixtureAddFile("tsan/Android.bp", []byte(`
 `))
 
 type providerInterface interface {
-	android.SingletonModuleProviderContext
+	android.OtherModuleProviderContext
 }
 
 // expectSharedLinkDep verifies that the from module links against the to module as a
@@ -55,7 +55,7 @@ type providerInterface interface {
 func expectSharedLinkDep(t *testing.T, ctx providerInterface, from, to android.TestingModule) {
 	t.Helper()
 	fromLink := from.Description("link")
-	toInfo, _ := android.SingletonModuleProvider(ctx, to.Module(), SharedLibraryInfoProvider)
+	toInfo, _ := android.OtherModuleProvider(ctx, to.Module(), SharedLibraryInfoProvider)
 
 	if g, w := fromLink.OrderOnly.Strings(), toInfo.SharedLibrary.RelativeToTop().String(); !android.InList(w, g) {
 		t.Errorf("%s should link against %s, expected %q, got %q",
@@ -68,7 +68,7 @@ func expectSharedLinkDep(t *testing.T, ctx providerInterface, from, to android.T
 func expectNoSharedLinkDep(t *testing.T, ctx providerInterface, from, to android.TestingModule) {
 	t.Helper()
 	fromLink := from.Description("link")
-	toInfo, _ := android.SingletonModuleProvider(ctx, to.Module(), SharedLibraryInfoProvider)
+	toInfo, _ := android.OtherModuleProvider(ctx, to.Module(), SharedLibraryInfoProvider)
 
 	if g, w := fromLink.OrderOnly.Strings(), toInfo.SharedLibrary.RelativeToTop().String(); android.InList(w, g) {
 		t.Errorf("%s should not link against %s, expected %q, got %q",
@@ -81,7 +81,7 @@ func expectNoSharedLinkDep(t *testing.T, ctx providerInterface, from, to android
 func expectStaticLinkDep(t *testing.T, ctx providerInterface, from, to android.TestingModule) {
 	t.Helper()
 	fromLink := from.Description("link")
-	toInfo, _ := android.SingletonModuleProvider(ctx, to.Module(), StaticLibraryInfoProvider)
+	toInfo, _ := android.OtherModuleProvider(ctx, to.Module(), StaticLibraryInfoProvider)
 
 	if g, w := fromLink.Implicits.Strings(), toInfo.StaticLibrary.RelativeToTop().String(); !android.InList(w, g) {
 		t.Errorf("%s should link against %s, expected %q, got %q",
@@ -95,7 +95,7 @@ func expectStaticLinkDep(t *testing.T, ctx providerInterface, from, to android.T
 func expectNoStaticLinkDep(t *testing.T, ctx providerInterface, from, to android.TestingModule) {
 	t.Helper()
 	fromLink := from.Description("link")
-	toInfo, _ := android.SingletonModuleProvider(ctx, to.Module(), StaticLibraryInfoProvider)
+	toInfo, _ := android.OtherModuleProvider(ctx, to.Module(), StaticLibraryInfoProvider)
 
 	if g, w := fromLink.Implicits.Strings(), toInfo.StaticLibrary.RelativeToTop().String(); android.InList(w, g) {
 		t.Errorf("%s should not link against %s, expected %q, got %q",
