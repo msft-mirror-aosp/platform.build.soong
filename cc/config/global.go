@@ -293,13 +293,6 @@ var (
 		"-Wno-error=invalid-offsetof",
 		"-Wno-error=thread-safety-reference-return",
 
-		// Irrelevant on Android because _we_ don't use exceptions, but causes
-		// lots of build noise because libcxx/libcxxabi do. This can probably
-		// go away when we're on a new enough libc++, but has to be global
-		// until then because it causes warnings in the _callers_, not the
-		// project itself.
-		"-Wno-deprecated-dynamic-exception-spec",
-
 		// Allow using VLA CXX extension.
 		"-Wno-vla-cxx-extension",
 	}
