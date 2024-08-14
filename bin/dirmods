@@ -32,7 +32,10 @@ import modinfo
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('path')
+    parser.add_argument('--no-recurse', '-n', action='store_true',
+                        help='Do not include modules defined in subdirs of path')
     args = parser.parse_args()
+    should_recurse = not args.no_recurse
 
     d = os.path.normpath(args.path)
     # Fix absolute path to be relative to build top
@@ -43,15 +46,15 @@ def main():
             if d.startswith(base):
                 d = d[len(base):]
 
-    prefix = d + '/'
+    prefix = d + os.path.sep
 
     module_info = modinfo.ReadModuleInfo()
 
     results = set()
     for m in module_info.values():
-        for path in m.get(u'path', []):
-            if path == d or path.startswith(prefix):
-                name = m.get(u'module_name')
+        for path in m.get('path', []):
+            if path == d or (should_recurse and path.startswith(prefix)):
+                name = m.get('module_name')
                 if name:
                     results.add(name)
 

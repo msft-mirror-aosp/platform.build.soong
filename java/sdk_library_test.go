@@ -130,7 +130,7 @@ func TestJavaSdkLibrary(t *testing.T) {
 	result.ModuleForTests("foo.api.system.28", "")
 	result.ModuleForTests("foo.api.test.28", "")
 
-	exportedComponentsInfo, _ := android.SingletonModuleProvider(result, foo.Module(), android.ExportedComponentsInfoProvider)
+	exportedComponentsInfo, _ := android.OtherModuleProvider(result, foo.Module(), android.ExportedComponentsInfoProvider)
 	expectedFooExportedComponents := []string{
 		"foo-removed.api.combined.public.latest",
 		"foo-removed.api.combined.system.latest",

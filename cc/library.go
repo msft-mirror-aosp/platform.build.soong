@@ -142,7 +142,7 @@ type SharedProperties struct {
 // Use `StaticProperties` or `SharedProperties`, depending on which variant is needed.
 // `StaticOrSharedProperties` exists only to avoid duplication.
 type StaticOrSharedProperties struct {
-	Srcs []string `android:"path,arch_variant"`
+	Srcs proptools.Configurable[[]string] `android:"path,arch_variant"`
 
 	Tidy_disabled_srcs []string `android:"path,arch_variant"`
 
@@ -633,14 +633,17 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 		return objs
 	}
 
+	srcs := library.baseCompiler.Properties.Srcs.GetOrDefault(ctx, nil)
+	staticSrcs := library.StaticProperties.Static.Srcs.GetOrDefault(ctx, nil)
+	sharedSrcs := library.SharedProperties.Shared.Srcs.GetOrDefault(ctx, nil)
 	if !library.buildShared() && !library.buildStatic() {
-		if len(library.baseCompiler.Properties.Srcs) > 0 {
+		if len(srcs) > 0 {
 			ctx.PropertyErrorf("srcs", "cc_library_headers must not have any srcs")
 		}
-		if len(library.StaticProperties.Static.Srcs) > 0 {
+		if len(staticSrcs) > 0 {
 			ctx.PropertyErrorf("static.srcs", "cc_library_headers must not have any srcs")
 		}
-		if len(library.SharedProperties.Shared.Srcs) > 0 {
+		if len(sharedSrcs) > 0 {
 			ctx.PropertyErrorf("shared.srcs", "cc_library_headers must not have any srcs")
 		}
 		return Objects{}
@@ -651,8 +654,8 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 		for _, dir := range dirs {
 			flags.SAbiFlags = append(flags.SAbiFlags, "-I"+dir)
 		}
-		totalLength := len(library.baseCompiler.Properties.Srcs) + len(deps.GeneratedSources) +
-			len(library.SharedProperties.Shared.Srcs) + len(library.StaticProperties.Static.Srcs)
+		totalLength := len(srcs) + len(deps.GeneratedSources) +
+			len(sharedSrcs) + len(staticSrcs)
 		if totalLength > 0 {
 			flags.SAbiDump = true
 		}
@@ -662,13 +665,13 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 	buildFlags := flagsToBuilderFlags(flags)
 
 	if library.static() {
-		srcs := android.PathsForModuleSrc(ctx, library.StaticProperties.Static.Srcs)
+		srcs := android.PathsForModuleSrc(ctx, staticSrcs)
 		objs = objs.Append(compileObjs(ctx, buildFlags, android.DeviceStaticLibrary, srcs,
 			android.PathsForModuleSrc(ctx, library.StaticProperties.Static.Tidy_disabled_srcs),
 			android.PathsForModuleSrc(ctx, library.StaticProperties.Static.Tidy_timeout_srcs),
 			library.baseCompiler.pathDeps, library.baseCompiler.cFlagsDeps))
 	} else if library.shared() {
-		srcs := android.PathsForModuleSrc(ctx, library.SharedProperties.Shared.Srcs)
+		srcs := android.PathsForModuleSrc(ctx, sharedSrcs)
 		objs = objs.Append(compileObjs(ctx, buildFlags, android.DeviceSharedLibrary, srcs,
 			android.PathsForModuleSrc(ctx, library.SharedProperties.Shared.Tidy_disabled_srcs),
 			android.PathsForModuleSrc(ctx, library.SharedProperties.Shared.Tidy_timeout_srcs),
@@ -1651,8 +1654,8 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 
 	// Optionally export aidl headers.
 	if Bool(library.Properties.Aidl.Export_aidl_headers) {
-		if library.baseCompiler.hasAidl(deps) {
-			if library.baseCompiler.hasSrcExt(".aidl") {
+		if library.baseCompiler.hasAidl(ctx, deps) {
+			if library.baseCompiler.hasSrcExt(ctx, ".aidl") {
 				dir := android.PathForModuleGen(ctx, "aidl")
 				library.reexportDirs(dir)
 			}
@@ -1668,7 +1671,7 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 
 	// Optionally export proto headers.
 	if Bool(library.Properties.Proto.Export_proto_headers) {
-		if library.baseCompiler.hasSrcExt(".proto") {
+		if library.baseCompiler.hasSrcExt(ctx, ".proto") {
 			var includes android.Paths
 			if flags.proto.CanonicalPathFromRoot {
 				includes = append(includes, flags.proto.SubDir)
@@ -1682,7 +1685,7 @@ func (library *libraryDecorator) link(ctx ModuleContext,
 	}
 
 	// If the library is sysprop_library, expose either public or internal header selectively.
-	if library.baseCompiler.hasSrcExt(".sysprop") {
+	if library.baseCompiler.hasSrcExt(ctx, ".sysprop") {
 		dir := android.PathForModuleGen(ctx, "sysprop", "include")
 		if library.Properties.Sysprop.Platform != nil {
 			isOwnerPlatform := Bool(library.Properties.Sysprop.Platform)
@@ -2091,7 +2094,7 @@ func reuseStaticLibrary(ctx android.BottomUpMutatorContext, shared *Module) {
 			ctx.AddVariationDependencies([]blueprint.Variation{{"link", "static"}}, reuseObjTag, ctx.ModuleName())
 			sharedCompiler.baseCompiler.Properties.OriginalSrcs =
 				sharedCompiler.baseCompiler.Properties.Srcs
-			sharedCompiler.baseCompiler.Properties.Srcs = nil
+			sharedCompiler.baseCompiler.Properties.Srcs = proptools.NewConfigurable[[]string](nil, nil)
 			sharedCompiler.baseCompiler.Properties.Generated_sources = nil
 		}
 
