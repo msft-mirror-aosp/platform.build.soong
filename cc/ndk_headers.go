@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 
 	"android/soong/android"
+
 	"github.com/google/blueprint"
 )
 
@@ -44,7 +45,7 @@ func init() {
 }
 
 // Returns the NDK base include path for use with sdk_version current. Usable with -I.
-func getCurrentIncludePath(ctx android.ModuleContext) android.OutputPath {
+func getCurrentIncludePath(ctx android.PathContext) android.OutputPath {
 	return getNdkSysrootBase(ctx).Join(ctx, "usr/include")
 }
 
@@ -73,6 +74,13 @@ type headerProperties struct {
 
 	// Path to the NOTICE file associated with the headers.
 	License *string `android:"path"`
+
+	// Set to true if the headers installed by this module should skip
+	// verification. This step ensures that each header is self-contained (can
+	// be #included alone) and is valid C. This should not be disabled except in
+	// rare cases. Outside bionic and external, if you're using this option
+	// you've probably made a mistake.
+	Skip_verification *bool
 }
 
 type headerModule struct {
@@ -309,6 +317,13 @@ type preprocessedHeadersProperties struct {
 
 	// Path to the NOTICE file associated with the headers.
 	License *string
+
+	// Set to true if the headers installed by this module should skip
+	// verification. This step ensures that each header is self-contained (can
+	// be #included alone) and is valid C. This should not be disabled except in
+	// rare cases. Outside bionic and external, if you're using this option
+	// you've probably made a mistake.
+	Skip_verification *bool
 }
 
 type preprocessedHeadersModule struct {

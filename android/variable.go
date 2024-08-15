@@ -508,9 +508,16 @@ type ProductVariables struct {
 
 	ArtTargetIncludeDebugBuild *bool `json:",omitempty"`
 
-	SystemPropFiles []string `json:",omitempty"`
+	SystemPropFiles    []string `json:",omitempty"`
+	SystemExtPropFiles []string `json:",omitempty"`
+	ProductPropFiles   []string `json:",omitempty"`
 
 	EnableUffdGc *string `json:",omitempty"`
+
+	BoardAvbEnable                         *bool    `json:",omitempty"`
+	BoardAvbSystemAddHashtreeFooterArgs    []string `json:",omitempty"`
+	DeviceFrameworkCompatibilityMatrixFile []string `json:",omitempty"`
+	DeviceProductCompatibilityMatrixFile   []string `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {

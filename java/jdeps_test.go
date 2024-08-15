@@ -91,15 +91,42 @@ func TestCollectJavaLibraryPropertiesAddAidlIncludeDirs(t *testing.T) {
 	}
 }
 
-func TestCollectJavaLibraryPropertiesAddJarjarRules(t *testing.T) {
-	expected := "Jarjar_rules.txt"
-	module := LibraryFactory().(*Library)
-	module.expandJarjarRules = android.PathForTesting(expected)
+func TestCollectJavaLibraryWithJarJarRules(t *testing.T) {
+	ctx, _ := testJava(t,
+		`
+		java_library {
+			name: "javalib",
+			srcs: ["foo.java"],
+			jarjar_rules: "jarjar_rules.txt",
+		}
+	`)
+	module := ctx.ModuleForTests("javalib", "android_common").Module().(*Library)
 	dpInfo := &android.IdeInfo{}
 
 	module.IDEInfo(dpInfo)
-
-	if dpInfo.Jarjar_rules[0] != expected {
-		t.Errorf("Library.IDEInfo() Jarjar_rules = %v, want %v", dpInfo.Jarjar_rules[0], expected)
+	android.AssertBoolEquals(t, "IdeInfo.Srcs of repackaged library should be empty", true, len(dpInfo.Srcs) == 0)
+	android.AssertStringEquals(t, "IdeInfo.Jar_rules of repackaged library should not be empty", "jarjar_rules.txt", dpInfo.Jarjar_rules[0])
+	if !android.SubstringInList(dpInfo.Jars, "soong/.intermediates/javalib/android_common/jarjar/turbine/javalib.jar") {
+		t.Errorf("IdeInfo.Jars of repackaged library should contain the output of jarjar-ing. All outputs: %v\n", dpInfo.Jars)
 	}
+}
+
+func TestCollectJavaLibraryLinkingAgainstVersionedSdk(t *testing.T) {
+	ctx := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		FixtureWithPrebuiltApis(map[string][]string{
+			"29": {},
+		})).RunTestWithBp(t,
+		`
+		java_library {
+			name: "javalib",
+			srcs: ["foo.java"],
+			sdk_version: "29",
+		}
+	`)
+	module := ctx.ModuleForTests("javalib", "android_common").Module().(*Library)
+	dpInfo := &android.IdeInfo{}
+
+	module.IDEInfo(dpInfo)
+	android.AssertStringListContains(t, "IdeInfo.Deps should contain versioned sdk module", dpInfo.Deps, "sdk_public_29_android")
 }

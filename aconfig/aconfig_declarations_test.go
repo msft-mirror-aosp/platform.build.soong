@@ -40,7 +40,7 @@ func TestAconfigDeclarations(t *testing.T) {
 	module := result.ModuleForTests("module_name", "").Module().(*DeclarationsModule)
 
 	// Check that the provider has the right contents
-	depData, _ := android.SingletonModuleProvider(result, module, android.AconfigDeclarationsProviderKey)
+	depData, _ := android.OtherModuleProvider(result, module, android.AconfigDeclarationsProviderKey)
 	android.AssertStringEquals(t, "package", depData.Package, "com.example.package")
 	android.AssertStringEquals(t, "container", depData.Container, "com.android.foo")
 	android.AssertBoolEquals(t, "exportable", depData.Exportable, true)
@@ -67,7 +67,7 @@ func TestAconfigDeclarationsWithExportableUnset(t *testing.T) {
 	result := runTest(t, android.FixtureExpectsNoErrors, bp)
 
 	module := result.ModuleForTests("module_name", "").Module().(*DeclarationsModule)
-	depData, _ := android.SingletonModuleProvider(result, module, android.AconfigDeclarationsProviderKey)
+	depData, _ := android.OtherModuleProvider(result, module, android.AconfigDeclarationsProviderKey)
 	android.AssertBoolEquals(t, "exportable", depData.Exportable, false)
 }
 
@@ -205,7 +205,7 @@ func TestGenerateAndroidBuildActions(t *testing.T) {
 		}
 		result := fixture.RunTestWithBp(t, test.bp)
 		module := result.ModuleForTests("module_name", "").Module().(*DeclarationsModule)
-		depData, _ := android.SingletonModuleProvider(result, module, android.AconfigReleaseDeclarationsProviderKey)
+		depData, _ := android.OtherModuleProvider(result, module, android.AconfigReleaseDeclarationsProviderKey)
 		expectedKeys := []string{""}
 		for _, rc := range strings.Split(test.buildFlags["RELEASE_ACONFIG_EXTRA_RELEASE_CONFIGS"], " ") {
 			expectedKeys = append(expectedKeys, rc)

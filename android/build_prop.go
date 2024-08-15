@@ -37,6 +37,9 @@ type buildPropProperties struct {
 
 	// Path to a JSON file containing product configs.
 	Product_config *string `android:"path"`
+
+	// Optional subdirectory under which this file is installed into
+	Relative_install_path *string
 }
 
 type buildPropModule struct {
@@ -56,6 +59,10 @@ func (p *buildPropModule) propFiles(ctx ModuleContext) Paths {
 	partition := p.PartitionTag(ctx.DeviceConfig())
 	if partition == "system" {
 		return ctx.Config().SystemPropFiles(ctx)
+	} else if partition == "system_ext" {
+		return ctx.Config().SystemExtPropFiles(ctx)
+	} else if partition == "product" {
+		return ctx.Config().ProductPropFiles(ctx)
 	}
 	return nil
 }
@@ -75,6 +82,28 @@ func shouldAddBuildThumbprint(config Config) bool {
 	return false
 }
 
+// Can't use PartitionTag() because PartitionTag() returns the partition this module is actually
+// installed (e.g. odm module's partition tag can be either "odm" or "vendor")
+func (p *buildPropModule) partition(config DeviceConfig) string {
+	if p.SocSpecific() {
+		return "vendor"
+	} else if p.DeviceSpecific() {
+		return "odm"
+	} else if p.ProductSpecific() {
+		return "product"
+	} else if p.SystemExtSpecific() {
+		return "system_ext"
+	}
+	return "system"
+}
+
+var validPartitions = []string{
+	"system",
+	"system_ext",
+	"product",
+	"odm",
+}
+
 func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 	p.outputFilePath = PathForModuleOut(ctx, "build.prop").OutputPath
 	if !ctx.Config().KatiEnabled() {
@@ -83,9 +112,9 @@ func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 		return
 	}
 
-	partition := p.PartitionTag(ctx.DeviceConfig())
-	if partition != "system" {
-		ctx.PropertyErrorf("partition", "unsupported partition %q: only \"system\" is supported", partition)
+	partition := p.partition(ctx.DeviceConfig())
+	if !InList(partition, validPartitions) {
+		ctx.PropertyErrorf("partition", "unsupported partition %q: only %q are supported", partition, validPartitions)
 		return
 	}
 
@@ -113,7 +142,7 @@ func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 	cmd.FlagWithInput("--platform-preview-sdk-fingerprint-file=", ApiFingerprintPath(ctx))
 	cmd.FlagWithInput("--product-config=", PathForModuleSrc(ctx, proptools.String(p.properties.Product_config)))
 	cmd.FlagWithArg("--partition=", partition)
-	cmd.FlagForEachInput("--prop-files=", ctx.Config().SystemPropFiles(ctx))
+	cmd.FlagForEachInput("--prop-files=", p.propFiles(ctx))
 	cmd.FlagWithOutput("--out=", p.outputFilePath)
 
 	postProcessCmd := rule.Command().BuiltTool("post_process_props")
@@ -134,7 +163,7 @@ func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 
 	rule.Build(ctx.ModuleName(), "generating build.prop")
 
-	p.installPath = PathForModuleInstall(ctx)
+	p.installPath = PathForModuleInstall(ctx, proptools.String(p.properties.Relative_install_path))
 	ctx.InstallFile(p.installPath, p.stem(), p.outputFilePath)
 
 	ctx.SetOutputFiles(Paths{p.outputFilePath}, "")
