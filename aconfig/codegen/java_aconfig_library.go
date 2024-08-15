@@ -15,13 +15,12 @@
 package codegen
 
 import (
-	"fmt"
-
 	"android/soong/android"
 	"android/soong/java"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
+	"strconv"
 )
 
 type declarationsTagType struct {
@@ -73,6 +72,7 @@ func (callbacks *JavaAconfigDeclarationsLibraryCallbacks) DepsMutator(module *ja
 		module.AddSharedLibrary("aconfig-annotations-lib")
 		// TODO(b/303773055): Remove the annotation after access issue is resolved.
 		module.AddSharedLibrary("unsupportedappusage")
+		module.AddSharedLibrary("aconfig_storage_reader_java")
 	}
 }
 
@@ -80,7 +80,7 @@ func (callbacks *JavaAconfigDeclarationsLibraryCallbacks) GenerateSourceJarBuild
 	// Get the values that came from the global RELEASE_ACONFIG_VALUE_SETS flag
 	declarationsModules := ctx.GetDirectDepsWithTag(declarationsTag)
 	if len(declarationsModules) != 1 {
-		panic(fmt.Errorf("Exactly one aconfig_declarations property required"))
+		panic("Exactly one aconfig_declarations property required")
 	}
 	declarations, _ := android.OtherModuleProvider(ctx, declarationsModules[0], android.AconfigDeclarationsProviderKey)
 
@@ -104,7 +104,8 @@ func (callbacks *JavaAconfigDeclarationsLibraryCallbacks) GenerateSourceJarBuild
 		Output:      srcJarPath,
 		Description: "aconfig.srcjar",
 		Args: map[string]string{
-			"mode": mode,
+			"mode":  mode,
+			"debug": strconv.FormatBool(ctx.Config().ReleaseReadFromNewStorage()),
 		},
 	})
 
@@ -131,10 +132,6 @@ func (callbacks *JavaAconfigDeclarationsLibraryCallbacks) GenerateSourceJarBuild
 	})
 
 	return srcJarPath, declarations.IntermediateCacheOutputPath
-}
-
-func (callbacks *JavaAconfigDeclarationsLibraryCallbacks) AconfigDeclarations() *string {
-	return proptools.StringPtr(callbacks.properties.Aconfig_declarations)
 }
 
 func isModeSupported(mode string) bool {

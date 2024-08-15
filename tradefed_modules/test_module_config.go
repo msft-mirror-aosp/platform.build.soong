@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -171,6 +172,20 @@ func (m *testModuleConfigModule) GenerateAndroidBuildActions(ctx android.ModuleC
 func (m *testModuleConfigModule) validateTestSuites(ctx android.ModuleContext) bool {
 	if len(m.tradefedProperties.Test_suites) == 0 {
 		ctx.ModuleErrorf("At least one test-suite must be set or this won't run. Use \"general-tests\" or \"device-tests\"")
+		return false
+	}
+
+	var extra_derived_suites []string
+	// Ensure all suites listed are also in base.
+	for _, s := range m.tradefedProperties.Test_suites {
+		if !slices.Contains(m.provider.TestSuites, s) {
+			extra_derived_suites = append(extra_derived_suites, s)
+		}
+	}
+	if len(extra_derived_suites) != 0 {
+		ctx.ModuleErrorf("Suites: [%s] listed but do not exist in base module: %s",
+			strings.Join(extra_derived_suites, ", "),
+			*m.tradefedProperties.Base)
 		return false
 	}
 

@@ -71,5 +71,5 @@ message flag_declaration_artifact {
 
 message flag_declaration_artifacts {
   // The artifacts
-  repeated flag_declaration_artifact flag_declaration_artifacts = 1;
+  repeated flag_declaration_artifact flag_declaration_artifact_list = 1;
 }

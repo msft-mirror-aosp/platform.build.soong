@@ -37,7 +37,7 @@ def has_preprocessed_issues(args, *, fail=False):
                     sys.exit(args.apk + ': Contains compressed JNI libraries')
                 return True
             # It's ok for non-privileged apps to have compressed dex files, see go/gms-uncompressed-jni-slides
-            if args.privileged:
+            if args.privileged and args.uncompress_priv_app_dex:
                 if info.filename.endswith('.dex') and info.compress_type != zipfile.ZIP_STORED:
                     if fail:
                         sys.exit(args.apk + ': Contains compressed dex files and is privileged')
@@ -52,6 +52,7 @@ def main():
     parser.add_argument('--skip-preprocessed-apk-checks', action = 'store_true', help = "the value of the soong property with the same name")
     parser.add_argument('--preprocessed', action = 'store_true', help = "the value of the soong property with the same name")
     parser.add_argument('--privileged', action = 'store_true', help = "the value of the soong property with the same name")
+    parser.add_argument('--uncompress-priv-app-dex', action = 'store_true', help = "the value of the product variable with the same name")
     parser.add_argument('apk', help = "the apk to check")
     parser.add_argument('stampfile', help = "a file to touch if successful")
     args = parser.parse_args()

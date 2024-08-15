@@ -174,6 +174,16 @@ var PrepareForTestDisallowNonExistentPaths = FixtureModifyConfig(func(config Con
 	config.TestAllowNonExistentPaths = false
 })
 
+// PrepareForTestWithBuildFlag returns a FixturePreparer that sets the given flag to the given value.
+func PrepareForTestWithBuildFlag(flag, value string) FixturePreparer {
+	return FixtureModifyProductVariables(func(variables FixtureProductVariables) {
+		if variables.BuildFlags == nil {
+			variables.BuildFlags = make(map[string]string)
+		}
+		variables.BuildFlags[flag] = value
+	})
+}
+
 func NewTestArchContext(config Config) *TestContext {
 	ctx := NewTestContext(config)
 	ctx.preDeps = append(ctx.preDeps, registerArchMutator)
@@ -202,7 +212,7 @@ func (ctx *TestContext) HardCodedPreArchMutators(f RegisterMutatorFunc) {
 	ctx.PreArchMutators(f)
 }
 
-func (ctx *TestContext) moduleProvider(m blueprint.Module, p blueprint.AnyProviderKey) (any, bool) {
+func (ctx *TestContext) otherModuleProvider(m blueprint.Module, p blueprint.AnyProviderKey) (any, bool) {
 	return ctx.Context.ModuleProvider(m, p)
 }
 
@@ -220,8 +230,12 @@ func (ctx *TestContext) FinalDepsMutators(f RegisterMutatorFunc) {
 
 func (ctx *TestContext) OtherModuleProviderAdaptor() OtherModuleProviderContext {
 	return NewOtherModuleProviderAdaptor(func(module blueprint.Module, provider blueprint.AnyProviderKey) (any, bool) {
-		return ctx.moduleProvider(module, provider)
+		return ctx.otherModuleProvider(module, provider)
 	})
+}
+
+func (ctx *TestContext) OtherModulePropertyErrorf(module Module, property string, fmt_ string, args ...interface{}) {
+	panic(fmt.Sprintf(fmt_, args...))
 }
 
 // registeredComponentOrder defines the order in which a sortableComponent type is registered at
@@ -818,15 +832,15 @@ func newBaseTestingComponent(config Config, provider testBuildProvider) baseTest
 // containing at most one instance of the temporary build directory at the start of the path while
 // this assumes that there can be any number at any position.
 func normalizeStringRelativeToTop(config Config, s string) string {
-	// The soongOutDir usually looks something like: /tmp/testFoo2345/001
+	// The outDir usually looks something like: /tmp/testFoo2345/001
 	//
-	// Replace any usage of the soongOutDir with out/soong, e.g. replace "/tmp/testFoo2345/001" with
+	// Replace any usage of the outDir with out/soong, e.g. replace "/tmp/testFoo2345/001" with
 	// "out/soong".
 	outSoongDir := filepath.Clean(config.soongOutDir)
 	re := regexp.MustCompile(`\Q` + outSoongDir + `\E\b`)
 	s = re.ReplaceAllString(s, "out/soong")
 
-	// Replace any usage of the soongOutDir/.. with out, e.g. replace "/tmp/testFoo2345" with
+	// Replace any usage of the outDir/.. with out, e.g. replace "/tmp/testFoo2345" with
 	// "out". This must come after the previous replacement otherwise this would replace
 	// "/tmp/testFoo2345/001" with "out/001" instead of "out/soong".
 	outDir := filepath.Dir(outSoongDir)
@@ -1014,20 +1028,21 @@ func (m TestingModule) VariablesForTestsRelativeToTop() map[string]string {
 	return normalizeStringMapRelativeToTop(m.config, m.module.VariablesForTests())
 }
 
-// OutputFiles calls OutputFileProducer.OutputFiles on the encapsulated module, exits the test
-// immediately if there is an error and otherwise returns the result of calling Paths.RelativeToTop
+// OutputFiles checks if module base outputFiles property has any output
+// files can be used to return.
+// Exits the test immediately if there is an error and
+// otherwise returns the result of calling Paths.RelativeToTop
 // on the returned Paths.
 func (m TestingModule) OutputFiles(t *testing.T, tag string) Paths {
-	producer, ok := m.module.(OutputFileProducer)
-	if !ok {
-		t.Fatalf("%q must implement OutputFileProducer\n", m.module.Name())
-	}
-	paths, err := producer.OutputFiles(tag)
-	if err != nil {
-		t.Fatal(err)
+	outputFiles := m.Module().base().outputFiles
+	if tag == "" && outputFiles.DefaultOutputFiles != nil {
+		return outputFiles.DefaultOutputFiles.RelativeToTop()
+	} else if taggedOutputFiles, hasTag := outputFiles.TaggedOutputFiles[tag]; hasTag {
+		return taggedOutputFiles.RelativeToTop()
 	}
 
-	return paths.RelativeToTop()
+	t.Fatal(fmt.Errorf("No test output file has been set for tag %q", tag))
+	return nil
 }
 
 // TestingSingleton is wrapper around an android.Singleton that provides methods to find information about individual
@@ -1229,8 +1244,14 @@ func StringPathRelativeToTop(soongOutDir string, path string) string {
 	}
 
 	if isRel {
-		// The path is in the soong out dir so indicate that in the relative path.
-		return filepath.Join("out/soong", rel)
+		if strings.HasSuffix(soongOutDir, testOutSoongSubDir) {
+			// The path is in the soong out dir so indicate that in the relative path.
+			return filepath.Join(TestOutSoongDir, rel)
+		} else {
+			// Handle the PathForArbitraryOutput case
+			return filepath.Join(testOutDir, rel)
+
+		}
 	}
 
 	// Check to see if the path is relative to the top level out dir.

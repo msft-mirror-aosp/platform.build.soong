@@ -53,11 +53,7 @@ func TestBootclasspathFragments_FragmentDependency(t *testing.T) {
 		java.FixtureConfigureBootJars("com.android.art:baz", "com.android.art:quuz"),
 		java.FixtureConfigureApexBootJars("someapex:foo", "someapex:bar"),
 		prepareForTestWithArtApex,
-		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.BuildFlags = map[string]string{
-				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
-			}
-		}),
+		android.PrepareForTestWithBuildFlag("RELEASE_HIDDEN_API_EXPORTABLE_STUBS", "true"),
 		java.PrepareForTestWithJavaSdkLibraryFiles,
 		java.FixtureWithLastReleaseApis("foo", "baz"),
 	).RunTestWithBp(t, `
@@ -156,7 +152,7 @@ func TestBootclasspathFragments_FragmentDependency(t *testing.T) {
 
 	// Check stub dex paths exported by art.
 	artFragment := result.Module("art-bootclasspath-fragment", "android_common")
-	artInfo, _ := android.SingletonModuleProvider(result, artFragment, java.HiddenAPIInfoProvider)
+	artInfo, _ := android.OtherModuleProvider(result, artFragment, java.HiddenAPIInfoProvider)
 
 	bazPublicStubs := "out/soong/.intermediates/baz.stubs.exportable/android_common/dex/baz.stubs.exportable.jar"
 	bazSystemStubs := "out/soong/.intermediates/baz.stubs.exportable.system/android_common/dex/baz.stubs.exportable.system.jar"
@@ -169,7 +165,7 @@ func TestBootclasspathFragments_FragmentDependency(t *testing.T) {
 
 	// Check stub dex paths exported by other.
 	otherFragment := result.Module("other-bootclasspath-fragment", "android_common")
-	otherInfo, _ := android.SingletonModuleProvider(result, otherFragment, java.HiddenAPIInfoProvider)
+	otherInfo, _ := android.OtherModuleProvider(result, otherFragment, java.HiddenAPIInfoProvider)
 
 	fooPublicStubs := "out/soong/.intermediates/foo.stubs.exportable/android_common/dex/foo.stubs.exportable.jar"
 	fooSystemStubs := "out/soong/.intermediates/foo.stubs.exportable.system/android_common/dex/foo.stubs.exportable.system.jar"
@@ -561,6 +557,7 @@ func TestBootclasspathFragmentInPrebuiltArtApex(t *testing.T) {
 		result := preparers.RunTestWithBp(t, fmt.Sprintf(bp, "enabled: false,"))
 
 		java.CheckModuleDependencies(t, result.TestContext, "com.android.art", "android_common_com.android.art", []string{
+			`all_apex_contributions`,
 			`dex2oatd`,
 			`prebuilt_art-bootclasspath-fragment`,
 			`prebuilt_com.android.art.apex.selector`,
@@ -568,6 +565,7 @@ func TestBootclasspathFragmentInPrebuiltArtApex(t *testing.T) {
 		})
 
 		java.CheckModuleDependencies(t, result.TestContext, "art-bootclasspath-fragment", "android_common_com.android.art", []string{
+			`all_apex_contributions`,
 			`dex2oatd`,
 			`prebuilt_bar`,
 			`prebuilt_com.android.art.deapexer`,
@@ -690,7 +688,7 @@ func TestBootclasspathFragmentContentsNoName(t *testing.T) {
 	// Make sure that the fragment provides the hidden API encoded dex jars to the APEX.
 	fragment := result.Module("mybootclasspathfragment", "android_common_apex10000")
 
-	info, _ := android.SingletonModuleProvider(result, fragment, java.BootclasspathFragmentApexContentInfoProvider)
+	info, _ := android.OtherModuleProvider(result, fragment, java.BootclasspathFragmentApexContentInfoProvider)
 
 	checkFragmentExportedDexJar := func(name string, expectedDexJar string) {
 		module := result.Module(name, "android_common_apex10000")
@@ -729,11 +727,7 @@ func TestBootclasspathFragment_HiddenAPIList(t *testing.T) {
 
 		java.PrepareForTestWithJavaSdkLibraryFiles,
 		java.FixtureWithLastReleaseApis("foo", "quuz"),
-		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.BuildFlags = map[string]string{
-				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
-			}
-		}),
+		android.PrepareForTestWithBuildFlag("RELEASE_HIDDEN_API_EXPORTABLE_STUBS", "true"),
 	).RunTestWithBp(t, `
 		apex {
 			name: "com.android.art",
@@ -1364,6 +1358,91 @@ func TestBootclasspathFragment_AndroidNonUpdatable_AlwaysUsePrebuiltSdks(t *test
 	android.AssertStringDoesContain(t, "public", command, "--public-stub-classpath="+nonUpdatablePublicStubs)
 	android.AssertStringDoesContain(t, "system", command, "--system-stub-classpath="+nonUpdatableSystemStubs)
 	android.AssertStringDoesContain(t, "test", command, "--test-stub-classpath="+nonUpdatableTestStubs)
+}
+
+func TestBootclasspathFragmentProtoContainsMinSdkVersion(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		prepareForTestWithBootclasspathFragment,
+		prepareForTestWithMyapex,
+		// Configure bootclasspath jars to ensure that hidden API encoding is performed on them.
+		java.FixtureConfigureApexBootJars("myapex:foo", "myapex:bar"),
+		// Make sure that the frameworks/base/Android.bp file exists as otherwise hidden API encoding
+		// is disabled.
+		android.FixtureAddTextFile("frameworks/base/Android.bp", ""),
+
+		java.PrepareForTestWithJavaSdkLibraryFiles,
+		java.FixtureWithLastReleaseApis("foo", "bar"),
+	).RunTestWithBp(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			bootclasspath_fragments: [
+				"mybootclasspathfragment",
+			],
+			updatable: false,
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		java_sdk_library {
+			name: "foo",
+			srcs: ["b.java"],
+			shared_library: false,
+			public: {enabled: true},
+			apex_available: [
+				"myapex",
+			],
+			min_sdk_version: "33",
+		}
+
+		java_sdk_library {
+			name: "bar",
+			srcs: ["b.java"],
+			shared_library: false,
+			public: {enabled: true},
+			apex_available: [
+				"myapex",
+			],
+			min_sdk_version: "34",
+		}
+
+		bootclasspath_fragment {
+			name: "mybootclasspathfragment",
+			contents: [
+				"foo",
+				"bar",
+			],
+			apex_available: [
+				"myapex",
+			],
+			hidden_api: {
+				split_packages: ["*"],
+			},
+		}
+	`)
+
+	fragment := result.ModuleForTests("mybootclasspathfragment", "android_common_apex10000")
+	classPathProtoContent := android.ContentFromFileRuleForTests(t, result.TestContext, fragment.Output("bootclasspath.pb.textproto"))
+	// foo
+	ensureContains(t, classPathProtoContent, `jars {
+path: "/apex/myapex/javalib/foo.jar"
+classpath: BOOTCLASSPATH
+min_sdk_version: "33"
+max_sdk_version: ""
+}
+`)
+	// bar
+	ensureContains(t, classPathProtoContent, `jars {
+path: "/apex/myapex/javalib/bar.jar"
+classpath: BOOTCLASSPATH
+min_sdk_version: "34"
+max_sdk_version: ""
+}
+`)
 }
 
 // TODO(b/177892522) - add test for host apex.
