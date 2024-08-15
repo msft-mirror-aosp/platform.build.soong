@@ -52,6 +52,8 @@ var PrepareForTestWithJavaBuildComponents = android.GroupFixturePreparers(
 	android.MockFS{
 		// Needed for linter used by java_library.
 		"build/soong/java/lint_defaults.txt": nil,
+		// Needed for java components that invoke Metalava.
+		"build/soong/java/metalava/Android.bp": []byte(`filegroup {name: "metalava-config-files"}`),
 		// Needed for apps that do not provide their own.
 		"build/make/target/product/security": nil,
 		// Required to generate Java used-by API coverage
@@ -422,6 +424,7 @@ func gatherRequiredDepsForTest() string {
 		"stub-annotations",
 
 		"aconfig-annotations-lib",
+		"aconfig_storage_reader_java",
 		"unsupportedappusage",
 	}
 
@@ -484,21 +487,17 @@ func gatherRequiredDepsForTest() string {
 	}
 
 	extraApiLibraryModules := map[string]droidstubsStruct{
-		"android_stubs_current.from-text":                  publicDroidstubs,
-		"android_system_stubs_current.from-text":           systemDroidstubs,
-		"android_test_stubs_current.from-text":             testDroidstubs,
-		"android_module_lib_stubs_current.from-text":       moduleLibDroidstubs,
-		"android_module_lib_stubs_current_full.from-text":  moduleLibDroidstubs,
-		"android_system_server_stubs_current.from-text":    systemServerDroidstubs,
-		"core.current.stubs.from-text":                     publicDroidstubs,
-		"legacy.core.platform.api.stubs.from-text":         publicDroidstubs,
-		"stable.core.platform.api.stubs.from-text":         publicDroidstubs,
-		"core-lambda-stubs.from-text":                      publicDroidstubs,
-		"android-non-updatable.stubs.from-text":            publicDroidstubs,
-		"android-non-updatable.stubs.system.from-text":     systemDroidstubs,
-		"android-non-updatable.stubs.test.from-text":       testDroidstubs,
-		"android-non-updatable.stubs.module_lib.from-text": moduleLibDroidstubs,
-		"android-non-updatable.stubs.test_module_lib":      moduleLibDroidstubs,
+		"android_stubs_current.from-text":                 publicDroidstubs,
+		"android_system_stubs_current.from-text":          systemDroidstubs,
+		"android_test_stubs_current.from-text":            testDroidstubs,
+		"android_module_lib_stubs_current.from-text":      moduleLibDroidstubs,
+		"android_module_lib_stubs_current_full.from-text": moduleLibDroidstubs,
+		"android_system_server_stubs_current.from-text":   systemServerDroidstubs,
+		"core.current.stubs.from-text":                    publicDroidstubs,
+		"legacy.core.platform.api.stubs.from-text":        publicDroidstubs,
+		"stable.core.platform.api.stubs.from-text":        publicDroidstubs,
+		"core-lambda-stubs.from-text":                     publicDroidstubs,
+		"android-non-updatable.stubs.test_module_lib":     moduleLibDroidstubs,
 	}
 
 	for _, droidstubs := range droidstubsStructs {
@@ -527,6 +526,8 @@ func gatherRequiredDepsForTest() string {
 			name: "%s",
 			api_contributions: ["%s"],
 			stubs_type: "everything",
+			sdk_version: "none",
+			system_modules: "none",
 		}
         `, libName, droidstubs.name+".api.contribution")
 	}
@@ -632,7 +633,7 @@ func CheckPlatformBootclasspathModules(t *testing.T, result *android.TestResult,
 func CheckClasspathFragmentProtoContentInfoProvider(t *testing.T, result *android.TestResult, generated bool, contents, outputFilename, installDir string) {
 	t.Helper()
 	p := result.Module("platform-bootclasspath", "android_common").(*platformBootclasspathModule)
-	info, _ := android.SingletonModuleProvider(result, p, ClasspathFragmentProtoContentInfoProvider)
+	info, _ := android.OtherModuleProvider(result, p, ClasspathFragmentProtoContentInfoProvider)
 
 	android.AssertBoolEquals(t, "classpath proto generated", generated, info.ClasspathFragmentProtoGenerated)
 	android.AssertStringEquals(t, "classpath proto contents", contents, info.ClasspathFragmentProtoContents.String())
@@ -652,7 +653,7 @@ func ApexNamePairsFromModules(ctx *android.TestContext, modules []android.Module
 func apexNamePairFromModule(ctx *android.TestContext, module android.Module) string {
 	name := module.Name()
 	var apex string
-	apexInfo, _ := android.SingletonModuleProvider(ctx, module, android.ApexInfoProvider)
+	apexInfo, _ := android.OtherModuleProvider(ctx, module, android.ApexInfoProvider)
 	if apexInfo.IsForPlatform() {
 		apex = "platform"
 	} else {

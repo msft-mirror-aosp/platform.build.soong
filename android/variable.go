@@ -55,6 +55,10 @@ type variableProperties struct {
 			Base_dir *string
 		}
 
+		Shipping_api_level struct {
+			Cflags []string
+		}
+
 		// unbundled_build is a catch-all property to annotate modules that don't build in one or
 		// more unbundled branches, usually due to dependencies missing from the manifest.
 		Unbundled_build struct {
@@ -128,9 +132,11 @@ type variableProperties struct {
 				Keep_symbols                 *bool
 				Keep_symbols_and_debug_frame *bool
 			}
-			Static_libs       []string
-			Whole_static_libs []string
-			Shared_libs       []string
+			Static_libs         []string
+			Exclude_static_libs []string
+			Whole_static_libs   []string
+			Shared_libs         []string
+			Jni_libs            []string
 
 			Cmdline []string
 
@@ -195,11 +201,12 @@ type ProductVariables struct {
 	// Suffix to add to generated Makefiles
 	Make_suffix *string `json:",omitempty"`
 
-	BuildId             *string `json:",omitempty"`
-	BuildNumberFile     *string `json:",omitempty"`
-	BuildHostnameFile   *string `json:",omitempty"`
-	BuildThumbprintFile *string `json:",omitempty"`
-	DisplayBuildNumber  *bool   `json:",omitempty"`
+	BuildId              *string `json:",omitempty"`
+	BuildFingerprintFile *string `json:",omitempty"`
+	BuildNumberFile      *string `json:",omitempty"`
+	BuildHostnameFile    *string `json:",omitempty"`
+	BuildThumbprintFile  *string `json:",omitempty"`
+	DisplayBuildNumber   *bool   `json:",omitempty"`
 
 	Platform_display_version_name          *string  `json:",omitempty"`
 	Platform_version_name                  *string  `json:",omitempty"`
@@ -231,8 +238,6 @@ type ProductVariables struct {
 	DeviceNoBionicPageSizeMacro           *bool    `json:",omitempty"`
 
 	VendorApiLevel *string `json:",omitempty"`
-
-	RecoverySnapshotVersion *string `json:",omitempty"`
 
 	DeviceSecondaryArch        *string  `json:",omitempty"`
 	DeviceSecondaryArchVariant *string  `json:",omitempty"`
@@ -269,8 +274,10 @@ type ProductVariables struct {
 	AAPTPreferredConfig *string  `json:",omitempty"`
 	AAPTPrebuiltDPI     []string `json:",omitempty"`
 
-	DefaultAppCertificate           *string `json:",omitempty"`
-	MainlineSepolicyDevCertificates *string `json:",omitempty"`
+	DefaultAppCertificate           *string  `json:",omitempty"`
+	ExtraOtaKeys                    []string `json:",omitempty"`
+	ExtraOtaRecoveryKeys            []string `json:",omitempty"`
+	MainlineSepolicyDevCertificates *string  `json:",omitempty"`
 
 	AppsDefaultVersionName *string `json:",omitempty"`
 
@@ -287,6 +294,7 @@ type ProductVariables struct {
 	HostStaticBinaries           *bool    `json:",omitempty"`
 	Binder32bit                  *bool    `json:",omitempty"`
 	UseGoma                      *bool    `json:",omitempty"`
+	UseABFS                      *bool    `json:",omitempty"`
 	UseRBE                       *bool    `json:",omitempty"`
 	UseRBEJAVAC                  *bool    `json:",omitempty"`
 	UseRBER8                     *bool    `json:",omitempty"`
@@ -364,20 +372,6 @@ type ProductVariables struct {
 
 	PgoAdditionalProfileDirs []string `json:",omitempty"`
 
-	VndkSnapshotBuildArtifacts *bool `json:",omitempty"`
-
-	DirectedVendorSnapshot bool            `json:",omitempty"`
-	VendorSnapshotModules  map[string]bool `json:",omitempty"`
-
-	DirectedRecoverySnapshot bool            `json:",omitempty"`
-	RecoverySnapshotModules  map[string]bool `json:",omitempty"`
-
-	VendorSnapshotDirsIncluded   []string `json:",omitempty"`
-	VendorSnapshotDirsExcluded   []string `json:",omitempty"`
-	RecoverySnapshotDirsExcluded []string `json:",omitempty"`
-	RecoverySnapshotDirsIncluded []string `json:",omitempty"`
-	HostFakeSnapshotEnabled      bool     `json:",omitempty"`
-
 	MultitreeUpdateMeta bool `json:",omitempty"`
 
 	BoardVendorSepolicyDirs      []string `json:",omitempty"`
@@ -394,7 +388,8 @@ type ProductVariables struct {
 
 	PlatformSepolicyCompatVersions []string `json:",omitempty"`
 
-	VendorVars map[string]map[string]string `json:",omitempty"`
+	VendorVars     map[string]map[string]string `json:",omitempty"`
+	VendorVarTypes map[string]map[string]string `json:",omitempty"`
 
 	Ndk_abis *bool `json:",omitempty"`
 
@@ -440,7 +435,7 @@ type ProductVariables struct {
 
 	PrebuiltHiddenApiDir *string `json:",omitempty"`
 
-	ShippingApiLevel *string `json:",omitempty"`
+	Shipping_api_level *string `json:",omitempty"`
 
 	BuildBrokenPluginValidation         []string `json:",omitempty"`
 	BuildBrokenClangAsFlags             bool     `json:",omitempty"`
@@ -454,6 +449,7 @@ type ProductVariables struct {
 	BuildBrokenIncorrectPartitionImages bool     `json:",omitempty"`
 	BuildBrokenInputDirModules          []string `json:",omitempty"`
 	BuildBrokenDontCheckSystemSdk       bool     `json:",omitempty"`
+	BuildBrokenDupSysprop               bool     `json:",omitempty"`
 
 	BuildWarningBadOptionalUsesLibsAllowlist []string `json:",omitempty"`
 
@@ -472,7 +468,6 @@ type ProductVariables struct {
 
 	IgnorePrefer32OnDevice bool `json:",omitempty"`
 
-	IncludeTags    []string `json:",omitempty"`
 	SourceRootDirs []string `json:",omitempty"`
 
 	AfdoProfiles []string `json:",omitempty"`
@@ -486,8 +481,6 @@ type ProductVariables struct {
 	ReleaseAconfigFlagDefaultPermission string `json:",omitempty"`
 
 	ReleaseDefaultModuleBuildFromSource *bool `json:",omitempty"`
-
-	KeepVndk *bool `json:",omitempty"`
 
 	CheckVendorSeappViolations *bool `json:",omitempty"`
 
@@ -512,6 +505,19 @@ type ProductVariables struct {
 	BoardUseVbmetaDigestInFingerprint *bool `json:",omitempty"`
 
 	OemProperties []string `json:",omitempty"`
+
+	ArtTargetIncludeDebugBuild *bool `json:",omitempty"`
+
+	SystemPropFiles    []string `json:",omitempty"`
+	SystemExtPropFiles []string `json:",omitempty"`
+	ProductPropFiles   []string `json:",omitempty"`
+
+	EnableUffdGc *string `json:",omitempty"`
+
+	BoardAvbEnable                         *bool    `json:",omitempty"`
+	BoardAvbSystemAddHashtreeFooterArgs    []string `json:",omitempty"`
+	DeviceFrameworkCompatibilityMatrixFile []string `json:",omitempty"`
+	DeviceProductCompatibilityMatrixFile   []string `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {

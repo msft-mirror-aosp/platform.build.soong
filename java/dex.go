@@ -91,6 +91,10 @@ type DexProperties struct {
 
 	// Exclude kotlinc generate files: *.kotlin_module, *.kotlin_builtins. Defaults to false.
 	Exclude_kotlinc_generated_files *bool
+
+	// Disable dex container (also known as "multi-dex").
+	// This may be necessary as a temporary workaround to mask toolchain bugs (see b/341652226).
+	No_dex_container *bool
 }
 
 type dexer struct {
@@ -117,6 +121,10 @@ func (d *DexProperties) resourceShrinkingEnabled(ctx android.ModuleContext) bool
 
 func (d *DexProperties) optimizedResourceShrinkingEnabled(ctx android.ModuleContext) bool {
 	return d.resourceShrinkingEnabled(ctx) && Bool(d.Optimize.Optimized_shrink_resources)
+}
+
+func (d *dexer) optimizeOrObfuscateEnabled() bool {
+	return d.effectiveOptimizeEnabled() && (proptools.Bool(d.dexProperties.Optimize.Optimize) || proptools.Bool(d.dexProperties.Optimize.Obfuscate))
 }
 
 var d8, d8RE = pctx.MultiCommandRemoteStaticRules("d8",
@@ -176,7 +184,7 @@ var r8, r8RE = pctx.MultiCommandRemoteStaticRules("r8",
 		"$r8Template": &remoteexec.REParams{
 			Labels:          map[string]string{"type": "compile", "compiler": "r8"},
 			Inputs:          []string{"$implicits", "${config.R8Jar}"},
-			OutputFiles:     []string{"${outUsage}", "${outConfig}", "${outDict}", "${resourcesOutput}"},
+			OutputFiles:     []string{"${outUsage}", "${outConfig}", "${outDict}", "${resourcesOutput}", "${outR8ArtProfile}"},
 			ExecStrategy:    "${config.RER8ExecStrategy}",
 			ToolchainInputs: []string{"${config.JavaCmd}"},
 			Platform:        map[string]string{remoteexec.PoolKey: "${config.REJavaPool}"},
@@ -196,7 +204,7 @@ var r8, r8RE = pctx.MultiCommandRemoteStaticRules("r8",
 			Platform:     map[string]string{remoteexec.PoolKey: "${config.REJavaPool}"},
 		},
 	}, []string{"outDir", "outDict", "outConfig", "outUsage", "outUsageZip", "outUsageDir",
-		"r8Flags", "zipFlags", "mergeZipsFlags", "resourcesOutput"}, []string{"implicits"})
+		"r8Flags", "zipFlags", "mergeZipsFlags", "resourcesOutput", "outR8ArtProfile"}, []string{"implicits"})
 
 func (d *dexer) dexCommonFlags(ctx android.ModuleContext,
 	dexParams *compileDexParams) (flags []string, deps android.Paths) {
@@ -283,8 +291,9 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams) 
 	// See b/20667396
 	var proguardRaiseDeps classpath
 	ctx.VisitDirectDepsWithTag(proguardRaiseTag, func(m android.Module) {
-		dep, _ := android.OtherModuleProvider(ctx, m, JavaInfoProvider)
-		proguardRaiseDeps = append(proguardRaiseDeps, dep.RepackagedHeaderJars...)
+		if dep, ok := android.OtherModuleProvider(ctx, m, JavaInfoProvider); ok {
+			proguardRaiseDeps = append(proguardRaiseDeps, dep.RepackagedHeaderJars...)
+		}
 	})
 
 	r8Flags = append(r8Flags, proguardRaiseDeps.FormJavaClassPath("-libraryjars"))
@@ -420,7 +429,7 @@ func (d *dexer) addArtProfile(ctx android.ModuleContext, dexParams *compileDexPa
 }
 
 // Return the compiled dex jar and (optional) profile _after_ r8 optimization
-func (d *dexer) compileDex(ctx android.ModuleContext, dexParams *compileDexParams) (android.OutputPath, *android.OutputPath) {
+func (d *dexer) compileDex(ctx android.ModuleContext, dexParams *compileDexParams) (android.Path, android.Path) {
 
 	// Compile classes.jar into classes.dex and then javalib.jar
 	javalibJar := android.PathForModuleOut(ctx, "dex", dexParams.jarName).OutputPath
@@ -459,13 +468,6 @@ func (d *dexer) compileDex(ctx android.ModuleContext, dexParams *compileDexParam
 			proguardConfiguration,
 		}
 		r8Flags, r8Deps, r8ArtProfileOutputPath := d.r8Flags(ctx, dexParams)
-		if r8ArtProfileOutputPath != nil {
-			artProfileOutputPath = r8ArtProfileOutputPath
-			implicitOutputs = append(
-				implicitOutputs,
-				artProfileOutputPath,
-			)
-		}
 		rule := r8
 		args := map[string]string{
 			"r8Flags":        strings.Join(append(commonFlags, r8Flags...), " "),
@@ -478,6 +480,17 @@ func (d *dexer) compileDex(ctx android.ModuleContext, dexParams *compileDexParam
 			"outDir":         outDir.String(),
 			"mergeZipsFlags": mergeZipsFlags,
 		}
+		if r8ArtProfileOutputPath != nil {
+			artProfileOutputPath = r8ArtProfileOutputPath
+			implicitOutputs = append(
+				implicitOutputs,
+				artProfileOutputPath,
+			)
+			// Add the implicit r8 Art profile output to args so that r8RE knows
+			// about this implicit output
+			args["outR8ArtProfile"] = artProfileOutputPath.String()
+		}
+
 		if ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_R8") {
 			rule = r8RE
 			args["implicits"] = strings.Join(r8Deps.Strings(), ",")

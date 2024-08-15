@@ -42,6 +42,10 @@ type ReleaseConfigMap struct {
 
 	// Flags declared this directory's flag_declarations/*.textproto
 	FlagDeclarations []rc_proto.FlagDeclaration
+
+	// Potential aconfig and build flag contributions in this map directory.
+	// This is used to detect errors.
+	FlagValueDirs map[string][]string
 }
 
 type ReleaseConfigDirMap map[string]int
@@ -76,6 +80,79 @@ type ReleaseConfigs struct {
 	// A map from the config directory to its order in the list of config
 	// directories.
 	configDirIndexes ReleaseConfigDirMap
+
+	// True if we should allow a missing primary release config.  In this
+	// case, we will substitute `trunk_staging` values, but the release
+	// config will not be in ALL_RELEASE_CONFIGS_FOR_PRODUCT.
+	allowMissing bool
+}
+
+func (configs *ReleaseConfigs) WriteInheritanceGraph(outFile string) error {
+	data := []string{}
+	usedAliases := make(map[string]bool)
+	priorStages := make(map[string][]string)
+	for _, config := range configs.ReleaseConfigs {
+		if config.Name == "root" {
+			continue
+		}
+		var fillColor string
+		inherits := []string{}
+		for _, inherit := range config.InheritNames {
+			if inherit == "root" {
+				continue
+			}
+			data = append(data, fmt.Sprintf(`"%s" -> "%s"`, config.Name, inherit))
+			inherits = append(inherits, inherit)
+			// If inheriting an alias, add a link from the alias to that release config.
+			if name, found := configs.Aliases[inherit]; found {
+				if !usedAliases[inherit] {
+					usedAliases[inherit] = true
+					data = append(data, fmt.Sprintf(`"%s" -> "%s"`, inherit, *name))
+					data = append(data,
+						fmt.Sprintf(`"%s" [ label="%s\ncurrently: %s" shape=oval ]`,
+							inherit, inherit, *name))
+				}
+			}
+		}
+		// Add links for all of the advancement progressions.
+		for priorStage := range config.PriorStagesMap {
+			data = append(data, fmt.Sprintf(`"%s" -> "%s" [ style=dashed color="#81c995" ]`,
+				priorStage, config.Name))
+			priorStages[config.Name] = append(priorStages[config.Name], priorStage)
+		}
+		label := config.Name
+		if len(inherits) > 0 {
+			label += "\\ninherits: " + strings.Join(inherits, " ")
+		}
+		if len(config.OtherNames) > 0 {
+			label += "\\nother names: " + strings.Join(config.OtherNames, " ")
+		}
+		switch config.Name {
+		case *configs.Artifact.ReleaseConfig.Name:
+			// The active release config has a light blue fill.
+			fillColor = `fillcolor="#d2e3fc" `
+		case "trunk", "trunk_staging":
+			// Certain workflow stages have a light green fill.
+			fillColor = `fillcolor="#ceead6" `
+		default:
+			// Look for "next" and "*_next", make them light green as well.
+			for _, n := range config.OtherNames {
+				if n == "next" || strings.HasSuffix(n, "_next") {
+					fillColor = `fillcolor="#ceead6" `
+				}
+			}
+		}
+		data = append(data,
+			fmt.Sprintf(`"%s" [ label="%s" %s]`, config.Name, label, fillColor))
+	}
+	slices.Sort(data)
+	data = append([]string{
+		"digraph {",
+		"graph [ ratio=.5 ]",
+		"node [ shape=box style=filled fillcolor=white colorscheme=svg fontcolor=black ]",
+	}, data...)
+	data = append(data, "}")
+	return os.WriteFile(outFile, []byte(strings.Join(data, "\n")), 0644)
 }
 
 // Write the "all_release_configs" artifact.
@@ -199,6 +276,20 @@ func (configs *ReleaseConfigs) LoadReleaseConfigMap(path string, ConfigDirIndex 
 		configs.Aliases[name] = alias.Target
 	}
 	var err error
+	// Temporarily allowlist duplicate flag declaration files to prevent
+	// more from entering the tree while we work to clean up the duplicates
+	// that already exist.
+	dupFlagFile := filepath.Join(dir, "duplicate_allowlist.txt")
+	data, err := os.ReadFile(dupFlagFile)
+	if err == nil {
+		for _, flag := range strings.Split(string(data), "\n") {
+			flag = strings.TrimSpace(flag)
+			if strings.HasPrefix(flag, "//") || strings.HasPrefix(flag, "#") {
+				continue
+			}
+			DuplicateDeclarationAllowlist[flag] = true
+		}
+	}
 	err = WalkTextprotoFiles(dir, "flag_declarations", func(path string, d fs.DirEntry, err error) error {
 		flagDeclaration := FlagDeclarationFactory(path)
 		// Container must be specified.
@@ -212,14 +303,6 @@ func (configs *ReleaseConfigs) LoadReleaseConfigMap(path string, ConfigDirIndex 
 			}
 		}
 
-		// TODO: once we have namespaces initialized, we can throw an error here.
-		if flagDeclaration.Namespace == nil {
-			flagDeclaration.Namespace = proto.String("android_UNKNOWN")
-		}
-		// If the input didn't specify a value, create one (== UnspecifiedValue).
-		if flagDeclaration.Value == nil {
-			flagDeclaration.Value = &rc_proto.Value{Val: &rc_proto.Value_UnspecifiedValue{false}}
-		}
 		m.FlagDeclarations = append(m.FlagDeclarations, *flagDeclaration)
 		name := *flagDeclaration.Name
 		if name == "RELEASE_ACONFIG_VALUE_SETS" {
@@ -227,8 +310,8 @@ func (configs *ReleaseConfigs) LoadReleaseConfigMap(path string, ConfigDirIndex 
 		}
 		if def, ok := configs.FlagArtifacts[name]; !ok {
 			configs.FlagArtifacts[name] = &FlagArtifact{FlagDeclaration: flagDeclaration, DeclarationIndex: ConfigDirIndex}
-		} else if !proto.Equal(def.FlagDeclaration, flagDeclaration) {
-			return fmt.Errorf("Duplicate definition of %s", *flagDeclaration.Name)
+		} else if !proto.Equal(def.FlagDeclaration, flagDeclaration) || !DuplicateDeclarationAllowlist[name] {
+			return fmt.Errorf("Duplicate definition of %s in %s", *flagDeclaration.Name, path)
 		}
 		// Set the initial value in the flag artifact.
 		configs.FilesUsedMap[path] = true
@@ -244,6 +327,21 @@ func (configs *ReleaseConfigs) LoadReleaseConfigMap(path string, ConfigDirIndex 
 		return err
 	}
 
+	subDirs := func(subdir string) (ret []string) {
+		if flagVersions, err := os.ReadDir(filepath.Join(dir, subdir)); err == nil {
+			for _, e := range flagVersions {
+				if e.IsDir() && validReleaseConfigName(e.Name()) {
+					ret = append(ret, e.Name())
+				}
+			}
+		}
+		return
+	}
+	m.FlagValueDirs = map[string][]string{
+		"aconfig":     subDirs("aconfig"),
+		"flag_values": subDirs("flag_values"),
+	}
+
 	err = WalkTextprotoFiles(dir, "release_configs", func(path string, d fs.DirEntry, err error) error {
 		releaseConfigContribution := &ReleaseConfigContribution{path: path, DeclarationIndex: ConfigDirIndex}
 		LoadMessage(path, &releaseConfigContribution.proto)
@@ -256,7 +354,17 @@ func (configs *ReleaseConfigs) LoadReleaseConfigMap(path string, ConfigDirIndex 
 		}
 		config := configs.ReleaseConfigs[name]
 		config.FilesUsedMap[path] = true
-		config.InheritNames = append(config.InheritNames, releaseConfigContribution.proto.Inherits...)
+		inheritNames := make(map[string]bool)
+		for _, inh := range config.InheritNames {
+			inheritNames[inh] = true
+		}
+		// If this contribution says to inherit something we already inherited, we do not want the duplicate.
+		for _, cInh := range releaseConfigContribution.proto.Inherits {
+			if !inheritNames[cInh] {
+				config.InheritNames = append(config.InheritNames, cInh)
+				inheritNames[cInh] = true
+			}
+		}
 
 		// Only walk flag_values/{RELEASE} for defined releases.
 		err2 := WalkTextprotoFiles(dir, filepath.Join("flag_values", name), func(path string, d fs.DirEntry, err error) error {
@@ -298,6 +406,11 @@ func (configs *ReleaseConfigs) GetReleaseConfig(name string) (*ReleaseConfig, er
 	if config, ok := configs.ReleaseConfigs[name]; ok {
 		return config, nil
 	}
+	if configs.allowMissing {
+		if config, ok := configs.ReleaseConfigs["trunk_staging"]; ok {
+			return config, nil
+		}
+	}
 	return nil, fmt.Errorf("Missing config %s.  Trace=%v", name, trace)
 }
 
@@ -307,92 +420,8 @@ func (configs *ReleaseConfigs) GetAllReleaseNames() []string {
 		allReleaseNames = append(allReleaseNames, v.Name)
 		allReleaseNames = append(allReleaseNames, v.OtherNames...)
 	}
-	slices.SortFunc(allReleaseNames, func(a, b string) int {
-		return cmp.Compare(a, b)
-	})
+	slices.Sort(allReleaseNames)
 	return allReleaseNames
-}
-
-// Write the makefile for this targetRelease.
-func (configs *ReleaseConfigs) WriteMakefile(outFile, targetRelease string) error {
-	makeVars := make(map[string]string)
-	config, err := configs.GetReleaseConfig(targetRelease)
-	if err != nil {
-		return err
-	}
-
-	myFlagArtifacts := config.FlagArtifacts.Clone()
-	// Sort the flags by name first.
-	names := []string{}
-	for k, _ := range myFlagArtifacts {
-		names = append(names, k)
-	}
-	slices.SortFunc(names, func(a, b string) int {
-		return cmp.Compare(a, b)
-	})
-	partitions := make(map[string][]string)
-
-	vNames := []string{}
-	addVar := func(name, suffix, value string) {
-		fullName := fmt.Sprintf("_ALL_RELEASE_FLAGS.%s.%s", name, suffix)
-		vNames = append(vNames, fullName)
-		makeVars[fullName] = value
-	}
-
-	for _, name := range names {
-		flag := myFlagArtifacts[name]
-		decl := flag.FlagDeclaration
-
-		for _, container := range decl.Containers {
-			partitions[container] = append(partitions[container], name)
-		}
-		value := MarshalValue(flag.Value)
-		makeVars[name] = value
-		addVar(name, "TYPE", ValueType(flag.Value))
-		addVar(name, "PARTITIONS", strings.Join(decl.Containers, " "))
-		addVar(name, "DEFAULT", MarshalValue(decl.Value))
-		addVar(name, "VALUE", value)
-		addVar(name, "DECLARED_IN", *flag.Traces[0].Source)
-		addVar(name, "SET_IN", *flag.Traces[len(flag.Traces)-1].Source)
-		addVar(name, "NAMESPACE", *decl.Namespace)
-	}
-	pNames := []string{}
-	for k := range partitions {
-		pNames = append(pNames, k)
-	}
-	slices.SortFunc(pNames, func(a, b string) int {
-		return cmp.Compare(a, b)
-	})
-
-	// Now sort the make variables, and output them.
-	slices.SortFunc(vNames, func(a, b string) int {
-		return cmp.Compare(a, b)
-	})
-
-	// Write the flags as:
-	//   _ALL_RELELASE_FLAGS
-	//   _ALL_RELEASE_FLAGS.PARTITIONS.*
-	//   all _ALL_RELEASE_FLAGS.*, sorted by name
-	//   Final flag values, sorted by name.
-	data := fmt.Sprintf("# TARGET_RELEASE=%s\n", config.Name)
-	if targetRelease != config.Name {
-		data += fmt.Sprintf("# User specified TARGET_RELEASE=%s\n", targetRelease)
-	}
-	// The variable _all_release_configs will get deleted during processing, so do not mark it read-only.
-	data += fmt.Sprintf("_all_release_configs := %s\n", strings.Join(configs.GetAllReleaseNames(), " "))
-	data += fmt.Sprintf("_used_files := %s\n", strings.Join(config.GetSortedFileList(), " "))
-	data += fmt.Sprintf("_ALL_RELEASE_FLAGS :=$= %s\n", strings.Join(names, " "))
-	for _, pName := range pNames {
-		data += fmt.Sprintf("_ALL_RELEASE_FLAGS.PARTITIONS.%s :=$= %s\n", pName, strings.Join(partitions[pName], " "))
-	}
-	for _, vName := range vNames {
-		data += fmt.Sprintf("%s :=$= %s\n", vName, makeVars[vName])
-	}
-	data += "\n\n# Values for all build flags\n"
-	for _, name := range names {
-		data += fmt.Sprintf("%s :=$= %s\n", name, makeVars[name])
-	}
-	return os.WriteFile(outFile, []byte(data), 0644)
 }
 
 func (configs *ReleaseConfigs) GenerateReleaseConfigs(targetRelease string) error {
@@ -420,6 +449,27 @@ func (configs *ReleaseConfigs) GenerateReleaseConfigs(targetRelease string) erro
 		}
 	}
 
+	// Look for ignored flagging values.  Gather the entire list to make it easier to fix them.
+	errors := []string{}
+	for _, contrib := range configs.ReleaseConfigMaps {
+		dirName := filepath.Dir(contrib.path)
+		for k, names := range contrib.FlagValueDirs {
+			for _, rcName := range names {
+				if config, err := configs.GetReleaseConfig(rcName); err == nil {
+					rcPath := filepath.Join(dirName, "release_configs", fmt.Sprintf("%s.textproto", config.Name))
+					if _, err := os.Stat(rcPath); err != nil {
+						errors = append(errors, fmt.Sprintf("%s exists but %s does not contribute to %s",
+							filepath.Join(dirName, k, rcName), dirName, config.Name))
+					}
+				}
+
+			}
+		}
+	}
+	if len(errors) > 0 {
+		return fmt.Errorf("%s", strings.Join(errors, "\n"))
+	}
+
 	releaseConfig, err := configs.GetReleaseConfig(targetRelease)
 	if err != nil {
 		return err
@@ -445,7 +495,7 @@ func (configs *ReleaseConfigs) GenerateReleaseConfigs(targetRelease string) erro
 	return nil
 }
 
-func ReadReleaseConfigMaps(releaseConfigMapPaths StringList, targetRelease string, useBuildVar bool) (*ReleaseConfigs, error) {
+func ReadReleaseConfigMaps(releaseConfigMapPaths StringList, targetRelease string, useBuildVar, allowMissing bool) (*ReleaseConfigs, error) {
 	var err error
 
 	if len(releaseConfigMapPaths) == 0 {
@@ -462,6 +512,7 @@ func ReadReleaseConfigMaps(releaseConfigMapPaths StringList, targetRelease strin
 	}
 
 	configs := ReleaseConfigsFactory()
+	configs.allowMissing = allowMissing
 	mapsRead := make(map[string]bool)
 	var idx int
 	for _, releaseConfigMapPath := range releaseConfigMapPaths {

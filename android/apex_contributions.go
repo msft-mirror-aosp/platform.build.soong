@@ -106,14 +106,23 @@ var (
 
 // Creates a dep to each selected apex_contributions
 func (a *allApexContributions) DepsMutator(ctx BottomUpMutatorContext) {
-	ctx.AddDependency(ctx.Module(), AcDepTag, ctx.Config().AllApexContributions()...)
+	// Skip apex_contributions if BuildApexContributionContents is true
+	// This product config var allows some products in the same family to use mainline modules from source
+	// (e.g. shiba and shiba_fullmte)
+	// Eventually these product variants will have their own release config maps.
+	if !proptools.Bool(ctx.Config().BuildIgnoreApexContributionContents()) {
+		ctx.AddDependency(ctx.Module(), AcDepTag, ctx.Config().AllApexContributions()...)
+	}
 }
 
 // Set PrebuiltSelectionInfoProvider in post deps phase
 func (a *allApexContributions) SetPrebuiltSelectionInfoProvider(ctx BaseModuleContext) {
 	addContentsToProvider := func(p *PrebuiltSelectionInfoMap, m *apexContributions) {
 		for _, content := range m.Contents() {
-			if !ctx.OtherModuleExists(content) && !ctx.Config().AllowMissingDependencies() {
+			// Verify that the module listed in contents exists in the tree
+			// Remove the prebuilt_ prefix to account for partner worksapces where the source module does not
+			// exist, and PrebuiltRenameMutator renames `prebuilt_foo` to `foo`
+			if !ctx.OtherModuleExists(content) && !ctx.OtherModuleExists(RemoveOptionalPrebuiltPrefix(content)) && !ctx.Config().AllowMissingDependencies() {
 				ctx.ModuleErrorf("%s listed in apex_contributions %s does not exist\n", content, m.Name())
 			}
 			pi := &PrebuiltSelectionInfo{
@@ -126,19 +135,13 @@ func (a *allApexContributions) SetPrebuiltSelectionInfoProvider(ctx BaseModuleCo
 	}
 
 	p := PrebuiltSelectionInfoMap{}
-	// Skip apex_contributions if BuildApexContributionContents is true
-	// This product config var allows some products in the same family to use mainline modules from source
-	// (e.g. shiba and shiba_fullmte)
-	// Eventually these product variants will have their own release config maps.
-	if !proptools.Bool(ctx.Config().BuildIgnoreApexContributionContents()) {
-		ctx.VisitDirectDepsWithTag(AcDepTag, func(child Module) {
-			if m, ok := child.(*apexContributions); ok {
-				addContentsToProvider(&p, m)
-			} else {
-				ctx.ModuleErrorf("%s is not an apex_contributions module\n", child.Name())
-			}
-		})
-	}
+	ctx.VisitDirectDepsWithTag(AcDepTag, func(child Module) {
+		if m, ok := child.(*apexContributions); ok {
+			addContentsToProvider(&p, m)
+		} else {
+			ctx.ModuleErrorf("%s is not an apex_contributions module\n", child.Name())
+		}
+	})
 	SetProvider(ctx, PrebuiltSelectionInfoProvider, p)
 }
 

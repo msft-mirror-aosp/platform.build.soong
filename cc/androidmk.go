@@ -104,16 +104,6 @@ func (c *Module) AndroidMkEntries() []android.AndroidMkEntries {
 					entries.AddStrings("LOCAL_RUNTIME_LIBRARIES", c.Properties.AndroidMkRuntimeLibs...)
 				}
 				entries.SetString("LOCAL_SOONG_LINK_TYPE", c.makeLinkType)
-				if c.InVendorOrProduct() {
-					if c.IsVndk() && !c.static() {
-						entries.SetString("LOCAL_SOONG_VNDK_VERSION", c.VndkVersion())
-						// VNDK libraries available to vendor are not installed because
-						// they are packaged in VNDK APEX and installed by APEX packages (apex/apex.go)
-						if !c.IsVndkExt() {
-							entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", true)
-						}
-					}
-				}
 				if c.InVendor() {
 					entries.SetBool("LOCAL_IN_VENDOR", true)
 				} else if c.InProduct() {
@@ -361,9 +351,6 @@ func (test *testBinary) AndroidMkEntries(ctx AndroidMkContext, entries *android.
 	ctx.subAndroidMk(entries, test.testDecorator)
 
 	entries.Class = "NATIVE_TESTS"
-	if Bool(test.Properties.Test_per_src) {
-		entries.SubName = "_" + String(test.binaryDecorator.Properties.Stem)
-	}
 	entries.ExtraEntries = append(entries.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 		if test.testConfig != nil {
 			entries.SetString("LOCAL_FULL_TEST_CONFIG", test.testConfig.String())
@@ -464,10 +451,6 @@ func (c *vndkPrebuiltLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, en
 	})
 }
 
-func (c *ndkPrebuiltStlLinker) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
-	entries.Class = "SHARED_LIBRARIES"
-}
-
 func (p *prebuiltLinker) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
 	entries.ExtraEntries = append(entries.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 		if p.properties.Check_elf_files != nil {
@@ -486,14 +469,14 @@ func (p *prebuiltLibraryLinker) AndroidMkEntries(ctx AndroidMkContext, entries *
 	ctx.subAndroidMk(entries, p.libraryDecorator)
 	if p.shared() {
 		ctx.subAndroidMk(entries, &p.prebuiltLinker)
-		androidMkWriteAllowUndefinedSymbols(p.baseLinker, entries)
+		androidMkWritePrebuiltOptions(p.baseLinker, entries)
 	}
 }
 
 func (p *prebuiltBinaryLinker) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
 	ctx.subAndroidMk(entries, p.binaryDecorator)
 	ctx.subAndroidMk(entries, &p.prebuiltLinker)
-	androidMkWriteAllowUndefinedSymbols(p.baseLinker, entries)
+	androidMkWritePrebuiltOptions(p.baseLinker, entries)
 }
 
 func (a *apiLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
@@ -524,11 +507,17 @@ func (a *apiHeadersDecorator) AndroidMkEntries(ctx AndroidMkContext, entries *an
 	})
 }
 
-func androidMkWriteAllowUndefinedSymbols(linker *baseLinker, entries *android.AndroidMkEntries) {
+func androidMkWritePrebuiltOptions(linker *baseLinker, entries *android.AndroidMkEntries) {
 	allow := linker.Properties.Allow_undefined_symbols
 	if allow != nil {
 		entries.ExtraEntries = append(entries.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 			entries.SetBool("LOCAL_ALLOW_UNDEFINED_SYMBOLS", *allow)
+		})
+	}
+	ignore := linker.Properties.Ignore_max_page_size
+	if ignore != nil {
+		entries.ExtraEntries = append(entries.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
+			entries.SetBool("LOCAL_IGNORE_MAX_PAGE_SIZE", *ignore)
 		})
 	}
 }

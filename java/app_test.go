@@ -119,10 +119,7 @@ func TestAppSplits(t *testing.T) {
 		foo.Output(expectedOutput)
 	}
 
-	outputFiles, err := foo.Module().(*AndroidApp).OutputFiles("")
-	if err != nil {
-		t.Fatal(err)
-	}
+	outputFiles := foo.OutputFiles(t, "")
 	android.AssertPathsRelativeToTopEquals(t, `OutputFiles("")`, expectedOutputs, outputFiles)
 }
 
@@ -517,6 +514,49 @@ func TestUpdatableApps_ErrorIfDepMinSdkVersionIsHigher(t *testing.T) {
 		}
 	`
 	testJavaError(t, `"libjni" .*: links "libbar" built against newer API version "current"`, bp)
+}
+
+func TestUpdatableApps_ApplyDefaultUpdatableModuleVersion(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+	).RunTestWithBp(t, `
+		android_app {
+			name: "com.android.foo",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			min_sdk_version: "31",
+			updatable: true,
+		}
+	`)
+	foo := result.ModuleForTests("com.android.foo", "android_common").Rule("manifestFixer")
+	android.AssertStringDoesContain(t,
+		"com.android.foo: expected manifest fixer to set override-placeholder-version to android.DefaultUpdatableModuleVersion",
+		foo.BuildParams.Args["args"],
+		fmt.Sprintf("--override-placeholder-version %s", android.DefaultUpdatableModuleVersion),
+	)
+}
+
+func TestUpdatableApps_ApplyOverrideApexManifestDefaultVersion(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+		android.FixtureMergeEnv(map[string]string{
+			"OVERRIDE_APEX_MANIFEST_DEFAULT_VERSION": "1234",
+		}),
+	).RunTestWithBp(t, `
+		android_app {
+			name: "com.android.foo",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			min_sdk_version: "31",
+			updatable: true,
+		}
+	`)
+	foo := result.ModuleForTests("com.android.foo", "android_common").Rule("manifestFixer")
+	android.AssertStringDoesContain(t,
+		"com.android.foo: expected manifest fixer to set override-placeholder-version to 1234",
+		foo.BuildParams.Args["args"],
+		"--override-placeholder-version 1234",
+	)
 }
 
 func TestResourceDirs(t *testing.T) {
@@ -4146,6 +4186,7 @@ func TestTargetSdkVersionMtsTests(t *testing.T) {
 	bpTemplate := `
 	%v {
 		name: "mytest",
+		min_sdk_version: "34",
 		target_sdk_version: "%v",
 		test_suites: ["othersuite", "%v"],
 	}
@@ -4323,7 +4364,16 @@ func TestPrivappAllowlistAndroidMk(t *testing.T) {
 }
 
 func TestAppFlagsPackages(t *testing.T) {
-	ctx := testApp(t, `
+	ctx := android.GroupFixturePreparers(
+		prepareForJavaTest,
+		android.FixtureMergeMockFs(
+			map[string][]byte{
+				"res/layout/layout.xml":         nil,
+				"res/values/strings.xml":        nil,
+				"res/values-en-rUS/strings.xml": nil,
+			},
+		),
+	).RunTestWithBp(t, `
 		android_app {
 			name: "foo",
 			srcs: ["a.java"],
@@ -4355,10 +4405,10 @@ func TestAppFlagsPackages(t *testing.T) {
 
 	// android_app module depends on aconfig_declarations listed in flags_packages
 	android.AssertBoolEquals(t, "foo expected to depend on bar", true,
-		CheckModuleHasDependency(t, ctx, "foo", "android_common", "bar"))
+		CheckModuleHasDependency(t, ctx.TestContext, "foo", "android_common", "bar"))
 
 	android.AssertBoolEquals(t, "foo expected to depend on baz", true,
-		CheckModuleHasDependency(t, ctx, "foo", "android_common", "baz"))
+		CheckModuleHasDependency(t, ctx.TestContext, "foo", "android_common", "baz"))
 
 	aapt2LinkRule := foo.Rule("android/soong/java.aapt2Link")
 	linkInFlags := aapt2LinkRule.Args["inFlags"]
@@ -4366,6 +4416,90 @@ func TestAppFlagsPackages(t *testing.T) {
 		"aapt2 link command expected to pass feature flags arguments",
 		linkInFlags,
 		"--feature-flags @out/soong/.intermediates/bar/intermediate.txt --feature-flags @out/soong/.intermediates/baz/intermediate.txt",
+	)
+
+	aapt2CompileRule := foo.Rule("android/soong/java.aapt2Compile")
+	compileFlags := aapt2CompileRule.Args["cFlags"]
+	android.AssertStringDoesContain(t,
+		"aapt2 compile command expected to pass feature flags arguments",
+		compileFlags,
+		"--feature-flags @out/soong/.intermediates/bar/intermediate.txt --feature-flags @out/soong/.intermediates/baz/intermediate.txt",
+	)
+}
+
+func TestAppFlagsPackagesPropagation(t *testing.T) {
+	ctx := testApp(t, `
+		aconfig_declarations {
+			name: "foo",
+			package: "com.example.package.foo",
+			container: "com.android.foo",
+			srcs: [
+				"foo.aconfig",
+			],
+		}
+		aconfig_declarations {
+			name: "bar",
+			package: "com.example.package.bar",
+			container: "com.android.bar",
+			srcs: [
+				"bar.aconfig",
+			],
+		}
+		aconfig_declarations {
+			name: "baz",
+			package: "com.example.package.baz",
+			container: "com.android.baz",
+			srcs: [
+				"baz.aconfig",
+			],
+		}
+		android_library {
+			name: "foo_lib",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			flags_packages: [
+				"foo",
+			],
+		}
+		android_library {
+			name: "bar_lib",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			flags_packages: [
+				"bar",
+			],
+		}
+		android_app {
+			name: "baz_app",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			flags_packages: [
+				"baz",
+			],
+			static_libs: [
+				"bar_lib",
+			],
+			libs: [
+				"foo_lib",
+			],
+		}
+	`)
+
+	bazApp := ctx.ModuleForTests("baz_app", "android_common")
+
+	// android_app module depends on aconfig_declarations listed in flags_packages
+	// and that of static libs, but not libs
+	aapt2LinkRule := bazApp.Rule("android/soong/java.aapt2Link")
+	linkInFlags := aapt2LinkRule.Args["inFlags"]
+	android.AssertStringDoesContain(t,
+		"aapt2 link command expected to pass feature flags arguments of flags_packages and that of its static libs",
+		linkInFlags,
+		"--feature-flags @out/soong/.intermediates/bar/intermediate.txt --feature-flags @out/soong/.intermediates/baz/intermediate.txt",
+	)
+	android.AssertStringDoesNotContain(t,
+		"aapt2 link command expected to not pass feature flags arguments of flags_packages of its libs",
+		linkInFlags,
+		"--feature-flags @out/soong/.intermediates/foo/intermediate.txt",
 	)
 }
 
@@ -4478,4 +4612,45 @@ func TestAppMinSdkVersionOverride(t *testing.T) {
 		"--minSdkVersion  33",
 	)
 
+}
+
+func TestNotApplyDefaultUpdatableModuleVersion(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+	).RunTestWithBp(t, `
+		android_app {
+			name: "com.android.foo",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			min_sdk_version: "31",
+		}
+	`)
+	foo := result.ModuleForTests("com.android.foo", "android_common").Rule("manifestFixer")
+	android.AssertStringDoesNotContain(t,
+		"com.android.foo: expected manifest fixer to not set override-placeholder-version",
+		foo.BuildParams.Args["args"],
+		"--override-placeholder-version",
+	)
+}
+
+func TestNotApplyOverrideApexManifestDefaultVersion(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		PrepareForTestWithJavaDefaultModules,
+		android.FixtureMergeEnv(map[string]string{
+			"OVERRIDE_APEX_MANIFEST_DEFAULT_VERSION": "1234",
+		}),
+	).RunTestWithBp(t, `
+		android_app {
+			name: "com.android.foo",
+			srcs: ["a.java"],
+			sdk_version: "current",
+			min_sdk_version: "31",
+		}
+	`)
+	foo := result.ModuleForTests("com.android.foo", "android_common").Rule("manifestFixer")
+	android.AssertStringDoesNotContain(t,
+		"com.android.foo: expected manifest fixer to not set override-placeholder-version",
+		foo.BuildParams.Args["args"],
+		"--override-placeholder-version",
+	)
 }

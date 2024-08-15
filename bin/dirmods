@@ -14,34 +14,47 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+'''
+Lists all modules in the given directory or its decendant directories, as cached
+in module-info.json. If any build change is made, and it should be reflected in
+the output, you should run 'refreshmod' first.
+'''
+
 import sys
 sys.dont_write_bytecode = True
 
-import modinfo
-
+import argparse
 import os
 
-# Get the path of a specific module in the android tree, as cached in module-info.json.
-# If any build change is made, and it should be reflected in the output, you should run
-# 'refreshmod' first.  Note: This is the inverse of pathmod.
+import modinfo
 
-def main(argv):
-    if len(argv) != 2:
-        sys.stderr.write("usage: usage: dirmods <path>\n")
-        sys.exit(1)
 
-    d = argv[1]
-    while d.endswith('/'):
-        d = d[:-1]
-    prefix = d + '/'
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('path')
+    parser.add_argument('--no-recurse', '-n', action='store_true',
+                        help='Do not include modules defined in subdirs of path')
+    args = parser.parse_args()
+    should_recurse = not args.no_recurse
+
+    d = os.path.normpath(args.path)
+    # Fix absolute path to be relative to build top
+    if os.path.isabs(d):
+        base = os.environ.get('ANDROID_BUILD_TOP')
+        if base:
+            base = os.path.normpath(base) + os.path.sep
+            if d.startswith(base):
+                d = d[len(base):]
+
+    prefix = d + os.path.sep
 
     module_info = modinfo.ReadModuleInfo()
 
     results = set()
     for m in module_info.values():
-        for path in m.get(u'path', []):
-            if path == d or path.startswith(prefix):
-                name = m.get(u'module_name')
+        for path in m.get('path', []):
+            if path == d or (should_recurse and path.startswith(prefix)):
+                name = m.get('module_name')
                 if name:
                     results.add(name)
 
@@ -49,4 +62,4 @@ def main(argv):
         print(name)
 
 if __name__ == "__main__":
-    main(sys.argv)
+    main()

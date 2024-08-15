@@ -445,7 +445,7 @@ func (b *BootclasspathFragmentModule) ComponentDepsMutator(ctx android.BottomUpM
 func (b *BootclasspathFragmentModule) DepsMutator(ctx android.BottomUpMutatorContext) {
 	// Add dependencies onto all the modules that provide the API stubs for classes on this
 	// bootclasspath fragment.
-	hiddenAPIAddStubLibDependencies(ctx, b.properties.apiScopeToStubLibs())
+	hiddenAPIAddStubLibDependencies(ctx, b.properties.apiScopeToStubLibs(ctx))
 
 	for _, additionalStubModule := range b.properties.Additional_stubs {
 		for _, apiScope := range hiddenAPISdkLibrarySupportedScopes {
@@ -524,10 +524,16 @@ func (b *BootclasspathFragmentModule) getProfileProviderApex(ctx android.BaseMod
 	}
 
 	// Bootclasspath fragment modules that are for the platform do not produce boot related files.
-	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
-	for _, apex := range apexInfo.InApexVariants {
-		if isProfileProviderApex(ctx, apex) {
-			return apex
+	apexInfos, _ := android.ModuleProvider(ctx, android.AllApexInfoProvider)
+	if apexInfos == nil {
+		return ""
+	}
+
+	for _, apexInfo := range apexInfos.ApexInfos {
+		for _, apex := range apexInfo.InApexVariants {
+			if isProfileProviderApex(ctx, apex) {
+				return apex
+			}
 		}
 	}
 
@@ -927,8 +933,8 @@ func (b *bootclasspathFragmentSdkMemberProperties) PopulateFromVariant(ctx andro
 	b.Filtered_flags_path = android.OptionalPathForPath(hiddenAPIInfo.FilteredFlagsPath)
 
 	// Copy stub_libs properties.
-	b.Stub_libs = module.properties.Api.Stub_libs
-	b.Core_platform_stub_libs = module.properties.Core_platform_api.Stub_libs
+	b.Stub_libs = module.properties.Api.Stub_libs.GetOrDefault(mctx, nil)
+	b.Core_platform_stub_libs = module.properties.Core_platform_api.Stub_libs.GetOrDefault(mctx, nil)
 
 	// Copy fragment properties.
 	b.Fragments = module.properties.Fragments

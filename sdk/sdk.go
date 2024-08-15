@@ -193,6 +193,10 @@ func (s *sdk) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		// Generate the snapshot from the member info.
 		s.buildSnapshot(ctx, sdkVariants)
 	}
+
+	if s.snapshotFile.Valid() {
+		ctx.SetOutputFiles([]android.Path{s.snapshotFile.Path()}, "")
+	}
 }
 
 func (s *sdk) AndroidMkEntries() []android.AndroidMkEntries {
@@ -220,18 +224,6 @@ func (s *sdk) AndroidMkEntries() []android.AndroidMkEntries {
 			},
 		},
 	}}
-}
-
-func (s *sdk) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		if s.snapshotFile.Valid() {
-			return []android.Path{s.snapshotFile.Path()}, nil
-		}
-		return nil, fmt.Errorf("snapshot file not defined. This is most likely because this isn't the common_os variant of this module")
-	default:
-		return nil, fmt.Errorf("unknown tag %q", tag)
-	}
 }
 
 // gatherTraits gathers the traits from the dynamically generated trait specific properties.
