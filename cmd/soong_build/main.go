@@ -16,6 +16,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -28,11 +29,11 @@ import (
 	"android/soong/android/allowlists"
 	"android/soong/bp2build"
 	"android/soong/shared"
-
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/bootstrap"
 	"github.com/google/blueprint/deptools"
 	"github.com/google/blueprint/metrics"
+	"github.com/google/blueprint/proptools"
 	androidProtobuf "google.golang.org/protobuf/android"
 )
 
@@ -48,6 +49,14 @@ var (
 
 	cmdlineArgs android.CmdArgs
 )
+
+const configCacheFile = "config.cache"
+
+type ConfigCache struct {
+	EnvDepsHash                  uint64
+	ProductVariableFileTimestamp int64
+	SoongBuildFileTimestamp      int64
+}
 
 func init() {
 	// Flags that make sense in every mode
@@ -82,6 +91,7 @@ func init() {
 	// Flags that probably shouldn't be flags of soong_build, but we haven't found
 	// the time to remove them yet
 	flag.BoolVar(&cmdlineArgs.RunGoTests, "t", false, "build and run go tests during bootstrap")
+	flag.BoolVar(&cmdlineArgs.IncrementalBuildActions, "incremental-build-actions", false, "generate build actions incrementally")
 
 	// Disable deterministic randomization in the protobuf package, so incremental
 	// builds with unrelated Soong changes don't trigger large rebuilds (since we
@@ -218,6 +228,60 @@ func writeDepFile(outputFile string, eventHandler *metrics.EventHandler, ninjaDe
 	maybeQuit(err, "error writing depfile '%s'", depFile)
 }
 
+// Check if there are changes to the environment file, product variable file and
+// soong_build binary, in which case no incremental will be performed.
+func incrementalValid(config android.Config, configCacheFile string) (*ConfigCache, bool) {
+	var newConfigCache ConfigCache
+	data, err := os.ReadFile(shared.JoinPath(topDir, usedEnvFile))
+	if err != nil {
+		// Clean build
+		if os.IsNotExist(err) {
+			data = []byte{}
+		} else {
+			maybeQuit(err, "")
+		}
+	}
+
+	newConfigCache.EnvDepsHash, err = proptools.CalculateHash(data)
+	newConfigCache.ProductVariableFileTimestamp = getFileTimestamp(filepath.Join(topDir, cmdlineArgs.SoongVariables))
+	newConfigCache.SoongBuildFileTimestamp = getFileTimestamp(filepath.Join(topDir, config.HostToolDir(), "soong_build"))
+	//TODO(b/344917959): out/soong/dexpreopt.config might need to be checked as well.
+
+	file, err := os.Open(configCacheFile)
+	if err != nil && os.IsNotExist(err) {
+		return &newConfigCache, false
+	}
+	maybeQuit(err, "")
+	defer file.Close()
+
+	var configCache ConfigCache
+	decoder := json.NewDecoder(file)
+	err = decoder.Decode(&configCache)
+	maybeQuit(err, "")
+
+	return &newConfigCache, newConfigCache == configCache
+}
+
+func getFileTimestamp(file string) int64 {
+	stat, err := os.Stat(file)
+	if err == nil {
+		return stat.ModTime().UnixMilli()
+	} else if !os.IsNotExist(err) {
+		maybeQuit(err, "")
+	}
+	return 0
+}
+
+func writeConfigCache(configCache *ConfigCache, configCacheFile string) {
+	file, err := os.Create(configCacheFile)
+	maybeQuit(err, "")
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	err = encoder.Encode(*configCache)
+	maybeQuit(err, "")
+}
+
 // runSoongOnlyBuild runs the standard Soong build in a number of different modes.
 func runSoongOnlyBuild(ctx *android.Context, extraNinjaDeps []string) string {
 	ctx.EventHandler.Begin("soong_build")
@@ -319,8 +383,26 @@ func main() {
 	ctx := newContext(configuration)
 	android.StartBackgroundMetrics(configuration)
 
+	var configCache *ConfigCache
+	configFile := filepath.Join(topDir, ctx.Config().OutDir(), configCacheFile)
+	incremental := false
+	ctx.SetIncrementalEnabled(cmdlineArgs.IncrementalBuildActions)
+	if cmdlineArgs.IncrementalBuildActions {
+		configCache, incremental = incrementalValid(ctx.Config(), configFile)
+	}
+	ctx.SetIncrementalAnalysis(incremental)
+
 	ctx.Register()
 	finalOutputFile := runSoongOnlyBuild(ctx, extraNinjaDeps)
+
+	if ctx.GetIncrementalEnabled() {
+		data, err := shared.EnvFileContents(configuration.EnvDeps())
+		maybeQuit(err, "")
+		configCache.EnvDepsHash, err = proptools.CalculateHash(data)
+		maybeQuit(err, "")
+		writeConfigCache(configCache, configFile)
+	}
+
 	writeMetrics(configuration, ctx.EventHandler, metricsDir)
 
 	writeUsedEnvironmentFile(configuration)

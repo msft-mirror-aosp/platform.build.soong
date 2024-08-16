@@ -15,14 +15,16 @@
 package build
 
 import (
-	"android/soong/ui/metrics"
-	"android/soong/ui/status"
 	"bufio"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
+
+	"android/soong/ui/metrics"
+	"android/soong/ui/status"
 )
 
 // Checks for files in the out directory that have a rule that depends on them but no rule to
@@ -64,7 +66,8 @@ func testForDanglingRules(ctx Context, config Config) {
 	outDir := config.OutDir()
 	modulePathsDir := filepath.Join(outDir, ".module_paths")
 	rawFilesDir := filepath.Join(outDir, "soong", "raw")
-	variablesFilePath := filepath.Join(outDir, "soong", "soong.variables")
+	variablesFilePath := config.SoongVarsFile()
+	extraVariablesFilePath := config.SoongExtraVarsFile()
 
 	// dexpreopt.config is an input to the soong_docs action, which runs the
 	// soong_build primary builder. However, this file is created from $(shell)
@@ -83,6 +86,10 @@ func testForDanglingRules(ctx Context, config Config) {
 	// before running soong and ninja.
 	releaseConfigDir := filepath.Join(outDir, "soong", "release-config")
 
+	// out/target/product/<xxxxx>/build_fingerprint.txt is a source file created in sysprop.mk
+	// ^out/target/product/[^/]+/build_fingerprint.txt$
+	buildFingerPrintFilePattern := regexp.MustCompile("^" + filepath.Join(outDir, "target", "product") + "/[^/]+/build_fingerprint.txt$")
+
 	danglingRules := make(map[string]bool)
 
 	scanner := bufio.NewScanner(stdout)
@@ -95,10 +102,12 @@ func testForDanglingRules(ctx Context, config Config) {
 		if strings.HasPrefix(line, modulePathsDir) ||
 			strings.HasPrefix(line, rawFilesDir) ||
 			line == variablesFilePath ||
+			line == extraVariablesFilePath ||
 			line == dexpreoptConfigFilePath ||
 			line == buildDatetimeFilePath ||
 			line == bpglob ||
-			strings.HasPrefix(line, releaseConfigDir) {
+			strings.HasPrefix(line, releaseConfigDir) ||
+			buildFingerPrintFilePattern.MatchString(line) {
 			// Leaf node is in one of Soong's bootstrap directories, which do not have
 			// full build rules in the primary build.ninja file.
 			continue

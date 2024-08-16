@@ -94,11 +94,15 @@ type LinkableInterface interface {
 	SelectedStl() string
 
 	BuildStaticVariant() bool
+	BuildRlibVariant() bool
 	BuildSharedVariant() bool
 	SetStatic()
 	SetShared()
 	IsPrebuilt() bool
 	Toc() android.OptionalPath
+
+	// IsRustFFI returns true if this is a Rust FFI library.
+	IsRustFFI() bool
 
 	// IsFuzzModule returns true if this a *_fuzz module.
 	IsFuzzModule() bool
@@ -136,9 +140,6 @@ type LinkableInterface interface {
 	// IsLlndk returns true for both LLNDK (public) and LLNDK-private libs.
 	IsLlndk() bool
 
-	// IsLlndkPublic returns true only for LLNDK (public) libs.
-	IsLlndkPublic() bool
-
 	// HasLlndkStubs returns true if this library has a variant that will build LLNDK stubs.
 	HasLlndkStubs() bool
 
@@ -162,12 +163,6 @@ type LinkableInterface interface {
 	// Bootstrap tests if this module is allowed to use non-APEX version of libraries.
 	Bootstrap() bool
 
-	// IsVndkSp returns true if this is a VNDK-SP module.
-	IsVndkSp() bool
-
-	IsVndk() bool
-	IsVndkExt() bool
-	IsVndkPrivate() bool
 	IsVendorPublicLibrary() bool
 	IsVndkPrebuiltLibrary() bool
 	HasVendorVariant() bool

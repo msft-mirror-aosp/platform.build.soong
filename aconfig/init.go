@@ -15,6 +15,8 @@
 package aconfig
 
 import (
+	"encoding/gob"
+
 	"android/soong/android"
 
 	"github.com/google/blueprint"
@@ -44,7 +46,7 @@ var (
 	// For create-device-config-sysprops: Generate aconfig flag value map text file
 	aconfigTextRule = pctx.AndroidStaticRule("aconfig_text",
 		blueprint.RuleParams{
-			Command: `${aconfig} dump-cache --dedup --format='{fully_qualified_name}={state:bool}'` +
+			Command: `${aconfig} dump-cache --dedup --format='{fully_qualified_name}:{permission}={state:bool}'` +
 				` --cache ${in}` +
 				` --out ${out}.tmp` +
 				` && ( if cmp -s ${out}.tmp ${out} ; then rm ${out}.tmp ; else mv ${out}.tmp ${out} ; fi )`,
@@ -106,6 +108,10 @@ func init() {
 	RegisterBuildComponents(android.InitRegistrationContext)
 	pctx.HostBinToolVariable("aconfig", "aconfig")
 	pctx.HostBinToolVariable("soong_zip", "soong_zip")
+
+	gob.Register(android.AconfigDeclarationsProviderData{})
+	gob.Register(android.AconfigReleaseDeclarationsProviderData{})
+	gob.Register(android.ModuleOutPath{})
 }
 
 func RegisterBuildComponents(ctx android.RegistrationContext) {
