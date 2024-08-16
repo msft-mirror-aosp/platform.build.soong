@@ -150,12 +150,7 @@ func TestReleaseAconfigExtraReleaseConfigs(t *testing.T) {
 
 	for _, tc := range testCases {
 		fixture := GroupFixturePreparers(
-			FixtureModifyProductVariables(func(vars FixtureProductVariables) {
-				if vars.BuildFlags == nil {
-					vars.BuildFlags = make(map[string]string)
-				}
-				vars.BuildFlags["RELEASE_ACONFIG_EXTRA_RELEASE_CONFIGS"] = tc.flag
-			}),
+			PrepareForTestWithBuildFlag("RELEASE_ACONFIG_EXTRA_RELEASE_CONFIGS", tc.flag),
 		)
 		actual := fixture.RunTest(t).Config.ReleaseAconfigExtraReleaseConfigs()
 		AssertArrayString(t, tc.name, tc.expected, actual)

@@ -321,8 +321,17 @@ func (this *stubDecorator) findPrebuiltAbiDump(ctx ModuleContext,
 }
 
 // Feature flag.
-func canDumpAbi(config android.Config) bool {
+func canDumpAbi(config android.Config, moduleDir string) bool {
 	if runtime.GOOS == "darwin" {
+		return false
+	}
+	if strings.HasPrefix(moduleDir, "bionic/") {
+		// Bionic has enough uncommon implementation details like ifuncs and asm
+		// code that the ABI tracking here has a ton of false positives. That's
+		// causing pretty extreme friction for development there, so disabling
+		// it until the workflow can be improved.
+		//
+		// http://b/358653811
 		return false
 	}
 	// http://b/156513478
@@ -460,7 +469,7 @@ func (c *stubDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) O
 	nativeAbiResult := parseNativeAbiDefinition(ctx, symbolFile, c.apiLevel, "")
 	objs := compileStubLibrary(ctx, flags, nativeAbiResult.stubSrc)
 	c.versionScriptPath = nativeAbiResult.versionScript
-	if canDumpAbi(ctx.Config()) {
+	if canDumpAbi(ctx.Config(), ctx.ModuleDir()) {
 		c.dumpAbi(ctx, nativeAbiResult.symbolList)
 		if canDiffAbi(ctx.Config()) {
 			c.diffAbi(ctx)

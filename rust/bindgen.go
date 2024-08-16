@@ -285,7 +285,7 @@ func (b *bindgenDecorator) GenerateSource(ctx ModuleContext, deps PathDeps) andr
 	if isCpp {
 		cflags = append(cflags, "-x c++")
 		// Add any C++ only flags.
-		cflags = append(cflags, esc(b.ClangProperties.Cppflags)...)
+		cflags = append(cflags, esc(b.ClangProperties.Cppflags.GetOrDefault(ctx, nil))...)
 	} else {
 		cflags = append(cflags, "-x c")
 	}
@@ -364,7 +364,7 @@ func NewRustBindgen(hod android.HostOrDeviceSupported) (*Module, *bindgenDecorat
 		ClangProperties:    cc.RustBindgenClangProperties{},
 	}
 
-	module := NewSourceProviderModule(hod, bindgen, false, true)
+	module := NewSourceProviderModule(hod, bindgen, false, false)
 
 	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
 		type stub_props struct {

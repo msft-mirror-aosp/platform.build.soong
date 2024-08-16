@@ -365,10 +365,10 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 		case bootClasspathTag:
 			if dep, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
 				deps.bootClasspath = append(deps.bootClasspath, dep.ImplementationJars...)
-			} else if sm, ok := module.(SystemModulesProvider); ok {
+			} else if sm, ok := android.OtherModuleProvider(ctx, module, SystemModulesProvider); ok {
 				// A system modules dependency has been added to the bootclasspath
 				// so add its libs to the bootclasspath.
-				deps.bootClasspath = append(deps.bootClasspath, sm.HeaderJars()...)
+				deps.bootClasspath = append(deps.bootClasspath, sm.HeaderJars...)
 			} else {
 				panic(fmt.Errorf("unknown dependency %q for %q", otherName, ctx.ModuleName()))
 			}
@@ -396,9 +396,12 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 			if deps.systemModules != nil {
 				panic("Found two system module dependencies")
 			}
-			sm := module.(SystemModulesProvider)
-			outputDir, outputDeps := sm.OutputDirAndDeps()
-			deps.systemModules = &systemModules{outputDir, outputDeps}
+			if sm, ok := android.OtherModuleProvider(ctx, module, SystemModulesProvider); ok {
+				deps.systemModules = &systemModules{sm.OutputDir, sm.OutputDirDeps}
+			} else {
+				ctx.PropertyErrorf("boot classpath dependency %q does not provide SystemModulesProvider",
+					ctx.OtherModuleName(module))
+			}
 		case aconfigDeclarationTag:
 			if dep, ok := android.OtherModuleProvider(ctx, module, android.AconfigDeclarationsProviderKey); ok {
 				deps.aconfigProtoFiles = append(deps.aconfigProtoFiles, dep.IntermediateCacheOutputPath)

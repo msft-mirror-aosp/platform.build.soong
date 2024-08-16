@@ -111,8 +111,8 @@ type Module interface {
 	RequiredModuleNames(ctx ConfigAndErrorContext) []string
 	HostRequiredModuleNames() []string
 	TargetRequiredModuleNames() []string
+	VintfFragmentModuleNames(ctx ConfigAndErrorContext) []string
 
-	FilesToInstall() InstallPaths
 	PackagingSpecs() []PackagingSpec
 
 	// TransitivePackagingSpecs returns the PackagingSpecs for this module and any transitive
@@ -497,6 +497,9 @@ type commonProperties struct {
 
 	// The team (defined by the owner/vendor) who owns the property.
 	Team *string `android:"path"`
+
+	// vintf_fragment Modules required from this module.
+	Vintf_fragment_modules proptools.Configurable[[]string] `android:"path"`
 }
 
 type distProperties struct {
@@ -760,6 +763,14 @@ func InitCommonOSAndroidMultiTargetsArchModule(m Module, hod HostOrDeviceSupport
 	m.base().commonProperties.CreateCommonOSVariant = true
 }
 
+func ModuleFilesToInstall(ctx OtherModuleProviderContext, m blueprint.Module) InstallPaths {
+	var filesToInstall InstallPaths
+	if info, ok := OtherModuleProvider(ctx, m, InstallFilesProvider); ok {
+		filesToInstall = info.InstallFiles
+	}
+	return filesToInstall
+}
+
 // A ModuleBase object contains the properties that are common to all Android
 // modules.  It should be included as an anonymous field in every module
 // struct definition.  InitAndroidModule should then be called from the module's
@@ -832,7 +843,6 @@ type ModuleBase struct {
 	primaryLicensesProperty applicableLicensesProperty
 
 	noAddressSanitizer   bool
-	installFiles         InstallPaths
 	installFilesDepSet   *DepSet[InstallPath]
 	checkbuildFiles      Paths
 	packagingSpecs       []PackagingSpec
@@ -1028,6 +1038,7 @@ func (m *ModuleBase) baseDepsMutator(ctx BottomUpMutatorContext) {
 	fullManifest := pv.DeviceArch != nil && pv.DeviceName != nil
 	if fullManifest {
 		addRequiredDeps(ctx)
+		addVintfFragmentDeps(ctx)
 	}
 }
 
@@ -1103,6 +1114,16 @@ func addRequiredDeps(ctx BottomUpMutatorContext) {
 			}
 		}
 	}
+}
+
+var vintfDepTag = struct {
+	blueprint.BaseDependencyTag
+	InstallAlwaysNeededDependencyTag
+}{}
+
+func addVintfFragmentDeps(ctx BottomUpMutatorContext) {
+	mod := ctx.Module()
+	ctx.AddDependency(mod, vintfDepTag, mod.VintfFragmentModuleNames(ctx)...)
 }
 
 // AddProperties "registers" the provided props
@@ -1476,10 +1497,6 @@ func isInstallDepNeeded(dep Module, tag blueprint.DependencyTag) bool {
 	return IsInstallDepNeededTag(tag)
 }
 
-func (m *ModuleBase) FilesToInstall() InstallPaths {
-	return m.installFiles
-}
-
 func (m *ModuleBase) PackagingSpecs() []PackagingSpec {
 	return m.packagingSpecs
 }
@@ -1597,6 +1614,10 @@ func (m *ModuleBase) TargetRequiredModuleNames() []string {
 	return m.base().commonProperties.Target_required
 }
 
+func (m *ModuleBase) VintfFragmentModuleNames(ctx ConfigAndErrorContext) []string {
+	return m.base().commonProperties.Vintf_fragment_modules.GetOrDefault(m.ConfigurableEvaluator(ctx), nil)
+}
+
 func (m *ModuleBase) InitRc() Paths {
 	return append(Paths{}, m.initRcPaths...)
 }
@@ -1615,12 +1636,16 @@ func (m *ModuleBase) SetLicenseInstallMap(installMap []string) {
 	m.licenseInstallMap = append(m.licenseInstallMap, installMap...)
 }
 
-func (m *ModuleBase) generateModuleTarget(ctx ModuleContext) {
+func (m *ModuleBase) generateModuleTarget(ctx *moduleContext) {
 	var allInstalledFiles InstallPaths
 	var allCheckbuildFiles Paths
 	ctx.VisitAllModuleVariants(func(module Module) {
 		a := module.base()
-		allInstalledFiles = append(allInstalledFiles, a.installFiles...)
+		if a == m {
+			allInstalledFiles = append(allInstalledFiles, ctx.installFiles...)
+		} else {
+			allInstalledFiles = append(allInstalledFiles, ModuleFilesToInstall(ctx, module)...)
+		}
 		// A module's -checkbuild phony targets should
 		// not be created if the module is not exported to make.
 		// Those could depend on the build target and fail to compile
@@ -1763,6 +1788,12 @@ func (m *ModuleBase) archModuleContextFactory(ctx archModuleContextFactoryContex
 
 }
 
+type InstallFilesInfo struct {
+	InstallFiles InstallPaths
+}
+
+var InstallFilesProvider = blueprint.NewProvider[InstallFilesInfo]()
+
 func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) {
 	ctx := &moduleContext{
 		module:            m.module,
@@ -1853,7 +1884,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 				}
 			}
 
-			m.vintfFragmentsPaths = PathsForModuleSrc(ctx, m.commonProperties.Vintf_fragments.GetOrDefault(m.ConfigurableEvaluator(ctx), nil))
+			m.vintfFragmentsPaths = PathsForModuleSrc(ctx, m.commonProperties.Vintf_fragments.GetOrDefault(ctx, nil))
 			vintfDir := PathForModuleInstall(ctx, "etc", "vintf", "manifest")
 			for _, src := range m.vintfFragmentsPaths {
 				installedVintfFragment := vintfDir.Join(ctx, src.Base())
@@ -1914,14 +1945,14 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 				return
 			}
 			cacheKey = &blueprint.BuildActionCacheKey{
-				Id:        ctx.bp.ModuleId(),
+				Id:        ctx.bp.ModuleCacheKey(),
 				InputHash: hash,
 			}
 		}
 
 		restored := false
 		if incrementalAnalysis && cacheKey != nil {
-			restored = ctx.bp.RestoreBuildActions(cacheKey, incrementalModule)
+			restored = ctx.bp.RestoreBuildActions(cacheKey)
 		}
 
 		if !restored {
@@ -1944,12 +1975,15 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			return
 		}
 
-		m.installFiles = append(m.installFiles, ctx.installFiles...)
 		m.checkbuildFiles = append(m.checkbuildFiles, ctx.checkbuildFiles...)
 		m.packagingSpecs = append(m.packagingSpecs, ctx.packagingSpecs...)
 		m.katiInstalls = append(m.katiInstalls, ctx.katiInstalls...)
 		m.katiSymlinks = append(m.katiSymlinks, ctx.katiSymlinks...)
 		m.testData = append(m.testData, ctx.testData...)
+
+		SetProvider(ctx, InstallFilesProvider, InstallFilesInfo{
+			InstallFiles: ctx.installFiles,
+		})
 	} else if ctx.Config().AllowMissingDependencies() {
 		// If the module is not enabled it will not create any build rules, nothing will call
 		// ctx.GetMissingDependencies(), and blueprint will consider the missing dependencies to be unhandled
@@ -1965,7 +1999,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		}
 	}
 
-	m.installFilesDepSet = NewDepSet[InstallPath](TOPOLOGICAL, m.installFiles, dependencyInstallFiles)
+	m.installFilesDepSet = NewDepSet[InstallPath](TOPOLOGICAL, ctx.installFiles, dependencyInstallFiles)
 	m.packagingSpecsDepSet = NewDepSet[PackagingSpec](TOPOLOGICAL, m.packagingSpecs, dependencyPackagingSpecs)
 
 	buildLicenseMetadata(ctx, m.licenseMetadataFile)
@@ -2519,7 +2553,7 @@ func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, 
 			fromProperty = true
 		}
 	} else if cta, isCta := ctx.(*singletonContextAdaptor); isCta {
-		providerData, _ := cta.moduleProvider(module, OutputFilesProvider)
+		providerData, _ := cta.otherModuleProvider(module, OutputFilesProvider)
 		outputFiles, _ = providerData.(OutputFilesInfo)
 	} else {
 		return nil, fmt.Errorf("unsupported context %q in method outputFilesForModuleFromProvider", reflect.TypeOf(ctx))
