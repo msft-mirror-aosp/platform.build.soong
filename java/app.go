@@ -1109,7 +1109,7 @@ func collectJniDeps(ctx android.ModuleContext,
 						coverageFile:   dep.CoverageOutputFile(),
 						unstrippedFile: dep.UnstrippedOutputFile(),
 						partition:      dep.Partition(),
-						installPaths:   dep.FilesToInstall(),
+						installPaths:   android.ModuleFilesToInstall(ctx, dep),
 					})
 				} else if ctx.Config().AllowMissingDependencies() {
 					ctx.AddMissingDependencies([]string{otherName})
