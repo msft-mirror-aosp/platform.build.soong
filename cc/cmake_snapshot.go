@@ -347,8 +347,11 @@ func (m *CmakeSnapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		if slices.Contains(ignoredSystemLibs, moduleName) {
 			return false // system libs built in-tree for Android
 		}
+		if dep.IsPrebuilt() {
+			return false // prebuilts are not supported
+		}
 		if dep.compiler == nil {
-			return false // unsupported module type (e.g. prebuilt)
+			return false // unsupported module type
 		}
 		isAidlModule := dep.compiler.baseCompilerProps().AidlInterface.Lang != ""
 
@@ -473,7 +476,7 @@ func (m *CmakeSnapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		var prebuiltsList android.Paths
 
 		ctx.VisitDirectDepsWithTag(cmakeSnapshotPrebuiltTag, func(dep android.Module) {
-			for _, file := range dep.FilesToInstall() {
+			for _, file := range android.ModuleFilesToInstall(ctx, dep) {
 				prebuiltsList = append(prebuiltsList, file)
 			}
 		})

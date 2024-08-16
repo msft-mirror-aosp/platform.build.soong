@@ -457,11 +457,7 @@ java_import {
 			android.FixtureMergeEnv(map[string]string{
 				"SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE": "S",
 			}),
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
-				}
-			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_HIDDEN_API_EXPORTABLE_STUBS", "true"),
 		).RunTest(t)
 
 		CheckSnapshot(t, result, "mysdk", "",
@@ -573,11 +569,9 @@ java_sdk_library_import {
 				"SOONG_SDK_SNAPSHOT_TARGET_BUILD_RELEASE": "S",
 			}),
 			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
-				}
 				variables.Platform_version_active_codenames = []string{"UpsideDownCake", "Tiramisu", "S-V2"}
 			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_HIDDEN_API_EXPORTABLE_STUBS", "true"),
 		).RunTest(t)
 
 		CheckSnapshot(t, result, "mysdk", "",

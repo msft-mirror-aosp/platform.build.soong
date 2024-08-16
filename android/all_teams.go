@@ -1,8 +1,9 @@
 package android
 
 import (
-	"android/soong/android/team_proto"
 	"path/filepath"
+
+	"android/soong/android/team_proto"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -93,7 +94,7 @@ func (t *allTeamsSingleton) GenerateBuildActions(ctx SingletonContext) {
 		}
 
 		testModInfo := TestModuleInformation{}
-		if tmi, ok := SingletonModuleProvider(ctx, module, TestOnlyProviderKey); ok {
+		if tmi, ok := OtherModuleProvider(ctx, module, TestOnlyProviderKey); ok {
 			testModInfo = tmi
 		}
 

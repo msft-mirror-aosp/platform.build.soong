@@ -93,7 +93,7 @@ func dumpMakeVars(ctx Context, config Config, goals, vars []string, write_soong_
 	defer tool.Finish()
 
 	cmd := Command(ctx, config, "dumpvars",
-		config.PrebuiltBuildTool("ckati"),
+		config.KatiBin(),
 		"-f", "build/make/core/config.mk",
 		"--color_warnings",
 		"--kati_stats",

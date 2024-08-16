@@ -431,6 +431,9 @@ func (a *AndroidAppImport) validatePresignedApk(ctx android.ModuleContext, srcAp
 	var extraArgs []string
 	if a.Privileged() {
 		extraArgs = append(extraArgs, "--privileged")
+		if ctx.Config().UncompressPrivAppDex() {
+			extraArgs = append(extraArgs, "--uncompress-priv-app-dex")
+		}
 	}
 	if proptools.Bool(a.properties.Skip_preprocessed_apk_checks) {
 		extraArgs = append(extraArgs, "--skip-preprocessed-apk-checks")

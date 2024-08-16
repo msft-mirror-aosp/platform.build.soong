@@ -14,6 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# prevent glob expansion in this script
+set -f
+
 dir=${1:-.}
 
 shift

@@ -49,7 +49,7 @@ func runNinjaForBuild(ctx Context, config Config) {
 	nr := status.NewNinjaReader(ctx, ctx.Status.StartTool(), fifo)
 	defer nr.Close()
 
-	executable := config.PrebuiltBuildTool("ninja")
+	executable := config.NinjaBin()
 	args := []string{
 		"-d", "keepdepfile",
 		"-d", "keeprsp",
@@ -229,6 +229,7 @@ func runNinjaForBuild(ctx Context, config Config) {
 			"BUILD_BROKEN_INCORRECT_PARTITION_IMAGES",
 			"SOONG_USE_N2",
 			"RUST_BACKTRACE",
+			"RUST_LOG",
 		}, config.BuildBrokenNinjaUsesEnvVars()...)...)
 	}
 

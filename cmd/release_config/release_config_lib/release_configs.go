@@ -276,6 +276,20 @@ func (configs *ReleaseConfigs) LoadReleaseConfigMap(path string, ConfigDirIndex 
 		configs.Aliases[name] = alias.Target
 	}
 	var err error
+	// Temporarily allowlist duplicate flag declaration files to prevent
+	// more from entering the tree while we work to clean up the duplicates
+	// that already exist.
+	dupFlagFile := filepath.Join(dir, "duplicate_allowlist.txt")
+	data, err := os.ReadFile(dupFlagFile)
+	if err == nil {
+		for _, flag := range strings.Split(string(data), "\n") {
+			flag = strings.TrimSpace(flag)
+			if strings.HasPrefix(flag, "//") || strings.HasPrefix(flag, "#") {
+				continue
+			}
+			DuplicateDeclarationAllowlist[flag] = true
+		}
+	}
 	err = WalkTextprotoFiles(dir, "flag_declarations", func(path string, d fs.DirEntry, err error) error {
 		flagDeclaration := FlagDeclarationFactory(path)
 		// Container must be specified.
@@ -289,14 +303,6 @@ func (configs *ReleaseConfigs) LoadReleaseConfigMap(path string, ConfigDirIndex 
 			}
 		}
 
-		// TODO: once we have namespaces initialized, we can throw an error here.
-		if flagDeclaration.Namespace == nil {
-			flagDeclaration.Namespace = proto.String("android_UNKNOWN")
-		}
-		// If the input didn't specify a value, create one (== UnspecifiedValue).
-		if flagDeclaration.Value == nil {
-			flagDeclaration.Value = &rc_proto.Value{Val: &rc_proto.Value_UnspecifiedValue{false}}
-		}
 		m.FlagDeclarations = append(m.FlagDeclarations, *flagDeclaration)
 		name := *flagDeclaration.Name
 		if name == "RELEASE_ACONFIG_VALUE_SETS" {
@@ -304,8 +310,8 @@ func (configs *ReleaseConfigs) LoadReleaseConfigMap(path string, ConfigDirIndex 
 		}
 		if def, ok := configs.FlagArtifacts[name]; !ok {
 			configs.FlagArtifacts[name] = &FlagArtifact{FlagDeclaration: flagDeclaration, DeclarationIndex: ConfigDirIndex}
-		} else if !proto.Equal(def.FlagDeclaration, flagDeclaration) {
-			return fmt.Errorf("Duplicate definition of %s", *flagDeclaration.Name)
+		} else if !proto.Equal(def.FlagDeclaration, flagDeclaration) || !DuplicateDeclarationAllowlist[name] {
+			return fmt.Errorf("Duplicate definition of %s in %s", *flagDeclaration.Name, path)
 		}
 		// Set the initial value in the flag artifact.
 		configs.FilesUsedMap[path] = true

@@ -168,9 +168,10 @@ func (b *platformBootclasspathModule) GenerateAndroidBuildActions(ctx android.Mo
 
 	var transitiveSrcFiles android.Paths
 	for _, module := range allModules {
-		depInfo, _ := android.OtherModuleProvider(ctx, module, JavaInfoProvider)
-		if depInfo.TransitiveSrcFiles != nil {
-			transitiveSrcFiles = append(transitiveSrcFiles, depInfo.TransitiveSrcFiles.ToList()...)
+		if depInfo, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
+			if depInfo.TransitiveSrcFiles != nil {
+				transitiveSrcFiles = append(transitiveSrcFiles, depInfo.TransitiveSrcFiles.ToList()...)
+			}
 		}
 	}
 	jarArgs := resourcePathsToJarArgs(transitiveSrcFiles)

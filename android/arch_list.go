@@ -16,7 +16,6 @@ package android
 
 var archVariants = map[ArchType][]string{
 	Arm: {
-		"armv7-a",
 		"armv7-a-neon",
 		"armv8-a",
 		"armv8-2a",
