@@ -152,7 +152,7 @@ func (r *ravenwoodTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	var runtimeJniModuleNames map[string]bool
 
 	if utils := ctx.GetDirectDepsWithTag(ravenwoodUtilsTag)[0]; utils != nil {
-		for _, installFile := range utils.FilesToInstall() {
+		for _, installFile := range android.ModuleFilesToInstall(ctx, utils) {
 			installDeps = append(installDeps, installFile)
 		}
 		jniDeps, ok := android.OtherModuleProvider(ctx, utils, ravenwoodLibgroupJniDepProvider)
@@ -162,7 +162,7 @@ func (r *ravenwoodTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	if runtime := ctx.GetDirectDepsWithTag(ravenwoodRuntimeTag)[0]; runtime != nil {
-		for _, installFile := range runtime.FilesToInstall() {
+		for _, installFile := range android.ModuleFilesToInstall(ctx, runtime) {
 			installDeps = append(installDeps, installFile)
 		}
 		jniDeps, ok := android.OtherModuleProvider(ctx, runtime, ravenwoodLibgroupJniDepProvider)
@@ -191,7 +191,7 @@ func (r *ravenwoodTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	resApkInstallPath := installPath.Join(ctx, "ravenwood-res-apks")
 	if resApk := ctx.GetDirectDepsWithTag(ravenwoodTestResourceApkTag); len(resApk) > 0 {
-		for _, installFile := range resApk[0].FilesToInstall() {
+		for _, installFile := range android.ModuleFilesToInstall(ctx, resApk[0]) {
 			installResApk := ctx.InstallFile(resApkInstallPath, "ravenwood-res.apk", installFile)
 			installDeps = append(installDeps, installResApk)
 		}

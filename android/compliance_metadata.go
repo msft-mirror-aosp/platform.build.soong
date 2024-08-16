@@ -160,7 +160,7 @@ var (
 // buildComplianceMetadataProvider starts with the ModuleContext.ComplianceMetadataInfo() and fills in more common metadata
 // for different module types without accessing their private fields but through android.Module interface
 // and public/private fields of package android. The final metadata is stored to a module's ComplianceMetadataProvider.
-func buildComplianceMetadataProvider(ctx ModuleContext, m *ModuleBase) {
+func buildComplianceMetadataProvider(ctx *moduleContext, m *ModuleBase) {
 	complianceMetadataInfo := ctx.ComplianceMetadataInfo()
 	complianceMetadataInfo.SetStringValue(ComplianceMetadataProp.NAME, m.Name())
 	complianceMetadataInfo.SetStringValue(ComplianceMetadataProp.PACKAGE, ctx.ModuleDir())
@@ -186,7 +186,7 @@ func buildComplianceMetadataProvider(ctx ModuleContext, m *ModuleBase) {
 		}
 
 		var installed InstallPaths
-		installed = append(installed, m.module.FilesToInstall()...)
+		installed = append(installed, ctx.installFiles...)
 		installed = append(installed, m.katiInstalls.InstallPaths()...)
 		installed = append(installed, m.katiSymlinks.InstallPaths()...)
 		installed = append(installed, m.katiInitRcInstalls.InstallPaths()...)
