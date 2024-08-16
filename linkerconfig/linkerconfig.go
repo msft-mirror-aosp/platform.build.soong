@@ -104,7 +104,7 @@ func BuildLinkerConfig(ctx android.ModuleContext, builder *android.RuleBuilder,
 	// Secondly, if there's provideLibs gathered from provideModules, append them
 	var provideLibs []string
 	for _, m := range provideModules {
-		if c, ok := m.(*cc.Module); ok && cc.IsStubTarget(c) {
+		if c, ok := m.(*cc.Module); ok && (cc.IsStubTarget(c) || c.HasLlndkStubs()) {
 			for _, ps := range c.PackagingSpecs() {
 				provideLibs = append(provideLibs, ps.FileName())
 			}

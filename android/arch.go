@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -587,19 +588,21 @@ func archMutator(bpctx blueprint.BottomUpMutatorContext) {
 	}
 
 	osTargets := mctx.Config().Targets[os]
+
 	image := base.commonProperties.ImageVariation
 	// Filter NativeBridge targets unless they are explicitly supported.
 	// Skip creating native bridge variants for non-core modules.
 	if os == Android && !(base.IsNativeBridgeSupported() && image == CoreVariation) {
+		osTargets = slices.DeleteFunc(slices.Clone(osTargets), func(t Target) bool {
+			return bool(t.NativeBridge)
+		})
+	}
 
-		var targets []Target
-		for _, t := range osTargets {
-			if !t.NativeBridge {
-				targets = append(targets, t)
-			}
-		}
-
-		osTargets = targets
+	// Filter HostCross targets if disabled.
+	if base.HostSupported() && !base.HostCrossSupported() {
+		osTargets = slices.DeleteFunc(slices.Clone(osTargets), func(t Target) bool {
+			return t.HostCross
+		})
 	}
 
 	// only the primary arch in the ramdisk / vendor_ramdisk / recovery partition

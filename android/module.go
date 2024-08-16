@@ -111,8 +111,8 @@ type Module interface {
 	RequiredModuleNames(ctx ConfigAndErrorContext) []string
 	HostRequiredModuleNames() []string
 	TargetRequiredModuleNames() []string
+	VintfFragmentModuleNames(ctx ConfigAndErrorContext) []string
 
-	FilesToInstall() InstallPaths
 	PackagingSpecs() []PackagingSpec
 
 	// TransitivePackagingSpecs returns the PackagingSpecs for this module and any transitive
@@ -389,7 +389,7 @@ type commonProperties struct {
 	Init_rc []string `android:"arch_variant,path"`
 
 	// VINTF manifest fragments to be installed if this module is installed
-	Vintf_fragments []string `android:"path"`
+	Vintf_fragments proptools.Configurable[[]string] `android:"path"`
 
 	// names of other modules to install if this module is installed
 	Required proptools.Configurable[[]string] `android:"arch_variant"`
@@ -497,6 +497,9 @@ type commonProperties struct {
 
 	// The team (defined by the owner/vendor) who owns the property.
 	Team *string `android:"path"`
+
+	// vintf_fragment Modules required from this module.
+	Vintf_fragment_modules proptools.Configurable[[]string] `android:"path"`
 }
 
 type distProperties struct {
@@ -601,6 +604,11 @@ type hostAndDeviceProperties struct {
 
 	// If set to true, build a variant of the module for the device.  Defaults to true.
 	Device_supported *bool
+}
+
+type hostCrossProperties struct {
+	// If set to true, build a variant of the module for the host cross.  Defaults to true.
+	Host_cross_supported *bool
 }
 
 type Multilib string
@@ -718,6 +726,10 @@ func InitAndroidArchModule(m Module, hod HostOrDeviceSupported, defaultMultilib 
 		m.AddProperties(&base.hostAndDeviceProperties)
 	}
 
+	if hod&hostCrossSupported != 0 {
+		m.AddProperties(&base.hostCrossProperties)
+	}
+
 	initArchModule(m)
 }
 
@@ -749,6 +761,14 @@ func InitCommonOSAndroidMultiTargetsArchModule(m Module, hod HostOrDeviceSupport
 	InitAndroidArchModule(m, hod, defaultMultilib)
 	m.base().commonProperties.UseTargetVariants = false
 	m.base().commonProperties.CreateCommonOSVariant = true
+}
+
+func ModuleFilesToInstall(ctx OtherModuleProviderContext, m blueprint.Module) InstallPaths {
+	var filesToInstall InstallPaths
+	if info, ok := OtherModuleProvider(ctx, m, InstallFilesProvider); ok {
+		filesToInstall = info.InstallFiles
+	}
+	return filesToInstall
 }
 
 // A ModuleBase object contains the properties that are common to all Android
@@ -803,6 +823,7 @@ type ModuleBase struct {
 	distProperties          distProperties
 	variableProperties      interface{}
 	hostAndDeviceProperties hostAndDeviceProperties
+	hostCrossProperties     hostCrossProperties
 
 	// Arch specific versions of structs in GetProperties() prior to
 	// initialization in InitAndroidArchModule, lets call it `generalProperties`.
@@ -822,7 +843,6 @@ type ModuleBase struct {
 	primaryLicensesProperty applicableLicensesProperty
 
 	noAddressSanitizer   bool
-	installFiles         InstallPaths
 	installFilesDepSet   *DepSet[InstallPath]
 	checkbuildFiles      Paths
 	packagingSpecs       []PackagingSpec
@@ -1018,6 +1038,7 @@ func (m *ModuleBase) baseDepsMutator(ctx BottomUpMutatorContext) {
 	fullManifest := pv.DeviceArch != nil && pv.DeviceName != nil
 	if fullManifest {
 		addRequiredDeps(ctx)
+		addVintfFragmentDeps(ctx)
 	}
 }
 
@@ -1093,6 +1114,16 @@ func addRequiredDeps(ctx BottomUpMutatorContext) {
 			}
 		}
 	}
+}
+
+var vintfDepTag = struct {
+	blueprint.BaseDependencyTag
+	InstallAlwaysNeededDependencyTag
+}{}
+
+func addVintfFragmentDeps(ctx BottomUpMutatorContext) {
+	mod := ctx.Module()
+	ctx.AddDependency(mod, vintfDepTag, mod.VintfFragmentModuleNames(ctx)...)
 }
 
 // AddProperties "registers" the provided props
@@ -1207,29 +1238,7 @@ func (m *ModuleBase) GenerateTaggedDistFiles(ctx BaseModuleContext) TaggedDistFi
 				continue
 			}
 		}
-
-		// if the tagged dist file cannot be obtained from OutputFilesProvider,
-		// fall back to use OutputFileProducer
-		// TODO: remove this part after OutputFilesProvider fully replaces OutputFileProducer
-		if outputFileProducer, ok := m.module.(OutputFileProducer); ok {
-			// Call the OutputFiles(tag) method to get the paths associated with the tag.
-			distFilesForTag, err := outputFileProducer.OutputFiles(tag)
-			// If the tag was not supported and is not DefaultDistTag then it is an error.
-			// Failing to find paths for DefaultDistTag is not an error. It just means
-			// that the module type requires the legacy behavior.
-			if err != nil && tag != DefaultDistTag {
-				ctx.PropertyErrorf("dist.tag", "%s", err.Error())
-			}
-			distFiles = distFiles.addPathsForTag(tag, distFilesForTag...)
-		} else if tag != DefaultDistTag {
-			// If the tag was specified then it is an error if the module does not
-			// implement OutputFileProducer because there is no other way of accessing
-			// the paths for the specified tag.
-			ctx.PropertyErrorf("dist.tag",
-				"tag %s not supported because the module does not implement OutputFileProducer", tag)
-		}
 	}
-
 	return distFiles
 }
 
@@ -1321,7 +1330,11 @@ func (m *ModuleBase) HostCrossSupported() bool {
 	// hostEnabled is true if the host_supported property is true or the HostOrDeviceSupported
 	// value has the hostDefault bit set.
 	hostEnabled := proptools.BoolDefault(m.hostAndDeviceProperties.Host_supported, hod&hostDefault != 0)
-	return hod&hostCrossSupported != 0 && hostEnabled
+
+	// Default true for the Host_cross_supported property
+	hostCrossEnabled := proptools.BoolDefault(m.hostCrossProperties.Host_cross_supported, true)
+
+	return hod&hostCrossSupported != 0 && hostEnabled && hostCrossEnabled
 }
 
 func (m *ModuleBase) Platform() bool {
@@ -1484,10 +1497,6 @@ func isInstallDepNeeded(dep Module, tag blueprint.DependencyTag) bool {
 	return IsInstallDepNeededTag(tag)
 }
 
-func (m *ModuleBase) FilesToInstall() InstallPaths {
-	return m.installFiles
-}
-
 func (m *ModuleBase) PackagingSpecs() []PackagingSpec {
 	return m.packagingSpecs
 }
@@ -1605,6 +1614,10 @@ func (m *ModuleBase) TargetRequiredModuleNames() []string {
 	return m.base().commonProperties.Target_required
 }
 
+func (m *ModuleBase) VintfFragmentModuleNames(ctx ConfigAndErrorContext) []string {
+	return m.base().commonProperties.Vintf_fragment_modules.GetOrDefault(m.ConfigurableEvaluator(ctx), nil)
+}
+
 func (m *ModuleBase) InitRc() Paths {
 	return append(Paths{}, m.initRcPaths...)
 }
@@ -1623,12 +1636,16 @@ func (m *ModuleBase) SetLicenseInstallMap(installMap []string) {
 	m.licenseInstallMap = append(m.licenseInstallMap, installMap...)
 }
 
-func (m *ModuleBase) generateModuleTarget(ctx ModuleContext) {
+func (m *ModuleBase) generateModuleTarget(ctx *moduleContext) {
 	var allInstalledFiles InstallPaths
 	var allCheckbuildFiles Paths
 	ctx.VisitAllModuleVariants(func(module Module) {
 		a := module.base()
-		allInstalledFiles = append(allInstalledFiles, a.installFiles...)
+		if a == m {
+			allInstalledFiles = append(allInstalledFiles, ctx.installFiles...)
+		} else {
+			allInstalledFiles = append(allInstalledFiles, ModuleFilesToInstall(ctx, module)...)
+		}
 		// A module's -checkbuild phony targets should
 		// not be created if the module is not exported to make.
 		// Those could depend on the build target and fail to compile
@@ -1746,7 +1763,11 @@ func (m *ModuleBase) baseModuleContextFactory(ctx blueprint.BaseModuleContext) b
 	}
 }
 
-func (m *ModuleBase) archModuleContextFactory(ctx blueprint.IncomingTransitionContext) archModuleContext {
+type archModuleContextFactoryContext interface {
+	Config() interface{}
+}
+
+func (m *ModuleBase) archModuleContextFactory(ctx archModuleContextFactoryContext) archModuleContext {
 	config := ctx.Config().(Config)
 	target := m.Target()
 	primaryArch := false
@@ -1767,6 +1788,12 @@ func (m *ModuleBase) archModuleContextFactory(ctx blueprint.IncomingTransitionCo
 
 }
 
+type InstallFilesInfo struct {
+	InstallFiles InstallPaths
+}
+
+var InstallFilesProvider = blueprint.NewProvider[InstallFilesInfo]()
+
 func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) {
 	ctx := &moduleContext{
 		module:            m.module,
@@ -1774,6 +1801,8 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		baseModuleContext: m.baseModuleContextFactory(blueprintCtx),
 		variables:         make(map[string]string),
 	}
+
+	setContainerInfo(ctx)
 
 	m.licenseMetadataFile = PathForModuleOut(ctx, "meta_lic")
 
@@ -1855,7 +1884,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 				}
 			}
 
-			m.vintfFragmentsPaths = PathsForModuleSrc(ctx, m.commonProperties.Vintf_fragments)
+			m.vintfFragmentsPaths = PathsForModuleSrc(ctx, m.commonProperties.Vintf_fragments.GetOrDefault(ctx, nil))
 			vintfDir := PathForModuleInstall(ctx, "etc", "vintf", "manifest")
 			for _, src := range m.vintfFragmentsPaths {
 				installedVintfFragment := vintfDir.Join(ctx, src.Base())
@@ -1916,14 +1945,14 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 				return
 			}
 			cacheKey = &blueprint.BuildActionCacheKey{
-				Id:        ctx.bp.ModuleId(),
+				Id:        ctx.bp.ModuleCacheKey(),
 				InputHash: hash,
 			}
 		}
 
 		restored := false
 		if incrementalAnalysis && cacheKey != nil {
-			restored = ctx.bp.RestoreBuildActions(cacheKey, incrementalModule)
+			restored = ctx.bp.RestoreBuildActions(cacheKey)
 		}
 
 		if !restored {
@@ -1946,12 +1975,15 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			return
 		}
 
-		m.installFiles = append(m.installFiles, ctx.installFiles...)
 		m.checkbuildFiles = append(m.checkbuildFiles, ctx.checkbuildFiles...)
 		m.packagingSpecs = append(m.packagingSpecs, ctx.packagingSpecs...)
 		m.katiInstalls = append(m.katiInstalls, ctx.katiInstalls...)
 		m.katiSymlinks = append(m.katiSymlinks, ctx.katiSymlinks...)
 		m.testData = append(m.testData, ctx.testData...)
+
+		SetProvider(ctx, InstallFilesProvider, InstallFilesInfo{
+			InstallFiles: ctx.installFiles,
+		})
 	} else if ctx.Config().AllowMissingDependencies() {
 		// If the module is not enabled it will not create any build rules, nothing will call
 		// ctx.GetMissingDependencies(), and blueprint will consider the missing dependencies to be unhandled
@@ -1967,7 +1999,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		}
 	}
 
-	m.installFilesDepSet = NewDepSet[InstallPath](TOPOLOGICAL, m.installFiles, dependencyInstallFiles)
+	m.installFilesDepSet = NewDepSet[InstallPath](TOPOLOGICAL, ctx.installFiles, dependencyInstallFiles)
 	m.packagingSpecsDepSet = NewDepSet[PackagingSpec](TOPOLOGICAL, m.packagingSpecs, dependencyPackagingSpecs)
 
 	buildLicenseMetadata(ctx, m.licenseMetadataFile)
@@ -2215,6 +2247,9 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 		switch variable {
 		case "debuggable":
 			return proptools.ConfigurableValueBool(ctx.Config().Debuggable())
+		case "use_debug_art":
+			// TODO(b/234351700): Remove once ART does not have separated debug APEX
+			return proptools.ConfigurableValueBool(ctx.Config().UseDebugArt())
 		default:
 			// TODO(b/323382414): Might add these on a case-by-case basis
 			ctx.OtherModulePropertyErrorf(m, property, fmt.Sprintf("TODO(b/323382414): Product variable %q is not yet supported in selects", variable))
@@ -2379,7 +2414,7 @@ type sourceOrOutputDependencyTag struct {
 	// The name of the module.
 	moduleName string
 
-	// The tag that will be passed to the module's OutputFileProducer.OutputFiles(tag) method.
+	// The tag that will be used to get the specific output file(s).
 	tag string
 }
 
@@ -2433,14 +2468,7 @@ type SourceFileProducer interface {
 	Srcs() Paths
 }
 
-// A module that implements OutputFileProducer can be referenced from any property that is tagged with `android:"path"`
-// using the ":module" syntax or ":module{.tag}" syntax and provides a list of output files to be used as if they were
-// listed in the property.
-type OutputFileProducer interface {
-	OutputFiles(tag string) (Paths, error)
-}
-
-// OutputFilesForModule returns the paths from an OutputFileProducer with the given tag.  On error, including if the
+// OutputFilesForModule returns the output file paths with the given tag. On error, including if the
 // module produced zero paths, it reports errors to the ctx and returns nil.
 func OutputFilesForModule(ctx PathContext, module blueprint.Module, tag string) Paths {
 	paths, err := outputFilesForModule(ctx, module, tag)
@@ -2451,7 +2479,7 @@ func OutputFilesForModule(ctx PathContext, module blueprint.Module, tag string) 
 	return paths
 }
 
-// OutputFileForModule returns the path from an OutputFileProducer with the given tag.  On error, including if the
+// OutputFileForModule returns the output file paths with the given tag.  On error, including if the
 // module produced zero or multiple paths, it reports errors to the ctx and returns nil.
 func OutputFileForModule(ctx PathContext, module blueprint.Module, tag string) Path {
 	paths, err := outputFilesForModule(ctx, module, tag)
@@ -2491,21 +2519,14 @@ func outputFilesForModule(ctx PathContext, module blueprint.Module, tag string) 
 	if outputFilesFromProvider != nil || err != OutputFilesProviderNotSet {
 		return outputFilesFromProvider, err
 	}
-	if outputFileProducer, ok := module.(OutputFileProducer); ok {
-		paths, err := outputFileProducer.OutputFiles(tag)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get output file from module %q at tag %q: %s",
-				pathContextName(ctx, module), tag, err.Error())
-		}
-		return paths, nil
-	} else if sourceFileProducer, ok := module.(SourceFileProducer); ok {
+	if sourceFileProducer, ok := module.(SourceFileProducer); ok {
 		if tag != "" {
-			return nil, fmt.Errorf("module %q is a SourceFileProducer, not an OutputFileProducer, and so does not support tag %q", pathContextName(ctx, module), tag)
+			return nil, fmt.Errorf("module %q is a SourceFileProducer, which does not support tag %q", pathContextName(ctx, module), tag)
 		}
 		paths := sourceFileProducer.Srcs()
 		return paths, nil
 	} else {
-		return nil, fmt.Errorf("module %q is not an OutputFileProducer or SourceFileProducer", pathContextName(ctx, module))
+		return nil, fmt.Errorf("module %q is not a SourceFileProducer or having valid output file for tag %q", pathContextName(ctx, module), tag)
 	}
 }
 
@@ -2519,7 +2540,12 @@ func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, 
 	var outputFiles OutputFilesInfo
 	fromProperty := false
 
-	if mctx, isMctx := ctx.(ModuleContext); isMctx {
+	type OutputFilesProviderModuleContext interface {
+		OtherModuleProviderContext
+		Module() Module
+	}
+
+	if mctx, isMctx := ctx.(OutputFilesProviderModuleContext); isMctx {
 		if mctx.Module() != module {
 			outputFiles, _ = OtherModuleProvider(mctx, module, OutputFilesProvider)
 		} else {
@@ -2527,13 +2553,13 @@ func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, 
 			fromProperty = true
 		}
 	} else if cta, isCta := ctx.(*singletonContextAdaptor); isCta {
-		providerData, _ := cta.moduleProvider(module, OutputFilesProvider)
+		providerData, _ := cta.otherModuleProvider(module, OutputFilesProvider)
 		outputFiles, _ = providerData.(OutputFilesInfo)
+	} else {
+		return nil, fmt.Errorf("unsupported context %q in method outputFilesForModuleFromProvider", reflect.TypeOf(ctx))
 	}
-	// TODO: Add a check for skipped context
 
 	if outputFiles.isEmpty() {
-		// TODO: Add a check for param module not having OutputFilesProvider set
 		return nil, OutputFilesProviderNotSet
 	}
 

@@ -19,8 +19,11 @@
 import argparse
 import contextlib
 import json
+import os
 import subprocess
 import sys
+
+TEST_KEY_DIR = "build/make/target/product/security"
 
 def get_build_variant(product_config):
   if product_config["Eng"]:
@@ -126,16 +129,16 @@ def generate_common_build_props(args):
     print(f"ro.product.{partition}.name={config['DeviceProduct']}")
 
   if partition != "system":
-    if config["ModelForAttestation"]:
-        print(f"ro.product.model_for_attestation={config['ModelForAttestation']}")
-    if config["BrandForAttestation"]:
-        print(f"ro.product.brand_for_attestation={config['BrandForAttestation']}")
-    if config["NameForAttestation"]:
-        print(f"ro.product.name_for_attestation={config['NameForAttestation']}")
-    if config["DeviceForAttestation"]:
-        print(f"ro.product.device_for_attestation={config['DeviceForAttestation']}")
-    if config["ManufacturerForAttestation"]:
-        print(f"ro.product.manufacturer_for_attestation={config['ManufacturerForAttestation']}")
+    if config["ProductModelForAttestation"]:
+        print(f"ro.product.model_for_attestation={config['ProductModelForAttestation']}")
+    if config["ProductBrandForAttestation"]:
+        print(f"ro.product.brand_for_attestation={config['ProductBrandForAttestation']}")
+    if config["ProductNameForAttestation"]:
+        print(f"ro.product.name_for_attestation={config['ProductNameForAttestation']}")
+    if config["ProductDeviceForAttestation"]:
+        print(f"ro.product.device_for_attestation={config['ProductDeviceForAttestation']}")
+    if config["ProductManufacturerForAttestation"]:
+        print(f"ro.product.manufacturer_for_attestation={config['ProductManufacturerForAttestation']}")
 
   if config["ZygoteForce64"]:
     if partition == "vendor":
@@ -185,7 +188,7 @@ def generate_build_info(args):
 
     # Dev. branches should have DISPLAY_BUILD_NUMBER set
     if config["DisplayBuildNumber"]:
-      print(f"ro.build.display.id?={config['BuildId']} {config['BuildNumber']} {config['BuildKeys']}")
+      print(f"ro.build.display.id?={config['BuildId']}.{config['BuildNumber']} {config['BuildKeys']}")
     else:
       print(f"ro.build.display.id?={config['BuildId']} {config['BuildKeys']}")
   else:
@@ -234,7 +237,7 @@ def generate_build_info(args):
 
   print(f"# Do not try to parse description or thumbprint")
   print(f"ro.build.description?={config['BuildDesc']}")
-  if "build_thumbprint" in config:
+  if "BuildThumbprint" in config:
     print(f"ro.build.thumbprint={config['BuildThumbprint']}")
 
   print(f"# end build properties")
@@ -276,7 +279,7 @@ def append_additional_system_props(args):
   config = args.config
 
   # Add the product-defined properties to the build properties.
-  if config["PropertySplitEnabled"] or config["VendorImageFileSystemType"]:
+  if not config["PropertySplitEnabled"] or not config["VendorImageFileSystemType"]:
     if "PRODUCT_PROPERTY_OVERRIDES" in config:
       props += config["PRODUCT_PROPERTY_OVERRIDES"]
 
@@ -308,6 +311,7 @@ def append_additional_system_props(args):
   props.append("ro.postinstall.fstab.prefix=/system")
 
   enable_target_debugging = True
+  enable_dalvik_lock_contention_logging = True
   if config["BuildVariant"] == "user" or config["BuildVariant"] == "userdebug":
     # Target is secure in user builds.
     props.append("ro.secure=1")
@@ -317,6 +321,12 @@ def append_additional_system_props(args):
       # Disable debugging in plain user builds.
       props.append("ro.adb.secure=1")
       enable_target_debugging = False
+      enable_dalvik_lock_contention_logging = False
+    else:
+      # Disable debugging in userdebug builds if PRODUCT_NOT_DEBUGGABLE_IN_USERDEBUG
+      # is set.
+      if config["ProductNotDebuggableInUserdebug"]:
+        enable_target_debugging = False
 
     # Disallow mock locations by default for user builds
     props.append("ro.allow.mock.location=0")
@@ -328,10 +338,11 @@ def append_additional_system_props(args):
     # Allow mock locations by default for non user builds
     props.append("ro.allow.mock.location=1")
 
-  if enable_target_debugging:
+  if enable_dalvik_lock_contention_logging:
     # Enable Dalvik lock contention logging.
     props.append("dalvik.vm.lockprof.threshold=500")
 
+  if enable_target_debugging:
     # Target is more debuggable and adbd is on by default
     props.append("ro.debuggable=1")
   else:
@@ -413,7 +424,7 @@ def append_additional_vendor_props(args):
   # This must not be defined for the non-GRF devices.
   # The values of the GRF properties will be verified by post_process_props.py
   if config["BoardShippingApiLevel"]:
-    props.append(f"ro.board.first_api_level={config['ProductShippingApiLevel']}")
+    props.append(f"ro.board.first_api_level={config['BoardShippingApiLevel']}")
 
   # Build system set BOARD_API_LEVEL to show the api level of the vendor API surface.
   # This must not be altered outside of build system.
@@ -461,6 +472,8 @@ def append_additional_product_props(args):
   # Add the 16K developer args if it is defined for the product.
   props.append(f"ro.product.build.16k_page.enabled={'true' if config['Product16KDeveloperOption'] else 'false'}")
 
+  props.append(f"ro.product.page_size={16384 if config['TargetBoots16K'] else 4096}")
+
   props.append(f"ro.build.characteristics={config['AAPTCharacteristics']}")
 
   if "AbOtaUpdater" in config and config["AbOtaUpdater"]:
@@ -472,6 +485,9 @@ def append_additional_product_props(args):
   if config["NoBionicPageSizeMacro"]:
     props.append(f"ro.product.build.no_bionic_page_size_macro=true")
 
+  # This is a temporary system property that controls the ART module. The plan is
+  # to remove it by Aug 2025, at which time Mainline updates of the ART module
+  # will ignore it as well.
   # If the value is "default", it will be mangled by post_process_props.py.
   props.append(f"ro.dalvik.vm.enable_uffd_gc={config['EnableUffdGc']}")
 
@@ -497,6 +513,15 @@ def build_system_prop(args):
 
   build_prop(args, gen_build_info=True, gen_common_build_props=True, variables=variables)
 
+def build_system_ext_prop(args):
+  config = args.config
+
+  # Order matters here. When there are duplicates, the last one wins.
+  # TODO(b/117892318): don't allow duplicates so that the ordering doesn't matter
+  variables = ["PRODUCT_SYSTEM_EXT_PROPERTIES"]
+
+  build_prop(args, gen_build_info=False, gen_common_build_props=True, variables=variables)
+
 '''
 def build_vendor_prop(args):
   config = args.config
@@ -514,6 +539,7 @@ def build_vendor_prop(args):
     ]
 
   build_prop(args, gen_build_info=False, gen_common_build_props=True, variables=variables)
+'''
 
 def build_product_prop(args):
   config = args.config
@@ -524,8 +550,32 @@ def build_product_prop(args):
     "ADDITIONAL_PRODUCT_PROPERTIES",
     "PRODUCT_PRODUCT_PROPERTIES",
   ]
+
+  gen_common_build_props = True
+
+  # Skip common /product properties generation if device released before R and
+  # has no product partition. This is the first part of the check.
+  if config["Shipping_api_level"] and int(config["Shipping_api_level"]) < 30:
+    gen_common_build_props = False
+
+  # The second part of the check - always generate common properties for the
+  # devices with product partition regardless of shipping level.
+  if config["UsesProductImage"]:
+    gen_common_build_props = True
+
   build_prop(args, gen_build_info=False, gen_common_build_props=True, variables=variables)
-'''
+
+  if config["OemProperties"]:
+    print("####################################")
+    print("# PRODUCT_OEM_PROPERTIES")
+    print("####################################")
+
+    for prop in config["OemProperties"]:
+      print(f"import /oem/oem.prop {prop}")
+
+def build_odm_prop(args):
+  variables = ["ADDITIONAL_ODM_PROPERTIES", "PRODUCT_ODM_PROPERTIES"]
+  build_prop(args, gen_build_info=False, gen_common_build_props=True, variables=variables)
 
 def build_prop(args, gen_build_info, gen_common_build_props, variables):
   config = args.config
@@ -547,16 +597,19 @@ def main():
   args = parse_args()
 
   with contextlib.redirect_stdout(args.out):
-    if args.partition == "system":
-      build_system_prop(args)
-      '''
-    elif args.partition == "vendor":
-      build_vendor_prop(args)
-    elif args.partition == "product":
-      build_product_prop(args)
-      '''
-    else:
-      sys.exit(f"not supported partition {args.partition}")
+    match args.partition:
+      case "system":
+        build_system_prop(args)
+      case "system_ext":
+        build_system_ext_prop(args)
+      case "odm":
+        build_odm_prop(args)
+      case "product":
+        build_product_prop(args)
+      # case "vendor":  # NOT IMPLEMENTED
+      #  build_vendor_prop(args)
+      case _:
+        sys.exit(f"not supported partition {args.partition}")
 
 if __name__ == "__main__":
   main()

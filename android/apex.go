@@ -610,9 +610,15 @@ func IncomingApexTransition(ctx IncomingTransitionContext, incomingVariation str
 		return ""
 	}
 
-	// If this module has no apex variations the use the platform variation.
 	if len(apexInfos) == 0 {
-		return ""
+		if ctx.IsAddingDependency() {
+			// If this module has no apex variations we can't do any mapping on the incoming variation, just return it
+			// and let the caller get a "missing variant" error.
+			return incomingVariation
+		} else {
+			// If this module has no apex variations the use the platform variation.
+			return ""
+		}
 	}
 
 	// Convert the list of apex infos into from the AllApexInfoProvider into the merged list

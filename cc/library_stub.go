@@ -303,7 +303,7 @@ func (d *apiLibraryDecorator) hasStubsVariants() bool {
 	return d.hasApexStubs()
 }
 
-func (d *apiLibraryDecorator) stubsVersions(ctx android.BaseMutatorContext) []string {
+func (d *apiLibraryDecorator) stubsVersions(ctx android.BaseModuleContext) []string {
 	m, ok := ctx.Module().(*Module)
 
 	if !ok {
