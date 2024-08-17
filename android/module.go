@@ -111,6 +111,7 @@ type Module interface {
 	RequiredModuleNames(ctx ConfigAndErrorContext) []string
 	HostRequiredModuleNames() []string
 	TargetRequiredModuleNames() []string
+	VintfFragmentModuleNames(ctx ConfigAndErrorContext) []string
 
 	PackagingSpecs() []PackagingSpec
 
@@ -496,6 +497,9 @@ type commonProperties struct {
 
 	// The team (defined by the owner/vendor) who owns the property.
 	Team *string `android:"path"`
+
+	// vintf_fragment Modules required from this module.
+	Vintf_fragment_modules proptools.Configurable[[]string] `android:"path"`
 }
 
 type distProperties struct {
@@ -1034,6 +1038,7 @@ func (m *ModuleBase) baseDepsMutator(ctx BottomUpMutatorContext) {
 	fullManifest := pv.DeviceArch != nil && pv.DeviceName != nil
 	if fullManifest {
 		addRequiredDeps(ctx)
+		addVintfFragmentDeps(ctx)
 	}
 }
 
@@ -1109,6 +1114,16 @@ func addRequiredDeps(ctx BottomUpMutatorContext) {
 			}
 		}
 	}
+}
+
+var vintfDepTag = struct {
+	blueprint.BaseDependencyTag
+	InstallAlwaysNeededDependencyTag
+}{}
+
+func addVintfFragmentDeps(ctx BottomUpMutatorContext) {
+	mod := ctx.Module()
+	ctx.AddDependency(mod, vintfDepTag, mod.VintfFragmentModuleNames(ctx)...)
 }
 
 // AddProperties "registers" the provided props
@@ -1597,6 +1612,10 @@ func (m *ModuleBase) HostRequiredModuleNames() []string {
 
 func (m *ModuleBase) TargetRequiredModuleNames() []string {
 	return m.base().commonProperties.Target_required
+}
+
+func (m *ModuleBase) VintfFragmentModuleNames(ctx ConfigAndErrorContext) []string {
+	return m.base().commonProperties.Vintf_fragment_modules.GetOrDefault(m.ConfigurableEvaluator(ctx), nil)
 }
 
 func (m *ModuleBase) InitRc() Paths {

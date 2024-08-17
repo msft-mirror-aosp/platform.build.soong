@@ -421,8 +421,6 @@ var (
 	bootClasspathTag        = dependencyTag{name: "bootclasspath", runtimeLinked: true}
 	systemModulesTag        = dependencyTag{name: "system modules", runtimeLinked: true}
 	frameworkResTag         = dependencyTag{name: "framework-res"}
-	kotlinStdlibTag         = dependencyTag{name: "kotlin-stdlib", runtimeLinked: true}
-	kotlinAnnotationsTag    = dependencyTag{name: "kotlin-annotations", runtimeLinked: true}
 	kotlinPluginTag         = dependencyTag{name: "kotlin-plugin", toolchain: true}
 	proguardRaiseTag        = dependencyTag{name: "proguard-raise"}
 	certificateTag          = dependencyTag{name: "certificate"}
@@ -458,8 +456,6 @@ var (
 		bootClasspathTag,
 		systemModulesTag,
 		java9LibTag,
-		kotlinStdlibTag,
-		kotlinAnnotationsTag,
 		kotlinPluginTag,
 		syspropPublicStubDepTag,
 		instrumentationForTag,
@@ -568,8 +564,6 @@ type deps struct {
 	srcJars                 android.Paths
 	systemModules           *systemModules
 	aidlPreprocess          android.OptionalPath
-	kotlinStdlib            android.Paths
-	kotlinAnnotations       android.Paths
 	kotlinPlugins           android.Paths
 	aconfigProtoFiles       android.Paths
 
