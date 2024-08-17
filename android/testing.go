@@ -126,6 +126,10 @@ var PrepareForTestWithMakevars = FixtureRegisterWithContext(func(ctx Registratio
 	ctx.RegisterSingletonType("makevars", makeVarsSingletonFunc)
 })
 
+var PrepareForTestVintfFragmentModules = FixtureRegisterWithContext(func(ctx RegistrationContext) {
+	registerVintfFragmentComponents(ctx)
+})
+
 // Test fixture preparer that will register most java build components.
 //
 // Singletons and mutators should only be added here if they are needed for a majority of java
@@ -149,6 +153,7 @@ var PrepareForTestWithAndroidBuildComponents = GroupFixturePreparers(
 	PrepareForTestWithPackageModule,
 	PrepareForTestWithPrebuilts,
 	PrepareForTestWithVisibility,
+	PrepareForTestVintfFragmentModules,
 )
 
 // Prepares an integration test with all build components from the android package.
