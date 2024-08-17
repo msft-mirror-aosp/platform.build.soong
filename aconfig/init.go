@@ -23,8 +23,7 @@ import (
 )
 
 var (
-	pkgPath = "android/soong/aconfig"
-	pctx    = android.NewPackageContext(pkgPath)
+	pctx = android.NewPackageContext("android/soong/aconfig")
 
 	// For aconfig_declarations: Generate cache file
 	aconfigRule = pctx.AndroidStaticRule("aconfig",
@@ -111,6 +110,7 @@ func init() {
 	pctx.HostBinToolVariable("soong_zip", "soong_zip")
 
 	gob.Register(android.AconfigDeclarationsProviderData{})
+	gob.Register(android.AconfigReleaseDeclarationsProviderData{})
 	gob.Register(android.ModuleOutPath{})
 }
 

@@ -48,7 +48,7 @@ type prebuiltLinkerProperties struct {
 	Source_module_name *string
 
 	// a prebuilt library or binary. Can reference a genrule module that generates an executable file.
-	Srcs []string `android:"path,arch_variant"`
+	Srcs proptools.Configurable[[]string] `android:"path,arch_variant"`
 
 	Sanitized Sanitized `android:"arch_variant"`
 
@@ -73,10 +73,6 @@ type prebuiltLinker struct {
 
 func (p *prebuiltLinker) prebuilt() *android.Prebuilt {
 	return &p.Prebuilt
-}
-
-func (p *prebuiltLinker) PrebuiltSrcs() []string {
-	return p.properties.Srcs
 }
 
 type prebuiltLibraryInterface interface {
@@ -226,14 +222,14 @@ func (p *prebuiltLibraryLinker) link(ctx ModuleContext,
 
 func (p *prebuiltLibraryLinker) prebuiltSrcs(ctx android.BaseModuleContext) []string {
 	sanitize := ctx.Module().(*Module).sanitize
-	srcs := p.properties.Srcs
+	srcs := p.properties.Srcs.GetOrDefault(ctx, nil)
 	srcs = append(srcs, srcsForSanitizer(sanitize, p.properties.Sanitized)...)
 	if p.static() {
-		srcs = append(srcs, p.libraryDecorator.StaticProperties.Static.Srcs...)
+		srcs = append(srcs, p.libraryDecorator.StaticProperties.Static.Srcs.GetOrDefault(ctx, nil)...)
 		srcs = append(srcs, srcsForSanitizer(sanitize, p.libraryDecorator.StaticProperties.Static.Sanitized)...)
 	}
 	if p.shared() {
-		srcs = append(srcs, p.libraryDecorator.SharedProperties.Shared.Srcs...)
+		srcs = append(srcs, p.libraryDecorator.SharedProperties.Shared.Srcs.GetOrDefault(ctx, nil)...)
 		srcs = append(srcs, srcsForSanitizer(sanitize, p.libraryDecorator.SharedProperties.Shared.Sanitized)...)
 	}
 	return srcs
@@ -248,7 +244,7 @@ func (p *prebuiltLibraryLinker) nativeCoverage() bool {
 }
 
 func (p *prebuiltLibraryLinker) disablePrebuilt() {
-	p.properties.Srcs = nil
+	p.properties.Srcs = proptools.NewConfigurable[[]string](nil, nil)
 	p.properties.Sanitized.None.Srcs = nil
 	p.properties.Sanitized.Address.Srcs = nil
 	p.properties.Sanitized.Hwaddress.Srcs = nil
@@ -416,7 +412,7 @@ func (p *prebuiltBinaryLinker) hostToolPath() android.OptionalPath {
 func (p *prebuiltBinaryLinker) link(ctx ModuleContext,
 	flags Flags, deps PathDeps, objs Objects) android.Path {
 	// TODO(ccross): verify shared library dependencies
-	if len(p.properties.Srcs) > 0 {
+	if len(p.properties.Srcs.GetOrDefault(ctx, nil)) > 0 {
 		fileName := p.getStem(ctx) + flags.Toolchain.ExecutableSuffix()
 		in := p.Prebuilt.SingleSourcePath(ctx)
 		outputFile := android.PathForModuleOut(ctx, fileName)
@@ -500,7 +496,7 @@ func NewPrebuiltBinary(hod android.HostOrDeviceSupported) (*Module, *binaryDecor
 
 	module.AddProperties(&prebuilt.properties)
 
-	android.InitPrebuiltModule(module, &prebuilt.properties.Srcs)
+	android.InitConfigurablePrebuiltModule(module, &prebuilt.properties.Srcs)
 	return module, binary
 }
 
