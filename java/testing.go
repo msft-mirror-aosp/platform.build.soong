@@ -543,6 +543,16 @@ func gatherRequiredDepsForTest() string {
 			},
 			compile_dex: true,
 		}
+		java_library {
+			name: "framework-minus-apex",
+			srcs: ["a.java"],
+			sdk_version: "none",
+			system_modules: "stable-core-platform-api-stubs-system-modules",
+			aidl: {
+				export_include_dirs: ["framework/aidl"],
+			},
+			compile_dex: true,
+		}
 
 		android_app {
 			name: "framework-res",

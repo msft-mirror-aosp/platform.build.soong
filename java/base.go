@@ -219,6 +219,13 @@ type CommonProperties struct {
 	// the stubs via libs, but should be set to true when the module depends on
 	// the stubs via static libs.
 	Is_stubs_module *bool
+
+	// If true, enable the "Ravenizer" tool on the output jar.
+	// "Ravenizer" is a tool for Ravenwood tests, but it can also be enabled on other kinds
+	// of java targets.
+	Ravenizer struct {
+		Enabled *bool
+	}
 }
 
 // Properties that are specific to device modules. Host module factories should not add these when
@@ -555,13 +562,23 @@ type Module struct {
 	// List of soong module dependencies required to compile the current module.
 	// This information is printed out to `Dependencies` field in module_bp_java_deps.json
 	compileDepNames []string
+
+	ravenizer struct {
+		enabled bool
+	}
 }
 
 var _ android.InstallableModule = (*Module)(nil)
 
 // To satisfy the InstallableModule interface
-func (j *Module) EnforceApiContainerChecks() bool {
-	return true
+func (j *Module) StaticDependencyTags() []blueprint.DependencyTag {
+	return []blueprint.DependencyTag{staticLibTag}
+}
+
+// To satisfy the InstallableModule interface
+func (j *Module) DynamicDependencyTags() []blueprint.DependencyTag {
+	return []blueprint.DependencyTag{libTag, sdkLibTag, bootClasspathTag, systemModulesTag,
+		instrumentationForTag, java9LibTag}
 }
 
 // Overrides android.ModuleBase.InstallInProduct()
@@ -872,9 +889,12 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 	if j.hasSrcExt(".kt") {
 		// TODO(ccross): move this to a mutator pass that can tell if generated sources contain
 		// Kotlin files
-		ctx.AddVariationDependencies(nil, kotlinStdlibTag,
-			"kotlin-stdlib", "kotlin-stdlib-jdk7", "kotlin-stdlib-jdk8")
-		ctx.AddVariationDependencies(nil, kotlinAnnotationsTag, "kotlin-annotations")
+		tag := staticLibTag
+		if !BoolDefault(j.properties.Static_kotlin_stdlib, true) {
+			tag = libTag
+		}
+		ctx.AddVariationDependencies(nil, tag,
+			"kotlin-stdlib", "kotlin-stdlib-jdk7", "kotlin-stdlib-jdk8", "kotlin-annotations")
 	}
 
 	// Framework libraries need special handling in static coverage builds: they should not have
@@ -1110,7 +1130,6 @@ func (j *Module) addGeneratedSrcJars(path android.Path) {
 }
 
 func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspathJars, extraCombinedJars android.Paths) {
-
 	// Auto-propagating jarjar rules
 	jarjarProviderData := j.collectJarJarRules(ctx)
 	if jarjarProviderData != nil {
@@ -1124,6 +1143,10 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	}
 
 	j.exportAidlIncludeDirs = android.PathsForModuleSrc(ctx, j.deviceProperties.Aidl.Export_include_dirs)
+
+	if re := proptools.Bool(j.properties.Ravenizer.Enabled); re {
+		j.ravenizer.enabled = re
+	}
 
 	deps := j.collectDeps(ctx)
 	flags := j.collectBuilderFlags(ctx, deps)
@@ -1206,7 +1229,6 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	var kotlinJars android.Paths
 	var kotlinHeaderJars android.Paths
-	var kotlinExtraJars android.Paths
 
 	// Prepend extraClasspathJars to classpath so that the resource processor R.jar comes before
 	// any dependencies so that it can override any non-final R classes from dependencies with the
@@ -1285,9 +1307,6 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		// Collect common .kt files for AIDEGen
 		j.expandIDEInfoCompiledSrcs = append(j.expandIDEInfoCompiledSrcs, kotlinCommonSrcFiles.Strings()...)
 
-		flags.classpath = append(flags.classpath, deps.kotlinStdlib...)
-		flags.classpath = append(flags.classpath, deps.kotlinAnnotations...)
-
 		flags.kotlincClasspath = append(flags.kotlincClasspath, flags.bootClasspath...)
 		flags.kotlincClasspath = append(flags.kotlincClasspath, flags.classpath...)
 
@@ -1317,8 +1336,6 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 		kotlinJars = append(kotlinJars, kotlinJarPath)
 		kotlinHeaderJars = append(kotlinHeaderJars, kotlinHeaderJar)
-		kotlinExtraJars = append(kotlinExtraJars, deps.kotlinStdlib...)
-		kotlinExtraJars = append(kotlinExtraJars, deps.kotlinAnnotations...)
 	}
 
 	jars := slices.Clone(kotlinJars)
@@ -1337,9 +1354,6 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			// with sharding enabled. See: b/77284273.
 		}
 		extraJars := slices.Clone(kotlinHeaderJars)
-		if BoolDefault(j.properties.Static_kotlin_stdlib, true) {
-			extraJars = append(extraJars, kotlinExtraJars...)
-		}
 		extraJars = append(extraJars, extraCombinedJars...)
 		var combinedHeaderJarFile android.Path
 		headerJarFileWithoutDepsOrJarjar, combinedHeaderJarFile =
@@ -1416,13 +1430,6 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		if ctx.Failed() {
 			return
 		}
-	}
-
-	// Jar kotlin classes into the final jar after javac
-	if BoolDefault(j.properties.Static_kotlin_stdlib, true) {
-		jars = append(jars, kotlinExtraJars...)
-	} else {
-		flags.dexClasspath = append(flags.dexClasspath, kotlinExtraJars...)
 	}
 
 	jars = append(jars, extraCombinedJars...)
@@ -1561,6 +1568,18 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	if ctx.Failed() {
 		return
+	}
+
+	if j.ravenizer.enabled {
+		ravenizerInput := outputFile
+		ravenizerOutput := android.PathForModuleOut(ctx, "ravenizer", jarName)
+		ctx.Build(pctx, android.BuildParams{
+			Rule:        ravenizer,
+			Description: "ravenizer",
+			Input:       ravenizerInput,
+			Output:      ravenizerOutput,
+		})
+		outputFile = ravenizerOutput
 	}
 
 	// Check package restrictions if necessary.
@@ -2338,10 +2357,6 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 				} else {
 					ctx.PropertyErrorf("exported_plugins", "%q is not a java_plugin module", otherName)
 				}
-			case kotlinStdlibTag:
-				deps.kotlinStdlib = append(deps.kotlinStdlib, dep.HeaderJars...)
-			case kotlinAnnotationsTag:
-				deps.kotlinAnnotations = dep.HeaderJars
 			case kotlinPluginTag:
 				deps.kotlinPlugins = append(deps.kotlinPlugins, dep.ImplementationAndResourcesJars...)
 			case syspropPublicStubDepTag:
@@ -2565,8 +2580,6 @@ func collectDirectDepsProviders(ctx android.ModuleContext) (result *JarJarProvid
 					return RenameUseInclude, "tagswitch"
 				case exportedPluginTag:
 					return RenameUseInclude, "tagswitch"
-				case kotlinStdlibTag, kotlinAnnotationsTag:
-					return RenameUseExclude, "tagswitch"
 				case kotlinPluginTag:
 					return RenameUseInclude, "tagswitch"
 				default:
