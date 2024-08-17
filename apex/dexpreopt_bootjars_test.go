@@ -399,11 +399,7 @@ func TestDexpreoptProfileWithMultiplePrebuiltArtApexes(t *testing.T) {
 			java.FixtureConfigureBootJars("com.android.art:core-oj"),
 			PrepareForTestWithApexBuildComponents,
 			prepareForTestWithArtApex,
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_APEX_CONTRIBUTIONS_ART": tc.selectedArtApexContributions,
-				}
-			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ART", tc.selectedArtApexContributions),
 		).RunTestWithBp(t, bp)
 
 		dexBootJars := result.ModuleForTests("dex_bootjars", "android_common")

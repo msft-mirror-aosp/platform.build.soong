@@ -244,6 +244,8 @@ func InitPrebuiltModuleWithSrcSupplier(module PrebuiltInterface, srcsSupplier Pr
 	p.srcsPropertyName = srcsPropertyName
 }
 
+// InitPrebuiltModule is the same as InitPrebuiltModuleWithSrcSupplier, but uses the
+// provided list of strings property as the source provider.
 func InitPrebuiltModule(module PrebuiltInterface, srcs *[]string) {
 	if srcs == nil {
 		panic(fmt.Errorf("srcs must not be nil"))
@@ -251,6 +253,20 @@ func InitPrebuiltModule(module PrebuiltInterface, srcs *[]string) {
 
 	srcsSupplier := func(ctx BaseModuleContext, _ Module) []string {
 		return *srcs
+	}
+
+	InitPrebuiltModuleWithSrcSupplier(module, srcsSupplier, "srcs")
+}
+
+// InitConfigurablePrebuiltModule is the same as InitPrebuiltModule, but uses a
+// Configurable list of strings property instead of a regular list of strings.
+func InitConfigurablePrebuiltModule(module PrebuiltInterface, srcs *proptools.Configurable[[]string]) {
+	if srcs == nil {
+		panic(fmt.Errorf("srcs must not be nil"))
+	}
+
+	srcsSupplier := func(ctx BaseModuleContext, _ Module) []string {
+		return srcs.GetOrDefault(ctx, nil)
 	}
 
 	InitPrebuiltModuleWithSrcSupplier(module, srcsSupplier, "srcs")

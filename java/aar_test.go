@@ -53,7 +53,7 @@ func TestAarImportProducesJniPackages(t *testing.T) {
 			appMod := ctx.Module(tc.name, "android_common")
 			appTestMod := ctx.ModuleForTests(tc.name, "android_common")
 
-			info, ok := android.SingletonModuleProvider(ctx, appMod, JniPackageProvider)
+			info, ok := android.OtherModuleProvider(ctx, appMod, JniPackageProvider)
 			if !ok {
 				t.Errorf("expected android_library_import to have JniPackageProvider")
 			}
