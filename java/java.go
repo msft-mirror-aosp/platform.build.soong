@@ -2634,6 +2634,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	j.collectTransitiveHeaderJars(ctx)
 	var staticJars android.Paths
+	var staticResourceJars android.Paths
 	var staticHeaderJars android.Paths
 	ctx.VisitDirectDeps(func(module android.Module) {
 		tag := ctx.OtherModuleDependencyTag(module)
@@ -2644,7 +2645,8 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				flags.dexClasspath = append(flags.dexClasspath, dep.HeaderJars...)
 			case staticLibTag:
 				flags.classpath = append(flags.classpath, dep.HeaderJars...)
-				staticJars = append(staticJars, dep.ImplementationAndResourcesJars...)
+				staticJars = append(staticJars, dep.ImplementationJars...)
+				staticResourceJars = append(staticResourceJars, dep.ResourceJars...)
 				staticHeaderJars = append(staticHeaderJars, dep.HeaderJars...)
 			case bootClasspathTag:
 				flags.bootClasspath = append(flags.bootClasspath, dep.HeaderJars...)
@@ -2664,43 +2666,67 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Always pass the input jars to TransformJarsToJar, even if there is only a single jar, we need the output
 	// file of the module to be named jarName.
-	outputFile := android.PathForModuleOut(ctx, "combined", jarName)
+	var outputFile android.Path
+	combinedImplementationJar := android.PathForModuleOut(ctx, "combined", jarName)
 	implementationJars := append(slices.Clone(jars), staticJars...)
-	TransformJarsToJar(ctx, outputFile, "combine prebuilt implementation jars", implementationJars, android.OptionalPath{},
+	TransformJarsToJar(ctx, combinedImplementationJar, "combine prebuilt implementation jars", implementationJars, android.OptionalPath{},
 		false, j.properties.Exclude_files, j.properties.Exclude_dirs)
+	outputFile = combinedImplementationJar
 
 	// If no dependencies have separate header jars then there is no need to create a separate
 	// header jar for this module.
 	reuseImplementationJarAsHeaderJar := slices.Equal(staticJars, staticHeaderJars)
 
-	var headerOutputFile android.ModuleOutPath
+	var resourceJarFile android.Path
+	if len(staticResourceJars) > 1 {
+		combinedJar := android.PathForModuleOut(ctx, "res-combined", jarName)
+		TransformJarsToJar(ctx, combinedJar, "for resources", staticResourceJars, android.OptionalPath{},
+			false, nil, nil)
+		resourceJarFile = combinedJar
+	} else if len(staticResourceJars) == 1 {
+		resourceJarFile = staticResourceJars[0]
+	}
+
+	var headerJar android.Path
 	if reuseImplementationJarAsHeaderJar {
-		headerOutputFile = outputFile
+		headerJar = outputFile
 	} else {
 		headerJars := append(slices.Clone(jars), staticHeaderJars...)
-		headerOutputFile = android.PathForModuleOut(ctx, "turbine-combined", jarName)
+		headerOutputFile := android.PathForModuleOut(ctx, "turbine-combined", jarName)
 		TransformJarsToJar(ctx, headerOutputFile, "combine prebuilt header jars", headerJars, android.OptionalPath{},
 			false, j.properties.Exclude_files, j.properties.Exclude_dirs)
+		headerJar = headerOutputFile
 	}
 
 	if Bool(j.properties.Jetifier) {
-		inputFile := outputFile
-		outputFile = android.PathForModuleOut(ctx, "jetifier", jarName)
-		TransformJetifier(ctx, outputFile, inputFile)
+		jetifierOutputFile := android.PathForModuleOut(ctx, "jetifier", jarName)
+		TransformJetifier(ctx, jetifierOutputFile, outputFile)
+		outputFile = jetifierOutputFile
 
 		if !reuseImplementationJarAsHeaderJar {
-			headerInputFile := headerOutputFile
-			headerOutputFile = android.PathForModuleOut(ctx, "jetifier-headers", jarName)
-			TransformJetifier(ctx, headerOutputFile, headerInputFile)
+			jetifierHeaderJar := android.PathForModuleOut(ctx, "jetifier-headers", jarName)
+			TransformJetifier(ctx, jetifierHeaderJar, headerJar)
+			headerJar = jetifierHeaderJar
 		} else {
-			headerOutputFile = outputFile
+			headerJar = outputFile
 		}
+	}
+
+	implementationJarFile := outputFile
+
+	// merge implementation jar with resources if necessary
+	if resourceJarFile != nil {
+		jars := android.Paths{resourceJarFile, outputFile}
+		combinedJar := android.PathForModuleOut(ctx, "withres", jarName)
+		TransformJarsToJar(ctx, combinedJar, "for resources", jars, android.OptionalPath{},
+			false, nil, nil)
+		outputFile = combinedJar
 	}
 
 	// Save the output file with no relative path so that it doesn't end up in a subdirectory when used as a resource.
 	// Also strip the relative path from the header output file so that the reuseImplementationJarAsHeaderJar check
 	// in a module that depends on this module considers them equal.
-	j.combinedHeaderFile = headerOutputFile.WithoutRel()
+	j.combinedHeaderFile = headerJar.WithoutRel()
 	j.combinedImplementationFile = outputFile.WithoutRel()
 
 	j.maybeInstall(ctx, jarName, outputFile)
@@ -2790,7 +2816,8 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		TransitiveLibsHeaderJars:       j.transitiveLibsHeaderJars,
 		TransitiveStaticLibsHeaderJars: j.transitiveStaticLibsHeaderJars,
 		ImplementationAndResourcesJars: android.PathsIfNonNil(j.combinedImplementationFile),
-		ImplementationJars:             android.PathsIfNonNil(j.combinedImplementationFile),
+		ImplementationJars:             android.PathsIfNonNil(implementationJarFile.WithoutRel()),
+		ResourceJars:                   android.PathsIfNonNil(resourceJarFile),
 		AidlIncludeDirs:                j.exportAidlIncludeDirs,
 		StubsLinkType:                  j.stubsLinkType,
 		// TODO(b/289117800): LOCAL_ACONFIG_FILES for prebuilts

@@ -258,6 +258,13 @@ var (
 		},
 	)
 
+	ravenizer = pctx.AndroidStaticRule("ravenizer",
+		blueprint.RuleParams{
+			Command:     "rm -f $out && ${ravenizer} --in-jar $in --out-jar $out",
+			CommandDeps: []string{"${ravenizer}"},
+		},
+	)
+
 	zipalign = pctx.AndroidStaticRule("zipalign",
 		blueprint.RuleParams{
 			Command: "if ! ${config.ZipAlign} -c -p 4 $in > /dev/null; then " +
@@ -307,6 +314,7 @@ func init() {
 	pctx.Import("android/soong/java/config")
 
 	pctx.HostBinToolVariable("aconfig", "aconfig")
+	pctx.HostBinToolVariable("ravenizer", "ravenizer")
 	pctx.HostBinToolVariable("keep-flagged-apis", "keep-flagged-apis")
 }
 
@@ -760,6 +768,16 @@ func TransformJetifier(ctx android.ModuleContext, outputFile android.WritablePat
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        jetifier,
 		Description: "jetifier",
+		Output:      outputFile,
+		Input:       inputFile,
+	})
+}
+
+func TransformRavenizer(ctx android.ModuleContext, outputFile android.WritablePath,
+	inputFile android.Path) {
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        ravenizer,
+		Description: "ravenizer",
 		Output:      outputFile,
 		Input:       inputFile,
 	})

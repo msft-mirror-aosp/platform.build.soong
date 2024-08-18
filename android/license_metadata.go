@@ -92,7 +92,7 @@ func buildLicenseMetadata(ctx *moduleContext, licenseMetadataFile WritablePath) 
 
 			allDepMetadataArgs = append(allDepMetadataArgs, info.LicenseMetadataPath.String()+depAnnotations)
 
-			if depInstallFiles := ModuleFilesToInstall(ctx, dep); len(depInstallFiles) > 0 {
+			if depInstallFiles := OtherModuleProviderOrDefault(ctx, dep, InstallFilesProvider).InstallFiles; len(depInstallFiles) > 0 {
 				allDepOutputFiles = append(allDepOutputFiles, depInstallFiles.Paths()...)
 			} else if depOutputFiles, err := outputFilesForModule(ctx, dep, ""); err == nil {
 				depOutputFiles = PathsIfNonNil(depOutputFiles...)

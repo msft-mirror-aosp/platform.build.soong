@@ -476,7 +476,8 @@ func (m *CmakeSnapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		var prebuiltsList android.Paths
 
 		ctx.VisitDirectDepsWithTag(cmakeSnapshotPrebuiltTag, func(dep android.Module) {
-			for _, file := range android.ModuleFilesToInstall(ctx, dep) {
+			for _, file := range android.OtherModuleProviderOrDefault(
+				ctx, dep, android.InstallFilesProvider).InstallFiles {
 				prebuiltsList = append(prebuiltsList, file)
 			}
 		})
