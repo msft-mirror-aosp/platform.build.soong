@@ -465,11 +465,8 @@ func (c *Module) ExtraImageVariations(ctx android.BaseModuleContext) []string {
 
 func squashVendorSrcs(m *Module) {
 	if lib, ok := m.compiler.(*libraryDecorator); ok {
-		lib.baseCompiler.Properties.Srcs = append(lib.baseCompiler.Properties.Srcs,
-			lib.baseCompiler.Properties.Target.Vendor.Srcs...)
-
-		lib.baseCompiler.Properties.Exclude_srcs = append(lib.baseCompiler.Properties.Exclude_srcs,
-			lib.baseCompiler.Properties.Target.Vendor.Exclude_srcs...)
+		lib.baseCompiler.Properties.Srcs.AppendSimpleValue(lib.baseCompiler.Properties.Target.Vendor.Srcs)
+		lib.baseCompiler.Properties.Exclude_srcs.AppendSimpleValue(lib.baseCompiler.Properties.Target.Vendor.Exclude_srcs)
 
 		lib.baseCompiler.Properties.Exclude_generated_sources = append(lib.baseCompiler.Properties.Exclude_generated_sources,
 			lib.baseCompiler.Properties.Target.Vendor.Exclude_generated_sources...)
@@ -482,11 +479,8 @@ func squashVendorSrcs(m *Module) {
 
 func squashProductSrcs(m *Module) {
 	if lib, ok := m.compiler.(*libraryDecorator); ok {
-		lib.baseCompiler.Properties.Srcs = append(lib.baseCompiler.Properties.Srcs,
-			lib.baseCompiler.Properties.Target.Product.Srcs...)
-
-		lib.baseCompiler.Properties.Exclude_srcs = append(lib.baseCompiler.Properties.Exclude_srcs,
-			lib.baseCompiler.Properties.Target.Product.Exclude_srcs...)
+		lib.baseCompiler.Properties.Srcs.AppendSimpleValue(lib.baseCompiler.Properties.Target.Product.Srcs)
+		lib.baseCompiler.Properties.Exclude_srcs.AppendSimpleValue(lib.baseCompiler.Properties.Target.Product.Exclude_srcs)
 
 		lib.baseCompiler.Properties.Exclude_generated_sources = append(lib.baseCompiler.Properties.Exclude_generated_sources,
 			lib.baseCompiler.Properties.Target.Product.Exclude_generated_sources...)
@@ -499,11 +493,8 @@ func squashProductSrcs(m *Module) {
 
 func squashRecoverySrcs(m *Module) {
 	if lib, ok := m.compiler.(*libraryDecorator); ok {
-		lib.baseCompiler.Properties.Srcs = append(lib.baseCompiler.Properties.Srcs,
-			lib.baseCompiler.Properties.Target.Recovery.Srcs...)
-
-		lib.baseCompiler.Properties.Exclude_srcs = append(lib.baseCompiler.Properties.Exclude_srcs,
-			lib.baseCompiler.Properties.Target.Recovery.Exclude_srcs...)
+		lib.baseCompiler.Properties.Srcs.AppendSimpleValue(lib.baseCompiler.Properties.Target.Recovery.Srcs)
+		lib.baseCompiler.Properties.Exclude_srcs.AppendSimpleValue(lib.baseCompiler.Properties.Target.Recovery.Exclude_srcs)
 
 		lib.baseCompiler.Properties.Exclude_generated_sources = append(lib.baseCompiler.Properties.Exclude_generated_sources,
 			lib.baseCompiler.Properties.Target.Recovery.Exclude_generated_sources...)
@@ -512,13 +503,13 @@ func squashRecoverySrcs(m *Module) {
 
 func squashVendorRamdiskSrcs(m *Module) {
 	if lib, ok := m.compiler.(*libraryDecorator); ok {
-		lib.baseCompiler.Properties.Exclude_srcs = append(lib.baseCompiler.Properties.Exclude_srcs, lib.baseCompiler.Properties.Target.Vendor_ramdisk.Exclude_srcs...)
+		lib.baseCompiler.Properties.Exclude_srcs.AppendSimpleValue(lib.baseCompiler.Properties.Target.Vendor_ramdisk.Exclude_srcs)
 	}
 }
 
 func squashRamdiskSrcs(m *Module) {
 	if lib, ok := m.compiler.(*libraryDecorator); ok {
-		lib.baseCompiler.Properties.Exclude_srcs = append(lib.baseCompiler.Properties.Exclude_srcs, lib.baseCompiler.Properties.Target.Ramdisk.Exclude_srcs...)
+		lib.baseCompiler.Properties.Exclude_srcs.AppendSimpleValue(lib.baseCompiler.Properties.Target.Ramdisk.Exclude_srcs)
 	}
 }
 
