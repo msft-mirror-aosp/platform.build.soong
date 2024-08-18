@@ -384,7 +384,7 @@ func TestBasicApex(t *testing.T) {
 			symlink_preferred_arch: true,
 			system_shared_libs: [],
 			stl: "none",
-			apex_available: [ "myapex", "com.android.gki.*" ],
+			apex_available: [ "myapex" ],
 		}
 
 		rust_binary {
@@ -430,14 +430,6 @@ func TestBasicApex(t *testing.T) {
 			srcs: ["foo.rs"],
 			crate_name: "bar",
 			apex_available: ["myapex"],
-		}
-
-		apex {
-			name: "com.android.gki.fake",
-			binaries: ["foo"],
-			key: "myapex.key",
-			file_contexts: ":myapex-file_contexts",
-			updatable: false,
 		}
 
 		cc_library_shared {
@@ -11298,11 +11290,7 @@ func TestBootDexJarsMultipleApexPrebuilts(t *testing.T) {
 				fs["platform/Test.java"] = nil
 			}),
 
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": tc.selectedApexContributions,
-				}
-			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ADSERVICES", tc.selectedApexContributions),
 		)
 		ctx := testDexpreoptWithApexes(t, bp, "", preparer, fragment)
 		checkBootDexJarPath(t, ctx, "framework-foo", tc.expectedBootJar)
@@ -11441,11 +11429,7 @@ func TestInstallationRulesForMultipleApexPrebuilts(t *testing.T) {
 			android.FixtureMergeMockFs(map[string][]byte{
 				"system/sepolicy/apex/com.android.foo-file_contexts": nil,
 			}),
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": tc.selectedApexContributions,
-				}
-			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ADSERVICES", tc.selectedApexContributions),
 		)
 		if tc.expectedError != "" {
 			preparer = preparer.ExtendWithErrorHandler(android.FixtureExpectsOneErrorPattern(tc.expectedError))
@@ -11561,11 +11545,7 @@ func TestInstallationRulesForMultipleApexPrebuiltsWithoutSource(t *testing.T) {
 			android.FixtureMergeMockFs(map[string][]byte{
 				"system/sepolicy/apex/com.android.adservices-file_contexts": nil,
 			}),
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": tc.selectedApexContributions,
-				}
-			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ADSERVICES", tc.selectedApexContributions),
 		)
 		ctx := testApex(t, bp, preparer)
 
