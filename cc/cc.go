@@ -906,19 +906,17 @@ type Module struct {
 	logtagsPaths android.Paths
 
 	WholeRustStaticlib bool
+
+	hasAidl         bool
+	hasLex          bool
+	hasProto        bool
+	hasRenderscript bool
+	hasSysprop      bool
+	hasWinMsg       bool
+	hasYacc         bool
 }
 
 func (c *Module) AddJSONData(d *map[string]interface{}) {
-	var hasAidl, hasLex, hasProto, hasRenderscript, hasSysprop, hasWinMsg, hasYacc bool
-	if b, ok := c.compiler.(*baseCompiler); ok {
-		hasAidl = b.hasSrcExt(".aidl")
-		hasLex = b.hasSrcExt(".l") || b.hasSrcExt(".ll")
-		hasProto = b.hasSrcExt(".proto")
-		hasRenderscript = b.hasSrcExt(".rscript") || b.hasSrcExt(".fs")
-		hasSysprop = b.hasSrcExt(".sysprop")
-		hasWinMsg = b.hasSrcExt(".mc")
-		hasYacc = b.hasSrcExt(".y") || b.hasSrcExt(".yy")
-	}
 	c.AndroidModuleBase().AddJSONData(d)
 	(*d)["Cc"] = map[string]interface{}{
 		"SdkVersion":             c.SdkVersion(),
@@ -948,14 +946,14 @@ func (c *Module) AddJSONData(d *map[string]interface{}) {
 		"IsVendorPublicLibrary":  c.IsVendorPublicLibrary(),
 		"ApexSdkVersion":         c.apexSdkVersion,
 		"TestFor":                c.TestFor(),
-		"AidlSrcs":               hasAidl,
-		"LexSrcs":                hasLex,
-		"ProtoSrcs":              hasProto,
-		"RenderscriptSrcs":       hasRenderscript,
-		"SyspropSrcs":            hasSysprop,
-		"WinMsgSrcs":             hasWinMsg,
-		"YaccSrsc":               hasYacc,
-		"OnlyCSrcs":              !(hasAidl || hasLex || hasProto || hasRenderscript || hasSysprop || hasWinMsg || hasYacc),
+		"AidlSrcs":               c.hasAidl,
+		"LexSrcs":                c.hasLex,
+		"ProtoSrcs":              c.hasProto,
+		"RenderscriptSrcs":       c.hasRenderscript,
+		"SyspropSrcs":            c.hasSysprop,
+		"WinMsgSrcs":             c.hasWinMsg,
+		"YaccSrsc":               c.hasYacc,
+		"OnlyCSrcs":              !(c.hasAidl || c.hasLex || c.hasProto || c.hasRenderscript || c.hasSysprop || c.hasWinMsg || c.hasYacc),
 		"OptimizeForSize":        c.OptimizeForSize(),
 	}
 }
@@ -2085,6 +2083,16 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	}
 
 	buildComplianceMetadataInfo(ctx, c, deps)
+
+	if b, ok := c.compiler.(*baseCompiler); ok {
+		c.hasAidl = b.hasSrcExt(ctx, ".aidl")
+		c.hasLex = b.hasSrcExt(ctx, ".l") || b.hasSrcExt(ctx, ".ll")
+		c.hasProto = b.hasSrcExt(ctx, ".proto")
+		c.hasRenderscript = b.hasSrcExt(ctx, ".rscript") || b.hasSrcExt(ctx, ".fs")
+		c.hasSysprop = b.hasSrcExt(ctx, ".sysprop")
+		c.hasWinMsg = b.hasSrcExt(ctx, ".mc")
+		c.hasYacc = b.hasSrcExt(ctx, ".y") || b.hasSrcExt(ctx, ".yy")
+	}
 
 	c.setOutputFiles(ctx)
 }

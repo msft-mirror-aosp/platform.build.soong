@@ -106,6 +106,7 @@ bootstrap_go_package {
         "updatable_modules.go",
         "util.go",
         "variable.go",
+        "vintf_fragment.go",
         "visibility.go",
     ],
     testSrcs: [
@@ -148,6 +149,7 @@ bootstrap_go_package {
         "test_suites_test.go",
         "util_test.go",
         "variable_test.go",
+        "vintf_fragment_test.go",
         "visibility_test.go",
     ],
 }

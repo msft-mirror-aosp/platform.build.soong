@@ -1154,8 +1154,9 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	if Bool(a.properties.Jetifier) {
 		inputFile := a.aarPath
-		a.aarPath = android.PathForModuleOut(ctx, "jetifier", aarName)
-		TransformJetifier(ctx, a.aarPath.(android.WritablePath), inputFile)
+		jetifierPath := android.PathForModuleOut(ctx, "jetifier", aarName)
+		TransformJetifier(ctx, jetifierPath, inputFile)
+		a.aarPath = jetifierPath
 	}
 
 	jarName := ctx.ModuleName() + ".jar"
@@ -1306,11 +1307,12 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		addMissingOptionalUsesLibsFromDep(ctx, module, &a.usesLibrary)
 	})
 
-	var implementationJarFile android.OutputPath
+	var implementationJarFile android.Path
 	if len(staticJars) > 0 {
 		combineJars := append(android.Paths{classpathFile}, staticJars...)
-		implementationJarFile = android.PathForModuleOut(ctx, "combined", jarName).OutputPath
-		TransformJarsToJar(ctx, implementationJarFile, "combine", combineJars, android.OptionalPath{}, false, nil, nil)
+		combinedImplementationJar := android.PathForModuleOut(ctx, "combined", jarName).OutputPath
+		TransformJarsToJar(ctx, combinedImplementationJar, "combine", combineJars, android.OptionalPath{}, false, nil, nil)
+		implementationJarFile = combinedImplementationJar
 	} else {
 		implementationJarFile = classpathFile
 	}
@@ -1329,7 +1331,7 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	implementationAndResourcesJar := implementationJarFile
 	if resourceJarFile != nil {
 		jars := android.Paths{resourceJarFile, implementationAndResourcesJar}
-		combinedJar := android.PathForModuleOut(ctx, "withres", jarName).OutputPath
+		combinedJar := android.PathForModuleOut(ctx, "withres", jarName)
 		TransformJarsToJar(ctx, combinedJar, "for resources", jars, android.OptionalPath{},
 			false, nil, nil)
 		implementationAndResourcesJar = combinedJar

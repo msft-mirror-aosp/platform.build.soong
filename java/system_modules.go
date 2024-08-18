@@ -120,14 +120,16 @@ func SystemModulesFactory() android.Module {
 	return module
 }
 
-type SystemModulesProvider interface {
-	HeaderJars() android.Paths
-	OutputDirAndDeps() (android.Path, android.Paths)
+type SystemModulesProviderInfo struct {
+	// The aggregated header jars from all jars specified in the libs property.
+	// Used when system module is added as a dependency to bootclasspath.
+	HeaderJars android.Paths
+
+	OutputDir     android.Path
+	OutputDirDeps android.Paths
 }
 
-var _ SystemModulesProvider = (*SystemModules)(nil)
-
-var _ SystemModulesProvider = (*systemModulesImport)(nil)
+var SystemModulesProvider = blueprint.NewProvider[*SystemModulesProviderInfo]()
 
 type SystemModules struct {
 	android.ModuleBase
@@ -135,9 +137,6 @@ type SystemModules struct {
 
 	properties SystemModulesProperties
 
-	// The aggregated header jars from all jars specified in the libs property.
-	// Used when system module is added as a dependency to bootclasspath.
-	headerJars android.Paths
 	outputDir  android.Path
 	outputDeps android.Paths
 }
@@ -145,17 +144,6 @@ type SystemModules struct {
 type SystemModulesProperties struct {
 	// List of java library modules that should be included in the system modules
 	Libs []string
-}
-
-func (system *SystemModules) HeaderJars() android.Paths {
-	return system.headerJars
-}
-
-func (system *SystemModules) OutputDirAndDeps() (android.Path, android.Paths) {
-	if system.outputDir == nil || len(system.outputDeps) == 0 {
-		panic("Missing directory for system module dependency")
-	}
-	return system.outputDir, system.outputDeps
 }
 
 func (system *SystemModules) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -167,9 +155,13 @@ func (system *SystemModules) GenerateAndroidBuildActions(ctx android.ModuleConte
 		}
 	})
 
-	system.headerJars = jars
-
 	system.outputDir, system.outputDeps = TransformJarsToSystemModules(ctx, jars)
+
+	android.SetProvider(ctx, SystemModulesProvider, &SystemModulesProviderInfo{
+		HeaderJars:    jars,
+		OutputDir:     system.outputDir,
+		OutputDirDeps: system.outputDeps,
+	})
 }
 
 // ComponentDepsMutator is called before prebuilt modules without a corresponding source module are

@@ -43,6 +43,10 @@ var (
 		"-mno-ms-bitfields",
 
 		"--sysroot ${WindowsGccRoot}/${WindowsGccTriple}",
+
+		// Windows flags to generate PDB
+		"-g",
+		"-gcodeview",
 	}
 
 	windowsIncludeFlags = []string{
