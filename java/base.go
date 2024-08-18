@@ -1211,6 +1211,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	var kotlinJars android.Paths
 	var kotlinHeaderJars android.Paths
+	var kotlinExtraJars android.Paths
 
 	// Prepend extraClasspathJars to classpath so that the resource processor R.jar comes before
 	// any dependencies so that it can override any non-final R classes from dependencies with the
@@ -1321,17 +1322,8 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 		kotlinJars = append(kotlinJars, kotlinJarPath)
 		kotlinHeaderJars = append(kotlinHeaderJars, kotlinHeaderJar)
-
-		// Jar kotlin classes into the final jar after javac
-		if BoolDefault(j.properties.Static_kotlin_stdlib, true) {
-			kotlinJars = append(kotlinJars, deps.kotlinStdlib...)
-			kotlinJars = append(kotlinJars, deps.kotlinAnnotations...)
-			kotlinHeaderJars = append(kotlinHeaderJars, deps.kotlinStdlib...)
-			kotlinHeaderJars = append(kotlinHeaderJars, deps.kotlinAnnotations...)
-		} else {
-			flags.dexClasspath = append(flags.dexClasspath, deps.kotlinStdlib...)
-			flags.dexClasspath = append(flags.dexClasspath, deps.kotlinAnnotations...)
-		}
+		kotlinExtraJars = append(kotlinExtraJars, deps.kotlinStdlib...)
+		kotlinExtraJars = append(kotlinExtraJars, deps.kotlinAnnotations...)
 	}
 
 	jars := slices.Clone(kotlinJars)
@@ -1349,7 +1341,11 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			// allow for the use of annotation processors that do function correctly
 			// with sharding enabled. See: b/77284273.
 		}
-		extraJars := append(slices.Clone(kotlinHeaderJars), extraCombinedJars...)
+		extraJars := slices.Clone(kotlinHeaderJars)
+		if BoolDefault(j.properties.Static_kotlin_stdlib, true) {
+			extraJars = append(extraJars, kotlinExtraJars...)
+		}
+		extraJars = append(extraJars, extraCombinedJars...)
 		var combinedHeaderJarFile android.Path
 		headerJarFileWithoutDepsOrJarjar, combinedHeaderJarFile =
 			j.compileJavaHeader(ctx, uniqueJavaFiles, srcJars, deps, flags, jarName, extraJars)
@@ -1425,6 +1421,13 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		if ctx.Failed() {
 			return
 		}
+	}
+
+	// Jar kotlin classes into the final jar after javac
+	if BoolDefault(j.properties.Static_kotlin_stdlib, true) {
+		jars = append(jars, kotlinExtraJars...)
+	} else {
+		flags.dexClasspath = append(flags.dexClasspath, kotlinExtraJars...)
 	}
 
 	jars = append(jars, extraCombinedJars...)
@@ -2024,16 +2027,20 @@ func (j *Module) ClassLoaderContexts() dexpreopt.ClassLoaderContextMap {
 
 // Collect information for opening IDE project files in java/jdeps.go.
 func (j *Module) IDEInfo(dpInfo *android.IdeInfo) {
-	dpInfo.Deps = append(dpInfo.Deps, j.CompilerDeps()...)
-	dpInfo.Srcs = append(dpInfo.Srcs, j.expandIDEInfoCompiledSrcs...)
-	dpInfo.SrcJars = append(dpInfo.SrcJars, j.compiledSrcJars.Strings()...)
-	dpInfo.Aidl_include_dirs = append(dpInfo.Aidl_include_dirs, j.deviceProperties.Aidl.Include_dirs...)
+	// jarjar rules will repackage the sources. To prevent misleading results, IdeInfo should contain the
+	// repackaged jar instead of the input sources.
 	if j.expandJarjarRules != nil {
 		dpInfo.Jarjar_rules = append(dpInfo.Jarjar_rules, j.expandJarjarRules.String())
+		dpInfo.Jars = append(dpInfo.Jars, j.headerJarFile.String())
+	} else {
+		dpInfo.Srcs = append(dpInfo.Srcs, j.expandIDEInfoCompiledSrcs...)
+		dpInfo.SrcJars = append(dpInfo.SrcJars, j.compiledSrcJars.Strings()...)
+		dpInfo.SrcJars = append(dpInfo.SrcJars, j.annoSrcJars.Strings()...)
 	}
+	dpInfo.Deps = append(dpInfo.Deps, j.CompilerDeps()...)
+	dpInfo.Aidl_include_dirs = append(dpInfo.Aidl_include_dirs, j.deviceProperties.Aidl.Include_dirs...)
 	dpInfo.Static_libs = append(dpInfo.Static_libs, j.properties.Static_libs...)
 	dpInfo.Libs = append(dpInfo.Libs, j.properties.Libs...)
-	dpInfo.SrcJars = append(dpInfo.SrcJars, j.annoSrcJars.Strings()...)
 }
 
 func (j *Module) CompilerDeps() []string {
@@ -2226,6 +2233,11 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			deps.classpath = append(deps.classpath, sdkDep.jars...)
 			deps.dexClasspath = append(deps.dexClasspath, sdkDep.jars...)
 			deps.aidlPreprocess = sdkDep.aidl
+			// Add the sdk module dependency to `compileDepNames`.
+			// This ensures that the dependency is reported in `module_bp_java_deps.json`
+			// TODO (b/358608607): Move this to decodeSdkDep
+			sdkSpec := android.SdkContext(j).SdkVersion(ctx)
+			j.compileDepNames = append(j.compileDepNames, fmt.Sprintf("sdk_%s_%s_android", sdkSpec.Kind.String(), sdkSpec.ApiLevel.String()))
 		} else {
 			deps.aidlPreprocess = sdkDep.aidl
 		}
@@ -2366,16 +2378,24 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			case bootClasspathTag:
 				// If a system modules dependency has been added to the bootclasspath
 				// then add its libs to the bootclasspath.
-				sm := module.(SystemModulesProvider)
-				deps.bootClasspath = append(deps.bootClasspath, sm.HeaderJars()...)
+				if sm, ok := android.OtherModuleProvider(ctx, module, SystemModulesProvider); ok {
+					depHeaderJars := sm.HeaderJars
+					deps.bootClasspath = append(deps.bootClasspath, depHeaderJars...)
+				} else {
+					ctx.PropertyErrorf("boot classpath dependency %q does not provide SystemModulesProvider",
+						ctx.OtherModuleName(module))
+				}
 
 			case systemModulesTag:
 				if deps.systemModules != nil {
 					panic("Found two system module dependencies")
 				}
-				sm := module.(SystemModulesProvider)
-				outputDir, outputDeps := sm.OutputDirAndDeps()
-				deps.systemModules = &systemModules{outputDir, outputDeps}
+				if sm, ok := android.OtherModuleProvider(ctx, module, SystemModulesProvider); ok {
+					deps.systemModules = &systemModules{sm.OutputDir, sm.OutputDirDeps}
+				} else {
+					ctx.PropertyErrorf("system modules dependency %q does not provide SystemModulesProvider",
+						ctx.OtherModuleName(module))
+				}
 
 			case instrumentationForTag:
 				ctx.PropertyErrorf("instrumentation_for", "dependency %q of type %q does not provide JavaInfo so is unsuitable for use with this property", ctx.OtherModuleName(module), ctx.OtherModuleType(module))

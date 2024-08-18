@@ -51,7 +51,6 @@ var (
 const (
 	nsjailPath = "prebuilts/build-tools/linux-x86/bin/nsjail"
 	abfsSrcDir = "/src"
-	abfsOutDir = "/src/out"
 )
 
 var sandboxConfig struct {
@@ -162,13 +161,37 @@ func (c *Cmd) outDirArg() string {
 		return sandboxConfig.outDir
 	}
 
-	return sandboxConfig.outDir + ":" + abfsOutDir
+	return sandboxConfig.outDir + ":" + filepath.Join(abfsSrcDir, sandboxConfig.outDir)
+}
+
+// When configured to use ABFS, we need to allow the creation of the /src
+// directory. Therefore, we cannot mount the root "/" directory as read-only.
+// Instead, we individually mount the children of "/" as RO.
+func (c *Cmd) readMountArgs() []string {
+	if !c.config.UseABFS() {
+		// For now, just map everything. Make most things readonly.
+		return []string{"-R", "/"}
+	}
+
+	entries, err := os.ReadDir("/")
+	if err != nil {
+		// If we can't read "/", just use the default non-ABFS behavior.
+		return []string{"-R", "/"}
+	}
+
+	args := make([]string, 0, 2*len(entries))
+	for _, ent := range entries {
+		args = append(args, "-R", "/"+ent.Name())
+	}
+
+	return args
 }
 
 func (c *Cmd) wrapSandbox() {
 	wd, _ := os.Getwd()
 
-	sandboxArgs := []string{
+	var sandboxArgs []string
+	sandboxArgs = append(sandboxArgs,
 		// The executable to run
 		"-x", c.Path,
 
@@ -200,10 +223,13 @@ func (c *Cmd) wrapSandbox() {
 		"--rlimit_cpu", "soft",
 		"--rlimit_fsize", "soft",
 		"--rlimit_nofile", "soft",
+	)
 
-		// For now, just map everything. Make most things readonly.
-		"-R", "/",
+	sandboxArgs = append(sandboxArgs,
+		c.readMountArgs()...
+	)
 
+	sandboxArgs = append(sandboxArgs,
 		// Mount a writable tmp dir
 		"-B", "/tmp",
 
@@ -219,7 +245,7 @@ func (c *Cmd) wrapSandbox() {
 
 		// Only log important warnings / errors
 		"-q",
-	}
+	)
 	if c.config.UseABFS() {
 		sandboxArgs = append(sandboxArgs, "-B", "{ABFS_DIR}")
 	}

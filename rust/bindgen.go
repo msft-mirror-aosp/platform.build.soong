@@ -364,7 +364,7 @@ func NewRustBindgen(hod android.HostOrDeviceSupported) (*Module, *bindgenDecorat
 		ClangProperties:    cc.RustBindgenClangProperties{},
 	}
 
-	module := NewSourceProviderModule(hod, bindgen, false, true)
+	module := NewSourceProviderModule(hod, bindgen, false, false)
 
 	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
 		type stub_props struct {
