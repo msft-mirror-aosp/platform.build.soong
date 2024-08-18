@@ -35,7 +35,7 @@ type SingletonContext interface {
 	// Allows generating build actions for `referer` based on the metadata for `name` deferred until the singleton context.
 	ModuleVariantsFromName(referer Module, name string) []Module
 
-	moduleProvider(module blueprint.Module, provider blueprint.AnyProviderKey) (any, bool)
+	otherModuleProvider(module blueprint.Module, provider blueprint.AnyProviderKey) (any, bool)
 
 	ModuleErrorf(module blueprint.Module, format string, args ...interface{})
 	Errorf(format string, args ...interface{})
@@ -279,7 +279,7 @@ func (s *singletonContextAdaptor) ModuleVariantsFromName(referer Module, name st
 	return result
 }
 
-func (s *singletonContextAdaptor) moduleProvider(module blueprint.Module, provider blueprint.AnyProviderKey) (any, bool) {
+func (s *singletonContextAdaptor) otherModuleProvider(module blueprint.Module, provider blueprint.AnyProviderKey) (any, bool) {
 	return s.SingletonContext.ModuleProvider(module, provider)
 }
 
