@@ -113,13 +113,14 @@ type Module interface {
 	TargetRequiredModuleNames() []string
 	VintfFragmentModuleNames(ctx ConfigAndErrorContext) []string
 
-	PackagingSpecs() []PackagingSpec
-
 	// TransitivePackagingSpecs returns the PackagingSpecs for this module and any transitive
 	// dependencies with dependency tags for which IsInstallDepNeeded() returns true.
 	TransitivePackagingSpecs() []PackagingSpec
 
 	ConfigurableEvaluator(ctx ConfigAndErrorContext) proptools.ConfigurableEvaluator
+
+	// Get the information about the containers this module belongs to.
+	ContainersInfo() ContainersInfo
 }
 
 // Qualified id for a module
@@ -763,14 +764,6 @@ func InitCommonOSAndroidMultiTargetsArchModule(m Module, hod HostOrDeviceSupport
 	m.base().commonProperties.CreateCommonOSVariant = true
 }
 
-func ModuleFilesToInstall(ctx OtherModuleProviderContext, m blueprint.Module) InstallPaths {
-	var filesToInstall InstallPaths
-	if info, ok := OtherModuleProvider(ctx, m, InstallFilesProvider); ok {
-		filesToInstall = info.InstallFiles
-	}
-	return filesToInstall
-}
-
 // A ModuleBase object contains the properties that are common to all Android
 // modules.  It should be included as an anonymous field in every module
 // struct definition.  InitAndroidModule should then be called from the module's
@@ -844,18 +837,11 @@ type ModuleBase struct {
 
 	noAddressSanitizer   bool
 	installFilesDepSet   *DepSet[InstallPath]
-	checkbuildFiles      Paths
-	packagingSpecs       []PackagingSpec
 	packagingSpecsDepSet *DepSet[PackagingSpec]
-	// katiInstalls tracks the install rules that were created by Soong but are being exported
-	// to Make to convert to ninja rules so that Make can add additional dependencies.
-	katiInstalls katiInstalls
 	// katiInitRcInstalls and katiVintfInstalls track the install rules created by Soong that are
 	// allowed to have duplicates across modules and variants.
 	katiInitRcInstalls katiInstalls
 	katiVintfInstalls  katiInstalls
-	katiSymlinks       katiInstalls
-	testData           []DataPath
 
 	// The files to copy to the dist as explicitly specified in the .bp file.
 	distFiles TaggedDistFiles
@@ -902,6 +888,10 @@ type ModuleBase struct {
 	// complianceMetadataInfo is for different module types to dump metadata.
 	// See android.ModuleContext interface.
 	complianceMetadataInfo *ComplianceMetadataInfo
+
+	// containersInfo stores the information about the containers and the information of the
+	// apexes the module belongs to.
+	containersInfo ContainersInfo
 }
 
 func (m *ModuleBase) AddJSONData(d *map[string]interface{}) {
@@ -1497,10 +1487,6 @@ func isInstallDepNeeded(dep Module, tag blueprint.DependencyTag) bool {
 	return IsInstallDepNeededTag(tag)
 }
 
-func (m *ModuleBase) PackagingSpecs() []PackagingSpec {
-	return m.packagingSpecs
-}
-
 func (m *ModuleBase) TransitivePackagingSpecs() []PackagingSpec {
 	return m.packagingSpecsDepSet.ToList()
 }
@@ -1641,17 +1627,21 @@ func (m *ModuleBase) generateModuleTarget(ctx *moduleContext) {
 	var allCheckbuildFiles Paths
 	ctx.VisitAllModuleVariants(func(module Module) {
 		a := module.base()
+		var checkBuilds Paths
 		if a == m {
 			allInstalledFiles = append(allInstalledFiles, ctx.installFiles...)
+			checkBuilds = ctx.checkbuildFiles
 		} else {
-			allInstalledFiles = append(allInstalledFiles, ModuleFilesToInstall(ctx, module)...)
+			info := OtherModuleProviderOrDefault(ctx, module, InstallFilesProvider)
+			allInstalledFiles = append(allInstalledFiles, info.InstallFiles...)
+			checkBuilds = info.CheckbuildFiles
 		}
 		// A module's -checkbuild phony targets should
 		// not be created if the module is not exported to make.
 		// Those could depend on the build target and fail to compile
 		// for the current build target.
 		if !ctx.Config().KatiEnabled() || !shouldSkipAndroidMkProcessing(ctx, a) {
-			allCheckbuildFiles = append(allCheckbuildFiles, a.checkbuildFiles...)
+			allCheckbuildFiles = append(allCheckbuildFiles, checkBuilds...)
 		}
 	})
 
@@ -1789,7 +1779,14 @@ func (m *ModuleBase) archModuleContextFactory(ctx archModuleContextFactoryContex
 }
 
 type InstallFilesInfo struct {
-	InstallFiles InstallPaths
+	InstallFiles    InstallPaths
+	CheckbuildFiles Paths
+	PackagingSpecs  []PackagingSpec
+	// katiInstalls tracks the install rules that were created by Soong but are being exported
+	// to Make to convert to ninja rules so that Make can add additional dependencies.
+	KatiInstalls katiInstalls
+	KatiSymlinks katiInstalls
+	TestData     []DataPath
 }
 
 var InstallFilesProvider = blueprint.NewProvider[InstallFilesInfo]()
@@ -1975,14 +1972,13 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			return
 		}
 
-		m.checkbuildFiles = append(m.checkbuildFiles, ctx.checkbuildFiles...)
-		m.packagingSpecs = append(m.packagingSpecs, ctx.packagingSpecs...)
-		m.katiInstalls = append(m.katiInstalls, ctx.katiInstalls...)
-		m.katiSymlinks = append(m.katiSymlinks, ctx.katiSymlinks...)
-		m.testData = append(m.testData, ctx.testData...)
-
 		SetProvider(ctx, InstallFilesProvider, InstallFilesInfo{
-			InstallFiles: ctx.installFiles,
+			InstallFiles:    ctx.installFiles,
+			CheckbuildFiles: ctx.checkbuildFiles,
+			PackagingSpecs:  ctx.packagingSpecs,
+			KatiInstalls:    ctx.katiInstalls,
+			KatiSymlinks:    ctx.katiSymlinks,
+			TestData:        ctx.testData,
 		})
 	} else if ctx.Config().AllowMissingDependencies() {
 		// If the module is not enabled it will not create any build rules, nothing will call
@@ -2000,14 +1996,14 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	}
 
 	m.installFilesDepSet = NewDepSet[InstallPath](TOPOLOGICAL, ctx.installFiles, dependencyInstallFiles)
-	m.packagingSpecsDepSet = NewDepSet[PackagingSpec](TOPOLOGICAL, m.packagingSpecs, dependencyPackagingSpecs)
+	m.packagingSpecsDepSet = NewDepSet[PackagingSpec](TOPOLOGICAL, ctx.packagingSpecs, dependencyPackagingSpecs)
 
 	buildLicenseMetadata(ctx, m.licenseMetadataFile)
 
 	if m.moduleInfoJSON != nil {
 		var installed InstallPaths
-		installed = append(installed, m.katiInstalls.InstallPaths()...)
-		installed = append(installed, m.katiSymlinks.InstallPaths()...)
+		installed = append(installed, ctx.katiInstalls.InstallPaths()...)
+		installed = append(installed, ctx.katiSymlinks.InstallPaths()...)
 		installed = append(installed, m.katiInitRcInstalls.InstallPaths()...)
 		installed = append(installed, m.katiVintfInstalls.InstallPaths()...)
 		installedStrings := installed.Strings()
@@ -2020,7 +2016,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		}
 
 		var data []string
-		for _, d := range m.testData {
+		for _, d := range ctx.testData {
 			data = append(data, d.ToRelativeInstallPath())
 		}
 
@@ -2100,6 +2096,10 @@ func (m *ModuleBase) moduleInfoVariant(ctx ModuleContext) string {
 		}
 	}
 	return variant
+}
+
+func (m *ModuleBase) ContainersInfo() ContainersInfo {
+	return m.containersInfo
 }
 
 // Check the supplied dist structure to make sure that it is valid.
@@ -2700,7 +2700,7 @@ func (c *buildTargetSingleton) GenerateBuildActions(ctx SingletonContext) {
 	ctx.VisitAllModules(func(module Module) {
 		if module.Enabled(ctx) {
 			key := osAndCross{os: module.Target().Os, hostCross: module.Target().HostCross}
-			osDeps[key] = append(osDeps[key], module.base().checkbuildFiles...)
+			osDeps[key] = append(osDeps[key], OtherModuleProviderOrDefault(ctx, module, InstallFilesProvider).CheckbuildFiles...)
 		}
 	})
 

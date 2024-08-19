@@ -384,7 +384,7 @@ func TestBasicApex(t *testing.T) {
 			symlink_preferred_arch: true,
 			system_shared_libs: [],
 			stl: "none",
-			apex_available: [ "myapex", "com.android.gki.*" ],
+			apex_available: [ "myapex" ],
 		}
 
 		rust_binary {
@@ -430,14 +430,6 @@ func TestBasicApex(t *testing.T) {
 			srcs: ["foo.rs"],
 			crate_name: "bar",
 			apex_available: ["myapex"],
-		}
-
-		apex {
-			name: "com.android.gki.fake",
-			binaries: ["foo"],
-			key: "myapex.key",
-			file_contexts: ":myapex-file_contexts",
-			updatable: false,
 		}
 
 		cc_library_shared {
