@@ -29,8 +29,12 @@ import (
 )
 
 func init() {
-	android.RegisterModuleType("android_robolectric_test", RobolectricTestFactory)
-	android.RegisterModuleType("android_robolectric_runtimes", robolectricRuntimesFactory)
+	RegisterRobolectricBuildComponents(android.InitRegistrationContext)
+}
+
+func RegisterRobolectricBuildComponents(ctx android.RegistrationContext) {
+	ctx.RegisterModuleType("android_robolectric_test", RobolectricTestFactory)
+	ctx.RegisterModuleType("android_robolectric_runtimes", robolectricRuntimesFactory)
 }
 
 var robolectricDefaultLibs = []string{
@@ -74,6 +78,8 @@ type robolectricProperties struct {
 
 	// Use strict mode to limit access of Robolectric API directly. See go/roboStrictMode
 	Strict_mode *bool
+
+	Jni_libs []string
 }
 
 type robolectricTest struct {
@@ -116,7 +122,7 @@ func (r *robolectricTest) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 	if v := String(r.robolectricProperties.Robolectric_prebuilt_version); v != "" {
 		ctx.AddVariationDependencies(nil, libTag, fmt.Sprintf(robolectricPrebuiltLibPattern, v))
-	} else if !proptools.Bool(r.robolectricProperties.Strict_mode) {
+	} else if !proptools.BoolDefault(r.robolectricProperties.Strict_mode, true) {
 		if proptools.Bool(r.robolectricProperties.Upstream) {
 			ctx.AddVariationDependencies(nil, libTag, robolectricCurrentLib+"_upstream")
 		} else {
@@ -124,8 +130,11 @@ func (r *robolectricTest) DepsMutator(ctx android.BottomUpMutatorContext) {
 		}
 	}
 
-	if proptools.Bool(r.robolectricProperties.Strict_mode) {
+	if proptools.BoolDefault(r.robolectricProperties.Strict_mode, true) {
 		ctx.AddVariationDependencies(nil, roboRuntimeOnlyTag, robolectricCurrentLib+"_upstream")
+	} else {
+		// opting out from strict mode, robolectric_non_strict_mode_permission lib should be added
+		ctx.AddVariationDependencies(nil, libTag, "robolectric_non_strict_mode_permission")
 	}
 
 	ctx.AddVariationDependencies(nil, libTag, robolectricDefaultLibs...)
@@ -134,6 +143,10 @@ func (r *robolectricTest) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 	ctx.AddFarVariationDependencies(ctx.Config().BuildOSCommonTarget.Variations(),
 		roboRuntimesTag, "robolectric-android-all-prebuilts")
+
+	for _, lib := range r.robolectricProperties.Jni_libs {
+		ctx.AddVariationDependencies(ctx.Config().BuildOSTarget.Variations(), jniLibTag, lib)
+	}
 }
 
 func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -201,12 +214,13 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 	}
 
 	handleLibDeps := func(dep android.Module, runtimeOnly bool) {
-		m, _ := android.OtherModuleProvider(ctx, dep, JavaInfoProvider)
 		if !runtimeOnly {
 			r.libs = append(r.libs, ctx.OtherModuleName(dep))
 		}
 		if !android.InList(ctx.OtherModuleName(dep), config.FrameworkLibraries) {
-			combinedJarJars = append(combinedJarJars, m.ImplementationAndResourcesJars...)
+			if m, ok := android.OtherModuleProvider(ctx, dep, JavaInfoProvider); ok {
+				combinedJarJars = append(combinedJarJars, m.ImplementationAndResourcesJars...)
+			}
 		}
 	}
 
@@ -265,6 +279,12 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 	for _, data := range android.PathsForModuleSrc(ctx, r.testProperties.Data) {
 		installedData := ctx.InstallFile(installPath, data.Rel(), data)
 		installDeps = append(installDeps, installedData)
+	}
+
+	soInstallPath := installPath.Join(ctx, getLibPath(r.forceArchType))
+	for _, jniLib := range collectTransitiveJniDeps(ctx) {
+		installJni := ctx.InstallFile(soInstallPath, jniLib.path.Base(), jniLib.path)
+		installDeps = append(installDeps, installJni)
 	}
 
 	r.installFile = ctx.InstallFile(installPath, ctx.ModuleName()+".jar", r.combinedJar, installDeps...)

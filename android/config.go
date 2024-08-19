@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -37,9 +36,7 @@ import (
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android/soongconfig"
-	"android/soong/bazel"
 	"android/soong/remoteexec"
-	"android/soong/starlark_fmt"
 )
 
 // Bool re-exports proptools.Bool for the android package.
@@ -201,6 +198,33 @@ func (c Config) ReleaseAconfigValueSets() []string {
 	return c.config.productVariables.ReleaseAconfigValueSets
 }
 
+func (c Config) ReleaseAconfigExtraReleaseConfigs() []string {
+	result := []string{}
+	if val, ok := c.config.productVariables.BuildFlags["RELEASE_ACONFIG_EXTRA_RELEASE_CONFIGS"]; ok {
+		if len(val) > 0 {
+			// Remove any duplicates from the list.
+			found := make(map[string]bool)
+			for _, k := range strings.Split(val, " ") {
+				if !found[k] {
+					found[k] = true
+					result = append(result, k)
+				}
+			}
+		}
+	}
+	return result
+}
+
+func (c Config) ReleaseAconfigExtraReleaseConfigsValueSets() map[string][]string {
+	result := make(map[string][]string)
+	for _, rcName := range c.ReleaseAconfigExtraReleaseConfigs() {
+		if value, ok := c.config.productVariables.BuildFlags["RELEASE_ACONFIG_VALUE_SETS_"+rcName]; ok {
+			result[rcName] = strings.Split(value, " ")
+		}
+	}
+	return result
+}
+
 // The flag default permission value passed to aconfig
 // derived from RELEASE_ACONFIG_FLAG_DEFAULT_PERMISSION
 func (c Config) ReleaseAconfigFlagDefaultPermission() string {
@@ -324,9 +348,6 @@ type config struct {
 	// modules that aren't mixed-built for at least one variant will cause a build
 	// failure
 	ensureAllowlistIntegrity bool
-
-	// List of Api libraries that contribute to Api surfaces.
-	apiLibraries map[string]struct{}
 }
 
 type deviceConfig struct {
@@ -418,7 +439,7 @@ func loadFromConfigFile(configurable *ProductVariables, filename string) error {
 			proptools.StringPtr(String(configurable.Platform_sdk_codename))
 	}
 
-	return saveToBazelConfigFile(configurable, filepath.Dir(filename))
+	return nil
 }
 
 // atomically writes the config file in case two copies of soong_build are running simultaneously
@@ -450,81 +471,6 @@ func saveToConfigFile(config *ProductVariables, filename string) error {
 	os.Rename(f.Name(), filename)
 
 	return nil
-}
-
-type productVariableStarlarkRepresentation struct {
-	soongType   string
-	selectable  bool
-	archVariant bool
-}
-
-func saveToBazelConfigFile(config *ProductVariables, outDir string) error {
-	dir := filepath.Join(outDir, bazel.SoongInjectionDirName, "product_config")
-	err := createDirIfNonexistent(dir, os.ModePerm)
-	if err != nil {
-		return fmt.Errorf("Could not create dir %s: %s", dir, err)
-	}
-
-	allProductVariablesType := reflect.TypeOf((*ProductVariables)(nil)).Elem()
-	productVariablesInfo := make(map[string]productVariableStarlarkRepresentation)
-	p := variableProperties{}
-	t := reflect.TypeOf(p.Product_variables)
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		archVariant := proptools.HasTag(f, "android", "arch_variant")
-		if mainProductVariablesStructField, ok := allProductVariablesType.FieldByName(f.Name); ok {
-			productVariablesInfo[f.Name] = productVariableStarlarkRepresentation{
-				soongType:   stringRepresentationOfSimpleType(mainProductVariablesStructField.Type),
-				selectable:  true,
-				archVariant: archVariant,
-			}
-		} else {
-			panic("Unknown variable " + f.Name)
-		}
-	}
-
-	err = pathtools.WriteFileIfChanged(filepath.Join(dir, "product_variable_constants.bzl"), []byte(fmt.Sprintf(`
-# product_var_constant_info is a map of product variables to information about them. The fields are:
-# - soongType: The type of the product variable as it appears in soong's ProductVariables struct.
-#              examples are string, bool, int, *bool, *string, []string, etc. This may be an overly
-#              conservative estimation of the type, for example a *bool could oftentimes just be a
-#              bool that defaults to false.
-# - selectable: if this product variable can be selected on in Android.bp/build files. This means
-#               it's listed in the "variableProperties" soong struct. Currently all variables in
-#               this list are selectable because we only need the selectable ones at the moment,
-#               but the list may be expanded later.
-# - archVariant: If the variable is tagged as arch variant in the "variableProperties" struct.
-product_var_constant_info = %s
-product_var_constraints = [k for k, v in product_var_constant_info.items() if v.selectable]
-arch_variant_product_var_constraints = [k for k, v in product_var_constant_info.items() if v.selectable and v.archVariant]
-`, starlark_fmt.PrintAny(productVariablesInfo, 0))), 0644)
-	if err != nil {
-		return fmt.Errorf("Could not write .bzl config file %s", err)
-	}
-	err = pathtools.WriteFileIfChanged(filepath.Join(dir, "BUILD"),
-		[]byte(bazel.GeneratedBazelFileWarning), 0644)
-	if err != nil {
-		return fmt.Errorf("Could not write BUILD config file %s", err)
-	}
-
-	return nil
-}
-
-func stringRepresentationOfSimpleType(ty reflect.Type) string {
-	switch ty.Kind() {
-	case reflect.String:
-		return "string"
-	case reflect.Bool:
-		return "bool"
-	case reflect.Int:
-		return "int"
-	case reflect.Slice:
-		return "[]" + stringRepresentationOfSimpleType(ty.Elem())
-	case reflect.Pointer:
-		return "*" + stringRepresentationOfSimpleType(ty.Elem())
-	default:
-		panic("unimplemented type: " + ty.Kind().String())
-	}
 }
 
 // NullConfig returns a mostly empty Config for use by standalone tools like dexpreopt_gen that
@@ -650,40 +596,6 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 	setBuildMode(cmdArgs.BazelQueryViewDir, GenerateQueryView)
 	setBuildMode(cmdArgs.ModuleGraphFile, GenerateModuleGraph)
 	setBuildMode(cmdArgs.DocFile, GenerateDocFile)
-
-	// TODO(b/276958307): Replace the hardcoded list to a sdk_library local prop.
-	config.apiLibraries = map[string]struct{}{
-		"android.net.ipsec.ike":             {},
-		"art.module.public.api":             {},
-		"conscrypt.module.public.api":       {},
-		"framework-adservices":              {},
-		"framework-appsearch":               {},
-		"framework-bluetooth":               {},
-		"framework-configinfrastructure":    {},
-		"framework-connectivity":            {},
-		"framework-connectivity-t":          {},
-		"framework-devicelock":              {},
-		"framework-graphics":                {},
-		"framework-healthfitness":           {},
-		"framework-location":                {},
-		"framework-media":                   {},
-		"framework-mediaprovider":           {},
-		"framework-nfc":                     {},
-		"framework-ondevicepersonalization": {},
-		"framework-pdf":                     {},
-		"framework-pdf-v":                   {},
-		"framework-permission":              {},
-		"framework-permission-s":            {},
-		"framework-scheduling":              {},
-		"framework-sdkextensions":           {},
-		"framework-statsd":                  {},
-		"framework-sdksandbox":              {},
-		"framework-tethering":               {},
-		"framework-uwb":                     {},
-		"framework-virtualization":          {},
-		"framework-wifi":                    {},
-		"i18n.module.public.api":            {},
-	}
 
 	config.productVariables.Build_from_text_stub = boolPtr(config.BuildFromTextStub())
 
@@ -860,6 +772,17 @@ func (c *config) BuildId() string {
 
 func (c *config) DisplayBuildNumber() bool {
 	return Bool(c.productVariables.DisplayBuildNumber)
+}
+
+// BuildFingerprintFile returns the path to a text file containing metadata
+// representing the current build's fingerprint.
+//
+// Rules that want to reference the build fingerprint should read from this file
+// without depending on it. They will run whenever their other dependencies
+// require them to run and get the current build fingerprint. This ensures they
+// don't rebuild on every incremental build when the build number changes.
+func (c *config) BuildFingerprintFile(ctx PathContext) Path {
+	return PathForArbitraryOutput(ctx, "target", "product", c.DeviceName(), String(c.productVariables.BuildFingerprintFile))
 }
 
 // BuildNumberFile returns the path to a text file containing metadata
@@ -1100,6 +1023,22 @@ func (c *config) DefaultAppCertificate(ctx PathContext) (pem, key SourcePath) {
 	return defaultDir.Join(ctx, "testkey.x509.pem"), defaultDir.Join(ctx, "testkey.pk8")
 }
 
+func (c *config) ExtraOtaKeys(ctx PathContext, recovery bool) []SourcePath {
+	var otaKeys []string
+	if recovery {
+		otaKeys = c.productVariables.ExtraOtaRecoveryKeys
+	} else {
+		otaKeys = c.productVariables.ExtraOtaKeys
+	}
+
+	otaPaths := make([]SourcePath, len(otaKeys))
+	for i, key := range otaKeys {
+		otaPaths[i] = PathForSource(ctx, key+".x509.pem")
+	}
+
+	return otaPaths
+}
+
 func (c *config) BuildKeys() string {
 	defaultCert := String(c.productVariables.DefaultAppCertificate)
 	if defaultCert == "" || defaultCert == filepath.Join(testKeyDir, "testkey") {
@@ -1222,6 +1161,10 @@ func (c *config) Android64() bool {
 
 func (c *config) UseGoma() bool {
 	return Bool(c.productVariables.UseGoma)
+}
+
+func (c *config) UseABFS() bool {
+	return Bool(c.productVariables.UseABFS)
 }
 
 func (c *config) UseRBE() bool {
@@ -1385,10 +1328,6 @@ func (c *config) FrameworksBaseDirExists(ctx PathGlobContext) bool {
 	return ExistentPathForSource(ctx, "frameworks", "base", "Android.bp").Valid()
 }
 
-func (c *config) VndkSnapshotBuildArtifacts() bool {
-	return Bool(c.productVariables.VndkSnapshotBuildArtifacts)
-}
-
 func (c *config) HasMultilibConflict(arch ArchType) bool {
 	return c.multilibConflicts[arch]
 }
@@ -1450,10 +1389,6 @@ func (c *deviceConfig) VendorPath() string {
 		return *c.config.productVariables.VendorPath
 	}
 	return "vendor"
-}
-
-func (c *deviceConfig) RecoverySnapshotVersion() string {
-	return String(c.config.productVariables.RecoverySnapshotVersion)
 }
 
 func (c *deviceConfig) CurrentApiLevelForVendorModules() string {
@@ -1833,22 +1768,6 @@ func (c *deviceConfig) IsPartnerTrebleSepolicyTestEnabled() bool {
 	return c.SystemExtSepolicyPrebuiltApiDir() != "" || c.ProductSepolicyPrebuiltApiDir() != ""
 }
 
-func (c *deviceConfig) DirectedVendorSnapshot() bool {
-	return c.config.productVariables.DirectedVendorSnapshot
-}
-
-func (c *deviceConfig) VendorSnapshotModules() map[string]bool {
-	return c.config.productVariables.VendorSnapshotModules
-}
-
-func (c *deviceConfig) DirectedRecoverySnapshot() bool {
-	return c.config.productVariables.DirectedRecoverySnapshot
-}
-
-func (c *deviceConfig) RecoverySnapshotModules() map[string]bool {
-	return c.config.productVariables.RecoverySnapshotModules
-}
-
 func createDirsMap(previous map[string]bool, dirs []string) (map[string]bool, error) {
 	var ret = make(map[string]bool)
 	for _, dir := range dirs {
@@ -1873,40 +1792,6 @@ func (c *deviceConfig) createDirsMapOnce(onceKey OnceKey, previous map[string]bo
 		return nil
 	}
 	return dirMap.(map[string]bool)
-}
-
-var vendorSnapshotDirsExcludedKey = NewOnceKey("VendorSnapshotDirsExcludedMap")
-
-func (c *deviceConfig) VendorSnapshotDirsExcludedMap() map[string]bool {
-	return c.createDirsMapOnce(vendorSnapshotDirsExcludedKey, nil,
-		c.config.productVariables.VendorSnapshotDirsExcluded)
-}
-
-var vendorSnapshotDirsIncludedKey = NewOnceKey("VendorSnapshotDirsIncludedMap")
-
-func (c *deviceConfig) VendorSnapshotDirsIncludedMap() map[string]bool {
-	excludedMap := c.VendorSnapshotDirsExcludedMap()
-	return c.createDirsMapOnce(vendorSnapshotDirsIncludedKey, excludedMap,
-		c.config.productVariables.VendorSnapshotDirsIncluded)
-}
-
-var recoverySnapshotDirsExcludedKey = NewOnceKey("RecoverySnapshotDirsExcludedMap")
-
-func (c *deviceConfig) RecoverySnapshotDirsExcludedMap() map[string]bool {
-	return c.createDirsMapOnce(recoverySnapshotDirsExcludedKey, nil,
-		c.config.productVariables.RecoverySnapshotDirsExcluded)
-}
-
-var recoverySnapshotDirsIncludedKey = NewOnceKey("RecoverySnapshotDirsIncludedMap")
-
-func (c *deviceConfig) RecoverySnapshotDirsIncludedMap() map[string]bool {
-	excludedMap := c.RecoverySnapshotDirsExcludedMap()
-	return c.createDirsMapOnce(recoverySnapshotDirsIncludedKey, excludedMap,
-		c.config.productVariables.RecoverySnapshotDirsIncluded)
-}
-
-func (c *deviceConfig) HostFakeSnapshotEnabled() bool {
-	return c.config.productVariables.HostFakeSnapshotEnabled
 }
 
 func (c *deviceConfig) ShippingApiLevel() ApiLevel {
@@ -1959,6 +1844,10 @@ func (c *deviceConfig) BuildBrokenInputDir(name string) bool {
 
 func (c *deviceConfig) BuildBrokenDontCheckSystemSdk() bool {
 	return c.config.productVariables.BuildBrokenDontCheckSystemSdk
+}
+
+func (c *deviceConfig) BuildBrokenDupSysprop() bool {
+	return c.config.productVariables.BuildBrokenDupSysprop
 }
 
 func (c *config) BuildWarningBadOptionalUsesLibsAllowlist() []string {
@@ -2058,17 +1947,6 @@ func (c *config) SetBuildFromTextStub(b bool) {
 	c.productVariables.Build_from_text_stub = boolPtr(b)
 }
 
-func (c *config) SetApiLibraries(libs []string) {
-	c.apiLibraries = make(map[string]struct{})
-	for _, lib := range libs {
-		c.apiLibraries[lib] = struct{}{}
-	}
-}
-
-func (c *config) GetApiLibraries() map[string]struct{} {
-	return c.apiLibraries
-}
-
 func (c *deviceConfig) CheckVendorSeappViolations() bool {
 	return Bool(c.config.productVariables.CheckVendorSeappViolations)
 }
@@ -2083,41 +1961,41 @@ func (c *config) UseResourceProcessorByDefault() bool {
 }
 
 var (
-	mainlineApexContributionBuildFlags = []string{
-		"RELEASE_APEX_CONTRIBUTIONS_ADBD",
-		"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES",
-		"RELEASE_APEX_CONTRIBUTIONS_APPSEARCH",
-		"RELEASE_APEX_CONTRIBUTIONS_ART",
-		"RELEASE_APEX_CONTRIBUTIONS_BLUETOOTH",
-		"RELEASE_APEX_CONTRIBUTIONS_CAPTIVEPORTALLOGIN",
-		"RELEASE_APEX_CONTRIBUTIONS_CELLBROADCAST",
-		"RELEASE_APEX_CONTRIBUTIONS_CONFIGINFRASTRUCTURE",
-		"RELEASE_APEX_CONTRIBUTIONS_CONNECTIVITY",
-		"RELEASE_APEX_CONTRIBUTIONS_CONSCRYPT",
-		"RELEASE_APEX_CONTRIBUTIONS_CRASHRECOVERY",
-		"RELEASE_APEX_CONTRIBUTIONS_DEVICELOCK",
-		"RELEASE_APEX_CONTRIBUTIONS_DOCUMENTSUIGOOGLE",
-		"RELEASE_APEX_CONTRIBUTIONS_EXTSERVICES",
-		"RELEASE_APEX_CONTRIBUTIONS_HEALTHFITNESS",
-		"RELEASE_APEX_CONTRIBUTIONS_IPSEC",
-		"RELEASE_APEX_CONTRIBUTIONS_MEDIA",
-		"RELEASE_APEX_CONTRIBUTIONS_MEDIAPROVIDER",
-		"RELEASE_APEX_CONTRIBUTIONS_MODULE_METADATA",
-		"RELEASE_APEX_CONTRIBUTIONS_NETWORKSTACKGOOGLE",
-		"RELEASE_APEX_CONTRIBUTIONS_NEURALNETWORKS",
-		"RELEASE_APEX_CONTRIBUTIONS_ONDEVICEPERSONALIZATION",
-		"RELEASE_APEX_CONTRIBUTIONS_PERMISSION",
-		"RELEASE_APEX_CONTRIBUTIONS_PRIMARY_LIBS",
-		"RELEASE_APEX_CONTRIBUTIONS_REMOTEKEYPROVISIONING",
-		"RELEASE_APEX_CONTRIBUTIONS_RESOLV",
-		"RELEASE_APEX_CONTRIBUTIONS_SCHEDULING",
-		"RELEASE_APEX_CONTRIBUTIONS_SDKEXTENSIONS",
-		"RELEASE_APEX_CONTRIBUTIONS_SWCODEC",
-		"RELEASE_APEX_CONTRIBUTIONS_STATSD",
-		"RELEASE_APEX_CONTRIBUTIONS_TELEMETRY_TVP",
-		"RELEASE_APEX_CONTRIBUTIONS_TZDATA",
-		"RELEASE_APEX_CONTRIBUTIONS_UWB",
-		"RELEASE_APEX_CONTRIBUTIONS_WIFI",
+	mainlineApexContributionBuildFlagsToApexNames = map[string]string{
+		"RELEASE_APEX_CONTRIBUTIONS_ADBD":                    "com.android.adbd",
+		"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES":              "com.android.adservices",
+		"RELEASE_APEX_CONTRIBUTIONS_APPSEARCH":               "com.android.appsearch",
+		"RELEASE_APEX_CONTRIBUTIONS_ART":                     "com.android.art",
+		"RELEASE_APEX_CONTRIBUTIONS_BLUETOOTH":               "com.android.btservices",
+		"RELEASE_APEX_CONTRIBUTIONS_CAPTIVEPORTALLOGIN":      "",
+		"RELEASE_APEX_CONTRIBUTIONS_CELLBROADCAST":           "com.android.cellbroadcast",
+		"RELEASE_APEX_CONTRIBUTIONS_CONFIGINFRASTRUCTURE":    "com.android.configinfrastructure",
+		"RELEASE_APEX_CONTRIBUTIONS_CONNECTIVITY":            "com.android.tethering",
+		"RELEASE_APEX_CONTRIBUTIONS_CONSCRYPT":               "com.android.conscrypt",
+		"RELEASE_APEX_CONTRIBUTIONS_CRASHRECOVERY":           "",
+		"RELEASE_APEX_CONTRIBUTIONS_DEVICELOCK":              "com.android.devicelock",
+		"RELEASE_APEX_CONTRIBUTIONS_DOCUMENTSUIGOOGLE":       "",
+		"RELEASE_APEX_CONTRIBUTIONS_EXTSERVICES":             "com.android.extservices",
+		"RELEASE_APEX_CONTRIBUTIONS_HEALTHFITNESS":           "com.android.healthfitness",
+		"RELEASE_APEX_CONTRIBUTIONS_IPSEC":                   "com.android.ipsec",
+		"RELEASE_APEX_CONTRIBUTIONS_MEDIA":                   "com.android.media",
+		"RELEASE_APEX_CONTRIBUTIONS_MEDIAPROVIDER":           "com.android.mediaprovider",
+		"RELEASE_APEX_CONTRIBUTIONS_MODULE_METADATA":         "",
+		"RELEASE_APEX_CONTRIBUTIONS_NETWORKSTACKGOOGLE":      "",
+		"RELEASE_APEX_CONTRIBUTIONS_NEURALNETWORKS":          "com.android.neuralnetworks",
+		"RELEASE_APEX_CONTRIBUTIONS_ONDEVICEPERSONALIZATION": "com.android.ondevicepersonalization",
+		"RELEASE_APEX_CONTRIBUTIONS_PERMISSION":              "com.android.permission",
+		"RELEASE_APEX_CONTRIBUTIONS_PRIMARY_LIBS":            "",
+		"RELEASE_APEX_CONTRIBUTIONS_REMOTEKEYPROVISIONING":   "com.android.rkpd",
+		"RELEASE_APEX_CONTRIBUTIONS_RESOLV":                  "com.android.resolv",
+		"RELEASE_APEX_CONTRIBUTIONS_SCHEDULING":              "com.android.scheduling",
+		"RELEASE_APEX_CONTRIBUTIONS_SDKEXTENSIONS":           "com.android.sdkext",
+		"RELEASE_APEX_CONTRIBUTIONS_SWCODEC":                 "com.android.media.swcodec",
+		"RELEASE_APEX_CONTRIBUTIONS_STATSD":                  "com.android.os.statsd",
+		"RELEASE_APEX_CONTRIBUTIONS_TELEMETRY_TVP":           "",
+		"RELEASE_APEX_CONTRIBUTIONS_TZDATA":                  "com.android.tzdata",
+		"RELEASE_APEX_CONTRIBUTIONS_UWB":                     "com.android.uwb",
+		"RELEASE_APEX_CONTRIBUTIONS_WIFI":                    "com.android.wifi",
 	}
 )
 
@@ -2125,12 +2003,16 @@ var (
 // Each mainline module will have one entry in the list
 func (c *config) AllApexContributions() []string {
 	ret := []string{}
-	for _, f := range mainlineApexContributionBuildFlags {
+	for _, f := range SortedKeys(mainlineApexContributionBuildFlagsToApexNames) {
 		if val, exists := c.GetBuildFlag(f); exists && val != "" {
 			ret = append(ret, val)
 		}
 	}
 	return ret
+}
+
+func (c *config) AllMainlineApexNames() []string {
+	return SortedStringValues(mainlineApexContributionBuildFlagsToApexNames)
 }
 
 func (c *config) BuildIgnoreApexContributionContents() *bool {
@@ -2151,4 +2033,44 @@ func (c *config) BoardUseVbmetaDigestInFingerprint() bool {
 
 func (c *config) OemProperties() []string {
 	return c.productVariables.OemProperties
+}
+
+func (c *config) UseDebugArt() bool {
+	if c.productVariables.ArtTargetIncludeDebugBuild != nil {
+		return Bool(c.productVariables.ArtTargetIncludeDebugBuild)
+	}
+
+	return Bool(c.productVariables.Eng)
+}
+
+func (c *config) SystemPropFiles(ctx PathContext) Paths {
+	return PathsForSource(ctx, c.productVariables.SystemPropFiles)
+}
+
+func (c *config) SystemExtPropFiles(ctx PathContext) Paths {
+	return PathsForSource(ctx, c.productVariables.SystemExtPropFiles)
+}
+
+func (c *config) ProductPropFiles(ctx PathContext) Paths {
+	return PathsForSource(ctx, c.productVariables.ProductPropFiles)
+}
+
+func (c *config) EnableUffdGc() string {
+	return String(c.productVariables.EnableUffdGc)
+}
+
+func (c *config) DeviceFrameworkCompatibilityMatrixFile() []string {
+	return c.productVariables.DeviceFrameworkCompatibilityMatrixFile
+}
+
+func (c *config) DeviceProductCompatibilityMatrixFile() []string {
+	return c.productVariables.DeviceProductCompatibilityMatrixFile
+}
+
+func (c *config) BoardAvbEnable() bool {
+	return Bool(c.productVariables.BoardAvbEnable)
+}
+
+func (c *config) BoardAvbSystemAddHashtreeFooterArgs() []string {
+	return c.productVariables.BoardAvbSystemAddHashtreeFooterArgs
 }

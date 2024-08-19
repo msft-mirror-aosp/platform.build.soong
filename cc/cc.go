@@ -48,11 +48,10 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("cc_defaults", defaultsFactory)
 
 	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("sdk", sdkMutator).Parallel()
+		ctx.Transition("sdk", &sdkTransitionMutator{})
 		ctx.BottomUp("llndk", llndkMutator).Parallel()
-		ctx.BottomUp("link", LinkageMutator).Parallel()
-		ctx.BottomUp("test_per_src", TestPerSrcMutator).Parallel()
-		ctx.BottomUp("version", versionMutator).Parallel()
+		ctx.Transition("link", &linkageTransitionMutator{})
+		ctx.Transition("version", &versionTransitionMutator{})
 		ctx.BottomUp("begin", BeginMutator).Parallel()
 	})
 
@@ -99,7 +98,6 @@ type Deps struct {
 	StaticLibs, LateStaticLibs, WholeStaticLibs []string
 	HeaderLibs                                  []string
 	RuntimeLibs                                 []string
-	Rlibs                                       []string
 
 	// UnexportedStaticLibs are static libraries that are also passed to -Wl,--exclude-libs= to
 	// prevent automatically exporting symbols.
@@ -361,6 +359,8 @@ type BaseProperties struct {
 	Recovery_available *bool
 
 	// Used by imageMutator, set by ImageMutatorBegin()
+	VendorVariantNeeded        bool `blueprint:"mutated"`
+	ProductVariantNeeded       bool `blueprint:"mutated"`
 	CoreVariantNeeded          bool `blueprint:"mutated"`
 	RamdiskVariantNeeded       bool `blueprint:"mutated"`
 	VendorRamdiskVariantNeeded bool `blueprint:"mutated"`
@@ -744,11 +744,6 @@ func (d libraryDependencyTag) static() bool {
 	return d.Kind == staticLibraryDependency
 }
 
-// rlib returns true if the libraryDependencyTag is tagging an rlib dependency.
-func (d libraryDependencyTag) rlib() bool {
-	return d.Kind == rlibLibraryDependency
-}
-
 func (d libraryDependencyTag) LicenseAnnotations() []android.LicenseAnnotation {
 	if d.shared() {
 		return []android.LicenseAnnotation{android.LicenseAnnotationSharedDependency}
@@ -803,7 +798,6 @@ var (
 	dataLibDepTag         = dependencyTag{name: "data lib"}
 	dataBinDepTag         = dependencyTag{name: "data bin"}
 	runtimeDepTag         = installDependencyTag{name: "runtime lib"}
-	testPerSrcDepTag      = dependencyTag{name: "test_per_src"}
 	stubImplDepTag        = dependencyTag{name: "stub_impl"}
 	JniFuzzLibTag         = dependencyTag{name: "jni_fuzz_lib_tag"}
 	FdoProfileTag         = dependencyTag{name: "fdo_profile"}
@@ -828,11 +822,6 @@ func IsHeaderDepTag(depTag blueprint.DependencyTag) bool {
 
 func IsRuntimeDepTag(depTag blueprint.DependencyTag) bool {
 	return depTag == runtimeDepTag
-}
-
-func IsTestPerSrcDepTag(depTag blueprint.DependencyTag) bool {
-	ccDepTag, ok := depTag.(dependencyTag)
-	return ok && ccDepTag == testPerSrcDepTag
 }
 
 // Module contains the properties and members used by all C/C++ module types, and implements
@@ -915,19 +904,19 @@ type Module struct {
 	hideApexVariantFromMake bool
 
 	logtagsPaths android.Paths
+
+	WholeRustStaticlib bool
+
+	hasAidl         bool
+	hasLex          bool
+	hasProto        bool
+	hasRenderscript bool
+	hasSysprop      bool
+	hasWinMsg       bool
+	hasYacc         bool
 }
 
 func (c *Module) AddJSONData(d *map[string]interface{}) {
-	var hasAidl, hasLex, hasProto, hasRenderscript, hasSysprop, hasWinMsg, hasYacc bool
-	if b, ok := c.compiler.(*baseCompiler); ok {
-		hasAidl = b.hasSrcExt(".aidl")
-		hasLex = b.hasSrcExt(".l") || b.hasSrcExt(".ll")
-		hasProto = b.hasSrcExt(".proto")
-		hasRenderscript = b.hasSrcExt(".rscript") || b.hasSrcExt(".fs")
-		hasSysprop = b.hasSrcExt(".sysprop")
-		hasWinMsg = b.hasSrcExt(".mc")
-		hasYacc = b.hasSrcExt(".y") || b.hasSrcExt(".yy")
-	}
 	c.AndroidModuleBase().AddJSONData(d)
 	(*d)["Cc"] = map[string]interface{}{
 		"SdkVersion":             c.SdkVersion(),
@@ -957,14 +946,14 @@ func (c *Module) AddJSONData(d *map[string]interface{}) {
 		"IsVendorPublicLibrary":  c.IsVendorPublicLibrary(),
 		"ApexSdkVersion":         c.apexSdkVersion,
 		"TestFor":                c.TestFor(),
-		"AidlSrcs":               hasAidl,
-		"LexSrcs":                hasLex,
-		"ProtoSrcs":              hasProto,
-		"RenderscriptSrcs":       hasRenderscript,
-		"SyspropSrcs":            hasSysprop,
-		"WinMsgSrcs":             hasWinMsg,
-		"YaccSrsc":               hasYacc,
-		"OnlyCSrcs":              !(hasAidl || hasLex || hasProto || hasRenderscript || hasSysprop || hasWinMsg || hasYacc),
+		"AidlSrcs":               c.hasAidl,
+		"LexSrcs":                c.hasLex,
+		"ProtoSrcs":              c.hasProto,
+		"RenderscriptSrcs":       c.hasRenderscript,
+		"SyspropSrcs":            c.hasSysprop,
+		"WinMsgSrcs":             c.hasWinMsg,
+		"YaccSrsc":               c.hasYacc,
+		"OnlyCSrcs":              !(c.hasAidl || c.hasLex || c.hasProto || c.hasRenderscript || c.hasSysprop || c.hasWinMsg || c.hasYacc),
 		"OptimizeForSize":        c.OptimizeForSize(),
 	}
 }
@@ -981,8 +970,8 @@ func (c *Module) HiddenFromMake() bool {
 	return c.Properties.HideFromMake
 }
 
-func (c *Module) RequiredModuleNames() []string {
-	required := android.CopyOf(c.ModuleBase.RequiredModuleNames())
+func (c *Module) RequiredModuleNames(ctx android.ConfigAndErrorContext) []string {
+	required := android.CopyOf(c.ModuleBase.RequiredModuleNames(ctx))
 	if c.ImageVariation().Variation == android.CoreVariation {
 		required = append(required, c.Properties.Target.Platform.Required...)
 		required = removeListFromList(required, c.Properties.Target.Platform.Exclude_required)
@@ -1037,13 +1026,6 @@ func (c *Module) SelectedStl() string {
 	return ""
 }
 
-func (c *Module) NdkPrebuiltStl() bool {
-	if _, ok := c.linker.(*ndkPrebuiltStlLinker); ok {
-		return true
-	}
-	return false
-}
-
 func (c *Module) StubDecorator() bool {
 	if _, ok := c.linker.(*stubDecorator); ok {
 		return true
@@ -1092,16 +1074,6 @@ func (c *Module) CcLibrary() bool {
 
 func (c *Module) CcLibraryInterface() bool {
 	if _, ok := c.linker.(libraryInterface); ok {
-		return true
-	}
-	return false
-}
-
-func (c *Module) IsNdkPrebuiltStl() bool {
-	if c.linker == nil {
-		return false
-	}
-	if _, ok := c.linker.(*ndkPrebuiltStlLinker); ok {
 		return true
 	}
 	return false
@@ -1188,6 +1160,16 @@ func (c *Module) BuildSharedVariant() bool {
 		}
 	}
 	panic(fmt.Errorf("BuildSharedVariant called on non-library module: %q", c.BaseModuleName()))
+}
+
+func (c *Module) BuildRlibVariant() bool {
+	// cc modules can never build rlib variants
+	return false
+}
+
+func (c *Module) IsRustFFI() bool {
+	// cc modules are not Rust modules
+	return false
 }
 
 func (c *Module) Module() android.Module {
@@ -1378,17 +1360,11 @@ func (c *Module) isOrderfileCompile() bool {
 }
 
 func (c *Module) isCfi() bool {
-	if sanitize := c.sanitize; sanitize != nil {
-		return Bool(sanitize.Properties.SanitizeMutated.Cfi)
-	}
-	return false
+	return c.sanitize.isSanitizerEnabled(cfi)
 }
 
 func (c *Module) isFuzzer() bool {
-	if sanitize := c.sanitize; sanitize != nil {
-		return Bool(sanitize.Properties.SanitizeMutated.Fuzzer)
-	}
-	return false
+	return c.sanitize.isSanitizerEnabled(Fuzzer)
 }
 
 func (c *Module) isNDKStubLibrary() bool {
@@ -1778,11 +1754,6 @@ func (c *Module) Symlinks() []string {
 	return nil
 }
 
-func (c *Module) IsTestPerSrcAllTestsVariation() bool {
-	test, ok := c.linker.(testPerSrc)
-	return ok && test.isAllTestsVariation()
-}
-
 func (c *Module) DataPaths() []android.DataPath {
 	if p, ok := c.installer.(interface {
 		dataPaths() []android.DataPath
@@ -1877,8 +1848,10 @@ var (
 		"libdl":         true,
 		"libz":          true,
 		// art apex
+		// TODO(b/234351700): Remove this when com.android.art.debug is gone.
 		"libandroidio":    true,
 		"libdexfile":      true,
+		"libdexfiled":     true, // com.android.art.debug only
 		"libnativebridge": true,
 		"libnativehelper": true,
 		"libnativeloader": true,
@@ -1934,16 +1907,6 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		TestOnly:       testOnly,
 		TopLevelTarget: c.testModule,
 	})
-
-	// Handle the case of a test module split by `test_per_src` mutator.
-	//
-	// The `test_per_src` mutator adds an extra variation named "", depending on all the other
-	// `test_per_src` variations of the test module. Set `outputFile` to an empty path for this
-	// module and return early, as this module does not produce an output file per se.
-	if c.IsTestPerSrcAllTestsVariation() {
-		c.outputFile = android.OptionalPath{}
-		return
-	}
 
 	c.Properties.SubName = GetSubnameProperty(actx, c)
 	apexInfo, _ := android.ModuleProvider(actx, android.ApexInfoProvider)
@@ -2117,8 +2080,68 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		if c.Properties.IsSdkVariant && c.Properties.SdkAndPlatformVariantVisibleToMake {
 			moduleInfoJSON.Uninstallable = true
 		}
-
 	}
+
+	buildComplianceMetadataInfo(ctx, c, deps)
+
+	if b, ok := c.compiler.(*baseCompiler); ok {
+		c.hasAidl = b.hasSrcExt(ctx, ".aidl")
+		c.hasLex = b.hasSrcExt(ctx, ".l") || b.hasSrcExt(ctx, ".ll")
+		c.hasProto = b.hasSrcExt(ctx, ".proto")
+		c.hasRenderscript = b.hasSrcExt(ctx, ".rscript") || b.hasSrcExt(ctx, ".fs")
+		c.hasSysprop = b.hasSrcExt(ctx, ".sysprop")
+		c.hasWinMsg = b.hasSrcExt(ctx, ".mc")
+		c.hasYacc = b.hasSrcExt(ctx, ".y") || b.hasSrcExt(ctx, ".yy")
+	}
+
+	c.setOutputFiles(ctx)
+}
+
+func (c *Module) setOutputFiles(ctx ModuleContext) {
+	if c.outputFile.Valid() {
+		ctx.SetOutputFiles(android.Paths{c.outputFile.Path()}, "")
+	} else {
+		ctx.SetOutputFiles(android.Paths{}, "")
+	}
+	if c.linker != nil {
+		ctx.SetOutputFiles(android.PathsIfNonNil(c.linker.unstrippedOutputFilePath()), "unstripped")
+		ctx.SetOutputFiles(android.PathsIfNonNil(c.linker.strippedAllOutputFilePath()), "stripped_all")
+	}
+}
+
+func buildComplianceMetadataInfo(ctx ModuleContext, c *Module, deps PathDeps) {
+	// Dump metadata that can not be done in android/compliance-metadata.go
+	complianceMetadataInfo := ctx.ComplianceMetadataInfo()
+	complianceMetadataInfo.SetStringValue(android.ComplianceMetadataProp.IS_STATIC_LIB, strconv.FormatBool(ctx.static()))
+	complianceMetadataInfo.SetStringValue(android.ComplianceMetadataProp.BUILT_FILES, c.outputFile.String())
+
+	// Static deps
+	staticDeps := ctx.GetDirectDepsWithTag(StaticDepTag(false))
+	staticDepNames := make([]string, 0, len(staticDeps))
+	for _, dep := range staticDeps {
+		staticDepNames = append(staticDepNames, dep.Name())
+	}
+
+	staticDepPaths := make([]string, 0, len(deps.StaticLibs))
+	for _, dep := range deps.StaticLibs {
+		staticDepPaths = append(staticDepPaths, dep.String())
+	}
+	complianceMetadataInfo.SetListValue(android.ComplianceMetadataProp.STATIC_DEPS, android.FirstUniqueStrings(staticDepNames))
+	complianceMetadataInfo.SetListValue(android.ComplianceMetadataProp.STATIC_DEP_FILES, android.FirstUniqueStrings(staticDepPaths))
+
+	// Whole static deps
+	wholeStaticDeps := ctx.GetDirectDepsWithTag(StaticDepTag(true))
+	wholeStaticDepNames := make([]string, 0, len(wholeStaticDeps))
+	for _, dep := range wholeStaticDeps {
+		wholeStaticDepNames = append(wholeStaticDepNames, dep.Name())
+	}
+
+	wholeStaticDepPaths := make([]string, 0, len(deps.WholeStaticLibs))
+	for _, dep := range deps.WholeStaticLibs {
+		wholeStaticDepPaths = append(wholeStaticDepPaths, dep.String())
+	}
+	complianceMetadataInfo.SetListValue(android.ComplianceMetadataProp.WHOLE_STATIC_DEPS, android.FirstUniqueStrings(wholeStaticDepNames))
+	complianceMetadataInfo.SetListValue(android.ComplianceMetadataProp.WHOLE_STATIC_DEP_FILES, android.FirstUniqueStrings(wholeStaticDepPaths))
 }
 
 func (c *Module) maybeUnhideFromMake() {
@@ -2228,7 +2251,6 @@ func (c *Module) deps(ctx DepsContext) Deps {
 
 	deps.WholeStaticLibs = android.LastUniqueStrings(deps.WholeStaticLibs)
 	deps.StaticLibs = android.LastUniqueStrings(deps.StaticLibs)
-	deps.Rlibs = android.LastUniqueStrings(deps.Rlibs)
 	deps.LateStaticLibs = android.LastUniqueStrings(deps.LateStaticLibs)
 	deps.SharedLibs = android.LastUniqueStrings(deps.SharedLibs)
 	deps.LateSharedLibs = android.LastUniqueStrings(deps.LateSharedLibs)
@@ -2509,7 +2531,7 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	if c.ImageVariation().Variation == android.CoreVariation && c.Device() &&
 		c.Target().NativeBridge == android.NativeBridgeDisabled {
 		actx.AddVariationDependencies(
-			[]blueprint.Variation{{Mutator: "image", Variation: VendorVariation}},
+			[]blueprint.Variation{{Mutator: "image", Variation: android.VendorVariation}},
 			llndkHeaderLibTag,
 			deps.LlndkHeaderLibs...)
 	}
@@ -2523,25 +2545,17 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	}
 
 	for _, lib := range deps.StaticLibs {
+		// Some dependencies listed in static_libs might actually be rust_ffi rlib variants.
 		depTag := libraryDependencyTag{Kind: staticLibraryDependency}
+
 		if inList(lib, deps.ReexportStaticLibHeaders) {
 			depTag.reexportFlags = true
 		}
 		if inList(lib, deps.ExcludeLibsForApex) {
 			depTag.excludeInApex = true
 		}
-
 		actx.AddVariationDependencies([]blueprint.Variation{
 			{Mutator: "link", Variation: "static"},
-		}, depTag, lib)
-	}
-
-	for _, lib := range deps.Rlibs {
-		depTag := libraryDependencyTag{Kind: rlibLibraryDependency}
-		actx.AddVariationDependencies([]blueprint.Variation{
-			{Mutator: "link", Variation: ""},
-			{Mutator: "rust_libraries", Variation: "rlib"},
-			{Mutator: "rust_stdlinkage", Variation: "rlib-std"},
 		}, depTag, lib)
 	}
 
@@ -2731,10 +2745,6 @@ func checkLinkType(ctx android.BaseModuleContext, from LinkableInterface, to Lin
 		return
 	}
 	if c, ok := to.(*Module); ok {
-		if c.NdkPrebuiltStl() {
-			// These are allowed, but they don't set sdk_version
-			return
-		}
 		if c.StubDecorator() {
 			// These aren't real libraries, but are the stub shared libraries that are included in
 			// the NDK.
@@ -3132,78 +3142,86 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					panic(fmt.Errorf("unexpected library dependency order %d", libDepTag.Order))
 				}
 
-			case libDepTag.rlib():
-				rlibDep := RustRlibDep{LibPath: linkFile.Path(), CrateName: ccDep.CrateName(), LinkDirs: ccDep.ExportedCrateLinkDirs()}
-				depPaths.ReexportedRustRlibDeps = append(depPaths.ReexportedRustRlibDeps, rlibDep)
-				depPaths.RustRlibDeps = append(depPaths.RustRlibDeps, rlibDep)
-				depPaths.IncludeDirs = append(depPaths.IncludeDirs, depExporterInfo.IncludeDirs...)
-				depPaths.ReexportedDirs = append(depPaths.ReexportedDirs, depExporterInfo.IncludeDirs...)
-
 			case libDepTag.static():
-				staticLibraryInfo, isStaticLib := android.OtherModuleProvider(ctx, dep, StaticLibraryInfoProvider)
-				if !isStaticLib {
-					if !ctx.Config().AllowMissingDependencies() {
-						ctx.ModuleErrorf("module %q is not a static library", depName)
-					} else {
-						ctx.AddMissingDependencies([]string{depName})
-					}
-					return
-				}
+				if ccDep.RustLibraryInterface() {
+					rlibDep := RustRlibDep{LibPath: linkFile.Path(), CrateName: ccDep.CrateName(), LinkDirs: ccDep.ExportedCrateLinkDirs()}
+					depPaths.RustRlibDeps = append(depPaths.RustRlibDeps, rlibDep)
+					depPaths.IncludeDirs = append(depPaths.IncludeDirs, depExporterInfo.IncludeDirs...)
+					if libDepTag.wholeStatic {
+						depPaths.ReexportedDirs = append(depPaths.ReexportedDirs, depExporterInfo.IncludeDirs...)
+						depPaths.ReexportedRustRlibDeps = append(depPaths.ReexportedRustRlibDeps, rlibDep)
 
-				// Stubs lib doesn't link to the static lib dependencies. Don't set
-				// linkFile, depFile, and ptr.
-				if c.IsStubs() {
-					break
-				}
-
-				linkFile = android.OptionalPathForPath(staticLibraryInfo.StaticLibrary)
-				if libDepTag.wholeStatic {
-					ptr = &depPaths.WholeStaticLibs
-					if len(staticLibraryInfo.Objects.objFiles) > 0 {
-						depPaths.WholeStaticLibObjs = depPaths.WholeStaticLibObjs.Append(staticLibraryInfo.Objects)
-					} else {
-						// This case normally catches prebuilt static
-						// libraries, but it can also occur when
-						// AllowMissingDependencies is on and the
-						// dependencies has no sources of its own
-						// but has a whole_static_libs dependency
-						// on a missing library.  We want to depend
-						// on the .a file so that there is something
-						// in the dependency tree that contains the
-						// error rule for the missing transitive
-						// dependency.
-						depPaths.WholeStaticLibsFromPrebuilts = append(depPaths.WholeStaticLibsFromPrebuilts, linkFile.Path())
+						// If whole_static, track this as we want to make sure that in a final linkage for a shared library,
+						// exported functions from the rust generated staticlib still exported.
+						if c.CcLibrary() && c.Shared() {
+							c.WholeRustStaticlib = true
+						}
 					}
-					depPaths.WholeStaticLibsFromPrebuilts = append(depPaths.WholeStaticLibsFromPrebuilts,
-						staticLibraryInfo.WholeStaticLibsFromPrebuilts...)
+
 				} else {
-					switch libDepTag.Order {
-					case earlyLibraryDependency:
-						panic(fmt.Errorf("early static libs not suppported"))
-					case normalLibraryDependency:
-						// static dependencies will be handled separately so they can be ordered
-						// using transitive dependencies.
-						ptr = nil
-						directStaticDeps = append(directStaticDeps, staticLibraryInfo)
-					case lateLibraryDependency:
-						ptr = &depPaths.LateStaticLibs
-					default:
-						panic(fmt.Errorf("unexpected library dependency order %d", libDepTag.Order))
+					staticLibraryInfo, isStaticLib := android.OtherModuleProvider(ctx, dep, StaticLibraryInfoProvider)
+					if !isStaticLib {
+						if !ctx.Config().AllowMissingDependencies() {
+							ctx.ModuleErrorf("module %q is not a static library", depName)
+						} else {
+							ctx.AddMissingDependencies([]string{depName})
+						}
+						return
 					}
-				}
 
-				// We re-export the Rust static_rlibs so rlib dependencies don't need to be redeclared by cc_library_static dependents.
-				// E.g. libfoo (cc_library_static) depends on libfoo.ffi (a rust_ffi rlib), libbar depending on libfoo shouldn't have to also add libfoo.ffi to static_rlibs.
-				depPaths.ReexportedRustRlibDeps = append(depPaths.ReexportedRustRlibDeps, depExporterInfo.RustRlibDeps...)
-				depPaths.RustRlibDeps = append(depPaths.RustRlibDeps, depExporterInfo.RustRlibDeps...)
+					// Stubs lib doesn't link to the static lib dependencies. Don't set
+					// linkFile, depFile, and ptr.
+					if c.IsStubs() {
+						break
+					}
 
-				if libDepTag.unexportedSymbols {
-					depPaths.LdFlags = append(depPaths.LdFlags,
-						"-Wl,--exclude-libs="+staticLibraryInfo.StaticLibrary.Base())
+					linkFile = android.OptionalPathForPath(staticLibraryInfo.StaticLibrary)
+					if libDepTag.wholeStatic {
+						ptr = &depPaths.WholeStaticLibs
+						if len(staticLibraryInfo.Objects.objFiles) > 0 {
+							depPaths.WholeStaticLibObjs = depPaths.WholeStaticLibObjs.Append(staticLibraryInfo.Objects)
+						} else {
+							// This case normally catches prebuilt static
+							// libraries, but it can also occur when
+							// AllowMissingDependencies is on and the
+							// dependencies has no sources of its own
+							// but has a whole_static_libs dependency
+							// on a missing library.  We want to depend
+							// on the .a file so that there is something
+							// in the dependency tree that contains the
+							// error rule for the missing transitive
+							// dependency.
+							depPaths.WholeStaticLibsFromPrebuilts = append(depPaths.WholeStaticLibsFromPrebuilts, linkFile.Path())
+						}
+						depPaths.WholeStaticLibsFromPrebuilts = append(depPaths.WholeStaticLibsFromPrebuilts,
+							staticLibraryInfo.WholeStaticLibsFromPrebuilts...)
+					} else {
+						switch libDepTag.Order {
+						case earlyLibraryDependency:
+							panic(fmt.Errorf("early static libs not supported"))
+						case normalLibraryDependency:
+							// static dependencies will be handled separately so they can be ordered
+							// using transitive dependencies.
+							ptr = nil
+							directStaticDeps = append(directStaticDeps, staticLibraryInfo)
+						case lateLibraryDependency:
+							ptr = &depPaths.LateStaticLibs
+						default:
+							panic(fmt.Errorf("unexpected library dependency order %d", libDepTag.Order))
+						}
+					}
+
+					// Collect any exported Rust rlib deps from static libraries which have been included as whole_static_libs
+					depPaths.RustRlibDeps = append(depPaths.RustRlibDeps, depExporterInfo.RustRlibDeps...)
+
+					if libDepTag.unexportedSymbols {
+						depPaths.LdFlags = append(depPaths.LdFlags,
+							"-Wl,--exclude-libs="+staticLibraryInfo.StaticLibrary.Base())
+					}
 				}
 			}
 
-			if libDepTag.static() && !libDepTag.wholeStatic {
+			if libDepTag.static() && !libDepTag.wholeStatic && !ccDep.RustLibraryInterface() {
 				if !ccDep.CcLibraryInterface() || !ccDep.Static() {
 					ctx.ModuleErrorf("module %q not a static library", depName)
 					return
@@ -3290,12 +3308,14 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				c.Properties.AndroidMkSharedLibs = append(
 					c.Properties.AndroidMkSharedLibs, makeLibName)
 			case libDepTag.static():
-				if libDepTag.wholeStatic {
-					c.Properties.AndroidMkWholeStaticLibs = append(
-						c.Properties.AndroidMkWholeStaticLibs, makeLibName)
-				} else {
-					c.Properties.AndroidMkStaticLibs = append(
-						c.Properties.AndroidMkStaticLibs, makeLibName)
+				if !ccDep.RustLibraryInterface() {
+					if libDepTag.wholeStatic {
+						c.Properties.AndroidMkWholeStaticLibs = append(
+							c.Properties.AndroidMkWholeStaticLibs, makeLibName)
+					} else {
+						c.Properties.AndroidMkStaticLibs = append(
+							c.Properties.AndroidMkStaticLibs, makeLibName)
+					}
 				}
 			}
 		} else if !c.IsStubs() {
@@ -3576,28 +3596,6 @@ func (c *Module) IntermPathForModuleOut() android.OptionalPath {
 	return c.outputFile
 }
 
-func (c *Module) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		if c.outputFile.Valid() {
-			return android.Paths{c.outputFile.Path()}, nil
-		}
-		return android.Paths{}, nil
-	case "unstripped":
-		if c.linker != nil {
-			return android.PathsIfNonNil(c.linker.unstrippedOutputFilePath()), nil
-		}
-		return nil, nil
-	case "stripped_all":
-		if c.linker != nil {
-			return android.PathsIfNonNil(c.linker.strippedAllOutputFilePath()), nil
-		}
-		return nil, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
-}
-
 func (c *Module) static() bool {
 	if static, ok := c.linker.(interface {
 		static() bool
@@ -3721,14 +3719,12 @@ func GetMakeLinkType(actx android.ModuleContext, c LinkableInterface) string {
 }
 
 // Overrides ApexModule.IsInstallabeToApex()
-// Only shared/runtime libraries and "test_per_src" tests are installable to APEX.
+// Only shared/runtime libraries .
 func (c *Module) IsInstallableToApex() bool {
 	if lib := c.library; lib != nil {
 		// Stub libs and prebuilt libs in a versioned SDK are not
 		// installable to APEX even though they are shared libs.
 		return lib.shared() && !lib.buildStubs()
-	} else if _, ok := c.linker.(testPerSrc); ok {
-		return true
 	}
 	return false
 }
@@ -3918,7 +3914,6 @@ const (
 	headerLibrary
 	testBin // testBinary already declared
 	ndkLibrary
-	ndkPrebuiltStl
 )
 
 func (c *Module) typ() moduleType {
@@ -3957,8 +3952,6 @@ func (c *Module) typ() moduleType {
 		return sharedLibrary
 	} else if c.isNDKStubLibrary() {
 		return ndkLibrary
-	} else if c.IsNdkPrebuiltStl() {
-		return ndkPrebuiltStl
 	}
 	return unknownType
 }
@@ -4068,6 +4061,13 @@ func (c *Module) BaseModuleName() string {
 		return smn.sourceModuleName()
 	}
 	return c.ModuleBase.BaseModuleName()
+}
+
+func (c *Module) stubsSymbolFilePath() android.Path {
+	if library, ok := c.linker.(*libraryDecorator); ok {
+		return library.stubsSymbolFilePath
+	}
+	return android.OptionalPath{}.Path()
 }
 
 var Bool = proptools.Bool

@@ -42,6 +42,11 @@ var (
 			CommandDeps: []string{"${extract_apks}"},
 		},
 		"abis", "allow-prereleased", "sdk-version", "skip-sdk-check")
+	decompressApex = pctx.StaticRule("decompressApex", blueprint.RuleParams{
+		Command:     `rm -rf $out && ${deapexer} decompress --copy-if-uncompressed --input ${in} --output ${out}`,
+		CommandDeps: []string{"${deapexer}"},
+		Description: "decompress $out",
+	})
 )
 
 type prebuilt interface {
@@ -197,6 +202,7 @@ func (p *prebuiltCommon) initApexFilesForAndroidMk(ctx android.ModuleContext) {
 	// If this apex contains a system server jar, then the dexpreopt artifacts should be added as required
 	for _, install := range p.Dexpreopter.DexpreoptBuiltInstalledForApex() {
 		p.requiredModuleNames = append(p.requiredModuleNames, install.FullModuleName())
+		install.PackageFile(ctx)
 	}
 }
 
@@ -245,7 +251,6 @@ func (p *prebuiltCommon) AndroidMkEntries() []android.AndroidMkEntries {
 			OutputFile:    android.OptionalPathForPath(p.outputApex),
 			Include:       "$(BUILD_PREBUILT)",
 			Host_required: p.hostRequired,
-			OverrideName:  p.BaseModuleName(),
 			ExtraEntries: []android.AndroidMkExtraEntriesFunc{
 				func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 					entries.SetString("LOCAL_MODULE_PATH", p.installDir.String())
@@ -511,7 +516,7 @@ type ApexFileProperties struct {
 	// This cannot be marked as `android:"arch_variant"` because the `prebuilt_apex` is only mutated
 	// for android_common. That is so that it will have the same arch variant as, and so be compatible
 	// with, the source `apex` module type that it replaces.
-	Src  *string `android:"path"`
+	Src  proptools.Configurable[string] `android:"path,replace_instead_of_append"`
 	Arch struct {
 		Arm struct {
 			Src *string `android:"path"`
@@ -561,7 +566,7 @@ func (p *ApexFileProperties) prebuiltApexSelector(ctx android.BaseModuleContext,
 		src = String(p.Arch.X86_64.Src)
 	}
 	if src == "" {
-		src = String(p.Src)
+		src = p.Src.GetOrDefault(ctx, "")
 	}
 
 	if src == "" {
@@ -585,15 +590,6 @@ type PrebuiltProperties struct {
 
 func (a *Prebuilt) hasSanitizedSource(sanitizer string) bool {
 	return false
-}
-
-func (p *Prebuilt) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return android.Paths{p.outputApex}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
 }
 
 // prebuilt_apex imports an `.apex` file into the build graph as if it was built with apex.
@@ -783,7 +779,7 @@ func (p *Prebuilt) ComponentDepsMutator(ctx android.BottomUpMutatorContext) {
 func (p *prebuiltCommon) DepsMutator(ctx android.BottomUpMutatorContext) {
 	if p.hasExportedDeps() {
 		// Create a dependency from the prebuilt apex (prebuilt_apex/apex_set) to the internal deapexer module
-		// The deapexer will return a provider that will be bubbled up to the rdeps of apexes (e.g. dex_bootjars)
+		// The deapexer will return a provider which will be used to determine the exported artfifacts from this prebuilt.
 		ctx.AddDependency(ctx.Module(), android.DeapexerTag, deapexerModuleName(p.Name()))
 	}
 }
@@ -894,6 +890,8 @@ func (p *Prebuilt) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		p.installedFile = ctx.InstallFile(p.installDir, p.installFilename, p.inputApex, p.compatSymlinks...)
 		p.provenanceMetaDataFile = provenance.GenerateArtifactProvenanceMetaData(ctx, p.inputApex, p.installedFile)
 	}
+
+	ctx.SetOutputFiles(android.Paths{p.outputApex}, "")
 }
 
 func (p *Prebuilt) ProvenanceMetaDataFile() android.OutputPath {
@@ -1009,15 +1007,6 @@ func (a *ApexSet) hasSanitizedSource(sanitizer string) bool {
 	return false
 }
 
-func (a *ApexSet) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return android.Paths{a.outputApex}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
-}
-
 // prebuilt_apex imports an `.apex` file into the build graph as if it was built with apex.
 func apexSetFactory() android.Module {
 	module := &ApexSet{}
@@ -1088,8 +1077,14 @@ func (a *ApexSet) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	inputApex := android.OptionalPathForModuleSrc(ctx, a.prebuiltCommonProperties.Selected_apex).Path()
 	a.outputApex = android.PathForModuleOut(ctx, a.installFilename)
+
+	// Build the output APEX. If compression is not enabled, make sure the output is not compressed even if the input is compressed
+	buildRule := android.Cp
+	if !ctx.Config().ApexCompressionEnabled() {
+		buildRule = decompressApex
+	}
 	ctx.Build(pctx, android.BuildParams{
-		Rule:   android.Cp,
+		Rule:   buildRule,
 		Input:  inputApex,
 		Output: a.outputApex,
 	})
@@ -1121,6 +1116,8 @@ func (a *ApexSet) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	for _, overridden := range a.prebuiltCommonProperties.Overrides {
 		a.compatSymlinks = append(a.compatSymlinks, makeCompatSymlinks(overridden, ctx)...)
 	}
+
+	ctx.SetOutputFiles(android.Paths{a.outputApex}, "")
 }
 
 type systemExtContext struct {
