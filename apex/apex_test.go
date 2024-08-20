@@ -384,7 +384,7 @@ func TestBasicApex(t *testing.T) {
 			symlink_preferred_arch: true,
 			system_shared_libs: [],
 			stl: "none",
-			apex_available: [ "myapex", "com.android.gki.*" ],
+			apex_available: [ "myapex" ],
 		}
 
 		rust_binary {
@@ -430,14 +430,6 @@ func TestBasicApex(t *testing.T) {
 			srcs: ["foo.rs"],
 			crate_name: "bar",
 			apex_available: ["myapex"],
-		}
-
-		apex {
-			name: "com.android.gki.fake",
-			binaries: ["foo"],
-			key: "myapex.key",
-			file_contexts: ":myapex-file_contexts",
-			updatable: false,
 		}
 
 		cc_library_shared {
@@ -6730,6 +6722,99 @@ func TestApexAvailable_CreatedForApex(t *testing.T) {
 	}
 }
 
+func TestApexAvailable_PrefixMatch(t *testing.T) {
+
+	for _, tc := range []struct {
+		name          string
+		apexAvailable string
+		expectedError string
+	}{
+		{
+			name:          "prefix matches correctly",
+			apexAvailable: "com.foo.*",
+		},
+		{
+			name:          "prefix doesn't match",
+			apexAvailable: "com.bar.*",
+			expectedError: `Consider .* "com.foo\.\*"`,
+		},
+		{
+			name:          "short prefix",
+			apexAvailable: "com.*",
+			expectedError: "requires two or more components",
+		},
+		{
+			name:          "wildcard not in the end",
+			apexAvailable: "com.*.foo",
+			expectedError: "should end with .*",
+		},
+		{
+			name:          "wildcard in the middle",
+			apexAvailable: "com.foo*.*",
+			expectedError: "not allowed in the middle",
+		},
+		{
+			name:          "hint with prefix pattern",
+			apexAvailable: "//apex_available:platform",
+			expectedError: "Consider adding \"com.foo.bar\" or \"com.foo.*\"",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errorHandler := android.FixtureExpectsNoErrors
+			if tc.expectedError != "" {
+				errorHandler = android.FixtureExpectsAtLeastOneErrorMatchingPattern(tc.expectedError)
+			}
+			context := android.GroupFixturePreparers(
+				prepareForApexTest,
+				android.FixtureMergeMockFs(android.MockFS{
+					"system/sepolicy/apex/com.foo.bar-file_contexts": nil,
+				}),
+			).ExtendWithErrorHandler(errorHandler)
+
+			context.RunTestWithBp(t, `
+				apex {
+					name: "com.foo.bar",
+					key: "myapex.key",
+					native_shared_libs: ["libfoo"],
+					updatable: false,
+				}
+
+				apex_key {
+					name: "myapex.key",
+					public_key: "testkey.avbpubkey",
+					private_key: "testkey.pem",
+				}
+
+				cc_library {
+					name: "libfoo",
+					stl: "none",
+					system_shared_libs: [],
+					apex_available: ["`+tc.apexAvailable+`"],
+				}`)
+		})
+	}
+	testApexError(t, `Consider adding "com.foo" to`, `
+		apex {
+			name: "com.foo", // too short for a partner apex
+			key: "myapex.key",
+			native_shared_libs: ["libfoo"],
+			updatable: false,
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		cc_library {
+			name: "libfoo",
+			stl: "none",
+			system_shared_libs: [],
+		}
+	`)
+}
+
 func TestOverrideApex(t *testing.T) {
 	ctx := testApex(t, `
 		apex {
@@ -8993,6 +9078,30 @@ func TestCompressedApex(t *testing.T) {
 	ensureContains(t, androidMk, "LOCAL_MODULE_STEM := myapex.capex\n")
 }
 
+func TestApexSet_ShouldRespectCompressedApexFlag(t *testing.T) {
+	for _, compressionEnabled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("compressionEnabled=%v", compressionEnabled), func(t *testing.T) {
+			ctx := testApex(t, `
+				apex_set {
+					name: "com.company.android.myapex",
+					apex_name: "com.android.myapex",
+					set: "company-myapex.apks",
+				}
+			`, android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+				variables.CompressedApex = proptools.BoolPtr(compressionEnabled)
+			}),
+			)
+
+			build := ctx.ModuleForTests("com.company.android.myapex", "android_common_com.android.myapex").Output("com.company.android.myapex.apex")
+			if compressionEnabled {
+				ensureEquals(t, build.Rule.String(), "android/soong/android.Cp")
+			} else {
+				ensureEquals(t, build.Rule.String(), "android/apex.decompressApex")
+			}
+		})
+	}
+}
+
 func TestPreferredPrebuiltSharedLibDep(t *testing.T) {
 	ctx := testApex(t, `
 		apex {
@@ -9992,9 +10101,6 @@ func TestApexLintBcpFragmentSdkLibDeps(t *testing.T) {
 		java.PrepareForTestWithJavaSdkLibraryFiles,
 		java.PrepareForTestWithJacocoInstrumentation,
 		java.FixtureWithLastReleaseApis("foo"),
-		android.FixtureModifyConfig(func(config android.Config) {
-			config.SetApiLibraries([]string{"foo"})
-		}),
 		android.FixtureMergeMockFs(fs),
 	).RunTestWithBp(t, bp)
 
@@ -11278,11 +11384,7 @@ func TestBootDexJarsMultipleApexPrebuilts(t *testing.T) {
 				fs["platform/Test.java"] = nil
 			}),
 
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": tc.selectedApexContributions,
-				}
-			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ADSERVICES", tc.selectedApexContributions),
 		)
 		ctx := testDexpreoptWithApexes(t, bp, "", preparer, fragment)
 		checkBootDexJarPath(t, ctx, "framework-foo", tc.expectedBootJar)
@@ -11421,11 +11523,7 @@ func TestInstallationRulesForMultipleApexPrebuilts(t *testing.T) {
 			android.FixtureMergeMockFs(map[string][]byte{
 				"system/sepolicy/apex/com.android.foo-file_contexts": nil,
 			}),
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": tc.selectedApexContributions,
-				}
-			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ADSERVICES", tc.selectedApexContributions),
 		)
 		if tc.expectedError != "" {
 			preparer = preparer.ExtendWithErrorHandler(android.FixtureExpectsOneErrorPattern(tc.expectedError))
@@ -11438,6 +11536,114 @@ func TestInstallationRulesForMultipleApexPrebuilts(t *testing.T) {
 		// 1. The contents of the selected apex_contributions are visible to make
 		// 2. The rest of the apexes in the mainline module family (source or other prebuilt) is hidden from make
 		checkHideFromMake(t, ctx, tc.expectedVisibleModuleName, tc.expectedHiddenModuleNames)
+	}
+}
+
+// Test that product packaging installs the selected mainline module in workspaces withtout source mainline module
+func TestInstallationRulesForMultipleApexPrebuiltsWithoutSource(t *testing.T) {
+	// for a mainline module family, check that only the flagged soong module is visible to make
+	checkHideFromMake := func(t *testing.T, ctx *android.TestContext, visibleModuleNames []string, hiddenModuleNames []string) {
+		variation := func(moduleName string) string {
+			ret := "android_common_com.android.adservices"
+			if moduleName == "com.google.android.foo" {
+				ret = "android_common_com.google.android.foo_com.google.android.foo"
+			}
+			return ret
+		}
+
+		for _, visibleModuleName := range visibleModuleNames {
+			visibleModule := ctx.ModuleForTests(visibleModuleName, variation(visibleModuleName)).Module()
+			android.AssertBoolEquals(t, "Apex "+visibleModuleName+" selected using apex_contributions should be visible to make", false, visibleModule.IsHideFromMake())
+		}
+
+		for _, hiddenModuleName := range hiddenModuleNames {
+			hiddenModule := ctx.ModuleForTests(hiddenModuleName, variation(hiddenModuleName)).Module()
+			android.AssertBoolEquals(t, "Apex "+hiddenModuleName+" not selected using apex_contributions should be hidden from make", true, hiddenModule.IsHideFromMake())
+
+		}
+	}
+
+	bp := `
+		apex_key {
+			name: "com.android.adservices.key",
+			public_key: "com.android.adservices.avbpubkey",
+			private_key: "com.android.adservices.pem",
+		}
+
+		// AOSP source apex
+		apex {
+			name: "com.android.adservices",
+			key: "com.android.adservices.key",
+			updatable: false,
+		}
+
+		// Prebuilt Google APEX.
+
+		prebuilt_apex {
+			name: "com.google.android.adservices",
+			apex_name: "com.android.adservices",
+			src: "com.android.foo-arm.apex",
+		}
+
+		// Another Prebuilt Google APEX
+		prebuilt_apex {
+			name: "com.google.android.adservices.v2",
+			apex_name: "com.android.adservices",
+			src: "com.android.foo-arm.apex",
+		}
+
+		// APEX contribution modules
+
+
+		apex_contributions {
+			name: "adservices.prebuilt.contributions",
+			api_domain: "com.android.adservices",
+			contents: ["prebuilt_com.google.android.adservices"],
+		}
+
+		apex_contributions {
+			name: "adservices.prebuilt.v2.contributions",
+			api_domain: "com.android.adservices",
+			contents: ["prebuilt_com.google.android.adservices.v2"],
+		}
+	`
+
+	testCases := []struct {
+		desc                       string
+		selectedApexContributions  string
+		expectedVisibleModuleNames []string
+		expectedHiddenModuleNames  []string
+	}{
+		{
+			desc:                       "No apex contributions selected, source aosp apex should be visible, and mainline prebuilts should be hidden",
+			selectedApexContributions:  "",
+			expectedVisibleModuleNames: []string{"com.android.adservices"},
+			expectedHiddenModuleNames:  []string{"com.google.android.adservices", "com.google.android.adservices.v2"},
+		},
+		{
+			desc:                       "Prebuilt apex prebuilt_com.android.foo is selected",
+			selectedApexContributions:  "adservices.prebuilt.contributions",
+			expectedVisibleModuleNames: []string{"com.android.adservices", "com.google.android.adservices"},
+			expectedHiddenModuleNames:  []string{"com.google.android.adservices.v2"},
+		},
+		{
+			desc:                       "Prebuilt apex prebuilt_com.android.foo.v2 is selected",
+			selectedApexContributions:  "adservices.prebuilt.v2.contributions",
+			expectedVisibleModuleNames: []string{"com.android.adservices", "com.google.android.adservices.v2"},
+			expectedHiddenModuleNames:  []string{"com.google.android.adservices"},
+		},
+	}
+
+	for _, tc := range testCases {
+		preparer := android.GroupFixturePreparers(
+			android.FixtureMergeMockFs(map[string][]byte{
+				"system/sepolicy/apex/com.android.adservices-file_contexts": nil,
+			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ADSERVICES", tc.selectedApexContributions),
+		)
+		ctx := testApex(t, bp, preparer)
+
+		checkHideFromMake(t, ctx, tc.expectedVisibleModuleNames, tc.expectedHiddenModuleNames)
 	}
 }
 
@@ -11466,9 +11672,6 @@ func TestAconfifDeclarationsValidation(t *testing.T) {
 		prepareForApexTest,
 		java.PrepareForTestWithJavaSdkLibraryFiles,
 		java.FixtureWithLastReleaseApis("foo"),
-		android.FixtureModifyConfig(func(config android.Config) {
-			config.SetApiLibraries([]string{"foo"})
-		}),
 	).RunTestWithBp(t, `
 		java_library {
 			name: "baz-java-lib",

@@ -136,11 +136,6 @@ var (
 		// displaying logs in web browsers.
 		"-fmessage-length=0",
 
-		// Disable C++17 "relaxed template template argument matching" as a workaround for
-		// our out-dated libcxx.
-		// http://b/341084395
-		"-fno-relaxed-template-template-args",
-
 		// Using simple template names reduces the size of debug builds.
 		"-gsimple-template-names",
 
@@ -149,9 +144,6 @@ var (
 
 		// Make paths in deps files relative.
 		"-no-canonical-prefixes",
-
-		// http://b/315250603 temporarily disabled
-		"-Wno-error=format",
 	}
 
 	commonGlobalConlyflags = []string{}
@@ -181,9 +173,6 @@ var (
 		"-Werror=sequence-point",
 		"-Werror=format-security",
 		"-nostdlibinc",
-
-		// Emit additional debug info for AutoFDO
-		"-fdebug-info-for-profiling",
 	}
 
 	commonGlobalLldflags = []string{
@@ -286,7 +275,7 @@ var (
 		"-Wno-zero-as-null-pointer-constant",        // http://b/68236239
 		"-Wno-deprecated-anon-enum-enum-conversion", // http://b/153746485
 		"-Wno-deprecated-enum-enum-conversion",
-		"-Wno-pessimizing-move", // http://b/154270751
+		"-Wno-error=pessimizing-move", // http://b/154270751
 		// New warnings to be fixed after clang-r399163
 		"-Wno-non-c-typedef-for-linkage", // http://b/161304145
 		// New warnings to be fixed after clang-r428724
@@ -303,13 +292,6 @@ var (
 		// New warnings to be fixed after clang-r522817
 		"-Wno-error=invalid-offsetof",
 		"-Wno-error=thread-safety-reference-return",
-
-		// Irrelevant on Android because _we_ don't use exceptions, but causes
-		// lots of build noise because libcxx/libcxxabi do. This can probably
-		// go away when we're on a new enough libc++, but has to be global
-		// until then because it causes warnings in the _callers_, not the
-		// project itself.
-		"-Wno-deprecated-dynamic-exception-spec",
 
 		// Allow using VLA CXX extension.
 		"-Wno-vla-cxx-extension",
@@ -350,6 +332,9 @@ var (
 
 		"-Wno-unused",
 		"-Wno-deprecated",
+
+		// http://b/315250603 temporarily disabled
+		"-Wno-error=format",
 	}
 
 	// Similar to noOverrideGlobalCflags, but applies only to third-party code
@@ -376,6 +361,7 @@ var (
 		"-Wno-unqualified-std-cast-call",
 		"-Wno-array-parameter",
 		"-Wno-gnu-offsetof-extensions",
+		"-Wno-pessimizing-move",
 		// TODO: Enable this warning http://b/315245071
 		"-Wno-fortify-source",
 	}

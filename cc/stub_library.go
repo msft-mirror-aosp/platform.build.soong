@@ -39,8 +39,9 @@ func IsStubTarget(m *Module) bool {
 }
 
 // Get target file name to be installed from this module
-func getInstalledFileName(m *Module) string {
-	for _, ps := range m.PackagingSpecs() {
+func getInstalledFileName(ctx android.SingletonContext, m *Module) string {
+	for _, ps := range android.OtherModuleProviderOrDefault(
+		ctx, m.Module(), android.InstallFilesProvider).PackagingSpecs {
 		if name := ps.FileName(); name != "" {
 			return name
 		}
@@ -53,7 +54,7 @@ func (s *stubLibraries) GenerateBuildActions(ctx android.SingletonContext) {
 	ctx.VisitAllModules(func(module android.Module) {
 		if m, ok := module.(*Module); ok {
 			if IsStubTarget(m) {
-				if name := getInstalledFileName(m); name != "" {
+				if name := getInstalledFileName(ctx, m); name != "" {
 					s.stubLibraryMap[name] = true
 					if m.InVendor() {
 						s.stubVendorLibraryMap[name] = true
