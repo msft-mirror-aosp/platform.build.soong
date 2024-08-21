@@ -152,11 +152,11 @@ type StaticOrSharedProperties struct {
 
 	Cflags proptools.Configurable[[]string] `android:"arch_variant"`
 
-	Enabled            *bool    `android:"arch_variant"`
-	Whole_static_libs  []string `android:"arch_variant"`
-	Static_libs        []string `android:"arch_variant"`
-	Shared_libs        []string `android:"arch_variant"`
-	System_shared_libs []string `android:"arch_variant"`
+	Enabled            *bool                            `android:"arch_variant"`
+	Whole_static_libs  proptools.Configurable[[]string] `android:"arch_variant"`
+	Static_libs        proptools.Configurable[[]string] `android:"arch_variant"`
+	Shared_libs        proptools.Configurable[[]string] `android:"arch_variant"`
+	System_shared_libs []string                         `android:"arch_variant"`
 
 	Export_shared_lib_headers []string `android:"arch_variant"`
 	Export_static_lib_headers []string `android:"arch_variant"`
@@ -837,9 +837,9 @@ func (library *libraryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 
 	if library.static() {
 		deps.WholeStaticLibs = append(deps.WholeStaticLibs,
-			library.StaticProperties.Static.Whole_static_libs...)
-		deps.StaticLibs = append(deps.StaticLibs, library.StaticProperties.Static.Static_libs...)
-		deps.SharedLibs = append(deps.SharedLibs, library.StaticProperties.Static.Shared_libs...)
+			library.StaticProperties.Static.Whole_static_libs.GetOrDefault(ctx, nil)...)
+		deps.StaticLibs = append(deps.StaticLibs, library.StaticProperties.Static.Static_libs.GetOrDefault(ctx, nil)...)
+		deps.SharedLibs = append(deps.SharedLibs, library.StaticProperties.Static.Shared_libs.GetOrDefault(ctx, nil)...)
 
 		deps.ReexportSharedLibHeaders = append(deps.ReexportSharedLibHeaders, library.StaticProperties.Static.Export_shared_lib_headers...)
 		deps.ReexportStaticLibHeaders = append(deps.ReexportStaticLibHeaders, library.StaticProperties.Static.Export_static_lib_headers...)
@@ -852,9 +852,9 @@ func (library *libraryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 		if library.baseLinker.Properties.crtPadSegment() {
 			deps.CrtEnd = append(deps.CrtEnd, ctx.toolchain().CrtPadSegmentSharedLibrary()...)
 		}
-		deps.WholeStaticLibs = append(deps.WholeStaticLibs, library.SharedProperties.Shared.Whole_static_libs...)
-		deps.StaticLibs = append(deps.StaticLibs, library.SharedProperties.Shared.Static_libs...)
-		deps.SharedLibs = append(deps.SharedLibs, library.SharedProperties.Shared.Shared_libs...)
+		deps.WholeStaticLibs = append(deps.WholeStaticLibs, library.SharedProperties.Shared.Whole_static_libs.GetOrDefault(ctx, nil)...)
+		deps.StaticLibs = append(deps.StaticLibs, library.SharedProperties.Shared.Static_libs.GetOrDefault(ctx, nil)...)
+		deps.SharedLibs = append(deps.SharedLibs, library.SharedProperties.Shared.Shared_libs.GetOrDefault(ctx, nil)...)
 
 		deps.ReexportSharedLibHeaders = append(deps.ReexportSharedLibHeaders, library.SharedProperties.Shared.Export_shared_lib_headers...)
 		deps.ReexportStaticLibHeaders = append(deps.ReexportStaticLibHeaders, library.SharedProperties.Shared.Export_static_lib_headers...)
@@ -900,8 +900,8 @@ func (library *libraryDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	return deps
 }
 
-func (library *libraryDecorator) linkerSpecifiedDeps(specifiedDeps specifiedDeps) specifiedDeps {
-	specifiedDeps = library.baseLinker.linkerSpecifiedDeps(specifiedDeps)
+func (library *libraryDecorator) linkerSpecifiedDeps(ctx android.ConfigAndErrorContext, module *Module, specifiedDeps specifiedDeps) specifiedDeps {
+	specifiedDeps = library.baseLinker.linkerSpecifiedDeps(ctx, module, specifiedDeps)
 	var properties StaticOrSharedProperties
 	if library.static() {
 		properties = library.StaticProperties.Static
@@ -909,7 +909,8 @@ func (library *libraryDecorator) linkerSpecifiedDeps(specifiedDeps specifiedDeps
 		properties = library.SharedProperties.Shared
 	}
 
-	specifiedDeps.sharedLibs = append(specifiedDeps.sharedLibs, properties.Shared_libs...)
+	eval := module.ConfigurableEvaluator(ctx)
+	specifiedDeps.sharedLibs = append(specifiedDeps.sharedLibs, properties.Shared_libs.GetOrDefault(eval, nil)...)
 
 	// Must distinguish nil and [] in system_shared_libs - ensure that [] in
 	// either input list doesn't come out as nil.
@@ -2079,12 +2080,12 @@ func reuseStaticLibrary(ctx android.BottomUpMutatorContext, shared *Module) {
 		// include directories.
 		if len(sharedCompiler.StaticProperties.Static.Cflags.GetOrDefault(ctx, nil)) == 0 &&
 			len(sharedCompiler.SharedProperties.Shared.Cflags.GetOrDefault(ctx, nil)) == 0 &&
-			len(sharedCompiler.StaticProperties.Static.Whole_static_libs) == 0 &&
-			len(sharedCompiler.SharedProperties.Shared.Whole_static_libs) == 0 &&
-			len(sharedCompiler.StaticProperties.Static.Static_libs) == 0 &&
-			len(sharedCompiler.SharedProperties.Shared.Static_libs) == 0 &&
-			len(sharedCompiler.StaticProperties.Static.Shared_libs) == 0 &&
-			len(sharedCompiler.SharedProperties.Shared.Shared_libs) == 0 &&
+			len(sharedCompiler.StaticProperties.Static.Whole_static_libs.GetOrDefault(ctx, nil)) == 0 &&
+			len(sharedCompiler.SharedProperties.Shared.Whole_static_libs.GetOrDefault(ctx, nil)) == 0 &&
+			len(sharedCompiler.StaticProperties.Static.Static_libs.GetOrDefault(ctx, nil)) == 0 &&
+			len(sharedCompiler.SharedProperties.Shared.Static_libs.GetOrDefault(ctx, nil)) == 0 &&
+			len(sharedCompiler.StaticProperties.Static.Shared_libs.GetOrDefault(ctx, nil)) == 0 &&
+			len(sharedCompiler.SharedProperties.Shared.Shared_libs.GetOrDefault(ctx, nil)) == 0 &&
 			// Compare System_shared_libs properties with nil because empty lists are
 			// semantically significant for them.
 			sharedCompiler.StaticProperties.Static.System_shared_libs == nil &&
