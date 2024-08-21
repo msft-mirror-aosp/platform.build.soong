@@ -206,6 +206,50 @@ type apexBundleProperties struct {
 
 type ApexNativeDependencies struct {
 	// List of native libraries that are embedded inside this APEX.
+	Native_shared_libs proptools.Configurable[[]string]
+
+	// List of JNI libraries that are embedded inside this APEX.
+	Jni_libs []string
+
+	// List of rust dyn libraries that are embedded inside this APEX.
+	Rust_dyn_libs []string
+
+	// List of native executables that are embedded inside this APEX.
+	Binaries proptools.Configurable[[]string]
+
+	// List of native tests that are embedded inside this APEX.
+	Tests []string
+
+	// List of filesystem images that are embedded inside this APEX bundle.
+	Filesystems []string
+
+	// List of prebuilt_etcs that are embedded inside this APEX bundle.
+	Prebuilts proptools.Configurable[[]string]
+
+	// List of native libraries to exclude from this APEX.
+	Exclude_native_shared_libs []string
+
+	// List of JNI libraries to exclude from this APEX.
+	Exclude_jni_libs []string
+
+	// List of rust dyn libraries to exclude from this APEX.
+	Exclude_rust_dyn_libs []string
+
+	// List of native executables to exclude from this APEX.
+	Exclude_binaries []string
+
+	// List of native tests to exclude from this APEX.
+	Exclude_tests []string
+
+	// List of filesystem images to exclude from this APEX bundle.
+	Exclude_filesystems []string
+
+	// List of prebuilt_etcs to exclude from this APEX bundle.
+	Exclude_prebuilts []string
+}
+
+type ResolvedApexNativeDependencies struct {
+	// List of native libraries that are embedded inside this APEX.
 	Native_shared_libs []string
 
 	// List of JNI libraries that are embedded inside this APEX.
@@ -215,8 +259,7 @@ type ApexNativeDependencies struct {
 	Rust_dyn_libs []string
 
 	// List of native executables that are embedded inside this APEX.
-	Binaries         proptools.Configurable[[]string]
-	ResolvedBinaries []string `blueprint:"mutated"`
+	Binaries []string
 
 	// List of native tests that are embedded inside this APEX.
 	Tests []string
@@ -225,8 +268,7 @@ type ApexNativeDependencies struct {
 	Filesystems []string
 
 	// List of prebuilt_etcs that are embedded inside this APEX bundle.
-	Prebuilts         proptools.Configurable[[]string]
-	ResolvedPrebuilts []string `blueprint:"mutated"`
+	Prebuilts []string
 
 	// List of native libraries to exclude from this APEX.
 	Exclude_native_shared_libs []string
@@ -251,14 +293,14 @@ type ApexNativeDependencies struct {
 }
 
 // Merge combines another ApexNativeDependencies into this one
-func (a *ApexNativeDependencies) Merge(ctx android.BaseMutatorContext, b ApexNativeDependencies) {
-	a.Native_shared_libs = append(a.Native_shared_libs, b.Native_shared_libs...)
+func (a *ResolvedApexNativeDependencies) Merge(ctx android.BaseMutatorContext, b ApexNativeDependencies) {
+	a.Native_shared_libs = append(a.Native_shared_libs, b.Native_shared_libs.GetOrDefault(ctx, nil)...)
 	a.Jni_libs = append(a.Jni_libs, b.Jni_libs...)
 	a.Rust_dyn_libs = append(a.Rust_dyn_libs, b.Rust_dyn_libs...)
-	a.ResolvedBinaries = append(a.ResolvedBinaries, b.Binaries.GetOrDefault(ctx, nil)...)
+	a.Binaries = append(a.Binaries, b.Binaries.GetOrDefault(ctx, nil)...)
 	a.Tests = append(a.Tests, b.Tests...)
 	a.Filesystems = append(a.Filesystems, b.Filesystems...)
-	a.ResolvedPrebuilts = append(a.ResolvedPrebuilts, b.Prebuilts.GetOrDefault(ctx, nil)...)
+	a.Prebuilts = append(a.Prebuilts, b.Prebuilts.GetOrDefault(ctx, nil)...)
 
 	a.Exclude_native_shared_libs = append(a.Exclude_native_shared_libs, b.Exclude_native_shared_libs...)
 	a.Exclude_jni_libs = append(a.Exclude_jni_libs, b.Exclude_jni_libs...)
@@ -693,7 +735,7 @@ var (
 )
 
 // TODO(jiyong): shorten this function signature
-func addDependenciesForNativeModules(ctx android.BottomUpMutatorContext, nativeModules ApexNativeDependencies, target android.Target, imageVariation string) {
+func addDependenciesForNativeModules(ctx android.BottomUpMutatorContext, nativeModules ResolvedApexNativeDependencies, target android.Target, imageVariation string) {
 	binVariations := target.Variations()
 	libVariations := append(target.Variations(), blueprint.Variation{Mutator: "link", Variation: "shared"})
 	rustLibVariations := append(
@@ -711,7 +753,7 @@ func addDependenciesForNativeModules(ctx android.BottomUpMutatorContext, nativeM
 	// this module. This is required since arch variant of an APEX bundle is 'common' but it is
 	// 'arm' or 'arm64' for native shared libs.
 	ctx.AddFarVariationDependencies(binVariations, executableTag,
-		android.RemoveListFromList(nativeModules.ResolvedBinaries, nativeModules.Exclude_binaries)...)
+		android.RemoveListFromList(nativeModules.Binaries, nativeModules.Exclude_binaries)...)
 	ctx.AddFarVariationDependencies(binVariations, testTag,
 		android.RemoveListFromList(nativeModules.Tests, nativeModules.Exclude_tests)...)
 	ctx.AddFarVariationDependencies(libVariations, jniLibTag,
@@ -723,7 +765,7 @@ func addDependenciesForNativeModules(ctx android.BottomUpMutatorContext, nativeM
 	ctx.AddFarVariationDependencies(target.Variations(), fsTag,
 		android.RemoveListFromList(nativeModules.Filesystems, nativeModules.Exclude_filesystems)...)
 	ctx.AddFarVariationDependencies(target.Variations(), prebuiltTag,
-		android.RemoveListFromList(nativeModules.ResolvedPrebuilts, nativeModules.Exclude_prebuilts)...)
+		android.RemoveListFromList(nativeModules.Prebuilts, nativeModules.Exclude_prebuilts)...)
 }
 
 func (a *apexBundle) combineProperties(ctx android.BottomUpMutatorContext) {
@@ -774,7 +816,7 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 		}
 	}
 	for i, target := range targets {
-		var deps ApexNativeDependencies
+		var deps ResolvedApexNativeDependencies
 
 		// Add native modules targeting both ABIs. When multilib.* is omitted for
 		// native_shared_libs/jni_libs/tests, it implies multilib.both
@@ -791,7 +833,7 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 		if isPrimaryAbi {
 			deps.Merge(ctx, a.properties.Multilib.First)
 			deps.Merge(ctx, ApexNativeDependencies{
-				Native_shared_libs: nil,
+				Native_shared_libs: proptools.NewConfigurable[[]string](nil, nil),
 				Tests:              nil,
 				Jni_libs:           nil,
 				Binaries:           a.properties.Binaries,
@@ -1028,7 +1070,7 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 
 	if a.dynamic_common_lib_apex() {
 		android.SetProvider(mctx, DCLAInfoProvider, DCLAInfo{
-			ProvidedLibs: a.properties.Native_shared_libs,
+			ProvidedLibs: a.properties.Native_shared_libs.GetOrDefault(mctx, nil),
 		})
 	}
 }
@@ -1480,7 +1522,7 @@ func (a *apexBundle) AddSanitizerDependencies(ctx android.BottomUpMutatorContext
 		imageVariation := a.getImageVariation()
 		for _, target := range ctx.MultiTargets() {
 			if target.Arch.ArchType.Multilib == "lib64" {
-				addDependenciesForNativeModules(ctx, ApexNativeDependencies{
+				addDependenciesForNativeModules(ctx, ResolvedApexNativeDependencies{
 					Native_shared_libs: []string{"libclang_rt.hwasan"},
 					Tests:              nil,
 					Jni_libs:           nil,
@@ -2755,10 +2797,21 @@ func (a *apexBundle) checkApexAvailability(ctx android.ModuleContext) {
 		if to.AvailableFor(apexName) || baselineApexAvailable(apexName, toName) {
 			return true
 		}
+
+		// Let's give some hint for apex_available
+		hint := fmt.Sprintf("%q", apexName)
+
+		if strings.HasPrefix(apexName, "com.") && !strings.HasPrefix(apexName, "com.android.") && strings.Count(apexName, ".") >= 2 {
+			// In case of a partner APEX, prefix format might be an option.
+			components := strings.Split(apexName, ".")
+			components[len(components)-1] = "*"
+			hint += fmt.Sprintf(" or %q", strings.Join(components, "."))
+		}
+
 		ctx.ModuleErrorf("%q requires %q that doesn't list the APEX under 'apex_available'."+
 			"\n\nDependency path:%s\n\n"+
-			"Consider adding %q to 'apex_available' property of %q",
-			fromName, toName, ctx.GetPathString(true), apexName, toName)
+			"Consider adding %s to 'apex_available' property of %q",
+			fromName, toName, ctx.GetPathString(true), hint, toName)
 		// Visit this module's dependencies to check and report any issues with their availability.
 		return true
 	})

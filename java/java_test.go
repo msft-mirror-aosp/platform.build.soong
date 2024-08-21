@@ -2919,9 +2919,9 @@ func TestJavaLibraryOutputFilesRel(t *testing.T) {
 	bar := result.ModuleForTests("bar", "android_common")
 	baz := result.ModuleForTests("baz", "android_common")
 
-	fooOutputPaths := foo.OutputFiles(t, "")
-	barOutputPaths := bar.OutputFiles(t, "")
-	bazOutputPaths := baz.OutputFiles(t, "")
+	fooOutputPaths := foo.OutputFiles(result.TestContext, t, "")
+	barOutputPaths := bar.OutputFiles(result.TestContext, t, "")
+	bazOutputPaths := baz.OutputFiles(result.TestContext, t, "")
 
 	android.AssertPathsRelativeToTopEquals(t, "foo output path",
 		[]string{"out/soong/.intermediates/foo/android_common/javac/foo.jar"}, fooOutputPaths)

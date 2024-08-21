@@ -361,7 +361,7 @@ func (m *moduleContext) Build(pctx PackageContext, params BuildParams) {
 }
 
 func (m *moduleContext) Phony(name string, deps ...Path) {
-	addPhony(m.config, name, deps...)
+	m.phonies[name] = append(m.phonies[name], deps...)
 }
 
 func (m *moduleContext) GetMissingDependencies() []string {
