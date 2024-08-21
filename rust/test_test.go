@@ -108,7 +108,7 @@ func TestDataLibs(t *testing.T) {
 
 	testingModule := ctx.ModuleForTests("main_test", "android_arm64_armv8-a")
 	testBinary := testingModule.Module().(*Module).compiler.(*testDecorator)
-	outputFiles := testingModule.OutputFiles(t, "")
+	outputFiles := testingModule.OutputFiles(ctx, t, "")
 	if len(outputFiles) != 1 {
 		t.Fatalf("expected exactly one output file. output files: [%s]", outputFiles)
 	}
@@ -168,7 +168,7 @@ func TestDataLibsRelativeInstallPath(t *testing.T) {
 	testingModule := ctx.ModuleForTests("main_test", "android_arm64_armv8-a")
 	module := testingModule.Module()
 	testBinary := module.(*Module).compiler.(*testDecorator)
-	outputFiles := testingModule.OutputFiles(t, "")
+	outputFiles := testingModule.OutputFiles(ctx, t, "")
 	if len(outputFiles) != 1 {
 		t.Fatalf("expected exactly one output file. output files: [%s]", outputFiles)
 	}
