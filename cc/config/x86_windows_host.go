@@ -47,6 +47,8 @@ var (
 		// Windows flags to generate PDB
 		"-g",
 		"-gcodeview",
+
+		"-fno-omit-frame-pointer",
 	}
 
 	windowsIncludeFlags = []string{
