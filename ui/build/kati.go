@@ -41,7 +41,7 @@ const katiPackageSuffix = "-package"
 // arguments.
 func genKatiSuffix(ctx Context, config Config) {
 	// Construct the base suffix.
-	katiSuffix := "-" + config.TargetProduct() + config.CoverageSuffix()
+	katiSuffix := "-" + config.TargetProduct()
 
 	// Append kati arguments to the suffix.
 	if args := config.KatiArgs(); len(args) > 0 {
