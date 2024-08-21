@@ -147,6 +147,21 @@ type generatorProperties struct {
 
 	// Enable restat to update the output only if the output is changed
 	Write_if_changed *bool
+
+	// When set to true, an additional $(build_number_file) label will be available
+	// to use in the cmd. This will be the location of a text file containing the
+	// build number. The dependency on this file will be "order-only", meaning that
+	// the genrule will not rerun when only this file changes, to avoid rerunning
+	// the genrule every build, because the build number changes every build.
+	// This also means that you should not attempt to consume the build number from
+	// the result of this genrule in another build rule. If you do, the build number
+	// in the second build rule will be stale when the second build rule rebuilds
+	// but this genrule does not. Only certain allowlisted modules are allowed to
+	// use this property, usages of the build number should be kept to the absolute
+	// minimum. Particularly no modules on the system image may include the build
+	// number. Prefer using libbuildversion via the use_version_lib property on
+	// cc modules.
+	Uses_order_only_build_number_file *bool
 }
 
 type Module struct {
@@ -226,6 +241,15 @@ func toolDepsMutator(ctx android.BottomUpMutatorContext) {
 			ctx.AddFarVariationDependencies(ctx.Config().BuildOSTarget.Variations(), tag, tool)
 		}
 	}
+}
+
+// This allowlist should be kept to the bare minimum, it's
+// intended for things that existed before the build number
+// was tightly controlled. Prefer using libbuildversion
+// via the use_version_lib property of cc modules.
+var genrule_build_number_allowlist = map[string]bool{
+	"build/soong/tests:gen":                   true,
+	"tools/tradefederation/core:tradefed_zip": true,
 }
 
 // generateCommonBuildActions contains build action generation logic
@@ -470,6 +494,11 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 				return strings.Join(proptools.ShellEscapeList(sandboxOuts), " "), nil
 			case "genDir":
 				return proptools.ShellEscape(cmd.PathForOutput(task.genDir)), nil
+			case "build_number_file":
+				if !proptools.Bool(g.properties.Uses_order_only_build_number_file) {
+					return reportError("to use the $(build_number_file) label, you must set uses_order_only_build_number_file: true")
+				}
+				return proptools.ShellEscape(cmd.PathForInput(ctx.Config().BuildNumberFile(ctx))), nil
 			default:
 				if strings.HasPrefix(name, "location ") {
 					label := strings.TrimSpace(strings.TrimPrefix(name, "location "))
@@ -516,6 +545,12 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 		cmd.Implicits(task.in)
 		cmd.ImplicitTools(tools)
 		cmd.ImplicitPackagedTools(packagedTools)
+		if proptools.Bool(g.properties.Uses_order_only_build_number_file) {
+			if _, ok := genrule_build_number_allowlist[ctx.ModuleDir()+":"+ctx.ModuleName()]; !ok {
+				ctx.ModuleErrorf("Only allowlisted modules may use uses_order_only_build_number_file: true")
+			}
+			cmd.OrderOnly(ctx.Config().BuildNumberFile(ctx))
+		}
 
 		// Create the rule to run the genrule command inside sbox.
 		rule.Build(name, desc)

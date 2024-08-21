@@ -2755,10 +2755,21 @@ func (a *apexBundle) checkApexAvailability(ctx android.ModuleContext) {
 		if to.AvailableFor(apexName) || baselineApexAvailable(apexName, toName) {
 			return true
 		}
+
+		// Let's give some hint for apex_available
+		hint := fmt.Sprintf("%q", apexName)
+
+		if strings.HasPrefix(apexName, "com.") && !strings.HasPrefix(apexName, "com.android.") && strings.Count(apexName, ".") >= 2 {
+			// In case of a partner APEX, prefix format might be an option.
+			components := strings.Split(apexName, ".")
+			components[len(components)-1] = "*"
+			hint += fmt.Sprintf(" or %q", strings.Join(components, "."))
+		}
+
 		ctx.ModuleErrorf("%q requires %q that doesn't list the APEX under 'apex_available'."+
 			"\n\nDependency path:%s\n\n"+
-			"Consider adding %q to 'apex_available' property of %q",
-			fromName, toName, ctx.GetPathString(true), apexName, toName)
+			"Consider adding %s to 'apex_available' property of %q",
+			fromName, toName, ctx.GetPathString(true), hint, toName)
 		// Visit this module's dependencies to check and report any issues with their availability.
 		return true
 	})
