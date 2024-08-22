@@ -1038,8 +1038,8 @@ func (m TestingModule) VariablesForTestsRelativeToTop() map[string]string {
 // Exits the test immediately if there is an error and
 // otherwise returns the result of calling Paths.RelativeToTop
 // on the returned Paths.
-func (m TestingModule) OutputFiles(t *testing.T, tag string) Paths {
-	outputFiles := m.Module().base().outputFiles
+func (m TestingModule) OutputFiles(ctx *TestContext, t *testing.T, tag string) Paths {
+	outputFiles := OtherModuleProviderOrDefault(ctx.OtherModuleProviderAdaptor(), m.Module(), OutputFilesProvider)
 	if tag == "" && outputFiles.DefaultOutputFiles != nil {
 		return outputFiles.DefaultOutputFiles.RelativeToTop()
 	} else if taggedOutputFiles, hasTag := outputFiles.TaggedOutputFiles[tag]; hasTag {

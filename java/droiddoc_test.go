@@ -69,7 +69,7 @@ func TestDroiddoc(t *testing.T) {
 			"bar-doc/a.java": nil,
 			"bar-doc/b.java": nil,
 		})
-	barStubsOutputs := ctx.ModuleForTests("bar-stubs", "android_common").OutputFiles(t, "")
+	barStubsOutputs := ctx.ModuleForTests("bar-stubs", "android_common").OutputFiles(ctx, t, "")
 	if len(barStubsOutputs) != 1 {
 		t.Errorf("Expected one output from \"bar-stubs\" got %s", barStubsOutputs)
 	}
