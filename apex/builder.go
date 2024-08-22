@@ -359,14 +359,14 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 	}
 
 	manifestJsonFullOut := android.PathForModuleOut(ctx, "apex_manifest_full.json")
-	defaultVersion := android.DefaultUpdatableModuleVersion
+	defaultVersion := ctx.Config().ReleaseDefaultUpdatableModuleVersion()
 	if a.properties.Variant_version != nil {
 		defaultVersionInt, err := strconv.Atoi(defaultVersion)
 		if err != nil {
-			ctx.ModuleErrorf("expected DefaultUpdatableModuleVersion to be an int, but got %s", defaultVersion)
+			ctx.ModuleErrorf("expected RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION to be an int, but got %s", defaultVersion)
 		}
 		if defaultVersionInt%10 != 0 {
-			ctx.ModuleErrorf("expected DefaultUpdatableModuleVersion to end in a zero, but got %s", defaultVersion)
+			ctx.ModuleErrorf("expected RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION to end in a zero, but got %s", defaultVersion)
 		}
 		variantVersion := []rune(*a.properties.Variant_version)
 		if len(variantVersion) != 1 || variantVersion[0] < '0' || variantVersion[0] > '9' {

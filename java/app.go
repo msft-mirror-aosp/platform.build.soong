@@ -586,7 +586,7 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 		if override := ctx.Config().Getenv("OVERRIDE_APEX_MANIFEST_DEFAULT_VERSION"); override != "" {
 			a.aapt.defaultManifestVersion = override
 		} else {
-			a.aapt.defaultManifestVersion = android.DefaultUpdatableModuleVersion
+			a.aapt.defaultManifestVersion = ctx.Config().ReleaseDefaultUpdatableModuleVersion()
 		}
 	}
 
