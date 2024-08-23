@@ -216,6 +216,8 @@ type ModuleContext interface {
 	// to set the OutputFilesProvider later.
 	SetOutputFiles(outputFiles Paths, tag string)
 
+	GetOutputFiles() OutputFilesInfo
+
 	// ComplianceMetadataInfo returns a ComplianceMetadataInfo instance for different module types to dump metadata,
 	// which usually happens in GenerateAndroidBuildActions() of a module type.
 	// See android.ModuleBase.complianceMetadataInfo
@@ -230,6 +232,9 @@ type moduleContext struct {
 	checkbuildFiles Paths
 	module          Module
 	phonies         map[string]Paths
+	// outputFiles stores the output of a module by tag and is used to set
+	// the OutputFilesProvider in GenerateBuildActions
+	outputFiles OutputFilesInfo
 
 	katiInstalls katiInstalls
 	katiSymlinks katiInstalls
@@ -713,20 +718,24 @@ func (m *moduleContext) ModuleInfoJSON() *ModuleInfoJSON {
 
 func (m *moduleContext) SetOutputFiles(outputFiles Paths, tag string) {
 	if tag == "" {
-		if len(m.module.base().outputFiles.DefaultOutputFiles) > 0 {
+		if len(m.outputFiles.DefaultOutputFiles) > 0 {
 			m.ModuleErrorf("Module %s default OutputFiles cannot be overwritten", m.ModuleName())
 		}
-		m.module.base().outputFiles.DefaultOutputFiles = outputFiles
+		m.outputFiles.DefaultOutputFiles = outputFiles
 	} else {
-		if m.module.base().outputFiles.TaggedOutputFiles == nil {
-			m.module.base().outputFiles.TaggedOutputFiles = make(map[string]Paths)
+		if m.outputFiles.TaggedOutputFiles == nil {
+			m.outputFiles.TaggedOutputFiles = make(map[string]Paths)
 		}
-		if _, exists := m.module.base().outputFiles.TaggedOutputFiles[tag]; exists {
+		if _, exists := m.outputFiles.TaggedOutputFiles[tag]; exists {
 			m.ModuleErrorf("Module %s OutputFiles at tag %s cannot be overwritten", m.ModuleName(), tag)
 		} else {
-			m.module.base().outputFiles.TaggedOutputFiles[tag] = outputFiles
+			m.outputFiles.TaggedOutputFiles[tag] = outputFiles
 		}
 	}
+}
+
+func (m *moduleContext) GetOutputFiles() OutputFilesInfo {
+	return m.outputFiles
 }
 
 func (m *moduleContext) ComplianceMetadataInfo() *ComplianceMetadataInfo {
