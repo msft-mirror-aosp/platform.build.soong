@@ -875,10 +875,6 @@ type ModuleBase struct {
 	// be included in the final module-info.json produced by Make.
 	moduleInfoJSON *ModuleInfoJSON
 
-	// outputFiles stores the output of a module by tag and is used to set
-	// the OutputFilesProvider in GenerateBuildActions
-	outputFiles OutputFilesInfo
-
 	// complianceMetadataInfo is for different module types to dump metadata.
 	// See android.ModuleContext interface.
 	complianceMetadataInfo *ComplianceMetadataInfo
@@ -2057,8 +2053,9 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	m.ruleParams = ctx.ruleParams
 	m.variables = ctx.variables
 
-	if m.outputFiles.DefaultOutputFiles != nil || m.outputFiles.TaggedOutputFiles != nil {
-		SetProvider(ctx, OutputFilesProvider, m.outputFiles)
+	outputFiles := ctx.GetOutputFiles()
+	if outputFiles.DefaultOutputFiles != nil || outputFiles.TaggedOutputFiles != nil {
+		SetProvider(ctx, OutputFilesProvider, outputFiles)
 	}
 
 	if len(ctx.phonies) > 0 {
@@ -2557,13 +2554,14 @@ func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, 
 	type OutputFilesProviderModuleContext interface {
 		OtherModuleProviderContext
 		Module() Module
+		GetOutputFiles() OutputFilesInfo
 	}
 
 	if mctx, isMctx := ctx.(OutputFilesProviderModuleContext); isMctx {
 		if mctx.Module() != module {
 			outputFiles, _ = OtherModuleProvider(mctx, module, OutputFilesProvider)
 		} else {
-			outputFiles = mctx.Module().base().outputFiles
+			outputFiles = mctx.GetOutputFiles()
 			fromProperty = true
 		}
 	} else if cta, isCta := ctx.(*singletonContextAdaptor); isCta {
