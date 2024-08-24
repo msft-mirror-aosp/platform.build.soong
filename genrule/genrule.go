@@ -320,8 +320,7 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 						ctx.ModuleErrorf("host tool %q missing output file", tool)
 						return
 					}
-					if specs := android.OtherModuleProviderOrDefault(
-						ctx, t, android.InstallFilesProvider).TransitivePackagingSpecs.ToList(); specs != nil {
+					if specs := t.TransitivePackagingSpecs(); specs != nil {
 						// If the HostToolProvider has PackgingSpecs, which are definitions of the
 						// required relative locations of the tool and its dependencies, use those
 						// instead.  They will be copied to those relative locations in the sbox

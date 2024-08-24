@@ -346,8 +346,7 @@ func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter
 		if pi, ok := ctx.OtherModuleDependencyTag(child).(PackagingItem); !ok || !pi.IsPackagingItem() {
 			return
 		}
-		for _, ps := range OtherModuleProviderOrDefault(
-			ctx, child, InstallFilesProvider).TransitivePackagingSpecs.ToList() {
+		for _, ps := range child.TransitivePackagingSpecs() {
 			if !filterArch(ps) {
 				continue
 			}
