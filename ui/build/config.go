@@ -1617,6 +1617,12 @@ func (c *configImpl) NinjaBin() string {
 	return c.PrebuiltBuildTool(binName)
 }
 
+func (c *configImpl) N2Bin() string {
+	path := c.PrebuiltBuildTool("n2")
+	// Use musl instead of glibc because glibc on the build server is old and has bugs
+	return strings.ReplaceAll(path, "/linux-x86/", "/linux_musl-x86/")
+}
+
 func (c *configImpl) PrebuiltBuildTool(name string) string {
 	if v, ok := c.environ.Get("SANITIZE_HOST"); ok {
 		if sanitize := strings.Fields(v); inList("address", sanitize) {
