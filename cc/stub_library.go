@@ -61,7 +61,7 @@ func (s *stubLibraries) GenerateBuildActions(ctx android.SingletonContext) {
 					}
 				}
 			}
-			if m.library != nil {
+			if m.library != nil && android.IsModulePreferred(m) {
 				if p := m.library.getAPIListCoverageXMLPath().String(); p != "" {
 					s.apiListCoverageXmlPaths = append(s.apiListCoverageXmlPaths, p)
 				}
