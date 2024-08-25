@@ -554,6 +554,12 @@ func (r *RuleBuilder) build(name string, desc string, ninjaEscapeCommandString b
 					To:   proto.String(r.sboxPathForInputRel(input)),
 				})
 			}
+			for _, input := range r.OrderOnlys() {
+				command.CopyBefore = append(command.CopyBefore, &sbox_proto.Copy{
+					From: proto.String(input.String()),
+					To:   proto.String(r.sboxPathForInputRel(input)),
+				})
+			}
 
 			// If using rsp files copy them and their contents into the sbox directory with
 			// the appropriate path mappings.

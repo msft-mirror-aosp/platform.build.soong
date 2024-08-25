@@ -516,6 +516,7 @@ func (a *AndroidMkEntries) fillInEntries(ctx fillInEntriesContext, mod blueprint
 		a.Include = "$(BUILD_PREBUILT)"
 	}
 	a.Required = append(a.Required, amod.RequiredModuleNames(ctx)...)
+	a.Required = append(a.Required, amod.VintfFragmentModuleNames(ctx)...)
 	a.Host_required = append(a.Host_required, amod.HostRequiredModuleNames()...)
 	a.Target_required = append(a.Target_required, amod.TargetRequiredModuleNames()...)
 

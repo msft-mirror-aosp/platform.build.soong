@@ -187,10 +187,10 @@ type variableProperties struct {
 		// release_aidl_use_unfrozen is "true" when a device can
 		// use the unfrozen versions of AIDL interfaces.
 		Release_aidl_use_unfrozen struct {
-			Cflags          []string
-			Cmd             *string
-			Required        []string
-			Vintf_fragments []string
+			Cflags                 []string
+			Cmd                    *string
+			Required               []string
+			Vintf_fragment_modules []string
 		}
 	} `android:"arch_variant"`
 }
@@ -380,6 +380,7 @@ type ProductVariables struct {
 	SystemExtPrivateSepolicyDirs []string `json:",omitempty"`
 	BoardSepolicyM4Defs          []string `json:",omitempty"`
 
+	BoardPlatform           *string `json:",omitempty"`
 	BoardSepolicyVers       *string `json:",omitempty"`
 	PlatformSepolicyVersion *string `json:",omitempty"`
 
