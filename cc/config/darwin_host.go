@@ -29,6 +29,7 @@ var (
 	darwinCflags = []string{
 		"-fPIC",
 		"-funwind-tables",
+		"-fno-omit-frame-pointer",
 
 		"-isysroot ${macSdkRoot}",
 		"-mmacosx-version-min=${macMinVersion}",
