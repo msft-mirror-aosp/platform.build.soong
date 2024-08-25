@@ -57,7 +57,7 @@ func runNinjaForBuild(ctx Context, config Config) {
 		"--frontend_file", fifo,
 	}
 	if config.useN2 {
-		executable = config.PrebuiltBuildTool("n2")
+		executable = config.N2Bin()
 		args = []string{
 			"-d", "trace",
 			// TODO: implement these features, or remove them.

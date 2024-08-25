@@ -6722,6 +6722,99 @@ func TestApexAvailable_CreatedForApex(t *testing.T) {
 	}
 }
 
+func TestApexAvailable_PrefixMatch(t *testing.T) {
+
+	for _, tc := range []struct {
+		name          string
+		apexAvailable string
+		expectedError string
+	}{
+		{
+			name:          "prefix matches correctly",
+			apexAvailable: "com.foo.*",
+		},
+		{
+			name:          "prefix doesn't match",
+			apexAvailable: "com.bar.*",
+			expectedError: `Consider .* "com.foo\.\*"`,
+		},
+		{
+			name:          "short prefix",
+			apexAvailable: "com.*",
+			expectedError: "requires two or more components",
+		},
+		{
+			name:          "wildcard not in the end",
+			apexAvailable: "com.*.foo",
+			expectedError: "should end with .*",
+		},
+		{
+			name:          "wildcard in the middle",
+			apexAvailable: "com.foo*.*",
+			expectedError: "not allowed in the middle",
+		},
+		{
+			name:          "hint with prefix pattern",
+			apexAvailable: "//apex_available:platform",
+			expectedError: "Consider adding \"com.foo.bar\" or \"com.foo.*\"",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errorHandler := android.FixtureExpectsNoErrors
+			if tc.expectedError != "" {
+				errorHandler = android.FixtureExpectsAtLeastOneErrorMatchingPattern(tc.expectedError)
+			}
+			context := android.GroupFixturePreparers(
+				prepareForApexTest,
+				android.FixtureMergeMockFs(android.MockFS{
+					"system/sepolicy/apex/com.foo.bar-file_contexts": nil,
+				}),
+			).ExtendWithErrorHandler(errorHandler)
+
+			context.RunTestWithBp(t, `
+				apex {
+					name: "com.foo.bar",
+					key: "myapex.key",
+					native_shared_libs: ["libfoo"],
+					updatable: false,
+				}
+
+				apex_key {
+					name: "myapex.key",
+					public_key: "testkey.avbpubkey",
+					private_key: "testkey.pem",
+				}
+
+				cc_library {
+					name: "libfoo",
+					stl: "none",
+					system_shared_libs: [],
+					apex_available: ["`+tc.apexAvailable+`"],
+				}`)
+		})
+	}
+	testApexError(t, `Consider adding "com.foo" to`, `
+		apex {
+			name: "com.foo", // too short for a partner apex
+			key: "myapex.key",
+			native_shared_libs: ["libfoo"],
+			updatable: false,
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		cc_library {
+			name: "libfoo",
+			stl: "none",
+			system_shared_libs: [],
+		}
+	`)
+}
+
 func TestOverrideApex(t *testing.T) {
 	ctx := testApex(t, `
 		apex {
