@@ -663,7 +663,7 @@ func runSoong(ctx Context, config Config) {
 		ninjaArgs = append(ninjaArgs, targets...)
 		ninjaCmd := config.NinjaBin()
 		if config.useN2 {
-			ninjaCmd = config.PrebuiltBuildTool("n2")
+			ninjaCmd = config.N2Bin()
 		}
 
 		cmd := Command(ctx, config, "soong bootstrap",

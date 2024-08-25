@@ -846,12 +846,6 @@ type ModuleBase struct {
 	// The files to copy to the dist as explicitly specified in the .bp file.
 	distFiles TaggedDistFiles
 
-	// Used by buildTargetSingleton to create checkbuild and per-directory build targets
-	// Only set on the final variant of each module
-	installTarget    WritablePath
-	checkbuildTarget WritablePath
-	blueprintDir     string
-
 	hooks hooks
 
 	registerProps []interface{}
@@ -880,10 +874,6 @@ type ModuleBase struct {
 	// moduleInfoJSON can be filled out by GenerateAndroidBuildActions to write a JSON file that will
 	// be included in the final module-info.json produced by Make.
 	moduleInfoJSON *ModuleInfoJSON
-
-	// outputFiles stores the output of a module by tag and is used to set
-	// the OutputFilesProvider in GenerateBuildActions
-	outputFiles OutputFilesInfo
 
 	// complianceMetadataInfo is for different module types to dump metadata.
 	// See android.ModuleContext interface.
@@ -1647,23 +1637,26 @@ func (m *ModuleBase) generateModuleTarget(ctx *moduleContext) {
 
 	var deps Paths
 
-	namespacePrefix := ctx.Namespace().id
-	if namespacePrefix != "" {
-		namespacePrefix = namespacePrefix + "-"
+	var namespacePrefix string
+	nameSpace := ctx.Namespace().Path
+	if nameSpace != "." {
+		namespacePrefix = strings.ReplaceAll(nameSpace, "/", ".") + "-"
 	}
+
+	var info FinalModuleBuildTargetsInfo
 
 	if len(allInstalledFiles) > 0 {
 		name := namespacePrefix + ctx.ModuleName() + "-install"
 		ctx.Phony(name, allInstalledFiles.Paths()...)
-		m.installTarget = PathForPhony(ctx, name)
-		deps = append(deps, m.installTarget)
+		info.InstallTarget = PathForPhony(ctx, name)
+		deps = append(deps, info.InstallTarget)
 	}
 
 	if len(allCheckbuildFiles) > 0 {
 		name := namespacePrefix + ctx.ModuleName() + "-checkbuild"
 		ctx.Phony(name, allCheckbuildFiles...)
-		m.checkbuildTarget = PathForPhony(ctx, name)
-		deps = append(deps, m.checkbuildTarget)
+		info.CheckbuildTarget = PathForPhony(ctx, name)
+		deps = append(deps, info.CheckbuildTarget)
 	}
 
 	if len(deps) > 0 {
@@ -1674,7 +1667,8 @@ func (m *ModuleBase) generateModuleTarget(ctx *moduleContext) {
 
 		ctx.Phony(namespacePrefix+ctx.ModuleName()+suffix, deps...)
 
-		m.blueprintDir = ctx.ModuleDir()
+		info.BlueprintDir = ctx.ModuleDir()
+		SetProvider(ctx, FinalModuleBuildTargetsProvider, info)
 	}
 }
 
@@ -1789,6 +1783,16 @@ type InstallFilesInfo struct {
 	TestData     []DataPath
 }
 
+var FinalModuleBuildTargetsProvider = blueprint.NewProvider[FinalModuleBuildTargetsInfo]()
+
+type FinalModuleBuildTargetsInfo struct {
+	// Used by buildTargetSingleton to create checkbuild and per-directory build targets
+	// Only set on the final variant of each module
+	InstallTarget    WritablePath
+	CheckbuildTarget WritablePath
+	BlueprintDir     string
+}
+
 var InstallFilesProvider = blueprint.NewProvider[InstallFilesInfo]()
 
 func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) {
@@ -1797,6 +1801,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		bp:                blueprintCtx,
 		baseModuleContext: m.baseModuleContextFactory(blueprintCtx),
 		variables:         make(map[string]string),
+		phonies:           make(map[string]Paths),
 	}
 
 	setContainerInfo(ctx)
@@ -2048,10 +2053,16 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	m.ruleParams = ctx.ruleParams
 	m.variables = ctx.variables
 
-	if m.outputFiles.DefaultOutputFiles != nil || m.outputFiles.TaggedOutputFiles != nil {
-		SetProvider(ctx, OutputFilesProvider, m.outputFiles)
+	outputFiles := ctx.GetOutputFiles()
+	if outputFiles.DefaultOutputFiles != nil || outputFiles.TaggedOutputFiles != nil {
+		SetProvider(ctx, OutputFilesProvider, outputFiles)
 	}
 
+	if len(ctx.phonies) > 0 {
+		SetProvider(ctx, ModulePhonyProvider, ModulePhonyInfo{
+			Phonies: ctx.phonies,
+		})
+	}
 	buildComplianceMetadataProvider(ctx, m)
 }
 
@@ -2543,13 +2554,14 @@ func outputFilesForModuleFromProvider(ctx PathContext, module blueprint.Module, 
 	type OutputFilesProviderModuleContext interface {
 		OtherModuleProviderContext
 		Module() Module
+		GetOutputFiles() OutputFilesInfo
 	}
 
 	if mctx, isMctx := ctx.(OutputFilesProviderModuleContext); isMctx {
 		if mctx.Module() != module {
 			outputFiles, _ = OtherModuleProvider(mctx, module, OutputFilesProvider)
 		} else {
-			outputFiles = mctx.Module().base().outputFiles
+			outputFiles = mctx.GetOutputFiles()
 			fromProperty = true
 		}
 	} else if cta, isCta := ctx.(*singletonContextAdaptor); isCta {
@@ -2655,17 +2667,15 @@ func (c *buildTargetSingleton) GenerateBuildActions(ctx SingletonContext) {
 	modulesInDir := make(map[string]Paths)
 
 	ctx.VisitAllModules(func(module Module) {
-		blueprintDir := module.base().blueprintDir
-		installTarget := module.base().installTarget
-		checkbuildTarget := module.base().checkbuildTarget
+		info := OtherModuleProviderOrDefault(ctx, module, FinalModuleBuildTargetsProvider)
 
-		if checkbuildTarget != nil {
-			checkbuildDeps = append(checkbuildDeps, checkbuildTarget)
-			modulesInDir[blueprintDir] = append(modulesInDir[blueprintDir], checkbuildTarget)
+		if info.CheckbuildTarget != nil {
+			checkbuildDeps = append(checkbuildDeps, info.CheckbuildTarget)
+			modulesInDir[info.BlueprintDir] = append(modulesInDir[info.BlueprintDir], info.CheckbuildTarget)
 		}
 
-		if installTarget != nil {
-			modulesInDir[blueprintDir] = append(modulesInDir[blueprintDir], installTarget)
+		if info.InstallTarget != nil {
+			modulesInDir[info.BlueprintDir] = append(modulesInDir[info.BlueprintDir], info.InstallTarget)
 		}
 	})
 

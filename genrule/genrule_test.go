@@ -19,6 +19,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 
 	"android/soong/android"
@@ -1188,6 +1189,68 @@ func TestGenruleWithGlobPaths(t *testing.T) {
 			).RunTestWithBp(t, test.bp)
 			gen := result.Module("gen", "").(*Module)
 			android.AssertStringEquals(t, "command", test.expectedCmd, gen.rawCommands[0])
+		})
+	}
+}
+
+func TestGenruleUsesOrderOnlyBuildNumberFile(t *testing.T) {
+	testCases := []struct {
+		name            string
+		bp              string
+		fs              android.MockFS
+		expectedError   string
+		expectedCommand string
+	}{
+		{
+			name: "not allowed when not in allowlist",
+			fs: android.MockFS{
+				"foo/Android.bp": []byte(`
+genrule {
+	name: "gen",
+	uses_order_only_build_number_file: true,
+	cmd: "cp $(build_number_file) $(out)",
+	out: ["out.txt"],
+}
+`),
+			},
+			expectedError: `Only allowlisted modules may use uses_order_only_build_number_file: true`,
+		},
+		{
+			name: "normal",
+			fs: android.MockFS{
+				"build/soong/tests/Android.bp": []byte(`
+genrule {
+	name: "gen",
+	uses_order_only_build_number_file: true,
+	cmd: "cp $(build_number_file) $(out)",
+	out: ["out.txt"],
+}
+`),
+			},
+			expectedCommand: `cp BUILD_NUMBER_FILE __SBOX_SANDBOX_DIR__/out/out.txt`,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixtures := android.GroupFixturePreparers(
+				prepareForGenRuleTest,
+				android.PrepareForTestWithVisibility,
+				android.FixtureMergeMockFs(tc.fs),
+				android.FixtureModifyConfigAndContext(func(config android.Config, ctx *android.TestContext) {
+					config.TestProductVariables.BuildNumberFile = proptools.StringPtr("build_number.txt")
+				}),
+			)
+			if tc.expectedError != "" {
+				fixtures = fixtures.ExtendWithErrorHandler(android.FixtureExpectsOneErrorPattern(tc.expectedError))
+			}
+			result := fixtures.RunTest(t)
+
+			if tc.expectedError == "" {
+				tc.expectedCommand = strings.ReplaceAll(tc.expectedCommand, "BUILD_NUMBER_FILE", result.Config.SoongOutDir()+"/build_number.txt")
+				gen := result.Module("gen", "").(*Module)
+				android.AssertStringEquals(t, "raw commands", tc.expectedCommand, gen.rawCommands[0])
+			}
 		})
 	}
 }

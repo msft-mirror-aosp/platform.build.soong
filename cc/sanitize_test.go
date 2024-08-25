@@ -794,47 +794,47 @@ func TestUbsan(t *testing.T) {
 
 		android.AssertStringListContains(t, "missing libclang_rt.ubsan_minimal in bin_with_ubsan static libs",
 			strings.Split(binWithUbsan.Rule("ld").Args["libFlags"], " "),
-			minimalRuntime.OutputFiles(t, "")[0].String())
+			minimalRuntime.OutputFiles(result.TestContext, t, "")[0].String())
 
 		android.AssertStringListContains(t, "missing libclang_rt.ubsan_minimal in bin_depends_ubsan_static static libs",
 			strings.Split(binDependsUbsan.Rule("ld").Args["libFlags"], " "),
-			minimalRuntime.OutputFiles(t, "")[0].String())
+			minimalRuntime.OutputFiles(result.TestContext, t, "")[0].String())
 
 		android.AssertStringListContains(t, "missing libclang_rt.ubsan_minimal in libsharedubsan static libs",
 			strings.Split(libSharedUbsan.Rule("ld").Args["libFlags"], " "),
-			minimalRuntime.OutputFiles(t, "")[0].String())
+			minimalRuntime.OutputFiles(result.TestContext, t, "")[0].String())
 
 		android.AssertStringListDoesNotContain(t, "unexpected libclang_rt.ubsan_minimal in bin_depends_ubsan_shared static libs",
 			strings.Split(binDependsUbsanShared.Rule("ld").Args["libFlags"], " "),
-			minimalRuntime.OutputFiles(t, "")[0].String())
+			minimalRuntime.OutputFiles(result.TestContext, t, "")[0].String())
 
 		android.AssertStringListDoesNotContain(t, "unexpected libclang_rt.ubsan_minimal in bin_no_ubsan static libs",
 			strings.Split(binNoUbsan.Rule("ld").Args["libFlags"], " "),
-			minimalRuntime.OutputFiles(t, "")[0].String())
+			minimalRuntime.OutputFiles(result.TestContext, t, "")[0].String())
 
 		android.AssertStringListContains(t, "missing -Wl,--exclude-libs for minimal runtime in bin_with_ubsan",
 			strings.Split(binWithUbsan.Rule("ld").Args["ldFlags"], " "),
-			"-Wl,--exclude-libs="+minimalRuntime.OutputFiles(t, "")[0].Base())
+			"-Wl,--exclude-libs="+minimalRuntime.OutputFiles(result.TestContext, t, "")[0].Base())
 
 		android.AssertStringListContains(t, "missing -Wl,--exclude-libs for minimal runtime in bin_depends_ubsan_static static libs",
 			strings.Split(binDependsUbsan.Rule("ld").Args["ldFlags"], " "),
-			"-Wl,--exclude-libs="+minimalRuntime.OutputFiles(t, "")[0].Base())
+			"-Wl,--exclude-libs="+minimalRuntime.OutputFiles(result.TestContext, t, "")[0].Base())
 
 		android.AssertStringListContains(t, "missing -Wl,--exclude-libs for minimal runtime in libsharedubsan static libs",
 			strings.Split(libSharedUbsan.Rule("ld").Args["ldFlags"], " "),
-			"-Wl,--exclude-libs="+minimalRuntime.OutputFiles(t, "")[0].Base())
+			"-Wl,--exclude-libs="+minimalRuntime.OutputFiles(result.TestContext, t, "")[0].Base())
 
 		android.AssertStringListDoesNotContain(t, "unexpected -Wl,--exclude-libs for minimal runtime in bin_depends_ubsan_shared static libs",
 			strings.Split(binDependsUbsanShared.Rule("ld").Args["ldFlags"], " "),
-			"-Wl,--exclude-libs="+minimalRuntime.OutputFiles(t, "")[0].Base())
+			"-Wl,--exclude-libs="+minimalRuntime.OutputFiles(result.TestContext, t, "")[0].Base())
 
 		android.AssertStringListDoesNotContain(t, "unexpected -Wl,--exclude-libs for minimal runtime in bin_no_ubsan static libs",
 			strings.Split(binNoUbsan.Rule("ld").Args["ldFlags"], " "),
-			"-Wl,--exclude-libs="+minimalRuntime.OutputFiles(t, "")[0].Base())
+			"-Wl,--exclude-libs="+minimalRuntime.OutputFiles(result.TestContext, t, "")[0].Base())
 
 		android.AssertStringListContains(t, "missing libclang_rt.ubsan_standalone.static in static_bin_with_ubsan_dep static libs",
 			strings.Split(staticBin.Rule("ld").Args["libFlags"], " "),
-			standaloneRuntime.OutputFiles(t, "")[0].String())
+			standaloneRuntime.OutputFiles(result.TestContext, t, "")[0].String())
 
 	}
 
