@@ -1041,7 +1041,7 @@ func (c *configImpl) NamedGlobFile(name string) string {
 
 func (c *configImpl) UsedEnvFile(tag string) string {
 	if v, ok := c.environ.Get("TARGET_PRODUCT"); ok {
-		return shared.JoinPath(c.SoongOutDir(), usedEnvFile+"."+v+"."+tag)
+		return shared.JoinPath(c.SoongOutDir(), usedEnvFile+"."+v+c.CoverageSuffix()+"."+tag)
 	}
 	return shared.JoinPath(c.SoongOutDir(), usedEnvFile+"."+tag)
 }
@@ -1147,6 +1147,13 @@ func (c *configImpl) TargetProductOrErr() (string, error) {
 		return v, nil
 	}
 	return "", fmt.Errorf("TARGET_PRODUCT is not defined")
+}
+
+func (c *configImpl) CoverageSuffix() string {
+	if v := c.environ.IsEnvTrue("EMMA_INSTRUMENT"); v {
+		return ".coverage"
+	}
+	return ""
 }
 
 func (c *configImpl) TargetDevice() string {
@@ -1520,7 +1527,7 @@ func (c *configImpl) SoongVarsFile() string {
 	if err != nil {
 		return filepath.Join(c.SoongOutDir(), "soong.variables")
 	} else {
-		return filepath.Join(c.SoongOutDir(), "soong."+targetProduct+".variables")
+		return filepath.Join(c.SoongOutDir(), "soong."+targetProduct+c.CoverageSuffix()+".variables")
 	}
 }
 
@@ -1529,7 +1536,7 @@ func (c *configImpl) SoongExtraVarsFile() string {
 	if err != nil {
 		return filepath.Join(c.SoongOutDir(), "soong.extra.variables")
 	} else {
-		return filepath.Join(c.SoongOutDir(), "soong."+targetProduct+".extra.variables")
+		return filepath.Join(c.SoongOutDir(), "soong."+targetProduct+c.CoverageSuffix()+".extra.variables")
 	}
 }
 
@@ -1538,7 +1545,7 @@ func (c *configImpl) SoongNinjaFile() string {
 	if err != nil {
 		return filepath.Join(c.SoongOutDir(), "build.ninja")
 	} else {
-		return filepath.Join(c.SoongOutDir(), "build."+targetProduct+".ninja")
+		return filepath.Join(c.SoongOutDir(), "build."+targetProduct+c.CoverageSuffix()+".ninja")
 	}
 }
 
@@ -1550,11 +1557,11 @@ func (c *configImpl) CombinedNinjaFile() string {
 }
 
 func (c *configImpl) SoongAndroidMk() string {
-	return filepath.Join(c.SoongOutDir(), "Android-"+c.TargetProduct()+".mk")
+	return filepath.Join(c.SoongOutDir(), "Android-"+c.TargetProduct()+c.CoverageSuffix()+".mk")
 }
 
 func (c *configImpl) SoongMakeVarsMk() string {
-	return filepath.Join(c.SoongOutDir(), "make_vars-"+c.TargetProduct()+".mk")
+	return filepath.Join(c.SoongOutDir(), "make_vars-"+c.TargetProduct()+c.CoverageSuffix()+".mk")
 }
 
 func (c *configImpl) SoongBuildMetrics() string {
