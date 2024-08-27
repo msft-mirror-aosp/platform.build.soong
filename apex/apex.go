@@ -692,6 +692,8 @@ type dependencyTag struct {
 	// If not-nil and an APEX is a member of an SDK then dependencies of that APEX with this tag will
 	// also be added as exported members of that SDK.
 	memberType android.SdkMemberType
+
+	installable bool
 }
 
 func (d *dependencyTag) SdkMemberType(_ android.Module) android.SdkMemberType {
@@ -710,18 +712,23 @@ func (d *dependencyTag) ReplaceSourceWithPrebuilt() bool {
 	return !d.sourceOnly
 }
 
+func (d *dependencyTag) InstallDepNeeded() bool {
+	return d.installable
+}
+
 var _ android.ReplaceSourceWithPrebuilt = &dependencyTag{}
 var _ android.SdkMemberDependencyTag = &dependencyTag{}
 
 var (
-	androidAppTag   = &dependencyTag{name: "androidApp", payload: true}
-	bpfTag          = &dependencyTag{name: "bpf", payload: true}
-	certificateTag  = &dependencyTag{name: "certificate"}
-	dclaTag         = &dependencyTag{name: "dcla"}
-	executableTag   = &dependencyTag{name: "executable", payload: true}
-	fsTag           = &dependencyTag{name: "filesystem", payload: true}
-	bcpfTag         = &dependencyTag{name: "bootclasspathFragment", payload: true, sourceOnly: true, memberType: java.BootclasspathFragmentSdkMemberType}
-	sscpfTag        = &dependencyTag{name: "systemserverclasspathFragment", payload: true, sourceOnly: true, memberType: java.SystemServerClasspathFragmentSdkMemberType}
+	androidAppTag  = &dependencyTag{name: "androidApp", payload: true}
+	bpfTag         = &dependencyTag{name: "bpf", payload: true}
+	certificateTag = &dependencyTag{name: "certificate"}
+	dclaTag        = &dependencyTag{name: "dcla"}
+	executableTag  = &dependencyTag{name: "executable", payload: true}
+	fsTag          = &dependencyTag{name: "filesystem", payload: true}
+	bcpfTag        = &dependencyTag{name: "bootclasspathFragment", payload: true, sourceOnly: true, memberType: java.BootclasspathFragmentSdkMemberType}
+	// The dexpreopt artifacts of apex system server jars are installed onto system image.
+	sscpfTag        = &dependencyTag{name: "systemserverclasspathFragment", payload: true, sourceOnly: true, memberType: java.SystemServerClasspathFragmentSdkMemberType, installable: true}
 	compatConfigTag = &dependencyTag{name: "compatConfig", payload: true, sourceOnly: true, memberType: java.CompatConfigSdkMemberType}
 	javaLibTag      = &dependencyTag{name: "javaLib", payload: true}
 	jniLibTag       = &dependencyTag{name: "jniLib", payload: true}
@@ -1674,12 +1681,10 @@ func apexFileForJavaModuleWithFile(ctx android.ModuleContext, module javaModule,
 	if sdkLib, ok := module.(*java.SdkLibrary); ok {
 		for _, install := range sdkLib.BuiltInstalledForApex() {
 			af.requiredModuleNames = append(af.requiredModuleNames, install.FullModuleName())
-			install.PackageFile(ctx)
 		}
 	} else if dexpreopter, ok := module.(java.DexpreopterInterface); ok {
 		for _, install := range dexpreopter.DexpreoptBuiltInstalledForApex() {
 			af.requiredModuleNames = append(af.requiredModuleNames, install.FullModuleName())
-			install.PackageFile(ctx)
 		}
 	}
 	return af
