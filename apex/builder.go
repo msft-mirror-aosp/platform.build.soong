@@ -595,7 +595,7 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 	if len(installMapSet) > 0 {
 		var installs []string
 		installs = append(installs, android.SortedKeys(installMapSet)...)
-		a.SetLicenseInstallMap(installs)
+		ctx.SetLicenseInstallMap(installs)
 	}
 
 	////////////////////////////////////////////////////////////////////////////////////////////
