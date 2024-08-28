@@ -842,9 +842,6 @@ type ModuleBase struct {
 	katiInitRcInstalls katiInstalls
 	katiVintfInstalls  katiInstalls
 
-	// The files to copy to the dist as explicitly specified in the .bp file.
-	distFiles TaggedDistFiles
-
 	hooks hooks
 
 	registerProps []interface{}
@@ -862,9 +859,6 @@ type ModuleBase struct {
 
 	// Merged Aconfig files for all transitive deps.
 	aconfigFilePaths Paths
-
-	// The path to the generated license metadata file for the module.
-	licenseMetadataFile WritablePath
 
 	// moduleInfoJSON can be filled out by GenerateAndroidBuildActions to write a JSON file that will
 	// be included in the final module-info.json produced by Make.
@@ -1768,12 +1762,17 @@ type InstallFilesInfo struct {
 	PackagingSpecs  []PackagingSpec
 	// katiInstalls tracks the install rules that were created by Soong but are being exported
 	// to Make to convert to ninja rules so that Make can add additional dependencies.
-	KatiInstalls katiInstalls
-	KatiSymlinks katiInstalls
-	TestData     []DataPath
-	// This was private before, make it private again once we have better solution.
-	TransitiveInstallFiles   *DepSet[InstallPath]
+	KatiInstalls             katiInstalls
+	KatiSymlinks             katiInstalls
+	TestData                 []DataPath
 	TransitivePackagingSpecs *DepSet[PackagingSpec]
+	LicenseMetadataFile      WritablePath
+
+	// The following fields are private before, make it private again once we have
+	// better solution.
+	TransitiveInstallFiles *DepSet[InstallPath]
+	// The files to copy to the dist as explicitly specified in the .bp file.
+	DistFiles TaggedDistFiles
 }
 
 var InstallFilesProvider = blueprint.NewProvider[InstallFilesInfo]()
@@ -1799,7 +1798,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 
 	setContainerInfo(ctx)
 
-	m.licenseMetadataFile = PathForModuleOut(ctx, "meta_lic")
+	ctx.licenseMetadataFile = PathForModuleOut(ctx, "meta_lic")
 
 	dependencyInstallFiles, dependencyPackagingSpecs := m.computeInstallDeps(ctx)
 	// set the TransitiveInstallFiles to only the transitive dependencies to be used as the dependencies
@@ -1967,11 +1966,12 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		// as GenerateTaggedDistFiles() calls OutputFiles(tag) and so relies on the
 		// output paths being set which must be done before or during
 		// GenerateAndroidBuildActions.
-		m.distFiles = m.GenerateTaggedDistFiles(ctx)
+		installFiles.DistFiles = m.GenerateTaggedDistFiles(ctx)
 		if ctx.Failed() {
 			return
 		}
 
+		installFiles.LicenseMetadataFile = ctx.licenseMetadataFile
 		installFiles.InstallFiles = ctx.installFiles
 		installFiles.CheckbuildFiles = ctx.checkbuildFiles
 		installFiles.PackagingSpecs = ctx.packagingSpecs
@@ -1999,7 +1999,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	installFiles.TransitivePackagingSpecs = m.packagingSpecsDepSet
 
 	SetProvider(ctx, InstallFilesProvider, installFiles)
-	buildLicenseMetadata(ctx, m.licenseMetadataFile)
+	buildLicenseMetadata(ctx, ctx.licenseMetadataFile)
 
 	if m.moduleInfoJSON != nil {
 		var installed InstallPaths
