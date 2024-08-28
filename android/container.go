@@ -93,6 +93,10 @@ var globallyAllowlistedDependencies = []string{
 	// This module is implicitly added as a dependency for java modules even when the
 	// dependency specifies sdk_version.
 	"framework-res",
+
+	// jacocoagent is implicitly added as a dependency in coverage builds, and is not installed
+	// on the device.
+	"jacocoagent",
 }
 
 // Returns true when the dependency is globally allowlisted for inter-container dependency
