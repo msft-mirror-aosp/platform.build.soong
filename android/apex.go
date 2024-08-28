@@ -475,13 +475,6 @@ const (
 	AvailableToAnyApex  = "//apex_available:anyapex"
 )
 
-var (
-	AvailableToRecognziedWildcards = []string{
-		AvailableToPlatform,
-		AvailableToAnyApex,
-	}
-)
-
 // CheckAvailableForApex provides the default algorithm for checking the apex availability. When the
 // availability is empty, it defaults to ["//apex_available:platform"] which means "available to the
 // platform but not available to any APEX". When the list is not empty, `what` is matched against

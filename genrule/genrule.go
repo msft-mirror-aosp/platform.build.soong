@@ -625,7 +625,7 @@ func (g *Module) setOutputFiles(ctx android.ModuleContext) {
 }
 
 // Collect information for opening IDE project files in java/jdeps.go.
-func (g *Module) IDEInfo(dpInfo *android.IdeInfo) {
+func (g *Module) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
 	dpInfo.Srcs = append(dpInfo.Srcs, g.Srcs().Strings()...)
 	for _, src := range g.properties.ResolvedSrcs {
 		if strings.HasPrefix(src, ":") {

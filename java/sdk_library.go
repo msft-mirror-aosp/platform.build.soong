@@ -3599,8 +3599,8 @@ func (s *sdkLibrarySdkMemberProperties) AddToPropertySet(ctx android.SdkMemberCo
 }
 
 // TODO(b/358613520): This can be removed when modules are no longer allowed to depend on the top-level library.
-func (s *SdkLibrary) IDEInfo(dpInfo *android.IdeInfo) {
-	s.Library.IDEInfo(dpInfo)
+func (s *SdkLibrary) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
+	s.Library.IDEInfo(ctx, dpInfo)
 	if s.implLibraryModule != nil {
 		dpInfo.Deps = append(dpInfo.Deps, s.implLibraryModule.Name())
 	} else {
