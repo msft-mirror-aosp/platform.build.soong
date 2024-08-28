@@ -157,6 +157,7 @@ type AndroidMkEntries struct {
 }
 
 type AndroidMkEntriesContext interface {
+	OtherModuleProviderContext
 	Config() Config
 }
 
@@ -354,14 +355,15 @@ func (a *AndroidMkEntries) getDistContributions(mod blueprint.Module) *distContr
 		availableTaggedDists = availableTaggedDists.addPathsForTag(DefaultDistTag, a.OutputFile.Path())
 	}
 
+	info := OtherModuleProviderOrDefault(a.entryContext, mod, InstallFilesProvider)
 	// If the distFiles created by GenerateTaggedDistFiles contains paths for the
 	// DefaultDistTag then that takes priority so delete any existing paths.
-	if _, ok := amod.distFiles[DefaultDistTag]; ok {
+	if _, ok := info.DistFiles[DefaultDistTag]; ok {
 		delete(availableTaggedDists, DefaultDistTag)
 	}
 
 	// Finally, merge the distFiles created by GenerateTaggedDistFiles.
-	availableTaggedDists = availableTaggedDists.merge(amod.distFiles)
+	availableTaggedDists = availableTaggedDists.merge(info.DistFiles)
 
 	if len(availableTaggedDists) == 0 {
 		// Nothing dist-able for this module.
@@ -372,7 +374,7 @@ func (a *AndroidMkEntries) getDistContributions(mod blueprint.Module) *distContr
 	distContributions := &distContributions{}
 
 	if !exemptFromRequiredApplicableLicensesProperty(mod.(Module)) {
-		distContributions.licenseMetadataFile = amod.licenseMetadataFile
+		distContributions.licenseMetadataFile = info.LicenseMetadataFile
 	}
 
 	// Iterate over this module's dist structs, merged from the dist and dists properties.
@@ -910,7 +912,6 @@ func translateAndroidModule(ctx SingletonContext, w io.Writer, moduleInfoJSONs *
 		case "*phony.PhonyRule": // writes phony deps and acts like `.PHONY`
 		case "*selinux.selinuxContextsModule": // license properties written
 		case "*sysprop.syspropLibrary": // license properties written
-		case "*vintf.vintfCompatibilityMatrixRule": // use case like phony
 		default:
 			if !ctx.Config().IsEnvFalse("ANDROID_REQUIRE_LICENSES") {
 				return fmt.Errorf("custom make rules not allowed for %q (%q) module %q", ctx.ModuleType(mod), reflect.TypeOf(mod), ctx.ModuleName(mod))

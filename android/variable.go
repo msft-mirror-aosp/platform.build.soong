@@ -514,11 +514,6 @@ type ProductVariables struct {
 	ProductPropFiles   []string `json:",omitempty"`
 
 	EnableUffdGc *string `json:",omitempty"`
-
-	BoardAvbEnable                         *bool    `json:",omitempty"`
-	BoardAvbSystemAddHashtreeFooterArgs    []string `json:",omitempty"`
-	DeviceFrameworkCompatibilityMatrixFile []string `json:",omitempty"`
-	DeviceProductCompatibilityMatrixFile   []string `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {
