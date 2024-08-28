@@ -2861,7 +2861,7 @@ func isStaticExecutableAllowed(apex string, exec string) bool {
 }
 
 // Collect information for opening IDE project files in java/jdeps.go.
-func (a *apexBundle) IDEInfo(dpInfo *android.IdeInfo) {
+func (a *apexBundle) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
 	dpInfo.Deps = append(dpInfo.Deps, a.properties.Java_libs...)
 	dpInfo.Deps = append(dpInfo.Deps, a.properties.Bootclasspath_fragments...)
 	dpInfo.Deps = append(dpInfo.Deps, a.properties.ResolvedSystemserverclasspathFragments...)

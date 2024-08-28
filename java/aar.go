@@ -914,12 +914,12 @@ func (a *AndroidLibrary) setOutputFiles(ctx android.ModuleContext) {
 	setOutputFiles(ctx, a.Library.Module)
 }
 
-func (a *AndroidLibrary) IDEInfo(dpInfo *android.IdeInfo) {
-	a.Library.IDEInfo(dpInfo)
-	a.aapt.IDEInfo(dpInfo)
+func (a *AndroidLibrary) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
+	a.Library.IDEInfo(ctx, dpInfo)
+	a.aapt.IDEInfo(ctx, dpInfo)
 }
 
-func (a *aapt) IDEInfo(dpInfo *android.IdeInfo) {
+func (a *aapt) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
 	if a.rJar != nil {
 		dpInfo.Jars = append(dpInfo.Jars, a.rJar.String())
 	}
@@ -1451,6 +1451,6 @@ func AARImportFactory() android.Module {
 	return module
 }
 
-func (a *AARImport) IDEInfo(dpInfo *android.IdeInfo) {
+func (a *AARImport) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
 	dpInfo.Jars = append(dpInfo.Jars, a.headerJarFile.String(), a.rJar.String())
 }

@@ -251,6 +251,14 @@ type moduleContext struct {
 
 	katiInstalls katiInstalls
 	katiSymlinks katiInstalls
+	// katiInitRcInstalls and katiVintfInstalls track the install rules created by Soong that are
+	// allowed to have duplicates across modules and variants.
+	katiInitRcInstalls           katiInstalls
+	katiVintfInstalls            katiInstalls
+	initRcPaths                  Paths
+	vintfFragmentsPaths          Paths
+	installedInitRcPaths         InstallPaths
+	installedVintfFragmentsPaths InstallPaths
 
 	testData []DataPath
 
@@ -258,6 +266,10 @@ type moduleContext struct {
 	buildParams []BuildParams
 	ruleParams  map[blueprint.Rule]blueprint.RuleParams
 	variables   map[string]string
+
+	// moduleInfoJSON can be filled out by GenerateAndroidBuildActions to write a JSON file that will
+	// be included in the final module-info.json produced by Make.
+	moduleInfoJSON *ModuleInfoJSON
 }
 
 var _ ModuleContext = &moduleContext{}
@@ -535,8 +547,8 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 
 	if m.requiresFullInstall() {
 		deps = append(deps, InstallPaths(m.TransitiveInstallFiles.ToList())...)
-		deps = append(deps, m.module.base().installedInitRcPaths...)
-		deps = append(deps, m.module.base().installedVintfFragmentsPaths...)
+		deps = append(deps, m.installedInitRcPaths...)
+		deps = append(deps, m.installedVintfFragmentsPaths...)
 
 		var implicitDeps, orderOnlyDeps Paths
 
@@ -721,11 +733,11 @@ func (m *moduleContext) LicenseMetadataFile() Path {
 }
 
 func (m *moduleContext) ModuleInfoJSON() *ModuleInfoJSON {
-	if moduleInfoJSON := m.module.base().moduleInfoJSON; moduleInfoJSON != nil {
+	if moduleInfoJSON := m.moduleInfoJSON; moduleInfoJSON != nil {
 		return moduleInfoJSON
 	}
 	moduleInfoJSON := &ModuleInfoJSON{}
-	m.module.base().moduleInfoJSON = moduleInfoJSON
+	m.moduleInfoJSON = moduleInfoJSON
 	return moduleInfoJSON
 }
 
