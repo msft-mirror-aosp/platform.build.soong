@@ -210,15 +210,19 @@ func disableSourceApexVariant(ctx android.BaseModuleContext) bool {
 		}
 	})
 	// Find the apex variant for this module
-	_, apexVariantsWithoutTestApexes, _ := android.ListSetDifference(apexInfo.InApexVariants, apexInfo.TestApexes)
+	var apexVariantsWithoutTestApexes []string
+	if apexInfo.BaseApexName != "" {
+		// This is a transitive dependency of an override_apex
+		apexVariantsWithoutTestApexes = []string{apexInfo.BaseApexName}
+	} else {
+		_, apexVariantsWithoutTestApexes, _ = android.ListSetDifference(apexInfo.InApexVariants, apexInfo.TestApexes)
+	}
 	disableSource := false
 	// find the selected apexes
 	for _, apexVariant := range apexVariantsWithoutTestApexes {
-		for _, selected := range psi.GetSelectedModulesForApiDomain(apexVariant) {
-			// If the apex_contribution for this api domain contains a prebuilt apex, disable the source variant
-			if strings.HasPrefix(selected, "prebuilt_com.google.android") {
-				disableSource = true
-			}
+		if len(psi.GetSelectedModulesForApiDomain(apexVariant)) > 0 {
+			// If the apex_contribution for this api domain is non-empty, disable the source variant
+			disableSource = true
 		}
 	}
 	return disableSource
