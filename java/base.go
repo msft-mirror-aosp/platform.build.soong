@@ -2049,7 +2049,7 @@ func (j *Module) ClassLoaderContexts() dexpreopt.ClassLoaderContextMap {
 }
 
 // Collect information for opening IDE project files in java/jdeps.go.
-func (j *Module) IDEInfo(dpInfo *android.IdeInfo) {
+func (j *Module) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
 	// jarjar rules will repackage the sources. To prevent misleading results, IdeInfo should contain the
 	// repackaged jar instead of the input sources.
 	if j.expandJarjarRules != nil {

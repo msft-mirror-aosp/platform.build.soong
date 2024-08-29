@@ -870,6 +870,10 @@ var ContainerDependencyViolationAllowlist = map[string][]string{
 		"net-utils-device-common-struct-base", // apex [com.android.tethering] -> system
 	},
 
+	"NfcNciApex": {
+		"android.permission.flags-aconfig-java", // apex [com.android.nfcservices] -> apex [com.android.permission, test_com.android.permission]
+	},
+
 	"okhttp-norepackage": {
 		"okhttp-android-util-log", // apex [com.android.adservices, com.android.devicelock, com.android.extservices] -> system
 	},
