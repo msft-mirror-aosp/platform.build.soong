@@ -111,10 +111,6 @@ type Module interface {
 	TargetRequiredModuleNames() []string
 	VintfFragmentModuleNames(ctx ConfigAndErrorContext) []string
 
-	// TransitivePackagingSpecs returns the PackagingSpecs for this module and any transitive
-	// dependencies with dependency tags for which IsInstallDepNeeded() returns true.
-	TransitivePackagingSpecs() []PackagingSpec
-
 	ConfigurableEvaluator(ctx ConfigAndErrorContext) proptools.ConfigurableEvaluator
 
 	// Get the information about the containers this module belongs to.
@@ -833,8 +829,7 @@ type ModuleBase struct {
 	// The primary licenses property, may be nil, records license metadata for the module.
 	primaryLicensesProperty applicableLicensesProperty
 
-	noAddressSanitizer   bool
-	packagingSpecsDepSet *DepSet[PackagingSpec]
+	noAddressSanitizer bool
 
 	hooks hooks
 
@@ -1451,10 +1446,6 @@ func isInstallDepNeeded(dep Module, tag blueprint.DependencyTag) bool {
 	return IsInstallDepNeededTag(tag)
 }
 
-func (m *ModuleBase) TransitivePackagingSpecs() []PackagingSpec {
-	return m.packagingSpecsDepSet.ToList()
-}
-
 func (m *ModuleBase) NoAddressSanitizer() bool {
 	return m.noAddressSanitizer
 }
@@ -1989,8 +1980,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 
 	ctx.TransitiveInstallFiles = NewDepSet[InstallPath](TOPOLOGICAL, ctx.installFiles, dependencyInstallFiles)
 	installFiles.TransitiveInstallFiles = ctx.TransitiveInstallFiles
-	m.packagingSpecsDepSet = NewDepSet[PackagingSpec](TOPOLOGICAL, ctx.packagingSpecs, dependencyPackagingSpecs)
-	installFiles.TransitivePackagingSpecs = m.packagingSpecsDepSet
+	installFiles.TransitivePackagingSpecs = NewDepSet[PackagingSpec](TOPOLOGICAL, ctx.packagingSpecs, dependencyPackagingSpecs)
 
 	SetProvider(ctx, InstallFilesProvider, installFiles)
 	buildLicenseMetadata(ctx, ctx.licenseMetadataFile)
