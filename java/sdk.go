@@ -308,10 +308,12 @@ func createFrameworkAidl(stubsModules []string, path android.WritablePath, ctx a
 
 			rule.Command().
 				Text("rm -f").Output(aidl)
+
 			rule.Command().
 				BuiltTool("sdkparcelables").
 				Input(jar).
-				Output(aidl)
+				Output(aidl).
+				Flag("--guarantee_stable")
 
 			aidls = append(aidls, aidl)
 		}
