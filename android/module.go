@@ -87,8 +87,6 @@ type Module interface {
 	ReplacedByPrebuilt()
 	IsReplacedByPrebuilt() bool
 	ExportedToMake() bool
-	InitRc() Paths
-	VintfFragments() Paths
 	EffectiveLicenseKinds() []string
 	EffectiveLicenseFiles() Paths
 
@@ -113,14 +111,7 @@ type Module interface {
 	TargetRequiredModuleNames() []string
 	VintfFragmentModuleNames(ctx ConfigAndErrorContext) []string
 
-	// TransitivePackagingSpecs returns the PackagingSpecs for this module and any transitive
-	// dependencies with dependency tags for which IsInstallDepNeeded() returns true.
-	TransitivePackagingSpecs() []PackagingSpec
-
 	ConfigurableEvaluator(ctx ConfigAndErrorContext) proptools.ConfigurableEvaluator
-
-	// Get the information about the containers this module belongs to.
-	ContainersInfo() ContainersInfo
 }
 
 // Qualified id for a module
@@ -835,16 +826,7 @@ type ModuleBase struct {
 	// The primary licenses property, may be nil, records license metadata for the module.
 	primaryLicensesProperty applicableLicensesProperty
 
-	noAddressSanitizer   bool
-	installFilesDepSet   *DepSet[InstallPath]
-	packagingSpecsDepSet *DepSet[PackagingSpec]
-	// katiInitRcInstalls and katiVintfInstalls track the install rules created by Soong that are
-	// allowed to have duplicates across modules and variants.
-	katiInitRcInstalls katiInstalls
-	katiVintfInstalls  katiInstalls
-
-	// The files to copy to the dist as explicitly specified in the .bp file.
-	distFiles TaggedDistFiles
+	noAddressSanitizer bool
 
 	hooks hooks
 
@@ -854,34 +836,6 @@ type ModuleBase struct {
 	buildParams []BuildParams
 	ruleParams  map[blueprint.Rule]blueprint.RuleParams
 	variables   map[string]string
-
-	initRcPaths         Paths
-	vintfFragmentsPaths Paths
-
-	installedInitRcPaths         InstallPaths
-	installedVintfFragmentsPaths InstallPaths
-
-	// Merged Aconfig files for all transitive deps.
-	aconfigFilePaths Paths
-
-	// set of dependency module:location mappings used to populate the license metadata for
-	// apex containers.
-	licenseInstallMap []string
-
-	// The path to the generated license metadata file for the module.
-	licenseMetadataFile WritablePath
-
-	// moduleInfoJSON can be filled out by GenerateAndroidBuildActions to write a JSON file that will
-	// be included in the final module-info.json produced by Make.
-	moduleInfoJSON *ModuleInfoJSON
-
-	// complianceMetadataInfo is for different module types to dump metadata.
-	// See android.ModuleContext interface.
-	complianceMetadataInfo *ComplianceMetadataInfo
-
-	// containersInfo stores the information about the containers and the information of the
-	// apexes the module belongs to.
-	containersInfo ContainersInfo
 }
 
 func (m *ModuleBase) AddJSONData(d *map[string]interface{}) {
@@ -1454,12 +1408,13 @@ func (m *ModuleBase) computeInstallDeps(ctx ModuleContext) ([]*DepSet[InstallPat
 		if isInstallDepNeeded(dep, ctx.OtherModuleDependencyTag(dep)) {
 			// Installation is still handled by Make, so anything hidden from Make is not
 			// installable.
+			info := OtherModuleProviderOrDefault(ctx, dep, InstallFilesProvider)
 			if !dep.IsHideFromMake() && !dep.IsSkipInstall() {
-				installDeps = append(installDeps, dep.base().installFilesDepSet)
+				installDeps = append(installDeps, info.TransitiveInstallFiles)
 			}
 			// Add packaging deps even when the dependency is not installed so that uninstallable
 			// modules can still be packaged.  Often the package will be installed instead.
-			packagingSpecs = append(packagingSpecs, dep.base().packagingSpecsDepSet)
+			packagingSpecs = append(packagingSpecs, info.TransitivePackagingSpecs)
 		}
 	})
 
@@ -1475,10 +1430,6 @@ func isInstallDepNeeded(dep Module, tag blueprint.DependencyTag) bool {
 	}
 	// Only install modules if the dependency tag is an InstallDepNeeded tag.
 	return IsInstallDepNeededTag(tag)
-}
-
-func (m *ModuleBase) TransitivePackagingSpecs() []PackagingSpec {
-	return m.packagingSpecsDepSet.ToList()
 }
 
 func (m *ModuleBase) NoAddressSanitizer() bool {
@@ -1592,24 +1543,6 @@ func (m *ModuleBase) TargetRequiredModuleNames() []string {
 
 func (m *ModuleBase) VintfFragmentModuleNames(ctx ConfigAndErrorContext) []string {
 	return m.base().commonProperties.Vintf_fragment_modules.GetOrDefault(m.ConfigurableEvaluator(ctx), nil)
-}
-
-func (m *ModuleBase) InitRc() Paths {
-	return append(Paths{}, m.initRcPaths...)
-}
-
-func (m *ModuleBase) VintfFragments() Paths {
-	return append(Paths{}, m.vintfFragmentsPaths...)
-}
-
-func (m *ModuleBase) CompileMultilib() *string {
-	return m.base().commonProperties.Compile_multilib
-}
-
-// SetLicenseInstallMap stores the set of dependency module:location mappings for files in an
-// apex container for use when generation the license metadata file.
-func (m *ModuleBase) SetLicenseInstallMap(installMap []string) {
-	m.licenseInstallMap = append(m.licenseInstallMap, installMap...)
 }
 
 func (m *ModuleBase) generateModuleTarget(ctx *moduleContext) {
@@ -1778,12 +1711,29 @@ type InstallFilesInfo struct {
 	PackagingSpecs  []PackagingSpec
 	// katiInstalls tracks the install rules that were created by Soong but are being exported
 	// to Make to convert to ninja rules so that Make can add additional dependencies.
-	KatiInstalls katiInstalls
-	KatiSymlinks katiInstalls
-	TestData     []DataPath
+	KatiInstalls             katiInstalls
+	KatiSymlinks             katiInstalls
+	TestData                 []DataPath
+	TransitivePackagingSpecs *DepSet[PackagingSpec]
+	LicenseMetadataFile      WritablePath
+
+	// The following fields are private before, make it private again once we have
+	// better solution.
+	TransitiveInstallFiles *DepSet[InstallPath]
+	// katiInitRcInstalls and katiVintfInstalls track the install rules created by Soong that are
+	// allowed to have duplicates across modules and variants.
+	KatiInitRcInstalls           katiInstalls
+	KatiVintfInstalls            katiInstalls
+	InitRcPaths                  Paths
+	VintfFragmentsPaths          Paths
+	InstalledInitRcPaths         InstallPaths
+	InstalledVintfFragmentsPaths InstallPaths
+
+	// The files to copy to the dist as explicitly specified in the .bp file.
+	DistFiles TaggedDistFiles
 }
 
-var FinalModuleBuildTargetsProvider = blueprint.NewProvider[FinalModuleBuildTargetsInfo]()
+var InstallFilesProvider = blueprint.NewProvider[InstallFilesInfo]()
 
 type FinalModuleBuildTargetsInfo struct {
 	// Used by buildTargetSingleton to create checkbuild and per-directory build targets
@@ -1793,7 +1743,7 @@ type FinalModuleBuildTargetsInfo struct {
 	BlueprintDir     string
 }
 
-var InstallFilesProvider = blueprint.NewProvider[InstallFilesInfo]()
+var FinalModuleBuildTargetsProvider = blueprint.NewProvider[FinalModuleBuildTargetsInfo]()
 
 func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) {
 	ctx := &moduleContext{
@@ -1805,14 +1755,17 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	}
 
 	setContainerInfo(ctx)
+	if ctx.Config().Getenv("DISABLE_CONTAINER_CHECK") != "true" {
+		checkContainerViolations(ctx)
+	}
 
-	m.licenseMetadataFile = PathForModuleOut(ctx, "meta_lic")
+	ctx.licenseMetadataFile = PathForModuleOut(ctx, "meta_lic")
 
 	dependencyInstallFiles, dependencyPackagingSpecs := m.computeInstallDeps(ctx)
-	// set m.installFilesDepSet to only the transitive dependencies to be used as the dependencies
+	// set the TransitiveInstallFiles to only the transitive dependencies to be used as the dependencies
 	// of installed files of this module.  It will be replaced by a depset including the installed
 	// files of this module at the end for use by modules that depend on this one.
-	m.installFilesDepSet = NewDepSet[InstallPath](TOPOLOGICAL, nil, dependencyInstallFiles)
+	ctx.TransitiveInstallFiles = NewDepSet[InstallPath](TOPOLOGICAL, nil, dependencyInstallFiles)
 
 	// Temporarily continue to call blueprintCtx.GetMissingDependencies() to maintain the previous behavior of never
 	// reporting missing dependency errors in Blueprint when AllowMissingDependencies == true.
@@ -1856,6 +1809,8 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		checkDistProperties(ctx, fmt.Sprintf("dists[%d]", i), &m.distProperties.Dists[i])
 	}
 
+	var installFiles InstallFilesInfo
+
 	if m.Enabled(ctx) {
 		// ensure all direct android.Module deps are enabled
 		ctx.VisitDirectDepsBlueprint(func(bm blueprint.Module) {
@@ -1873,30 +1828,36 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			// so only a single rule is created for each init.rc or vintf fragment file.
 
 			if !m.InVendorRamdisk() {
-				m.initRcPaths = PathsForModuleSrc(ctx, m.commonProperties.Init_rc)
+				ctx.initRcPaths = PathsForModuleSrc(ctx, m.commonProperties.Init_rc)
 				rcDir := PathForModuleInstall(ctx, "etc", "init")
-				for _, src := range m.initRcPaths {
+				for _, src := range ctx.initRcPaths {
 					installedInitRc := rcDir.Join(ctx, src.Base())
-					m.katiInitRcInstalls = append(m.katiInitRcInstalls, katiInstall{
+					ctx.katiInitRcInstalls = append(ctx.katiInitRcInstalls, katiInstall{
 						from: src,
 						to:   installedInitRc,
 					})
 					ctx.PackageFile(rcDir, src.Base(), src)
-					m.installedInitRcPaths = append(m.installedInitRcPaths, installedInitRc)
+					ctx.installedInitRcPaths = append(ctx.installedInitRcPaths, installedInitRc)
 				}
+				installFiles.InitRcPaths = ctx.initRcPaths
+				installFiles.KatiInitRcInstalls = ctx.katiInitRcInstalls
+				installFiles.InstalledInitRcPaths = ctx.installedInitRcPaths
 			}
 
-			m.vintfFragmentsPaths = PathsForModuleSrc(ctx, m.commonProperties.Vintf_fragments.GetOrDefault(ctx, nil))
+			ctx.vintfFragmentsPaths = PathsForModuleSrc(ctx, m.commonProperties.Vintf_fragments.GetOrDefault(ctx, nil))
 			vintfDir := PathForModuleInstall(ctx, "etc", "vintf", "manifest")
-			for _, src := range m.vintfFragmentsPaths {
+			for _, src := range ctx.vintfFragmentsPaths {
 				installedVintfFragment := vintfDir.Join(ctx, src.Base())
-				m.katiVintfInstalls = append(m.katiVintfInstalls, katiInstall{
+				ctx.katiVintfInstalls = append(ctx.katiVintfInstalls, katiInstall{
 					from: src,
 					to:   installedVintfFragment,
 				})
 				ctx.PackageFile(vintfDir, src.Base(), src)
-				m.installedVintfFragmentsPaths = append(m.installedVintfFragmentsPaths, installedVintfFragment)
+				ctx.installedVintfFragmentsPaths = append(ctx.installedVintfFragmentsPaths, installedVintfFragment)
 			}
+			installFiles.VintfFragmentsPaths = ctx.vintfFragmentsPaths
+			installFiles.KatiVintfInstalls = ctx.katiVintfInstalls
+			installFiles.InstalledVintfFragmentsPaths = ctx.installedVintfFragmentsPaths
 		}
 
 		licensesPropertyFlattener(ctx)
@@ -1962,6 +1923,13 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			if ctx.Failed() {
 				return
 			}
+
+			if x, ok := m.module.(IDEInfo); ok {
+				var result IdeInfo
+				x.IDEInfo(ctx, &result)
+				result.BaseModuleName = x.BaseModuleName()
+				SetProvider(ctx, IdeInfoProviderKey, result)
+			}
 		}
 
 		if incrementalEnabled && cacheKey != nil {
@@ -1972,19 +1940,18 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		// as GenerateTaggedDistFiles() calls OutputFiles(tag) and so relies on the
 		// output paths being set which must be done before or during
 		// GenerateAndroidBuildActions.
-		m.distFiles = m.GenerateTaggedDistFiles(ctx)
+		installFiles.DistFiles = m.GenerateTaggedDistFiles(ctx)
 		if ctx.Failed() {
 			return
 		}
 
-		SetProvider(ctx, InstallFilesProvider, InstallFilesInfo{
-			InstallFiles:    ctx.installFiles,
-			CheckbuildFiles: ctx.checkbuildFiles,
-			PackagingSpecs:  ctx.packagingSpecs,
-			KatiInstalls:    ctx.katiInstalls,
-			KatiSymlinks:    ctx.katiSymlinks,
-			TestData:        ctx.testData,
-		})
+		installFiles.LicenseMetadataFile = ctx.licenseMetadataFile
+		installFiles.InstallFiles = ctx.installFiles
+		installFiles.CheckbuildFiles = ctx.checkbuildFiles
+		installFiles.PackagingSpecs = ctx.packagingSpecs
+		installFiles.KatiInstalls = ctx.katiInstalls
+		installFiles.KatiSymlinks = ctx.katiSymlinks
+		installFiles.TestData = ctx.testData
 	} else if ctx.Config().AllowMissingDependencies() {
 		// If the module is not enabled it will not create any build rules, nothing will call
 		// ctx.GetMissingDependencies(), and blueprint will consider the missing dependencies to be unhandled
@@ -2000,17 +1967,19 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		}
 	}
 
-	m.installFilesDepSet = NewDepSet[InstallPath](TOPOLOGICAL, ctx.installFiles, dependencyInstallFiles)
-	m.packagingSpecsDepSet = NewDepSet[PackagingSpec](TOPOLOGICAL, ctx.packagingSpecs, dependencyPackagingSpecs)
+	ctx.TransitiveInstallFiles = NewDepSet[InstallPath](TOPOLOGICAL, ctx.installFiles, dependencyInstallFiles)
+	installFiles.TransitiveInstallFiles = ctx.TransitiveInstallFiles
+	installFiles.TransitivePackagingSpecs = NewDepSet[PackagingSpec](TOPOLOGICAL, ctx.packagingSpecs, dependencyPackagingSpecs)
 
-	buildLicenseMetadata(ctx, m.licenseMetadataFile)
+	SetProvider(ctx, InstallFilesProvider, installFiles)
+	buildLicenseMetadata(ctx, ctx.licenseMetadataFile)
 
-	if m.moduleInfoJSON != nil {
+	if ctx.moduleInfoJSON != nil {
 		var installed InstallPaths
 		installed = append(installed, ctx.katiInstalls.InstallPaths()...)
 		installed = append(installed, ctx.katiSymlinks.InstallPaths()...)
-		installed = append(installed, m.katiInitRcInstalls.InstallPaths()...)
-		installed = append(installed, m.katiVintfInstalls.InstallPaths()...)
+		installed = append(installed, ctx.katiInitRcInstalls.InstallPaths()...)
+		installed = append(installed, ctx.katiVintfInstalls.InstallPaths()...)
 		installedStrings := installed.Strings()
 
 		var targetRequired, hostRequired []string
@@ -2025,28 +1994,28 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			data = append(data, d.ToRelativeInstallPath())
 		}
 
-		if m.moduleInfoJSON.Uninstallable {
+		if ctx.moduleInfoJSON.Uninstallable {
 			installedStrings = nil
-			if len(m.moduleInfoJSON.CompatibilitySuites) == 1 && m.moduleInfoJSON.CompatibilitySuites[0] == "null-suite" {
-				m.moduleInfoJSON.CompatibilitySuites = nil
-				m.moduleInfoJSON.TestConfig = nil
-				m.moduleInfoJSON.AutoTestConfig = nil
+			if len(ctx.moduleInfoJSON.CompatibilitySuites) == 1 && ctx.moduleInfoJSON.CompatibilitySuites[0] == "null-suite" {
+				ctx.moduleInfoJSON.CompatibilitySuites = nil
+				ctx.moduleInfoJSON.TestConfig = nil
+				ctx.moduleInfoJSON.AutoTestConfig = nil
 				data = nil
 			}
 		}
 
-		m.moduleInfoJSON.core = CoreModuleInfoJSON{
-			RegisterName:       m.moduleInfoRegisterName(ctx, m.moduleInfoJSON.SubName),
+		ctx.moduleInfoJSON.core = CoreModuleInfoJSON{
+			RegisterName:       m.moduleInfoRegisterName(ctx, ctx.moduleInfoJSON.SubName),
 			Path:               []string{ctx.ModuleDir()},
 			Installed:          installedStrings,
-			ModuleName:         m.BaseModuleName() + m.moduleInfoJSON.SubName,
+			ModuleName:         m.BaseModuleName() + ctx.moduleInfoJSON.SubName,
 			SupportedVariants:  []string{m.moduleInfoVariant(ctx)},
 			TargetDependencies: targetRequired,
 			HostDependencies:   hostRequired,
 			Data:               data,
 			Required:           m.RequiredModuleNames(ctx),
 		}
-		SetProvider(ctx, ModuleInfoJSONProvider, m.moduleInfoJSON)
+		SetProvider(ctx, ModuleInfoJSONProvider, ctx.moduleInfoJSON)
 	}
 
 	m.buildParams = ctx.buildParams
@@ -2107,10 +2076,6 @@ func (m *ModuleBase) moduleInfoVariant(ctx ModuleContext) string {
 		}
 	}
 	return variant
-}
-
-func (m *ModuleBase) ContainersInfo() ContainersInfo {
-	return m.containersInfo
 }
 
 // Check the supplied dist structure to make sure that it is valid.
@@ -2745,7 +2710,7 @@ func (c *buildTargetSingleton) GenerateBuildActions(ctx SingletonContext) {
 
 // Collect information for opening IDE project files in java/jdeps.go.
 type IDEInfo interface {
-	IDEInfo(ideInfo *IdeInfo)
+	IDEInfo(ctx BaseModuleContext, ideInfo *IdeInfo)
 	BaseModuleName() string
 }
 
@@ -2757,7 +2722,9 @@ type IDECustomizedModuleName interface {
 	IDECustomizedModuleName() string
 }
 
+// Collect information for opening IDE project files in java/jdeps.go.
 type IdeInfo struct {
+	BaseModuleName    string   `json:"-"`
 	Deps              []string `json:"dependencies,omitempty"`
 	Srcs              []string `json:"srcs,omitempty"`
 	Aidl_include_dirs []string `json:"aidl_include_dirs,omitempty"`
@@ -2770,6 +2737,31 @@ type IdeInfo struct {
 	Static_libs       []string `json:"static_libs,omitempty"`
 	Libs              []string `json:"libs,omitempty"`
 }
+
+// Merge merges two IdeInfos and produces a new one, leaving the origional unchanged
+func (i IdeInfo) Merge(other IdeInfo) IdeInfo {
+	return IdeInfo{
+		Deps:              mergeStringLists(i.Deps, other.Deps),
+		Srcs:              mergeStringLists(i.Srcs, other.Srcs),
+		Aidl_include_dirs: mergeStringLists(i.Aidl_include_dirs, other.Aidl_include_dirs),
+		Jarjar_rules:      mergeStringLists(i.Jarjar_rules, other.Jarjar_rules),
+		Jars:              mergeStringLists(i.Jars, other.Jars),
+		Classes:           mergeStringLists(i.Classes, other.Classes),
+		Installed_paths:   mergeStringLists(i.Installed_paths, other.Installed_paths),
+		SrcJars:           mergeStringLists(i.SrcJars, other.SrcJars),
+		Paths:             mergeStringLists(i.Paths, other.Paths),
+		Static_libs:       mergeStringLists(i.Static_libs, other.Static_libs),
+		Libs:              mergeStringLists(i.Libs, other.Libs),
+	}
+}
+
+// mergeStringLists appends the two string lists together and returns a new string list,
+// leaving the originals unchanged. Duplicate strings will be deduplicated.
+func mergeStringLists(a, b []string) []string {
+	return FirstUniqueStrings(Concat(a, b))
+}
+
+var IdeInfoProviderKey = blueprint.NewProvider[IdeInfo]()
 
 func CheckBlueprintSyntax(ctx BaseModuleContext, filename string, contents string) []error {
 	bpctx := ctx.blueprintBaseModuleContext()

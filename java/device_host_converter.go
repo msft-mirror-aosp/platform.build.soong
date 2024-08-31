@@ -192,7 +192,7 @@ func (d *DeviceHostConverter) AndroidMk() android.AndroidMkData {
 // implement the following interface for IDE completion.
 var _ android.IDEInfo = (*DeviceHostConverter)(nil)
 
-func (d *DeviceHostConverter) IDEInfo(ideInfo *android.IdeInfo) {
+func (d *DeviceHostConverter) IDEInfo(ctx android.BaseModuleContext, ideInfo *android.IdeInfo) {
 	ideInfo.Deps = append(ideInfo.Deps, d.properties.Libs...)
 	ideInfo.Libs = append(ideInfo.Libs, d.properties.Libs...)
 }

@@ -3042,7 +3042,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		}
 
 		if dep.Target().Os != ctx.Os() {
-			ctx.ModuleErrorf("OS mismatch between %q and %q", ctx.ModuleName(), depName)
+			ctx.ModuleErrorf("OS mismatch between %q (%s) and %q (%s)", ctx.ModuleName(), ctx.Os().Name, depName, dep.Target().Os.Name)
 			return
 		}
 		if dep.Target().Arch.ArchType != ctx.Arch().ArchType {
