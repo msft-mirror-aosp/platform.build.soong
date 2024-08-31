@@ -16,6 +16,7 @@ package android
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -143,6 +144,17 @@ func (i ApexInfo) InApexModule(apexModuleName string) bool {
 		}
 	}
 	return false
+}
+
+// To satisfy the comparable interface
+func (i ApexInfo) Equal(other any) bool {
+	otherApexInfo, ok := other.(ApexInfo)
+	return ok && i.ApexVariationName == otherApexInfo.ApexVariationName &&
+		i.MinSdkVersion == otherApexInfo.MinSdkVersion &&
+		i.Updatable == otherApexInfo.Updatable &&
+		i.UsePlatformApis == otherApexInfo.UsePlatformApis &&
+		reflect.DeepEqual(i.InApexVariants, otherApexInfo.InApexVariants) &&
+		reflect.DeepEqual(i.InApexModules, otherApexInfo.InApexModules)
 }
 
 // ApexTestForInfo stores the contents of APEXes for which this module is a test - although this

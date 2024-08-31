@@ -1755,6 +1755,9 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	}
 
 	setContainerInfo(ctx)
+	if ctx.Config().Getenv("DISABLE_CONTAINER_CHECK") != "true" {
+		checkContainerViolations(ctx)
+	}
 
 	ctx.licenseMetadataFile = PathForModuleOut(ctx, "meta_lic")
 

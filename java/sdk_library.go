@@ -2099,6 +2099,7 @@ func (module *SdkLibrary) topLevelStubsLibraryProps(mctx android.DefaultableHook
 		props.Dist.Dir = proptools.StringPtr(module.apiDistPath(apiScope))
 		props.Dist.Tag = proptools.StringPtr(".jar")
 	}
+	props.Is_stubs_module = proptools.BoolPtr(true)
 
 	return props
 }

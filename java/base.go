@@ -590,6 +590,13 @@ func (j *Module) InstallInProduct() bool {
 	return j.ProductSpecific()
 }
 
+var _ android.StubsAvailableModule = (*Module)(nil)
+
+// To safisfy the StubsAvailableModule interface
+func (j *Module) IsStubsModule() bool {
+	return proptools.Bool(j.properties.Is_stubs_module)
+}
+
 func (j *Module) CheckStableSdkVersion(ctx android.BaseModuleContext) error {
 	sdkVersion := j.SdkVersion(ctx)
 	if sdkVersion.Stable() {
