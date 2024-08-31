@@ -293,6 +293,7 @@ func TestPlatformBootclasspathDependencies(t *testing.T) {
 			],
 			srcs: ["b.java"],
 			installable: true,
+			sdk_version: "core_current",
 		}
 
 		// Add a java_import that is not preferred and so won't have an appropriate apex variant created
