@@ -28,7 +28,7 @@ type defaultsDependencyTag struct {
 var DefaultsDepTag defaultsDependencyTag
 
 type defaultsProperties struct {
-	Defaults proptools.Configurable[[]string]
+	Defaults []string
 }
 
 type DefaultableModuleBase struct {
@@ -278,13 +278,13 @@ func RegisterDefaultsPreArchMutators(ctx RegisterMutatorsContext) {
 
 func defaultsDepsMutator(ctx BottomUpMutatorContext) {
 	if defaultable, ok := ctx.Module().(Defaultable); ok {
-		ctx.AddDependency(ctx.Module(), DefaultsDepTag, defaultable.defaults().Defaults.GetOrDefault(ctx, nil)...)
+		ctx.AddDependency(ctx.Module(), DefaultsDepTag, defaultable.defaults().Defaults...)
 	}
 }
 
 func defaultsMutator(ctx TopDownMutatorContext) {
 	if defaultable, ok := ctx.Module().(Defaultable); ok {
-		defaults := defaultable.defaults().Defaults.GetOrDefault(ctx, nil)
+		defaults := defaultable.defaults().Defaults
 		if len(defaults) > 0 {
 			var defaultsList []Defaults
 			seen := make(map[Defaults]bool)
@@ -295,7 +295,7 @@ func defaultsMutator(ctx TopDownMutatorContext) {
 						if !seen[defaults] {
 							seen[defaults] = true
 							defaultsList = append(defaultsList, defaults)
-							return len(defaults.defaults().Defaults.GetOrDefault(ctx, nil)) > 0
+							return len(defaults.defaults().Defaults) > 0
 						}
 					} else {
 						ctx.PropertyErrorf("defaults", "module %s is not an defaults module",

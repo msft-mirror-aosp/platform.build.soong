@@ -88,16 +88,9 @@ func (install dexpreopterInstall) ToMakeEntries() android.AndroidMkEntries {
 				entries.SetString("LOCAL_MODULE_PATH", install.installDirOnDevice.String())
 				entries.SetString("LOCAL_INSTALLED_MODULE_STEM", install.installFileOnDevice)
 				entries.SetString("LOCAL_NOT_AVAILABLE_FOR_PLATFORM", "false")
-				// Unset LOCAL_SOONG_INSTALLED_MODULE so that this does not default to the primary .apex file
-				// Without this, installation of the dexpreopt artifacts get skipped
-				entries.SetString("LOCAL_SOONG_INSTALLED_MODULE", "")
 			},
 		},
 	}
-}
-
-func (install dexpreopterInstall) PackageFile(ctx android.ModuleContext) android.PackagingSpec {
-	return ctx.PackageFile(install.installDirOnDevice, install.installFileOnDevice, install.outputPathOnHost)
 }
 
 type Dexpreopter struct {
@@ -217,15 +210,19 @@ func disableSourceApexVariant(ctx android.BaseModuleContext) bool {
 		}
 	})
 	// Find the apex variant for this module
-	_, apexVariantsWithoutTestApexes, _ := android.ListSetDifference(apexInfo.InApexVariants, apexInfo.TestApexes)
+	var apexVariantsWithoutTestApexes []string
+	if apexInfo.BaseApexName != "" {
+		// This is a transitive dependency of an override_apex
+		apexVariantsWithoutTestApexes = []string{apexInfo.BaseApexName}
+	} else {
+		_, apexVariantsWithoutTestApexes, _ = android.ListSetDifference(apexInfo.InApexVariants, apexInfo.TestApexes)
+	}
 	disableSource := false
 	// find the selected apexes
 	for _, apexVariant := range apexVariantsWithoutTestApexes {
-		for _, selected := range psi.GetSelectedModulesForApiDomain(apexVariant) {
-			// If the apex_contribution for this api domain contains a prebuilt apex, disable the source variant
-			if strings.HasPrefix(selected, "prebuilt_com.google.android") {
-				disableSource = true
-			}
+		if len(psi.GetSelectedModulesForApiDomain(apexVariant)) > 0 {
+			// If the apex_contribution for this api domain is non-empty, disable the source variant
+			disableSource = true
 		}
 	}
 	return disableSource
@@ -583,13 +580,16 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, libName string, dexJa
 				// Preopting of boot classpath jars in the ART APEX are handled in
 				// java/dexpreopt_bootjars.go, and other APEX jars are not preopted.
 				// The installs will be handled by Make as sub-modules of the java library.
-				d.builtInstalledForApex = append(d.builtInstalledForApex, dexpreopterInstall{
+				di := dexpreopterInstall{
 					name:                arch + "-" + installBase,
 					moduleName:          libName,
 					outputPathOnHost:    install.From,
 					installDirOnDevice:  installPath,
 					installFileOnDevice: installBase,
-				})
+				}
+				ctx.InstallFile(di.installDirOnDevice, di.installFileOnDevice, di.outputPathOnHost)
+				d.builtInstalledForApex = append(d.builtInstalledForApex, di)
+
 			}
 		} else if !d.preventInstall {
 			ctx.InstallFile(installPath, installBase, install.From)
