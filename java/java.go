@@ -2404,15 +2404,15 @@ func (al *ApiLibrary) TargetSdkVersion(ctx android.EarlyModuleContext) android.A
 	return al.SdkVersion(ctx).ApiLevel
 }
 
-func (al *ApiLibrary) IDEInfo(i *android.IdeInfo) {
-	i.Deps = append(i.Deps, al.ideDeps()...)
+func (al *ApiLibrary) IDEInfo(ctx android.BaseModuleContext, i *android.IdeInfo) {
+	i.Deps = append(i.Deps, al.ideDeps(ctx)...)
 	i.Libs = append(i.Libs, al.properties.Libs...)
 	i.Static_libs = append(i.Static_libs, al.properties.Static_libs...)
 	i.SrcJars = append(i.SrcJars, al.stubsSrcJar.String())
 }
 
 // deps of java_api_library for module_bp_java_deps.json
-func (al *ApiLibrary) ideDeps() []string {
+func (al *ApiLibrary) ideDeps(ctx android.BaseModuleContext) []string {
 	ret := []string{}
 	ret = append(ret, al.properties.Libs...)
 	ret = append(ret, al.properties.Static_libs...)
@@ -2933,7 +2933,7 @@ var _ android.IDECustomizedModuleName = (*Import)(nil)
 
 // Collect information for opening IDE project files in java/jdeps.go.
 
-func (j *Import) IDEInfo(dpInfo *android.IdeInfo) {
+func (j *Import) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
 	dpInfo.Jars = append(dpInfo.Jars, j.combinedHeaderFile.String())
 }
 
