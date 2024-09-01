@@ -226,6 +226,12 @@ type ModuleContext interface {
 	// which usually happens in GenerateAndroidBuildActions() of a module type.
 	// See android.ModuleBase.complianceMetadataInfo
 	ComplianceMetadataInfo() *ComplianceMetadataInfo
+
+	// Get the information about the containers this module belongs to.
+	getContainersInfo() ContainersInfo
+	setContainersInfo(info ContainersInfo)
+
+	setAconfigPaths(paths Paths)
 }
 
 type moduleContext struct {
@@ -246,8 +252,19 @@ type moduleContext struct {
 	// apex containers.
 	licenseInstallMap []string
 
+	// The path to the generated license metadata file for the module.
+	licenseMetadataFile WritablePath
+
 	katiInstalls katiInstalls
 	katiSymlinks katiInstalls
+	// katiInitRcInstalls and katiVintfInstalls track the install rules created by Soong that are
+	// allowed to have duplicates across modules and variants.
+	katiInitRcInstalls           katiInstalls
+	katiVintfInstalls            katiInstalls
+	initRcPaths                  Paths
+	vintfFragmentsPaths          Paths
+	installedInitRcPaths         InstallPaths
+	installedVintfFragmentsPaths InstallPaths
 
 	testData []DataPath
 
@@ -255,6 +272,21 @@ type moduleContext struct {
 	buildParams []BuildParams
 	ruleParams  map[blueprint.Rule]blueprint.RuleParams
 	variables   map[string]string
+
+	// moduleInfoJSON can be filled out by GenerateAndroidBuildActions to write a JSON file that will
+	// be included in the final module-info.json produced by Make.
+	moduleInfoJSON *ModuleInfoJSON
+
+	// containersInfo stores the information about the containers and the information of the
+	// apexes the module belongs to.
+	containersInfo ContainersInfo
+
+	// Merged Aconfig files for all transitive deps.
+	aconfigFilePaths Paths
+
+	// complianceMetadataInfo is for different module types to dump metadata.
+	// See android.ModuleContext interface.
+	complianceMetadataInfo *ComplianceMetadataInfo
 }
 
 var _ ModuleContext = &moduleContext{}
@@ -502,7 +534,11 @@ func (m *moduleContext) PackageFile(installPath InstallPath, name string, srcPat
 }
 
 func (m *moduleContext) getAconfigPaths() *Paths {
-	return &m.module.base().aconfigFilePaths
+	return &m.aconfigFilePaths
+}
+
+func (m *moduleContext) setAconfigPaths(paths Paths) {
+	m.aconfigFilePaths = paths
 }
 
 func (m *moduleContext) packageFile(fullInstallPath InstallPath, srcPath Path, executable bool) PackagingSpec {
@@ -532,8 +568,8 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 
 	if m.requiresFullInstall() {
 		deps = append(deps, InstallPaths(m.TransitiveInstallFiles.ToList())...)
-		deps = append(deps, m.module.base().installedInitRcPaths...)
-		deps = append(deps, m.module.base().installedVintfFragmentsPaths...)
+		deps = append(deps, m.installedInitRcPaths...)
+		deps = append(deps, m.installedVintfFragmentsPaths...)
 
 		var implicitDeps, orderOnlyDeps Paths
 
@@ -714,15 +750,15 @@ func (m *moduleContext) blueprintModuleContext() blueprint.ModuleContext {
 }
 
 func (m *moduleContext) LicenseMetadataFile() Path {
-	return m.module.base().licenseMetadataFile
+	return m.licenseMetadataFile
 }
 
 func (m *moduleContext) ModuleInfoJSON() *ModuleInfoJSON {
-	if moduleInfoJSON := m.module.base().moduleInfoJSON; moduleInfoJSON != nil {
+	if moduleInfoJSON := m.moduleInfoJSON; moduleInfoJSON != nil {
 		return moduleInfoJSON
 	}
 	moduleInfoJSON := &ModuleInfoJSON{}
-	m.module.base().moduleInfoJSON = moduleInfoJSON
+	m.moduleInfoJSON = moduleInfoJSON
 	return moduleInfoJSON
 }
 
@@ -753,12 +789,10 @@ func (m *moduleContext) SetLicenseInstallMap(installMap []string) {
 }
 
 func (m *moduleContext) ComplianceMetadataInfo() *ComplianceMetadataInfo {
-	if complianceMetadataInfo := m.module.base().complianceMetadataInfo; complianceMetadataInfo != nil {
-		return complianceMetadataInfo
+	if m.complianceMetadataInfo == nil {
+		m.complianceMetadataInfo = NewComplianceMetadataInfo()
 	}
-	complianceMetadataInfo := NewComplianceMetadataInfo()
-	m.module.base().complianceMetadataInfo = complianceMetadataInfo
-	return complianceMetadataInfo
+	return m.complianceMetadataInfo
 }
 
 // Returns a list of paths expanded from globs and modules referenced using ":module" syntax.  The property must
@@ -797,4 +831,12 @@ func (m *moduleContext) HostRequiredModuleNames() []string {
 
 func (m *moduleContext) TargetRequiredModuleNames() []string {
 	return m.module.TargetRequiredModuleNames()
+}
+
+func (m *moduleContext) getContainersInfo() ContainersInfo {
+	return m.containersInfo
+}
+
+func (m *moduleContext) setContainersInfo(info ContainersInfo) {
+	m.containersInfo = info
 }
