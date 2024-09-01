@@ -380,6 +380,7 @@ type ProductVariables struct {
 	SystemExtPrivateSepolicyDirs []string `json:",omitempty"`
 	BoardSepolicyM4Defs          []string `json:",omitempty"`
 
+	BoardPlatform           *string `json:",omitempty"`
 	BoardSepolicyVers       *string `json:",omitempty"`
 	PlatformSepolicyVersion *string `json:",omitempty"`
 
@@ -511,13 +512,9 @@ type ProductVariables struct {
 	SystemPropFiles    []string `json:",omitempty"`
 	SystemExtPropFiles []string `json:",omitempty"`
 	ProductPropFiles   []string `json:",omitempty"`
+	OdmPropFiles       []string `json:",omitempty"`
 
 	EnableUffdGc *string `json:",omitempty"`
-
-	BoardAvbEnable                         *bool    `json:",omitempty"`
-	BoardAvbSystemAddHashtreeFooterArgs    []string `json:",omitempty"`
-	DeviceFrameworkCompatibilityMatrixFile []string `json:",omitempty"`
-	DeviceProductCompatibilityMatrixFile   []string `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {

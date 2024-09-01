@@ -906,7 +906,7 @@ func TestApexWithStubs(t *testing.T) {
 		cc_library {
 			name: "mylib",
 			srcs: ["mylib.cpp"],
-			shared_libs: ["mylib2", "mylib3"],
+			shared_libs: ["mylib2", "mylib3", "my_prebuilt_platform_lib", "my_prebuilt_platform_stub_only_lib"],
 			system_shared_libs: [],
 			stl: "none",
 			apex_available: [ "myapex" ],
@@ -919,6 +919,7 @@ func TestApexWithStubs(t *testing.T) {
 			system_shared_libs: [],
 			stl: "none",
 			stubs: {
+				symbol_file: "mylib2.map.txt",
 				versions: ["1", "2", "3"],
 			},
 		}
@@ -930,6 +931,7 @@ func TestApexWithStubs(t *testing.T) {
 			system_shared_libs: [],
 			stl: "none",
 			stubs: {
+				symbol_file: "mylib3.map.txt",
 				versions: ["10", "11", "12"],
 			},
 			apex_available: [ "myapex" ],
@@ -941,6 +943,24 @@ func TestApexWithStubs(t *testing.T) {
 			system_shared_libs: [],
 			stl: "none",
 			apex_available: [ "myapex" ],
+		}
+
+		cc_prebuilt_library_shared {
+			name: "my_prebuilt_platform_lib",
+			stubs: {
+				symbol_file: "my_prebuilt_platform_lib.map.txt",
+				versions: ["1", "2", "3"],
+			},
+			srcs: ["foo.so"],
+		}
+
+		// Similar to my_prebuilt_platform_lib, but this library only provides stubs, i.e. srcs is empty
+		cc_prebuilt_library_shared {
+			name: "my_prebuilt_platform_stub_only_lib",
+			stubs: {
+				symbol_file: "my_prebuilt_platform_stub_only_lib.map.txt",
+				versions: ["1", "2", "3"],
+			}
 		}
 
 		rust_binary {
@@ -1022,6 +1042,20 @@ func TestApexWithStubs(t *testing.T) {
 
 	apexManifestRule := ctx.ModuleForTests("myapex", "android_common_myapex").Rule("apexManifestRule")
 	ensureListContains(t, names(apexManifestRule.Args["requireNativeLibs"]), "libfoo.shared_from_rust.so")
+
+	// Ensure that mylib is linking with the latest version of stubs for my_prebuilt_platform_lib
+	ensureContains(t, mylibLdFlags, "my_prebuilt_platform_lib/android_arm64_armv8-a_shared_current/my_prebuilt_platform_lib.so")
+	// ... and not linking to the non-stub (impl) variant of my_prebuilt_platform_lib
+	ensureNotContains(t, mylibLdFlags, "my_prebuilt_platform_lib/android_arm64_armv8-a_shared/my_prebuilt_platform_lib.so")
+	// Ensure that genstub for platform-provided lib is invoked with --systemapi
+	ensureContains(t, ctx.ModuleForTests("my_prebuilt_platform_lib", "android_arm64_armv8-a_shared_3").Rule("genStubSrc").Args["flags"], "--systemapi")
+
+	// Ensure that mylib is linking with the latest version of stubs for my_prebuilt_platform_lib
+	ensureContains(t, mylibLdFlags, "my_prebuilt_platform_stub_only_lib/android_arm64_armv8-a_shared_current/my_prebuilt_platform_stub_only_lib.so")
+	// ... and not linking to the non-stub (impl) variant of my_prebuilt_platform_lib
+	ensureNotContains(t, mylibLdFlags, "my_prebuilt_platform_stub_only_lib/android_arm64_armv8-a_shared/my_prebuilt_platform_stub_only_lib.so")
+	// Ensure that genstub for platform-provided lib is invoked with --systemapi
+	ensureContains(t, ctx.ModuleForTests("my_prebuilt_platform_stub_only_lib", "android_arm64_armv8-a_shared_3").Rule("genStubSrc").Args["flags"], "--systemapi")
 }
 
 func TestApexShouldNotEmbedStubVariant(t *testing.T) {
@@ -1156,6 +1190,7 @@ func TestApexWithStubsWithMinSdkVersion(t *testing.T) {
 			system_shared_libs: [],
 			stl: "none",
 			stubs: {
+				symbol_file: "mylib2.map.txt",
 				versions: ["28", "29", "30", "current"],
 			},
 			min_sdk_version: "28",
@@ -1168,6 +1203,7 @@ func TestApexWithStubsWithMinSdkVersion(t *testing.T) {
 			system_shared_libs: [],
 			stl: "none",
 			stubs: {
+				symbol_file: "mylib3.map.txt",
 				versions: ["28", "29", "30", "current"],
 			},
 			apex_available: [ "myapex" ],
@@ -11940,7 +11976,7 @@ func TestPrebuiltStubNoinstall(t *testing.T) {
 		).RunTest(t)
 
 		ldRule := result.ModuleForTests("installedlib", "android_arm64_armv8-a_shared").Rule("ld")
-		android.AssertStringDoesContain(t, "", ldRule.Args["libFlags"], "android_arm64_armv8-a_shared/libfoo.so")
+		android.AssertStringDoesContain(t, "", ldRule.Args["libFlags"], "android_arm64_armv8-a_shared_current/libfoo.so")
 
 		installRules := result.InstallMakeRulesForTesting(t)
 
