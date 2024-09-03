@@ -613,7 +613,7 @@ type linker interface {
 	coverageOutputFilePath() android.OptionalPath
 
 	// Get the deps that have been explicitly specified in the properties.
-	linkerSpecifiedDeps(specifiedDeps specifiedDeps) specifiedDeps
+	linkerSpecifiedDeps(ctx android.ConfigAndErrorContext, module *Module, specifiedDeps specifiedDeps) specifiedDeps
 
 	moduleInfoJSON(ctx ModuleContext, moduleInfoJSON *android.ModuleInfoJSON)
 }
@@ -906,19 +906,17 @@ type Module struct {
 	logtagsPaths android.Paths
 
 	WholeRustStaticlib bool
+
+	hasAidl         bool
+	hasLex          bool
+	hasProto        bool
+	hasRenderscript bool
+	hasSysprop      bool
+	hasWinMsg       bool
+	hasYacc         bool
 }
 
 func (c *Module) AddJSONData(d *map[string]interface{}) {
-	var hasAidl, hasLex, hasProto, hasRenderscript, hasSysprop, hasWinMsg, hasYacc bool
-	if b, ok := c.compiler.(*baseCompiler); ok {
-		hasAidl = b.hasSrcExt(".aidl")
-		hasLex = b.hasSrcExt(".l") || b.hasSrcExt(".ll")
-		hasProto = b.hasSrcExt(".proto")
-		hasRenderscript = b.hasSrcExt(".rscript") || b.hasSrcExt(".fs")
-		hasSysprop = b.hasSrcExt(".sysprop")
-		hasWinMsg = b.hasSrcExt(".mc")
-		hasYacc = b.hasSrcExt(".y") || b.hasSrcExt(".yy")
-	}
 	c.AndroidModuleBase().AddJSONData(d)
 	(*d)["Cc"] = map[string]interface{}{
 		"SdkVersion":             c.SdkVersion(),
@@ -948,14 +946,14 @@ func (c *Module) AddJSONData(d *map[string]interface{}) {
 		"IsVendorPublicLibrary":  c.IsVendorPublicLibrary(),
 		"ApexSdkVersion":         c.apexSdkVersion,
 		"TestFor":                c.TestFor(),
-		"AidlSrcs":               hasAidl,
-		"LexSrcs":                hasLex,
-		"ProtoSrcs":              hasProto,
-		"RenderscriptSrcs":       hasRenderscript,
-		"SyspropSrcs":            hasSysprop,
-		"WinMsgSrcs":             hasWinMsg,
-		"YaccSrsc":               hasYacc,
-		"OnlyCSrcs":              !(hasAidl || hasLex || hasProto || hasRenderscript || hasSysprop || hasWinMsg || hasYacc),
+		"AidlSrcs":               c.hasAidl,
+		"LexSrcs":                c.hasLex,
+		"ProtoSrcs":              c.hasProto,
+		"RenderscriptSrcs":       c.hasRenderscript,
+		"SyspropSrcs":            c.hasSysprop,
+		"WinMsgSrcs":             c.hasWinMsg,
+		"YaccSrsc":               c.hasYacc,
+		"OnlyCSrcs":              !(c.hasAidl || c.hasLex || c.hasProto || c.hasRenderscript || c.hasSysprop || c.hasWinMsg || c.hasYacc),
 		"OptimizeForSize":        c.OptimizeForSize(),
 	}
 }
@@ -1028,13 +1026,6 @@ func (c *Module) SelectedStl() string {
 	return ""
 }
 
-func (c *Module) NdkPrebuiltStl() bool {
-	if _, ok := c.linker.(*ndkPrebuiltStlLinker); ok {
-		return true
-	}
-	return false
-}
-
 func (c *Module) StubDecorator() bool {
 	if _, ok := c.linker.(*stubDecorator); ok {
 		return true
@@ -1083,16 +1074,6 @@ func (c *Module) CcLibrary() bool {
 
 func (c *Module) CcLibraryInterface() bool {
 	if _, ok := c.linker.(libraryInterface); ok {
-		return true
-	}
-	return false
-}
-
-func (c *Module) IsNdkPrebuiltStl() bool {
-	if c.linker == nil {
-		return false
-	}
-	if _, ok := c.linker.(*ndkPrebuiltStlLinker); ok {
 		return true
 	}
 	return false
@@ -2103,6 +2084,16 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 
 	buildComplianceMetadataInfo(ctx, c, deps)
 
+	if b, ok := c.compiler.(*baseCompiler); ok {
+		c.hasAidl = b.hasSrcExt(ctx, ".aidl")
+		c.hasLex = b.hasSrcExt(ctx, ".l") || b.hasSrcExt(ctx, ".ll")
+		c.hasProto = b.hasSrcExt(ctx, ".proto")
+		c.hasRenderscript = b.hasSrcExt(ctx, ".rscript") || b.hasSrcExt(ctx, ".fs")
+		c.hasSysprop = b.hasSrcExt(ctx, ".sysprop")
+		c.hasWinMsg = b.hasSrcExt(ctx, ".mc")
+		c.hasYacc = b.hasSrcExt(ctx, ".y") || b.hasSrcExt(ctx, ".yy")
+	}
+
 	c.setOutputFiles(ctx)
 }
 
@@ -2754,10 +2745,6 @@ func checkLinkType(ctx android.BaseModuleContext, from LinkableInterface, to Lin
 		return
 	}
 	if c, ok := to.(*Module); ok {
-		if c.NdkPrebuiltStl() {
-			// These are allowed, but they don't set sdk_version
-			return
-		}
 		if c.StubDecorator() {
 			// These aren't real libraries, but are the stub shared libraries that are included in
 			// the NDK.
@@ -3055,7 +3042,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		}
 
 		if dep.Target().Os != ctx.Os() {
-			ctx.ModuleErrorf("OS mismatch between %q and %q", ctx.ModuleName(), depName)
+			ctx.ModuleErrorf("OS mismatch between %q (%s) and %q (%s)", ctx.ModuleName(), ctx.Os().Name, depName, dep.Target().Os.Name)
 			return
 		}
 		if dep.Target().Arch.ArchType != ctx.Arch().ArchType {
@@ -3927,7 +3914,6 @@ const (
 	headerLibrary
 	testBin // testBinary already declared
 	ndkLibrary
-	ndkPrebuiltStl
 )
 
 func (c *Module) typ() moduleType {
@@ -3966,8 +3952,6 @@ func (c *Module) typ() moduleType {
 		return sharedLibrary
 	} else if c.isNDKStubLibrary() {
 		return ndkLibrary
-	} else if c.IsNdkPrebuiltStl() {
-		return ndkPrebuiltStl
 	}
 	return unknownType
 }

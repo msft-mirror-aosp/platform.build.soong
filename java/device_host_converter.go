@@ -130,7 +130,7 @@ func (d *DeviceHostConverter) GenerateAndroidBuildActions(ctx android.ModuleCont
 		d.combinedHeaderJar = d.headerJars[0]
 	}
 
-	android.SetProvider(ctx, JavaInfoProvider, JavaInfo{
+	android.SetProvider(ctx, JavaInfoProvider, &JavaInfo{
 		HeaderJars:                     d.headerJars,
 		ImplementationAndResourcesJars: d.implementationAndResourceJars,
 		ImplementationJars:             d.implementationJars,
@@ -187,4 +187,12 @@ func (d *DeviceHostConverter) AndroidMk() android.AndroidMkData {
 			},
 		},
 	}
+}
+
+// implement the following interface for IDE completion.
+var _ android.IDEInfo = (*DeviceHostConverter)(nil)
+
+func (d *DeviceHostConverter) IDEInfo(ctx android.BaseModuleContext, ideInfo *android.IdeInfo) {
+	ideInfo.Deps = append(ideInfo.Deps, d.properties.Libs...)
+	ideInfo.Libs = append(ideInfo.Libs, d.properties.Libs...)
 }

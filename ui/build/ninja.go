@@ -57,7 +57,7 @@ func runNinjaForBuild(ctx Context, config Config) {
 		"--frontend_file", fifo,
 	}
 	if config.useN2 {
-		executable = config.PrebuiltBuildTool("n2")
+		executable = config.N2Bin()
 		args = []string{
 			"-d", "trace",
 			// TODO: implement these features, or remove them.
@@ -229,6 +229,7 @@ func runNinjaForBuild(ctx Context, config Config) {
 			"BUILD_BROKEN_INCORRECT_PARTITION_IMAGES",
 			"SOONG_USE_N2",
 			"RUST_BACKTRACE",
+			"RUST_LOG",
 		}, config.BuildBrokenNinjaUsesEnvVars()...)...)
 	}
 

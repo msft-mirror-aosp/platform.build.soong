@@ -181,7 +181,11 @@ func FindDeapexerProviderForModule(ctx ModuleContext) (*DeapexerInfo, error) {
 			// An err has been found. Do not visit further.
 			return
 		}
-		c, _ := OtherModuleProvider(ctx, m, DeapexerProvider)
+		c, ok := OtherModuleProvider(ctx, m, DeapexerProvider)
+		if !ok {
+			ctx.ModuleErrorf("Expected all deps with DeapexerTag to have a DeapexerProvider, but module %q did not", m.Name())
+			return
+		}
 		p := &c
 		if di != nil {
 			// If two DeapexerInfo providers have been found then check if they are

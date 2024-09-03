@@ -595,7 +595,7 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 	if len(installMapSet) > 0 {
 		var installs []string
 		installs = append(installs, android.SortedKeys(installMapSet)...)
-		a.SetLicenseInstallMap(installs)
+		ctx.SetLicenseInstallMap(installs)
 	}
 
 	////////////////////////////////////////////////////////////////////////////////////////////
@@ -704,7 +704,7 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 		optFlags = append(optFlags, "--override_apk_package_name "+manifestPackageName)
 	}
 
-	androidManifest := a.properties.AndroidManifest.GetOrDefault(a.ConfigurableEvaluator(ctx), "")
+	androidManifest := a.properties.AndroidManifest.GetOrDefault(ctx, "")
 	if androidManifest != "" {
 		androidManifestFile := android.PathForModuleSrc(ctx, androidManifest)
 
@@ -1184,7 +1184,7 @@ func (a *apexBundle) buildCannedFsConfig(ctx android.ModuleContext, defaultReadO
 	}
 	// Custom fs_config is "appended" to the last so that entries from the file are preferred
 	// over default ones set above.
-	customFsConfig := a.properties.Canned_fs_config.GetOrDefault(a.ConfigurableEvaluator(ctx), "")
+	customFsConfig := a.properties.Canned_fs_config.GetOrDefault(ctx, "")
 	if customFsConfig != "" {
 		cmd.Text("cat").Input(android.PathForModuleSrc(ctx, customFsConfig))
 	}

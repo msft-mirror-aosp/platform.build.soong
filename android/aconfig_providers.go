@@ -136,12 +136,12 @@ func aconfigUpdateAndroidBuildActions(ctx ModuleContext) {
 			AconfigFiles: mergedAconfigFiles,
 			ModeInfos:    mergedModeInfos,
 		})
-		ctx.Module().base().aconfigFilePaths = getAconfigFilePaths(ctx.Module().base(), mergedAconfigFiles)
+		ctx.setAconfigPaths(getAconfigFilePaths(ctx.Module().base(), mergedAconfigFiles))
 	}
 }
 
 func aconfigUpdateAndroidMkData(ctx fillInEntriesContext, mod Module, data *AndroidMkData) {
-	info, ok := SingletonModuleProvider(ctx, mod, AconfigPropagatingProviderKey)
+	info, ok := OtherModuleProvider(ctx, mod, AconfigPropagatingProviderKey)
 	// If there is no aconfigPropagatingProvider, or there are no AconfigFiles, then we are done.
 	if !ok || len(info.AconfigFiles) == 0 {
 		return
@@ -172,7 +172,7 @@ func aconfigUpdateAndroidMkEntries(ctx fillInEntriesContext, mod Module, entries
 	if len(*entries) == 0 {
 		return
 	}
-	info, ok := SingletonModuleProvider(ctx, mod, AconfigPropagatingProviderKey)
+	info, ok := OtherModuleProvider(ctx, mod, AconfigPropagatingProviderKey)
 	if !ok || len(info.AconfigFiles) == 0 {
 		return
 	}

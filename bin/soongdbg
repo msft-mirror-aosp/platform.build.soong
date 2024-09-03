@@ -216,7 +216,7 @@ def print_args(parser):
                         help="jq query for each module metadata")
     parser.add_argument("--deptags", action="store_true",
                         help="show dependency tags (makes the graph much more complex)")
-    parser.add_argument("--tag", action="append",
+    parser.add_argument("--tag", action="append", default=[],
                         help="Limit output to these dependency tags.")
 
     group = parser.add_argument_group("output formats",

@@ -184,6 +184,10 @@ var PrepareForTestWithJacocoInstrumentation = android.GroupFixturePreparers(
 			host_supported: true,
 			srcs: ["Test.java"],
 			sdk_version: "current",
+			apex_available: [
+				"//apex_available:anyapex",
+				"//apex_available:platform",
+			],
 		}
 	`)),
 )
@@ -408,7 +412,6 @@ func gatherRequiredDepsForTest() string {
 		"core.current.stubs",
 		"legacy.core.platform.api.stubs",
 		"stable.core.platform.api.stubs",
-
 		"android_stubs_current_exportable",
 		"android_system_stubs_current_exportable",
 		"android_test_stubs_current_exportable",
@@ -416,14 +419,13 @@ func gatherRequiredDepsForTest() string {
 		"android_system_server_stubs_current_exportable",
 		"core.current.stubs.exportable",
 		"legacy.core.platform.api.stubs.exportable",
-
 		"kotlin-stdlib",
 		"kotlin-stdlib-jdk7",
 		"kotlin-stdlib-jdk8",
 		"kotlin-annotations",
 		"stub-annotations",
-
 		"aconfig-annotations-lib",
+		"aconfig_storage_reader_java",
 		"unsupportedappusage",
 	}
 
@@ -435,6 +437,7 @@ func gatherRequiredDepsForTest() string {
 				sdk_version: "none",
 				system_modules: "stable-core-platform-api-stubs-system-modules",
 				compile_dex: true,
+				is_stubs_module: true,
 			}
 		`, extra)
 	}
@@ -486,21 +489,17 @@ func gatherRequiredDepsForTest() string {
 	}
 
 	extraApiLibraryModules := map[string]droidstubsStruct{
-		"android_stubs_current.from-text":                  publicDroidstubs,
-		"android_system_stubs_current.from-text":           systemDroidstubs,
-		"android_test_stubs_current.from-text":             testDroidstubs,
-		"android_module_lib_stubs_current.from-text":       moduleLibDroidstubs,
-		"android_module_lib_stubs_current_full.from-text":  moduleLibDroidstubs,
-		"android_system_server_stubs_current.from-text":    systemServerDroidstubs,
-		"core.current.stubs.from-text":                     publicDroidstubs,
-		"legacy.core.platform.api.stubs.from-text":         publicDroidstubs,
-		"stable.core.platform.api.stubs.from-text":         publicDroidstubs,
-		"core-lambda-stubs.from-text":                      publicDroidstubs,
-		"android-non-updatable.stubs.from-text":            publicDroidstubs,
-		"android-non-updatable.stubs.system.from-text":     systemDroidstubs,
-		"android-non-updatable.stubs.test.from-text":       testDroidstubs,
-		"android-non-updatable.stubs.module_lib.from-text": moduleLibDroidstubs,
-		"android-non-updatable.stubs.test_module_lib":      moduleLibDroidstubs,
+		"android_stubs_current.from-text":                 publicDroidstubs,
+		"android_system_stubs_current.from-text":          systemDroidstubs,
+		"android_test_stubs_current.from-text":            testDroidstubs,
+		"android_module_lib_stubs_current.from-text":      moduleLibDroidstubs,
+		"android_module_lib_stubs_current_full.from-text": moduleLibDroidstubs,
+		"android_system_server_stubs_current.from-text":   systemServerDroidstubs,
+		"core.current.stubs.from-text":                    publicDroidstubs,
+		"legacy.core.platform.api.stubs.from-text":        publicDroidstubs,
+		"stable.core.platform.api.stubs.from-text":        publicDroidstubs,
+		"core-lambda-stubs.from-text":                     publicDroidstubs,
+		"android-non-updatable.stubs.test_module_lib":     moduleLibDroidstubs,
 	}
 
 	for _, droidstubs := range droidstubsStructs {
@@ -529,6 +528,8 @@ func gatherRequiredDepsForTest() string {
 			name: "%s",
 			api_contributions: ["%s"],
 			stubs_type: "everything",
+			sdk_version: "none",
+			system_modules: "none",
 		}
         `, libName, droidstubs.name+".api.contribution")
 	}
@@ -536,6 +537,16 @@ func gatherRequiredDepsForTest() string {
 	bp += `
 		java_library {
 			name: "framework",
+			srcs: ["a.java"],
+			sdk_version: "none",
+			system_modules: "stable-core-platform-api-stubs-system-modules",
+			aidl: {
+				export_include_dirs: ["framework/aidl"],
+			},
+			compile_dex: true,
+		}
+		java_library {
+			name: "framework-minus-apex",
 			srcs: ["a.java"],
 			sdk_version: "none",
 			system_modules: "stable-core-platform-api-stubs-system-modules",
@@ -634,7 +645,7 @@ func CheckPlatformBootclasspathModules(t *testing.T, result *android.TestResult,
 func CheckClasspathFragmentProtoContentInfoProvider(t *testing.T, result *android.TestResult, generated bool, contents, outputFilename, installDir string) {
 	t.Helper()
 	p := result.Module("platform-bootclasspath", "android_common").(*platformBootclasspathModule)
-	info, _ := android.SingletonModuleProvider(result, p, ClasspathFragmentProtoContentInfoProvider)
+	info, _ := android.OtherModuleProvider(result, p, ClasspathFragmentProtoContentInfoProvider)
 
 	android.AssertBoolEquals(t, "classpath proto generated", generated, info.ClasspathFragmentProtoGenerated)
 	android.AssertStringEquals(t, "classpath proto contents", contents, info.ClasspathFragmentProtoContents.String())
@@ -654,7 +665,7 @@ func ApexNamePairsFromModules(ctx *android.TestContext, modules []android.Module
 func apexNamePairFromModule(ctx *android.TestContext, module android.Module) string {
 	name := module.Name()
 	var apex string
-	apexInfo, _ := android.SingletonModuleProvider(ctx, module, android.ApexInfoProvider)
+	apexInfo, _ := android.OtherModuleProvider(ctx, module, android.ApexInfoProvider)
 	if apexInfo.IsForPlatform() {
 		apex = "platform"
 	} else {
