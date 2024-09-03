@@ -187,17 +187,8 @@ func (c *Cmd) readMountArgs() []string {
 	return args
 }
 
-func (c *Cmd) workDir() string {
-	if !c.config.UseABFS() {
-		wd, _ := os.Getwd()
-		return wd
-	}
-
-	return abfsSrcDir
-}
-
 func (c *Cmd) wrapSandbox() {
-	wd := c.workDir()
+	wd, _ := os.Getwd()
 
 	var sandboxArgs []string
 	sandboxArgs = append(sandboxArgs,
@@ -235,7 +226,7 @@ func (c *Cmd) wrapSandbox() {
 	)
 
 	sandboxArgs = append(sandboxArgs,
-		c.readMountArgs()...,
+		c.readMountArgs()...
 	)
 
 	sandboxArgs = append(sandboxArgs,
