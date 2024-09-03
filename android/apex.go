@@ -16,6 +16,7 @@ package android
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -143,6 +144,17 @@ func (i ApexInfo) InApexModule(apexModuleName string) bool {
 		}
 	}
 	return false
+}
+
+// To satisfy the comparable interface
+func (i ApexInfo) Equal(other any) bool {
+	otherApexInfo, ok := other.(ApexInfo)
+	return ok && i.ApexVariationName == otherApexInfo.ApexVariationName &&
+		i.MinSdkVersion == otherApexInfo.MinSdkVersion &&
+		i.Updatable == otherApexInfo.Updatable &&
+		i.UsePlatformApis == otherApexInfo.UsePlatformApis &&
+		reflect.DeepEqual(i.InApexVariants, otherApexInfo.InApexVariants) &&
+		reflect.DeepEqual(i.InApexModules, otherApexInfo.InApexModules)
 }
 
 // ApexTestForInfo stores the contents of APEXes for which this module is a test - although this
@@ -700,7 +712,7 @@ func MutateApexTransition(ctx BaseModuleContext, variation string) {
 	base.ApexProperties.InAnyApex = true
 	base.ApexProperties.DirectlyInAnyApex = inApex == directlyInApex
 
-	if platformVariation && !ctx.Host() && !module.AvailableFor(AvailableToPlatform) {
+	if platformVariation && !ctx.Host() && !module.AvailableFor(AvailableToPlatform) && module.NotAvailableForPlatform() {
 		// Do not install the module for platform, but still allow it to output
 		// uninstallable AndroidMk entries in certain cases when they have side
 		// effects.  TODO(jiyong): move this routine to somewhere else
