@@ -836,7 +836,7 @@ func (b *BootclasspathFragmentModule) getProfilePath() android.Path {
 }
 
 // Collect information for opening IDE project files in java/jdeps.go.
-func (b *BootclasspathFragmentModule) IDEInfo(dpInfo *android.IdeInfo) {
+func (b *BootclasspathFragmentModule) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
 	dpInfo.Deps = append(dpInfo.Deps, b.properties.Contents...)
 }
 

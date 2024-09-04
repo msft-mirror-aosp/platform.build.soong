@@ -160,7 +160,7 @@ var (
 // buildComplianceMetadataProvider starts with the ModuleContext.ComplianceMetadataInfo() and fills in more common metadata
 // for different module types without accessing their private fields but through android.Module interface
 // and public/private fields of package android. The final metadata is stored to a module's ComplianceMetadataProvider.
-func buildComplianceMetadataProvider(ctx ModuleContext, m *ModuleBase) {
+func buildComplianceMetadataProvider(ctx *moduleContext, m *ModuleBase) {
 	complianceMetadataInfo := ctx.ComplianceMetadataInfo()
 	complianceMetadataInfo.SetStringValue(ComplianceMetadataProp.NAME, m.Name())
 	complianceMetadataInfo.SetStringValue(ComplianceMetadataProp.PACKAGE, ctx.ModuleDir())
@@ -186,11 +186,11 @@ func buildComplianceMetadataProvider(ctx ModuleContext, m *ModuleBase) {
 		}
 
 		var installed InstallPaths
-		installed = append(installed, m.module.FilesToInstall()...)
-		installed = append(installed, m.katiInstalls.InstallPaths()...)
-		installed = append(installed, m.katiSymlinks.InstallPaths()...)
-		installed = append(installed, m.katiInitRcInstalls.InstallPaths()...)
-		installed = append(installed, m.katiVintfInstalls.InstallPaths()...)
+		installed = append(installed, ctx.installFiles...)
+		installed = append(installed, ctx.katiInstalls.InstallPaths()...)
+		installed = append(installed, ctx.katiSymlinks.InstallPaths()...)
+		installed = append(installed, ctx.katiInitRcInstalls.InstallPaths()...)
+		installed = append(installed, ctx.katiVintfInstalls.InstallPaths()...)
 		complianceMetadataInfo.SetListValue(ComplianceMetadataProp.INSTALLED_FILES, FirstUniqueStrings(installed.Strings()))
 	}
 	ctx.setProvider(ComplianceMetadataProvider, complianceMetadataInfo)
@@ -267,7 +267,7 @@ func (c *complianceMetadataSingleton) GenerateBuildActions(ctx SingletonContext)
 			writerToCsv(csvWriter, metadata)
 			return
 		}
-		if provider, ok := ctx.moduleProvider(module, ComplianceMetadataProvider); ok {
+		if provider, ok := ctx.otherModuleProvider(module, ComplianceMetadataProvider); ok {
 			metadataInfo := provider.(*ComplianceMetadataInfo)
 			rowId = rowId + 1
 			metadata := []string{strconv.Itoa(rowId)}
