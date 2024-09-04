@@ -65,6 +65,18 @@ func TestJavaContainersModuleProperties(t *testing.T) {
 				"general-tests",
 			],
 		}
+		java_library {
+			name: "bar",
+			static_libs: [
+				"framework-minus-apex",
+			],
+		}
+		java_library {
+			name: "baz",
+			static_libs: [
+				"bar",
+			],
+		}
 	`)
 
 	testcases := []struct {
@@ -73,6 +85,7 @@ func TestJavaContainersModuleProperties(t *testing.T) {
 		isVendorContainer  bool
 		isProductContainer bool
 		isCts              bool
+		isUnstable         bool
 	}{
 		{
 			moduleName:         "foo",
@@ -80,6 +93,7 @@ func TestJavaContainersModuleProperties(t *testing.T) {
 			isVendorContainer:  false,
 			isProductContainer: false,
 			isCts:              false,
+			isUnstable:         false,
 		},
 		{
 			moduleName:         "foo_vendor",
@@ -87,6 +101,7 @@ func TestJavaContainersModuleProperties(t *testing.T) {
 			isVendorContainer:  true,
 			isProductContainer: false,
 			isCts:              false,
+			isUnstable:         false,
 		},
 		{
 			moduleName:         "foo_soc_specific",
@@ -94,6 +109,7 @@ func TestJavaContainersModuleProperties(t *testing.T) {
 			isVendorContainer:  true,
 			isProductContainer: false,
 			isCts:              false,
+			isUnstable:         false,
 		},
 		{
 			moduleName:         "foo_product_specific",
@@ -101,6 +117,7 @@ func TestJavaContainersModuleProperties(t *testing.T) {
 			isVendorContainer:  false,
 			isProductContainer: true,
 			isCts:              false,
+			isUnstable:         false,
 		},
 		{
 			moduleName:         "foo_cts_test",
@@ -108,6 +125,7 @@ func TestJavaContainersModuleProperties(t *testing.T) {
 			isVendorContainer:  false,
 			isProductContainer: false,
 			isCts:              true,
+			isUnstable:         false,
 		},
 		{
 			moduleName:         "foo_non_cts_test",
@@ -115,6 +133,23 @@ func TestJavaContainersModuleProperties(t *testing.T) {
 			isVendorContainer:  false,
 			isProductContainer: false,
 			isCts:              false,
+			isUnstable:         false,
+		},
+		{
+			moduleName:         "bar",
+			isSystemContainer:  true,
+			isVendorContainer:  false,
+			isProductContainer: false,
+			isCts:              false,
+			isUnstable:         true,
+		},
+		{
+			moduleName:         "baz",
+			isSystemContainer:  true,
+			isVendorContainer:  false,
+			isProductContainer: false,
+			isCts:              false,
+			isUnstable:         true,
 		},
 	}
 
@@ -125,5 +160,7 @@ func TestJavaContainersModuleProperties(t *testing.T) {
 		checkContainerMatch(t, c.moduleName, "system", c.isSystemContainer, android.InList(android.SystemContainer, belongingContainers))
 		checkContainerMatch(t, c.moduleName, "vendor", c.isVendorContainer, android.InList(android.VendorContainer, belongingContainers))
 		checkContainerMatch(t, c.moduleName, "product", c.isProductContainer, android.InList(android.ProductContainer, belongingContainers))
+		checkContainerMatch(t, c.moduleName, "cts", c.isCts, android.InList(android.CtsContainer, belongingContainers))
+		checkContainerMatch(t, c.moduleName, "unstable", c.isUnstable, android.InList(android.UnstableContainer, belongingContainers))
 	}
 }

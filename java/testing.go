@@ -184,6 +184,10 @@ var PrepareForTestWithJacocoInstrumentation = android.GroupFixturePreparers(
 			host_supported: true,
 			srcs: ["Test.java"],
 			sdk_version: "current",
+			apex_available: [
+				"//apex_available:anyapex",
+				"//apex_available:platform",
+			],
 		}
 	`)),
 )
@@ -408,7 +412,6 @@ func gatherRequiredDepsForTest() string {
 		"core.current.stubs",
 		"legacy.core.platform.api.stubs",
 		"stable.core.platform.api.stubs",
-
 		"android_stubs_current_exportable",
 		"android_system_stubs_current_exportable",
 		"android_test_stubs_current_exportable",
@@ -416,13 +419,11 @@ func gatherRequiredDepsForTest() string {
 		"android_system_server_stubs_current_exportable",
 		"core.current.stubs.exportable",
 		"legacy.core.platform.api.stubs.exportable",
-
 		"kotlin-stdlib",
 		"kotlin-stdlib-jdk7",
 		"kotlin-stdlib-jdk8",
 		"kotlin-annotations",
 		"stub-annotations",
-
 		"aconfig-annotations-lib",
 		"unsupportedappusage",
 	}
@@ -435,6 +436,7 @@ func gatherRequiredDepsForTest() string {
 				sdk_version: "none",
 				system_modules: "stable-core-platform-api-stubs-system-modules",
 				compile_dex: true,
+				is_stubs_module: true,
 			}
 		`, extra)
 	}
@@ -542,6 +544,16 @@ func gatherRequiredDepsForTest() string {
 			},
 			compile_dex: true,
 		}
+		java_library {
+			name: "framework-minus-apex",
+			srcs: ["a.java"],
+			sdk_version: "none",
+			system_modules: "stable-core-platform-api-stubs-system-modules",
+			aidl: {
+				export_include_dirs: ["framework/aidl"],
+			},
+			compile_dex: true,
+		}
 
 		android_app {
 			name: "framework-res",
@@ -632,7 +644,7 @@ func CheckPlatformBootclasspathModules(t *testing.T, result *android.TestResult,
 func CheckClasspathFragmentProtoContentInfoProvider(t *testing.T, result *android.TestResult, generated bool, contents, outputFilename, installDir string) {
 	t.Helper()
 	p := result.Module("platform-bootclasspath", "android_common").(*platformBootclasspathModule)
-	info, _ := android.SingletonModuleProvider(result, p, ClasspathFragmentProtoContentInfoProvider)
+	info, _ := android.OtherModuleProvider(result, p, ClasspathFragmentProtoContentInfoProvider)
 
 	android.AssertBoolEquals(t, "classpath proto generated", generated, info.ClasspathFragmentProtoGenerated)
 	android.AssertStringEquals(t, "classpath proto contents", contents, info.ClasspathFragmentProtoContents.String())
@@ -652,7 +664,7 @@ func ApexNamePairsFromModules(ctx *android.TestContext, modules []android.Module
 func apexNamePairFromModule(ctx *android.TestContext, module android.Module) string {
 	name := module.Name()
 	var apex string
-	apexInfo, _ := android.SingletonModuleProvider(ctx, module, android.ApexInfoProvider)
+	apexInfo, _ := android.OtherModuleProvider(ctx, module, android.ApexInfoProvider)
 	if apexInfo.IsForPlatform() {
 		apex = "platform"
 	} else {

@@ -1548,6 +1548,8 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 			scopeTag.extractDepInfo(ctx, to, scopePaths)
 
 			exportedComponents[ctx.OtherModuleName(to)] = struct{}{}
+
+			ctx.Phony(ctx.ModuleName(), scopePaths.stubsHeaderPath...)
 		}
 
 		if tag == implLibraryTag {
@@ -1794,7 +1796,8 @@ type libraryProperties struct {
 		Dir     *string
 		Tag     *string
 	}
-	Is_stubs_module *bool
+	Is_stubs_module       *bool
+	Stub_contributing_api *string
 }
 
 func (module *SdkLibrary) stubsLibraryProps(mctx android.DefaultableHookContext, apiScope *apiScope) libraryProperties {
@@ -1820,6 +1823,7 @@ func (module *SdkLibrary) stubsLibraryProps(mctx android.DefaultableHookContext,
 	// interop with older developer tools that don't support 1.9.
 	props.Java_version = proptools.StringPtr("1.8")
 	props.Is_stubs_module = proptools.BoolPtr(true)
+	props.Stub_contributing_api = proptools.StringPtr(apiScope.kind.String())
 
 	return props
 }
@@ -2087,12 +2091,15 @@ func (module *SdkLibrary) topLevelStubsLibraryProps(mctx android.DefaultableHook
 	}
 	props.Compile_dex = compileDex
 
+	props.Stub_contributing_api = proptools.StringPtr(apiScope.kind.String())
+
 	if !Bool(module.sdkLibraryProperties.No_dist) && doDist {
 		props.Dist.Targets = []string{"sdk", "win_sdk"}
 		props.Dist.Dest = proptools.StringPtr(fmt.Sprintf("%v.jar", module.distStem()))
 		props.Dist.Dir = proptools.StringPtr(module.apiDistPath(apiScope))
 		props.Dist.Tag = proptools.StringPtr(".jar")
 	}
+	props.Is_stubs_module = proptools.BoolPtr(true)
 
 	return props
 }
@@ -2423,36 +2430,25 @@ func (s *defaultNamingScheme) exportableSourceStubsLibraryModuleName(scope *apiS
 
 var _ sdkLibraryComponentNamingScheme = (*defaultNamingScheme)(nil)
 
-func hasStubsLibrarySuffix(name string, apiScope *apiScope) bool {
-	return strings.HasSuffix(name, apiScope.stubsLibraryModuleNameSuffix()) ||
-		strings.HasSuffix(name, apiScope.exportableStubsLibraryModuleNameSuffix())
-}
-
-func moduleStubLinkType(name string) (stub bool, ret sdkLinkType) {
-	name = strings.TrimSuffix(name, ".from-source")
-
-	// This suffix-based approach is fragile and could potentially mis-trigger.
-	// TODO(b/155164730): Clean this up when modules no longer reference sdk_lib stubs directly.
-	if hasStubsLibrarySuffix(name, apiScopePublic) {
-		if name == "hwbinder.stubs" || name == "libcore_private.stubs" {
-			// Due to a previous bug, these modules were not considered stubs, so we retain that.
-			return false, javaPlatform
-		}
+func moduleStubLinkType(j *Module) (stub bool, ret sdkLinkType) {
+	kind := android.ToSdkKind(proptools.String(j.properties.Stub_contributing_api))
+	switch kind {
+	case android.SdkPublic:
 		return true, javaSdk
-	}
-	if hasStubsLibrarySuffix(name, apiScopeSystem) {
+	case android.SdkSystem:
 		return true, javaSystem
-	}
-	if hasStubsLibrarySuffix(name, apiScopeModuleLib) {
+	case android.SdkModule:
 		return true, javaModule
-	}
-	if hasStubsLibrarySuffix(name, apiScopeTest) {
+	case android.SdkTest:
 		return true, javaSystem
-	}
-	if hasStubsLibrarySuffix(name, apiScopeSystemServer) {
+	case android.SdkSystemServer:
 		return true, javaSystemServer
+	// Default value for all modules other than java_sdk_library-generated stub submodules
+	case android.SdkInvalid:
+		return false, javaPlatform
+	default:
+		panic(fmt.Sprintf("stub_contributing_api set as an unsupported sdk kind %s", kind.String()))
 	}
-	return false, javaPlatform
 }
 
 // java_sdk_library is a special Java library that provides optional platform APIs to apps.
@@ -3600,5 +3596,21 @@ func (s *sdkLibrarySdkMemberProperties) AddToPropertySet(ctx android.SdkMemberCo
 			dests = append(dests, dest)
 		}
 		propertySet.AddProperty("doctag_files", dests)
+	}
+}
+
+// TODO(b/358613520): This can be removed when modules are no longer allowed to depend on the top-level library.
+func (s *SdkLibrary) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
+	s.Library.IDEInfo(ctx, dpInfo)
+	if s.implLibraryModule != nil {
+		dpInfo.Deps = append(dpInfo.Deps, s.implLibraryModule.Name())
+	} else {
+		// This java_sdk_library does not have an implementation (it sets `api_only` to true).
+		// Examples of this are `art.module.intra.core.api` (IntraCore api surface).
+		// Return the "public" stubs for these.
+		stubPaths := s.findClosestScopePath(apiScopePublic)
+		if len(stubPaths.stubsHeaderPath) > 0 {
+			dpInfo.Jars = append(dpInfo.Jars, stubPaths.stubsHeaderPath[0].String())
+		}
 	}
 }

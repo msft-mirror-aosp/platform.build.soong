@@ -173,6 +173,13 @@ func (c Config) DisableVerifyOverlaps() bool {
 	return c.IsEnvTrue("DISABLE_VERIFY_OVERLAPS") || c.ReleaseDisableVerifyOverlaps() || !c.ReleaseDefaultModuleBuildFromSource()
 }
 
+func (c Config) CoverageSuffix() string {
+	if v := c.IsEnvTrue("EMMA_INSTRUMENT"); v {
+		return "coverage."
+	}
+	return ""
+}
+
 // MaxPageSizeSupported returns the max page size supported by the device. This
 // value will define the ELF segment alignment for binaries (executables and
 // shared libraries).
@@ -2044,6 +2051,14 @@ func (c *config) SystemPropFiles(ctx PathContext) Paths {
 
 func (c *config) SystemExtPropFiles(ctx PathContext) Paths {
 	return PathsForSource(ctx, c.productVariables.SystemExtPropFiles)
+}
+
+func (c *config) ProductPropFiles(ctx PathContext) Paths {
+	return PathsForSource(ctx, c.productVariables.ProductPropFiles)
+}
+
+func (c *config) OdmPropFiles(ctx PathContext) Paths {
+	return PathsForSource(ctx, c.productVariables.OdmPropFiles)
 }
 
 func (c *config) EnableUffdGc() string {

@@ -1100,7 +1100,7 @@ func TestJavaImport(t *testing.T) {
 	source := ctx.ModuleForTests("source_library", "android_common")
 	sourceJar := source.Output("javac/source_library.jar")
 	sourceHeaderJar := source.Output("turbine-combined/source_library.jar")
-	sourceJavaInfo, _ := android.SingletonModuleProvider(ctx, source.Module(), JavaInfoProvider)
+	sourceJavaInfo, _ := android.OtherModuleProvider(ctx, source.Module(), JavaInfoProvider)
 
 	// The source library produces separate implementation and header jars
 	android.AssertPathsRelativeToTopEquals(t, "source library implementation jar",
@@ -1110,7 +1110,7 @@ func TestJavaImport(t *testing.T) {
 
 	importWithNoDeps := ctx.ModuleForTests("import_with_no_deps", "android_common")
 	importWithNoDepsJar := importWithNoDeps.Output("combined/import_with_no_deps.jar")
-	importWithNoDepsJavaInfo, _ := android.SingletonModuleProvider(ctx, importWithNoDeps.Module(), JavaInfoProvider)
+	importWithNoDepsJavaInfo, _ := android.OtherModuleProvider(ctx, importWithNoDeps.Module(), JavaInfoProvider)
 
 	// An import with no deps produces a single jar used as both the header and implementation jar.
 	android.AssertPathsRelativeToTopEquals(t, "import with no deps implementation jar",
@@ -1123,7 +1123,7 @@ func TestJavaImport(t *testing.T) {
 	importWithSourceDeps := ctx.ModuleForTests("import_with_source_deps", "android_common")
 	importWithSourceDepsJar := importWithSourceDeps.Output("combined/import_with_source_deps.jar")
 	importWithSourceDepsHeaderJar := importWithSourceDeps.Output("turbine-combined/import_with_source_deps.jar")
-	importWithSourceDepsJavaInfo, _ := android.SingletonModuleProvider(ctx, importWithSourceDeps.Module(), JavaInfoProvider)
+	importWithSourceDepsJavaInfo, _ := android.OtherModuleProvider(ctx, importWithSourceDeps.Module(), JavaInfoProvider)
 
 	// An import with source deps produces separate header and implementation jars.
 	android.AssertPathsRelativeToTopEquals(t, "import with source deps implementation jar",
@@ -1137,7 +1137,7 @@ func TestJavaImport(t *testing.T) {
 
 	importWithImportDeps := ctx.ModuleForTests("import_with_import_deps", "android_common")
 	importWithImportDepsJar := importWithImportDeps.Output("combined/import_with_import_deps.jar")
-	importWithImportDepsJavaInfo, _ := android.SingletonModuleProvider(ctx, importWithImportDeps.Module(), JavaInfoProvider)
+	importWithImportDepsJavaInfo, _ := android.OtherModuleProvider(ctx, importWithImportDeps.Module(), JavaInfoProvider)
 
 	// An import with only import deps produces a single jar used as both the header and implementation jar.
 	android.AssertPathsRelativeToTopEquals(t, "import with import deps implementation jar",
@@ -2274,7 +2274,7 @@ func TestTransitiveSrcFiles(t *testing.T) {
 		}
 	`)
 	c := ctx.ModuleForTests("c", "android_common").Module()
-	javaInfo, _ := android.SingletonModuleProvider(ctx, c, JavaInfoProvider)
+	javaInfo, _ := android.OtherModuleProvider(ctx, c, JavaInfoProvider)
 	transitiveSrcFiles := android.Paths(javaInfo.TransitiveSrcFiles.ToList())
 	android.AssertArrayString(t, "unexpected jar deps", []string{"b.java", "c.java"}, transitiveSrcFiles.Strings())
 }
@@ -2634,11 +2634,7 @@ func TestMultiplePrebuilts(t *testing.T) {
 	for _, tc := range testCases {
 		ctx := android.GroupFixturePreparers(
 			prepareForJavaTest,
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": "myapex_contributions",
-				}
-			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ADSERVICES", "myapex_contributions"),
 		).RunTestWithBp(t, fmt.Sprintf(bp, tc.selectedDependencyName))
 
 		// check that rdep gets the correct variation of dep
@@ -2708,11 +2704,7 @@ func TestMultiplePlatformCompatConfigPrebuilts(t *testing.T) {
 		ctx := android.GroupFixturePreparers(
 			prepareForJavaTest,
 			PrepareForTestWithPlatformCompatConfig,
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": "myapex_contributions",
-				}
-			}),
+			android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ADSERVICES", "myapex_contributions"),
 		).RunTestWithBp(t, fmt.Sprintf(bp, tc.selectedDependencyName))
 
 		mergedGlobalConfig := ctx.SingletonForTests("platform_compat_config_singleton").Output("compat_config/merged_compat_config.xml")
@@ -2927,9 +2919,9 @@ func TestJavaLibraryOutputFilesRel(t *testing.T) {
 	bar := result.ModuleForTests("bar", "android_common")
 	baz := result.ModuleForTests("baz", "android_common")
 
-	fooOutputPaths := foo.OutputFiles(t, "")
-	barOutputPaths := bar.OutputFiles(t, "")
-	bazOutputPaths := baz.OutputFiles(t, "")
+	fooOutputPaths := foo.OutputFiles(result.TestContext, t, "")
+	barOutputPaths := bar.OutputFiles(result.TestContext, t, "")
+	bazOutputPaths := baz.OutputFiles(result.TestContext, t, "")
 
 	android.AssertPathsRelativeToTopEquals(t, "foo output path",
 		[]string{"out/soong/.intermediates/foo/android_common/javac/foo.jar"}, fooOutputPaths)

@@ -119,7 +119,7 @@ func TestAppSplits(t *testing.T) {
 		foo.Output(expectedOutput)
 	}
 
-	outputFiles := foo.OutputFiles(t, "")
+	outputFiles := foo.OutputFiles(ctx, t, "")
 	android.AssertPathsRelativeToTopEquals(t, `OutputFiles("")`, expectedOutputs, outputFiles)
 }
 
