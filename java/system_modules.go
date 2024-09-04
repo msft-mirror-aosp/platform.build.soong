@@ -307,7 +307,7 @@ func (p *systemModulesInfoProperties) AddToPropertySet(ctx android.SdkMemberCont
 // implement the following interface for IDE completion.
 var _ android.IDEInfo = (*SystemModules)(nil)
 
-func (s *SystemModules) IDEInfo(ideInfo *android.IdeInfo) {
+func (s *SystemModules) IDEInfo(ctx android.BaseModuleContext, ideInfo *android.IdeInfo) {
 	ideInfo.Deps = append(ideInfo.Deps, s.properties.Libs...)
 	ideInfo.Libs = append(ideInfo.Libs, s.properties.Libs...)
 }
