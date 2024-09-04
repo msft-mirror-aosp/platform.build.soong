@@ -492,6 +492,10 @@ type commonProperties struct {
 
 	// vintf_fragment Modules required from this module.
 	Vintf_fragment_modules proptools.Configurable[[]string] `android:"path"`
+
+	// List of module names that are prevented from being installed when this module gets
+	// installed.
+	Overrides []string
 }
 
 type distProperties struct {
@@ -1545,26 +1549,43 @@ func (m *ModuleBase) VintfFragmentModuleNames(ctx ConfigAndErrorContext) []strin
 	return m.base().commonProperties.Vintf_fragment_modules.GetOrDefault(m.ConfigurableEvaluator(ctx), nil)
 }
 
+func (m *ModuleBase) generateVariantTarget(ctx *moduleContext) {
+	namespacePrefix := ctx.Namespace().id
+	if namespacePrefix != "" {
+		namespacePrefix = namespacePrefix + "-"
+	}
+
+	if !ctx.uncheckedModule {
+		name := namespacePrefix + ctx.ModuleName() + "-" + ctx.ModuleSubDir() + "-checkbuild"
+		ctx.Phony(name, ctx.checkbuildFiles...)
+		ctx.checkbuildTarget = PathForPhony(ctx, name)
+	}
+
+}
+
 func (m *ModuleBase) generateModuleTarget(ctx *moduleContext) {
 	var allInstalledFiles InstallPaths
-	var allCheckbuildFiles Paths
+	var allCheckbuildTargets Paths
 	ctx.VisitAllModuleVariants(func(module Module) {
 		a := module.base()
-		var checkBuilds Paths
+		var checkbuildTarget Path
+		var uncheckedModule bool
 		if a == m {
 			allInstalledFiles = append(allInstalledFiles, ctx.installFiles...)
-			checkBuilds = ctx.checkbuildFiles
+			checkbuildTarget = ctx.checkbuildTarget
+			uncheckedModule = ctx.uncheckedModule
 		} else {
 			info := OtherModuleProviderOrDefault(ctx, module, InstallFilesProvider)
 			allInstalledFiles = append(allInstalledFiles, info.InstallFiles...)
-			checkBuilds = info.CheckbuildFiles
+			checkbuildTarget = info.CheckbuildTarget
+			uncheckedModule = info.UncheckedModule
 		}
 		// A module's -checkbuild phony targets should
 		// not be created if the module is not exported to make.
 		// Those could depend on the build target and fail to compile
 		// for the current build target.
-		if !ctx.Config().KatiEnabled() || !shouldSkipAndroidMkProcessing(ctx, a) {
-			allCheckbuildFiles = append(allCheckbuildFiles, checkBuilds...)
+		if (!ctx.Config().KatiEnabled() || !shouldSkipAndroidMkProcessing(ctx, a)) && !uncheckedModule && checkbuildTarget != nil {
+			allCheckbuildTargets = append(allCheckbuildTargets, checkbuildTarget)
 		}
 	})
 
@@ -1585,11 +1606,10 @@ func (m *ModuleBase) generateModuleTarget(ctx *moduleContext) {
 		deps = append(deps, info.InstallTarget)
 	}
 
-	if len(allCheckbuildFiles) > 0 {
+	if len(allCheckbuildTargets) > 0 {
 		name := namespacePrefix + ctx.ModuleName() + "-checkbuild"
-		ctx.Phony(name, allCheckbuildFiles...)
-		info.CheckbuildTarget = PathForPhony(ctx, name)
-		deps = append(deps, info.CheckbuildTarget)
+		ctx.Phony(name, allCheckbuildTargets...)
+		deps = append(deps, PathForPhony(ctx, name))
 	}
 
 	if len(deps) > 0 {
@@ -1706,9 +1726,11 @@ func (m *ModuleBase) archModuleContextFactory(ctx archModuleContextFactoryContex
 }
 
 type InstallFilesInfo struct {
-	InstallFiles    InstallPaths
-	CheckbuildFiles Paths
-	PackagingSpecs  []PackagingSpec
+	InstallFiles     InstallPaths
+	CheckbuildFiles  Paths
+	CheckbuildTarget Path
+	UncheckedModule  bool
+	PackagingSpecs   []PackagingSpec
 	// katiInstalls tracks the install rules that were created by Soong but are being exported
 	// to Make to convert to ninja rules so that Make can add additional dependencies.
 	KatiInstalls             katiInstalls
@@ -1945,9 +1967,13 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			return
 		}
 
+		m.generateVariantTarget(ctx)
+
 		installFiles.LicenseMetadataFile = ctx.licenseMetadataFile
 		installFiles.InstallFiles = ctx.installFiles
 		installFiles.CheckbuildFiles = ctx.checkbuildFiles
+		installFiles.CheckbuildTarget = ctx.checkbuildTarget
+		installFiles.UncheckedModule = ctx.uncheckedModule
 		installFiles.PackagingSpecs = ctx.packagingSpecs
 		installFiles.KatiInstalls = ctx.katiInstalls
 		installFiles.KatiSymlinks = ctx.katiSymlinks
