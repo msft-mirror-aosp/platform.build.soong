@@ -294,6 +294,15 @@ func (mod *Module) StaticExecutable() bool {
 	return mod.StaticallyLinked()
 }
 
+func (mod *Module) ApexExclude() bool {
+	if mod.compiler != nil {
+		if library, ok := mod.compiler.(libraryInterface); ok {
+			return library.apexExclude()
+		}
+	}
+	return false
+}
+
 func (mod *Module) Object() bool {
 	// Rust has no modules which produce only object files.
 	return false
@@ -1860,6 +1869,10 @@ func (mod *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Mo
 	}
 
 	if depTag == procMacroDepTag || depTag == customBindgenDepTag {
+		return false
+	}
+
+	if rustDep, ok := dep.(*Module); ok && rustDep.ApexExclude() {
 		return false
 	}
 

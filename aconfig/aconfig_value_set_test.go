@@ -38,6 +38,6 @@ func TestAconfigValueSet(t *testing.T) {
 	module := result.ModuleForTests("module_name", "").Module().(*ValueSetModule)
 
 	// Check that the provider has the right contents
-	depData, _ := android.SingletonModuleProvider(result, module, valueSetProviderKey)
+	depData, _ := android.OtherModuleProvider(result, module, valueSetProviderKey)
 	android.AssertStringEquals(t, "AvailablePackages", "blah.aconfig_values", depData.AvailablePackages["foo.package"][0].String())
 }

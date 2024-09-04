@@ -98,6 +98,7 @@ func BuildLinkerConfig(ctx android.ModuleContext, builder *android.RuleBuilder,
 	builder.Command().
 		BuiltTool("conv_linker_config").
 		Flag("proto").
+		Flag("--force").
 		FlagWithInput("-s ", input).
 		FlagWithOutput("-o ", interimOutput)
 
@@ -105,7 +106,8 @@ func BuildLinkerConfig(ctx android.ModuleContext, builder *android.RuleBuilder,
 	var provideLibs []string
 	for _, m := range provideModules {
 		if c, ok := m.(*cc.Module); ok && (cc.IsStubTarget(c) || c.HasLlndkStubs()) {
-			for _, ps := range c.PackagingSpecs() {
+			for _, ps := range android.OtherModuleProviderOrDefault(
+				ctx, c, android.InstallFilesProvider).PackagingSpecs {
 				provideLibs = append(provideLibs, ps.FileName())
 			}
 		}
