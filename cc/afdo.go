@@ -47,6 +47,10 @@ func (afdo *afdo) begin(ctx BaseModuleContext) {
 	if ctx.Config().Eng() {
 		afdo.Properties.Afdo = false
 	}
+	// Disable for native coverage builds.
+	if ctx.DeviceConfig().NativeCoverageEnabled() {
+		afdo.Properties.Afdo = false
+	}
 }
 
 // afdoEnabled returns true for binaries and shared libraries
@@ -76,6 +80,8 @@ func (afdo *afdo) flags(ctx ModuleContext, flags Flags) Flags {
 	}
 
 	if afdo.Properties.Afdo || afdo.Properties.AfdoDep {
+		// Emit additional debug info for AutoFDO
+		flags.Local.CFlags = append([]string{"-fdebug-info-for-profiling"}, flags.Local.CFlags...)
 		// We use `-funique-internal-linkage-names` to associate profiles to the right internal
 		// functions. This option should be used before generating a profile. Because a profile
 		// generated for a binary without unique names doesn't work well building a binary with

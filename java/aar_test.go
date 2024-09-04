@@ -53,7 +53,7 @@ func TestAarImportProducesJniPackages(t *testing.T) {
 			appMod := ctx.Module(tc.name, "android_common")
 			appTestMod := ctx.ModuleForTests(tc.name, "android_common")
 
-			info, ok := android.SingletonModuleProvider(ctx, appMod, JniPackageProvider)
+			info, ok := android.OtherModuleProvider(ctx, appMod, JniPackageProvider)
 			if !ok {
 				t.Errorf("expected android_library_import to have JniPackageProvider")
 			}
@@ -159,9 +159,9 @@ func TestAndroidLibraryOutputFilesRel(t *testing.T) {
 	bar := result.ModuleForTests("bar", "android_common")
 	baz := result.ModuleForTests("baz", "android_common")
 
-	fooOutputPaths := foo.OutputFiles(t, "")
-	barOutputPaths := bar.OutputFiles(t, "")
-	bazOutputPaths := baz.OutputFiles(t, "")
+	fooOutputPaths := foo.OutputFiles(result.TestContext, t, "")
+	barOutputPaths := bar.OutputFiles(result.TestContext, t, "")
+	bazOutputPaths := baz.OutputFiles(result.TestContext, t, "")
 
 	android.AssertPathsRelativeToTopEquals(t, "foo output path",
 		[]string{"out/soong/.intermediates/foo/android_common/withres/foo.jar"}, fooOutputPaths)

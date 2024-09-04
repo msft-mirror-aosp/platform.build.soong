@@ -104,7 +104,6 @@ cc_genrule {
 // Instantiate the dex_bootjars singleton module.
 dex_bootjars {
     name: "dex_bootjars",
-    no_full_install: true,
 }
 
 // Pseudo-test that's run on checkbuilds to ensure that get_clang_version can
@@ -140,4 +139,31 @@ build_prop {
         "//device/google/cuttlefish/system_image",
         "//packages/modules/Virtualization/build/microdroid",
     ],
+}
+
+build_prop {
+    name: "system_ext-build.prop",
+    stem: "build.prop",
+    system_ext_specific: true,
+    product_config: ":product_config",
+    relative_install_path: "etc", // system_ext/etc/build.prop
+    visibility: ["//visibility:private"],
+}
+
+build_prop {
+    name: "product-build.prop",
+    stem: "build.prop",
+    product_specific: true,
+    product_config: ":product_config",
+    relative_install_path: "etc", // product/etc/build.prop
+    visibility: ["//visibility:private"],
+}
+
+build_prop {
+    name: "odm-build.prop",
+    stem: "build.prop",
+    device_specific: true,
+    product_config: ":product_config",
+    relative_install_path: "etc", // odm/etc/build.prop
+    visibility: ["//visibility:private"],
 }

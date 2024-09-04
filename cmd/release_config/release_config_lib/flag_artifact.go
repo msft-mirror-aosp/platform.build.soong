@@ -102,7 +102,7 @@ func (fa *FlagArtifact) GenerateFlagDeclarationArtifact() *rc_proto.FlagDeclarat
 	if description := fa.FlagDeclaration.GetDescription(); description != "" {
 		ret.Description = proto.String(description)
 	}
-	if workflow := fa.FlagDeclaration.GetWorkflow(); workflow != rc_proto.Workflow_Workflow_Unspecified {
+	if workflow := fa.FlagDeclaration.GetWorkflow(); workflow != rc_proto.Workflow_WORKFLOW_UNSPECIFIED {
 		ret.Workflow = &workflow
 	}
 	if containers := fa.FlagDeclaration.GetContainers(); containers != nil {

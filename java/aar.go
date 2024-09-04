@@ -166,7 +166,11 @@ func propagateRROEnforcementMutator(ctx android.TopDownMutatorContext) {
 func (a *aapt) useResourceProcessorBusyBox(ctx android.BaseModuleContext) bool {
 	return BoolDefault(a.aaptProperties.Use_resource_processor, ctx.Config().UseResourceProcessorByDefault()) &&
 		// TODO(b/331641946): remove this when ResourceProcessorBusyBox supports generating shared libraries.
-		!slices.Contains(a.aaptProperties.Aaptflags, "--shared-lib")
+		!slices.Contains(a.aaptProperties.Aaptflags, "--shared-lib") &&
+		// Use the legacy resource processor in kythe builds.
+		// The legacy resource processor creates an R.srcjar, which kythe can use for generating crossrefs.
+		// TODO(b/354854007): Re-enable BusyBox in kythe builds
+		!ctx.Config().EmitXrefRules()
 }
 
 func (a *aapt) filterProduct() string {
@@ -910,12 +914,12 @@ func (a *AndroidLibrary) setOutputFiles(ctx android.ModuleContext) {
 	setOutputFiles(ctx, a.Library.Module)
 }
 
-func (a *AndroidLibrary) IDEInfo(dpInfo *android.IdeInfo) {
-	a.Library.IDEInfo(dpInfo)
-	a.aapt.IDEInfo(dpInfo)
+func (a *AndroidLibrary) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
+	a.Library.IDEInfo(ctx, dpInfo)
+	a.aapt.IDEInfo(ctx, dpInfo)
 }
 
-func (a *aapt) IDEInfo(dpInfo *android.IdeInfo) {
+func (a *aapt) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
 	if a.rJar != nil {
 		dpInfo.Jars = append(dpInfo.Jars, a.rJar.String())
 	}
@@ -991,17 +995,17 @@ type AARImport struct {
 
 	properties AARImportProperties
 
-	headerJarFile                      android.WritablePath
-	implementationJarFile              android.WritablePath
-	implementationAndResourcesJarFile  android.WritablePath
-	proguardFlags                      android.WritablePath
-	exportPackage                      android.WritablePath
+	headerJarFile                      android.Path
+	implementationJarFile              android.Path
+	implementationAndResourcesJarFile  android.Path
+	proguardFlags                      android.Path
+	exportPackage                      android.Path
 	transitiveAaptResourcePackagesFile android.Path
-	extraAaptPackagesFile              android.WritablePath
+	extraAaptPackagesFile              android.Path
 	manifest                           android.Path
-	assetsPackage                      android.WritablePath
-	rTxt                               android.WritablePath
-	rJar                               android.WritablePath
+	assetsPackage                      android.Path
+	rTxt                               android.Path
+	rJar                               android.Path
 
 	resourcesNodesDepSet *android.DepSet[*resourcesNode]
 	manifestsDepSet      *android.DepSet[android.Path]
@@ -1150,8 +1154,9 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	if Bool(a.properties.Jetifier) {
 		inputFile := a.aarPath
-		a.aarPath = android.PathForModuleOut(ctx, "jetifier", aarName)
-		TransformJetifier(ctx, a.aarPath.(android.WritablePath), inputFile)
+		jetifierPath := android.PathForModuleOut(ctx, "jetifier", aarName)
+		TransformJetifier(ctx, jetifierPath, inputFile)
+		a.aarPath = jetifierPath
 	}
 
 	jarName := ctx.ModuleName() + ".jar"
@@ -1166,14 +1171,14 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		a.manifest = extractedManifest
 	}
 
-	a.rTxt = extractedAARDir.Join(ctx, "R.txt")
-	a.assetsPackage = android.PathForModuleOut(ctx, "assets.zip")
-	a.proguardFlags = extractedAARDir.Join(ctx, "proguard.txt")
+	rTxt := extractedAARDir.Join(ctx, "R.txt")
+	assetsPackage := android.PathForModuleOut(ctx, "assets.zip")
+	proguardFlags := extractedAARDir.Join(ctx, "proguard.txt")
 	transitiveProguardFlags, transitiveUnconditionalExportedFlags := collectDepProguardSpecInfo(ctx)
 	android.SetProvider(ctx, ProguardSpecInfoProvider, ProguardSpecInfo{
 		ProguardFlagsFiles: android.NewDepSet[android.Path](
 			android.POSTORDER,
-			android.Paths{a.proguardFlags},
+			android.Paths{proguardFlags},
 			transitiveProguardFlags,
 		),
 		UnconditionallyExportedProguardFlags: android.NewDepSet[android.Path](
@@ -1186,14 +1191,18 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        unzipAAR,
 		Input:       a.aarPath,
-		Outputs:     android.WritablePaths{classpathFile, a.proguardFlags, extractedManifest, a.assetsPackage, a.rTxt},
+		Outputs:     android.WritablePaths{classpathFile, proguardFlags, extractedManifest, assetsPackage, rTxt},
 		Description: "unzip AAR",
 		Args: map[string]string{
 			"outDir":             extractedAARDir.String(),
 			"combinedClassesJar": classpathFile.String(),
-			"assetsPackage":      a.assetsPackage.String(),
+			"assetsPackage":      assetsPackage.String(),
 		},
 	})
+
+	a.proguardFlags = proguardFlags
+	a.assetsPackage = assetsPackage
+	a.rTxt = rTxt
 
 	// Always set --pseudo-localize, it will be stripped out later for release
 	// builds that don't want it.
@@ -1202,10 +1211,10 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	flata := compiledResDir.Join(ctx, "gen_res.flata")
 	aapt2CompileZip(ctx, flata, a.aarPath, "res", compileFlags)
 
-	a.exportPackage = android.PathForModuleOut(ctx, "package-res.apk")
+	exportPackage := android.PathForModuleOut(ctx, "package-res.apk")
 	proguardOptionsFile := android.PathForModuleGen(ctx, "proguard.options")
 	aaptRTxt := android.PathForModuleOut(ctx, "R.txt")
-	a.extraAaptPackagesFile = android.PathForModuleOut(ctx, "extra_packages")
+	extraAaptPackagesFile := android.PathForModuleOut(ctx, "extra_packages")
 
 	var linkDeps android.Paths
 
@@ -1241,13 +1250,16 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	transitiveAssets := android.ReverseSliceInPlace(staticDeps.assets())
-	aapt2Link(ctx, a.exportPackage, nil, proguardOptionsFile, aaptRTxt,
+	aapt2Link(ctx, exportPackage, nil, proguardOptionsFile, aaptRTxt,
 		linkFlags, linkDeps, nil, overlayRes, transitiveAssets, nil, nil)
+	a.exportPackage = exportPackage
 
-	a.rJar = android.PathForModuleOut(ctx, "busybox/R.jar")
-	resourceProcessorBusyBoxGenerateBinaryR(ctx, a.rTxt, a.manifest, a.rJar, nil, true, nil, false)
+	rJar := android.PathForModuleOut(ctx, "busybox/R.jar")
+	resourceProcessorBusyBoxGenerateBinaryR(ctx, a.rTxt, a.manifest, rJar, nil, true, nil, false)
+	a.rJar = rJar
 
-	aapt2ExtractExtraPackages(ctx, a.extraAaptPackagesFile, a.rJar)
+	aapt2ExtractExtraPackages(ctx, extraAaptPackagesFile, a.rJar)
+	a.extraAaptPackagesFile = extraAaptPackagesFile
 
 	resourcesNodesDepSetBuilder := android.NewDepSetBuilder[*resourcesNode](android.TOPOLOGICAL)
 	resourcesNodesDepSetBuilder.Direct(&resourcesNode{
@@ -1295,11 +1307,12 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		addMissingOptionalUsesLibsFromDep(ctx, module, &a.usesLibrary)
 	})
 
-	var implementationJarFile android.OutputPath
+	var implementationJarFile android.Path
 	if len(staticJars) > 0 {
 		combineJars := append(android.Paths{classpathFile}, staticJars...)
-		implementationJarFile = android.PathForModuleOut(ctx, "combined", jarName).OutputPath
-		TransformJarsToJar(ctx, implementationJarFile, "combine", combineJars, android.OptionalPath{}, false, nil, nil)
+		combinedImplementationJar := android.PathForModuleOut(ctx, "combined", jarName).OutputPath
+		TransformJarsToJar(ctx, combinedImplementationJar, "combine", combineJars, android.OptionalPath{}, false, nil, nil)
+		implementationJarFile = combinedImplementationJar
 	} else {
 		implementationJarFile = classpathFile
 	}
@@ -1318,7 +1331,7 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	implementationAndResourcesJar := implementationJarFile
 	if resourceJarFile != nil {
 		jars := android.Paths{resourceJarFile, implementationAndResourcesJar}
-		combinedJar := android.PathForModuleOut(ctx, "withres", jarName).OutputPath
+		combinedJar := android.PathForModuleOut(ctx, "withres", jarName)
 		TransformJarsToJar(ctx, combinedJar, "for resources", jars, android.OptionalPath{},
 			false, nil, nil)
 		implementationAndResourcesJar = combinedJar
@@ -1330,13 +1343,14 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	if len(staticHeaderJars) > 0 {
 		combineJars := append(android.Paths{classpathFile}, staticHeaderJars...)
-		a.headerJarFile = android.PathForModuleOut(ctx, "turbine-combined", jarName)
-		TransformJarsToJar(ctx, a.headerJarFile, "combine header jars", combineJars, android.OptionalPath{}, false, nil, nil)
+		headerJarFile := android.PathForModuleOut(ctx, "turbine-combined", jarName)
+		TransformJarsToJar(ctx, headerJarFile, "combine header jars", combineJars, android.OptionalPath{}, false, nil, nil)
+		a.headerJarFile = headerJarFile
 	} else {
 		a.headerJarFile = classpathFile
 	}
 
-	android.SetProvider(ctx, JavaInfoProvider, JavaInfo{
+	android.SetProvider(ctx, JavaInfoProvider, &JavaInfo{
 		HeaderJars:                     android.PathsIfNonNil(a.headerJarFile),
 		ResourceJars:                   android.PathsIfNonNil(resourceJarFile),
 		TransitiveLibsHeaderJars:       a.transitiveLibsHeaderJars,
@@ -1435,4 +1449,8 @@ func AARImportFactory() android.Module {
 	android.InitApexModule(module)
 	InitJavaModuleMultiTargets(module, android.DeviceSupported)
 	return module
+}
+
+func (a *AARImport) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
+	dpInfo.Jars = append(dpInfo.Jars, a.headerJarFile.String(), a.rJar.String())
 }

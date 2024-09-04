@@ -364,7 +364,7 @@ func NewRustBindgen(hod android.HostOrDeviceSupported) (*Module, *bindgenDecorat
 		ClangProperties:    cc.RustBindgenClangProperties{},
 	}
 
-	module := NewSourceProviderModule(hod, bindgen, false, true)
+	module := NewSourceProviderModule(hod, bindgen, false, false)
 
 	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
 		type stub_props struct {
@@ -393,8 +393,8 @@ func (b *bindgenDecorator) SourceProviderDeps(ctx DepsContext, deps Deps) Deps {
 		deps.StaticLibs = append(deps.StaticLibs, String(b.Properties.Static_inline_library))
 	}
 
-	deps.SharedLibs = append(deps.SharedLibs, b.ClangProperties.Shared_libs...)
-	deps.StaticLibs = append(deps.StaticLibs, b.ClangProperties.Static_libs...)
-	deps.HeaderLibs = append(deps.HeaderLibs, b.ClangProperties.Header_libs...)
+	deps.SharedLibs = append(deps.SharedLibs, b.ClangProperties.Shared_libs.GetOrDefault(ctx, nil)...)
+	deps.StaticLibs = append(deps.StaticLibs, b.ClangProperties.Static_libs.GetOrDefault(ctx, nil)...)
+	deps.HeaderLibs = append(deps.HeaderLibs, b.ClangProperties.Header_libs.GetOrDefault(ctx, nil)...)
 	return deps
 }
