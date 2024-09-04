@@ -1471,7 +1471,23 @@ func (a *AndroidTest) FixTestConfig(ctx android.ModuleContext, testConfig androi
 	return testConfig
 }
 
+func (a *AndroidTestHelperApp) DepsMutator(ctx android.BottomUpMutatorContext) {
+	if len(a.ApexProperties.Apex_available) == 0 && ctx.Config().IsEnvTrue("EMMA_API_MAPPER") {
+		// Instrument the android_test_helper target to log potential API calls at the run time.
+		// Contact android-xts-infra team before using the environment var EMMA_API_MAPPER.
+		ctx.AddVariationDependencies(nil, staticLibTag, "apimapper-helper-device-lib")
+		a.setApiMapper(true)
+	}
+	a.AndroidApp.DepsMutator(ctx)
+}
+
 func (a *AndroidTest) DepsMutator(ctx android.BottomUpMutatorContext) {
+	if len(a.ApexProperties.Apex_available) == 0 && ctx.Config().IsEnvTrue("EMMA_API_MAPPER") {
+		// Instrument the android_test_helper target to log potential API calls at the run time.
+		// Contact android-xts-infra team before using the environment var EMMA_API_MAPPER.
+		ctx.AddVariationDependencies(nil, staticLibTag, "apimapper-helper-device-lib")
+		a.setApiMapper(true)
+	}
 	a.AndroidApp.DepsMutator(ctx)
 }
 

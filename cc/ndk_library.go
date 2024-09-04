@@ -484,8 +484,7 @@ func (c *stubDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) O
 // Add a dependency on the header modules of this ndk_library
 func (linker *stubDecorator) linkerDeps(ctx DepsContext, deps Deps) Deps {
 	return Deps{
-		ReexportHeaderLibHeaders: linker.properties.Export_header_libs,
-		HeaderLibs:               linker.properties.Export_header_libs,
+		HeaderLibs: linker.properties.Export_header_libs,
 	}
 }
 

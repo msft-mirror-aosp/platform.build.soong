@@ -492,6 +492,10 @@ type commonProperties struct {
 
 	// vintf_fragment Modules required from this module.
 	Vintf_fragment_modules proptools.Configurable[[]string] `android:"path"`
+
+	// List of module names that are prevented from being installed when this module gets
+	// installed.
+	Overrides []string
 }
 
 type distProperties struct {
