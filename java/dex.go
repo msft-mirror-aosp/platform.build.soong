@@ -289,14 +289,18 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams) 
 	// - suppress ProGuard warnings of referencing symbols unknown to the lower SDK version.
 	// - prevent ProGuard stripping subclass in the support library that extends class added in the higher SDK version.
 	// See b/20667396
-	var proguardRaiseDeps classpath
-	ctx.VisitDirectDepsWithTag(proguardRaiseTag, func(m android.Module) {
-		dep, _ := android.OtherModuleProvider(ctx, m, JavaInfoProvider)
-		proguardRaiseDeps = append(proguardRaiseDeps, dep.RepackagedHeaderJars...)
-	})
+	// TODO(b/360905238): Remove SdkSystemServer exception after resolving missing class references.
+	if !dexParams.sdkVersion.Stable() || dexParams.sdkVersion.Kind == android.SdkSystemServer {
+		var proguardRaiseDeps classpath
+		ctx.VisitDirectDepsWithTag(proguardRaiseTag, func(m android.Module) {
+			if dep, ok := android.OtherModuleProvider(ctx, m, JavaInfoProvider); ok {
+				proguardRaiseDeps = append(proguardRaiseDeps, dep.RepackagedHeaderJars...)
+			}
+		})
+		r8Flags = append(r8Flags, proguardRaiseDeps.FormJavaClassPath("-libraryjars"))
+		r8Deps = append(r8Deps, proguardRaiseDeps...)
+	}
 
-	r8Flags = append(r8Flags, proguardRaiseDeps.FormJavaClassPath("-libraryjars"))
-	r8Deps = append(r8Deps, proguardRaiseDeps...)
 	r8Flags = append(r8Flags, flags.bootClasspath.FormJavaClassPath("-libraryjars"))
 	r8Deps = append(r8Deps, flags.bootClasspath...)
 	r8Flags = append(r8Flags, flags.dexClasspath.FormJavaClassPath("-libraryjars"))
@@ -428,7 +432,7 @@ func (d *dexer) addArtProfile(ctx android.ModuleContext, dexParams *compileDexPa
 }
 
 // Return the compiled dex jar and (optional) profile _after_ r8 optimization
-func (d *dexer) compileDex(ctx android.ModuleContext, dexParams *compileDexParams) (android.OutputPath, *android.OutputPath) {
+func (d *dexer) compileDex(ctx android.ModuleContext, dexParams *compileDexParams) (android.Path, android.Path) {
 
 	// Compile classes.jar into classes.dex and then javalib.jar
 	javalibJar := android.PathForModuleOut(ctx, "dex", dexParams.jarName).OutputPath

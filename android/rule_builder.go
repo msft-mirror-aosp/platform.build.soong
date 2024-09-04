@@ -554,6 +554,12 @@ func (r *RuleBuilder) build(name string, desc string, ninjaEscapeCommandString b
 					To:   proto.String(r.sboxPathForInputRel(input)),
 				})
 			}
+			for _, input := range r.OrderOnlys() {
+				command.CopyBefore = append(command.CopyBefore, &sbox_proto.Copy{
+					From: proto.String(input.String()),
+					To:   proto.String(r.sboxPathForInputRel(input)),
+				})
+			}
 
 			// If using rsp files copy them and their contents into the sbox directory with
 			// the appropriate path mappings.
@@ -574,6 +580,16 @@ func (r *RuleBuilder) build(name string, desc string, ninjaEscapeCommandString b
 				})
 			}
 
+			// Set OUT_DIR to the relative path of the sandboxed out directory.
+			// Otherwise, OUT_DIR will be inherited from the rest of the build,
+			// which will allow scripts to escape the sandbox if OUT_DIR is an
+			// absolute path.
+			command.Env = append(command.Env, &sbox_proto.EnvironmentVariable{
+				Name: proto.String("OUT_DIR"),
+				State: &sbox_proto.EnvironmentVariable_Value{
+					Value: sboxOutSubDir,
+				},
+			})
 			command.Chdir = proto.Bool(true)
 		}
 

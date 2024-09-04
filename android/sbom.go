@@ -42,7 +42,9 @@ func RegisterSbomSingleton(ctx RegistrationContext) {
 }
 
 // sbomSingleton is used to generate build actions of generating SBOM of products.
-type sbomSingleton struct{}
+type sbomSingleton struct {
+	sbomFile OutputPath
+}
 
 func sbomSingletonFactory() Singleton {
 	return &sbomSingleton{}
@@ -77,12 +79,12 @@ func (this *sbomSingleton) GenerateBuildActions(ctx SingletonContext) {
 	implicits = append(implicits, installedFilesStamp)
 
 	metadataDb := PathForOutput(ctx, "compliance-metadata", ctx.Config().DeviceProduct(), "compliance-metadata.db")
-	sbomFile := PathForOutput(ctx, "sbom", ctx.Config().DeviceProduct(), "sbom.spdx.json")
+	this.sbomFile = PathForOutput(ctx, "sbom", ctx.Config().DeviceProduct(), "sbom.spdx.json")
 	ctx.Build(pctx, BuildParams{
 		Rule:      genSbomRule,
 		Input:     metadataDb,
 		Implicits: implicits,
-		Output:    sbomFile,
+		Output:    this.sbomFile,
 		Args: map[string]string{
 			"productOut":           filepath.Join(ctx.Config().OutDir(), "target", "product", String(prodVars.DeviceName)),
 			"soongOut":             ctx.Config().soongOutDir,
@@ -91,10 +93,19 @@ func (this *sbomSingleton) GenerateBuildActions(ctx SingletonContext) {
 		},
 	})
 
-	// Phony rule "soong-sbom". "m soong-sbom" to generate product SBOM in Soong.
-	ctx.Build(pctx, BuildParams{
-		Rule:   blueprint.Phony,
-		Inputs: []Path{sbomFile},
-		Output: PathForPhony(ctx, "soong-sbom"),
-	})
+	if !ctx.Config().UnbundledBuildApps() {
+		// When building SBOM of products, phony rule "sbom" is for generating product SBOM in Soong.
+		ctx.Build(pctx, BuildParams{
+			Rule:   blueprint.Phony,
+			Inputs: []Path{this.sbomFile},
+			Output: PathForPhony(ctx, "sbom"),
+		})
+	}
+}
+
+func (this *sbomSingleton) MakeVars(ctx MakeVarsContext) {
+	// When building SBOM of products
+	if !ctx.Config().UnbundledBuildApps() {
+		ctx.DistForGoalWithFilename("droid", this.sbomFile, "sbom/sbom.spdx.json")
+	}
 }

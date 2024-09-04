@@ -15,9 +15,10 @@
 package aconfig
 
 import (
-	"android/soong/android"
 	"fmt"
 	"slices"
+
+	"android/soong/android"
 )
 
 // A singleton module that collects all of the aconfig flags declared in the
@@ -55,7 +56,7 @@ func (this *allAconfigDeclarationsSingleton) GenerateBuildActions(ctx android.Si
 		var packages = make(map[string]int)
 		var cacheFiles android.Paths
 		ctx.VisitAllModules(func(module android.Module) {
-			decl, ok := android.SingletonModuleProvider(ctx, module, android.AconfigReleaseDeclarationsProviderKey)
+			decl, ok := android.OtherModuleProvider(ctx, module, android.AconfigReleaseDeclarationsProviderKey)
 			if !ok {
 				return
 			}
