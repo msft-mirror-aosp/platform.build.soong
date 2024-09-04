@@ -53,11 +53,7 @@ func TestBootclasspathFragments_FragmentDependency(t *testing.T) {
 		java.FixtureConfigureBootJars("com.android.art:baz", "com.android.art:quuz"),
 		java.FixtureConfigureApexBootJars("someapex:foo", "someapex:bar"),
 		prepareForTestWithArtApex,
-		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.BuildFlags = map[string]string{
-				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
-			}
-		}),
+		android.PrepareForTestWithBuildFlag("RELEASE_HIDDEN_API_EXPORTABLE_STUBS", "true"),
 		java.PrepareForTestWithJavaSdkLibraryFiles,
 		java.FixtureWithLastReleaseApis("foo", "baz"),
 	).RunTestWithBp(t, `
@@ -108,6 +104,7 @@ func TestBootclasspathFragments_FragmentDependency(t *testing.T) {
 			test: {
 				enabled: true,
 			},
+			sdk_version: "core_current",
 		}
 
 		java_library {
@@ -156,7 +153,7 @@ func TestBootclasspathFragments_FragmentDependency(t *testing.T) {
 
 	// Check stub dex paths exported by art.
 	artFragment := result.Module("art-bootclasspath-fragment", "android_common")
-	artInfo, _ := android.SingletonModuleProvider(result, artFragment, java.HiddenAPIInfoProvider)
+	artInfo, _ := android.OtherModuleProvider(result, artFragment, java.HiddenAPIInfoProvider)
 
 	bazPublicStubs := "out/soong/.intermediates/baz.stubs.exportable/android_common/dex/baz.stubs.exportable.jar"
 	bazSystemStubs := "out/soong/.intermediates/baz.stubs.exportable.system/android_common/dex/baz.stubs.exportable.system.jar"
@@ -169,7 +166,7 @@ func TestBootclasspathFragments_FragmentDependency(t *testing.T) {
 
 	// Check stub dex paths exported by other.
 	otherFragment := result.Module("other-bootclasspath-fragment", "android_common")
-	otherInfo, _ := android.SingletonModuleProvider(result, otherFragment, java.HiddenAPIInfoProvider)
+	otherInfo, _ := android.OtherModuleProvider(result, otherFragment, java.HiddenAPIInfoProvider)
 
 	fooPublicStubs := "out/soong/.intermediates/foo.stubs.exportable/android_common/dex/foo.stubs.exportable.jar"
 	fooSystemStubs := "out/soong/.intermediates/foo.stubs.exportable.system/android_common/dex/foo.stubs.exportable.system.jar"
@@ -561,6 +558,7 @@ func TestBootclasspathFragmentInPrebuiltArtApex(t *testing.T) {
 		result := preparers.RunTestWithBp(t, fmt.Sprintf(bp, "enabled: false,"))
 
 		java.CheckModuleDependencies(t, result.TestContext, "com.android.art", "android_common_com.android.art", []string{
+			`all_apex_contributions`,
 			`dex2oatd`,
 			`prebuilt_art-bootclasspath-fragment`,
 			`prebuilt_com.android.art.apex.selector`,
@@ -568,6 +566,7 @@ func TestBootclasspathFragmentInPrebuiltArtApex(t *testing.T) {
 		})
 
 		java.CheckModuleDependencies(t, result.TestContext, "art-bootclasspath-fragment", "android_common_com.android.art", []string{
+			`all_apex_contributions`,
 			`dex2oatd`,
 			`prebuilt_bar`,
 			`prebuilt_com.android.art.deapexer`,
@@ -690,7 +689,7 @@ func TestBootclasspathFragmentContentsNoName(t *testing.T) {
 	// Make sure that the fragment provides the hidden API encoded dex jars to the APEX.
 	fragment := result.Module("mybootclasspathfragment", "android_common_apex10000")
 
-	info, _ := android.SingletonModuleProvider(result, fragment, java.BootclasspathFragmentApexContentInfoProvider)
+	info, _ := android.OtherModuleProvider(result, fragment, java.BootclasspathFragmentApexContentInfoProvider)
 
 	checkFragmentExportedDexJar := func(name string, expectedDexJar string) {
 		module := result.Module(name, "android_common_apex10000")
@@ -729,11 +728,7 @@ func TestBootclasspathFragment_HiddenAPIList(t *testing.T) {
 
 		java.PrepareForTestWithJavaSdkLibraryFiles,
 		java.FixtureWithLastReleaseApis("foo", "quuz"),
-		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			variables.BuildFlags = map[string]string{
-				"RELEASE_HIDDEN_API_EXPORTABLE_STUBS": "true",
-			}
-		}),
+		android.PrepareForTestWithBuildFlag("RELEASE_HIDDEN_API_EXPORTABLE_STUBS", "true"),
 	).RunTestWithBp(t, `
 		apex {
 			name: "com.android.art",
@@ -755,6 +750,7 @@ func TestBootclasspathFragment_HiddenAPIList(t *testing.T) {
 			],
 			srcs: ["b.java"],
 			compile_dex: true,
+			sdk_version: "core_current",
 		}
 
 		java_sdk_library {
@@ -928,6 +924,7 @@ func TestBootclasspathFragment_AndroidNonUpdatable_FromSource(t *testing.T) {
 			],
 			srcs: ["b.java"],
 			compile_dex: true,
+			sdk_version: "core_current",
 		}
 
 		java_library {
@@ -1099,6 +1096,7 @@ func TestBootclasspathFragment_AndroidNonUpdatable_FromText(t *testing.T) {
 			],
 			srcs: ["b.java"],
 			compile_dex: true,
+			sdk_version: "core_current",
 		}
 
 		java_library {
@@ -1251,6 +1249,7 @@ func TestBootclasspathFragment_AndroidNonUpdatable_AlwaysUsePrebuiltSdks(t *test
 			],
 			srcs: ["b.java"],
 			compile_dex: true,
+			sdk_version: "core_current",
 		}
 
 		java_library {
