@@ -1595,6 +1595,11 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 			module.hostdexInstallFile = module.implLibraryModule.hostdexInstallFile
 		}
 
+		if installFilesInfo, ok := android.OtherModuleProvider(ctx, module.implLibraryModule, android.InstallFilesProvider); ok {
+			if installFilesInfo.CheckbuildTarget != nil {
+				ctx.CheckbuildFile(installFilesInfo.CheckbuildTarget)
+			}
+		}
 		android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: module.implLibraryModule.uniqueSrcFiles.Strings()})
 	}
 

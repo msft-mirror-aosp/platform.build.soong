@@ -2507,8 +2507,14 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		}
 
 		if c.isNDKStubLibrary() {
-			// ndk_headers do not have any variations
-			actx.AddFarVariationDependencies([]blueprint.Variation{}, depTag, lib)
+			variationExists := actx.OtherModuleDependencyVariantExists(nil, lib)
+			if variationExists {
+				actx.AddVariationDependencies(nil, depTag, lib)
+			} else {
+				// dependencies to ndk_headers fall here as ndk_headers do not have
+				// any variants.
+				actx.AddFarVariationDependencies([]blueprint.Variation{}, depTag, lib)
+			}
 		} else if c.IsStubs() && !c.isImportedApiLibrary() {
 			actx.AddFarVariationDependencies(append(ctx.Target().Variations(), c.ImageVariation()),
 				depTag, lib)
