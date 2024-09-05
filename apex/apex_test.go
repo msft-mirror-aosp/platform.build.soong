@@ -267,6 +267,7 @@ func ensureNotContains(t *testing.T, result string, notExpected string) {
 }
 
 func ensureMatches(t *testing.T, result string, expectedRex string) {
+	t.Helper()
 	ok, err := regexp.MatchString(expectedRex, result)
 	if err != nil {
 		t.Fatalf("regexp failure trying to match %s against `%s` expression: %s", result, expectedRex, err)
@@ -274,6 +275,14 @@ func ensureMatches(t *testing.T, result string, expectedRex string) {
 	}
 	if !ok {
 		t.Errorf("%s does not match regular expession %s", result, expectedRex)
+	}
+}
+
+func ensureListContainsMatch(t *testing.T, result []string, expectedRex string) {
+	t.Helper()
+	p := regexp.MustCompile(expectedRex)
+	if android.IndexListPred(func(s string) bool { return p.MatchString(s) }, result) == -1 {
+		t.Errorf("%q is not found in %v", expectedRex, result)
 	}
 }
 
@@ -10791,14 +10800,14 @@ func TestAconfigFilesJavaDeps(t *testing.T) {
 	mod := ctx.ModuleForTests("myapex", "android_common_myapex")
 	s := mod.Rule("apexRule").Args["copy_commands"]
 	copyCmds := regexp.MustCompile(" *&& *").Split(s, -1)
-	if len(copyCmds) != 8 {
-		t.Fatalf("Expected 5 commands, got %d in:\n%s", len(copyCmds), s)
+	if len(copyCmds) != 12 {
+		t.Fatalf("Expected 12 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
-	ensureMatches(t, copyCmds[4], "^cp -f .*/aconfig_flags.pb .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[5], "^cp -f .*/package.map .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[6], "^cp -f .*/flag.map .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[7], "^cp -f .*/flag.val .*/image.apex/etc$")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/aconfig_flags.pb .*/image.apex/etc/aconfig_flags.pb")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/package.map .*/image.apex/etc/package.map")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.map .*/image.apex/etc/flag.map")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.val .*/image.apex/etc/flag.val")
 
 	inputs := []string{
 		"my_aconfig_declarations_foo/intermediate.pb",
@@ -10926,14 +10935,14 @@ func TestAconfigFilesJavaAndCcDeps(t *testing.T) {
 	mod := ctx.ModuleForTests("myapex", "android_common_myapex")
 	s := mod.Rule("apexRule").Args["copy_commands"]
 	copyCmds := regexp.MustCompile(" *&& *").Split(s, -1)
-	if len(copyCmds) != 12 {
-		t.Fatalf("Expected 12 commands, got %d in:\n%s", len(copyCmds), s)
+	if len(copyCmds) != 16 {
+		t.Fatalf("Expected 16 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
-	ensureMatches(t, copyCmds[8], "^cp -f .*/aconfig_flags.pb .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[9], "^cp -f .*/package.map .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[10], "^cp -f .*/flag.map .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[11], "^cp -f .*/flag.val .*/image.apex/etc$")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/aconfig_flags.pb .*/image.apex/etc/aconfig_flags.pb")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/package.map .*/image.apex/etc/package.map")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.map .*/image.apex/etc/flag.map")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.val .*/image.apex/etc/flag.val")
 
 	inputs := []string{
 		"my_aconfig_declarations_foo/intermediate.pb",
@@ -11094,14 +11103,14 @@ func TestAconfigFilesRustDeps(t *testing.T) {
 	mod := ctx.ModuleForTests("myapex", "android_common_myapex")
 	s := mod.Rule("apexRule").Args["copy_commands"]
 	copyCmds := regexp.MustCompile(" *&& *").Split(s, -1)
-	if len(copyCmds) != 32 {
-		t.Fatalf("Expected 28 commands, got %d in:\n%s", len(copyCmds), s)
+	if len(copyCmds) != 36 {
+		t.Fatalf("Expected 36 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
-	ensureMatches(t, copyCmds[28], "^cp -f .*/aconfig_flags.pb .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[29], "^cp -f .*/package.map .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[30], "^cp -f .*/flag.map .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[31], "^cp -f .*/flag.val .*/image.apex/etc$")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/aconfig_flags.pb .*/image.apex/etc/aconfig_flags.pb")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/package.map .*/image.apex/etc/package.map")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.map .*/image.apex/etc/flag.map")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.val .*/image.apex/etc/flag.val")
 
 	inputs := []string{
 		"my_aconfig_declarations_foo/intermediate.pb",

@@ -554,6 +554,14 @@ func (a *AndroidMkEntries) fillInEntries(ctx fillInEntriesContext, mod blueprint
 		a.SetBoolIfTrue("LOCAL_UNINSTALLABLE_MODULE", proptools.Bool(base.commonProperties.No_full_install))
 	}
 
+	if info.UncheckedModule {
+		a.SetBool("LOCAL_DONT_CHECK_MODULE", true)
+	} else if info.CheckbuildTarget != nil {
+		a.SetPath("LOCAL_CHECKED_MODULE", info.CheckbuildTarget)
+	} else {
+		a.SetOptionalPath("LOCAL_CHECKED_MODULE", a.OutputFile)
+	}
+
 	if len(info.TestData) > 0 {
 		a.AddStrings("LOCAL_TEST_DATA", androidMkDataPaths(info.TestData)...)
 	}
