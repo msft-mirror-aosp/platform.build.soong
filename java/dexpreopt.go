@@ -489,6 +489,7 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, libName string, dexJa
 
 	d.configPath = android.PathForModuleOut(ctx, "dexpreopt", dexJarStem, "dexpreopt.config")
 	dexpreopt.WriteModuleConfig(ctx, dexpreoptConfig, d.configPath)
+	ctx.CheckbuildFile(d.configPath)
 
 	if d.dexpreoptDisabled(ctx, libName) {
 		return
@@ -592,7 +593,8 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, libName string, dexJa
 
 			}
 		} else if !d.preventInstall {
-			ctx.InstallFile(installPath, installBase, install.From)
+			// Install without adding to checkbuild to match behavior of previous Make-based checkbuild rules
+			ctx.InstallFileWithoutCheckbuild(installPath, installBase, install.From)
 		}
 	}
 

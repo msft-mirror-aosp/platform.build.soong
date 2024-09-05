@@ -1009,6 +1009,8 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		ctx.InstallFile(a.installDir, a.outputFile.Base(), a.outputFile, extraInstalledPaths...)
 	}
 
+	ctx.CheckbuildFile(a.outputFile)
+
 	a.buildAppDependencyInfo(ctx)
 
 	providePrebuiltInfo(ctx,
