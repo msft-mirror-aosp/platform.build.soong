@@ -563,11 +563,11 @@ be unnecessary as every module in the sdk already has its own licenses property.
 	}
 	builder.infoContents = string(output)
 	android.WriteFileRuleVerbatim(ctx, info, builder.infoContents)
-	installedInfo := ctx.InstallFile(android.PathForMainlineSdksInstall(ctx), info.Base(), info)
+	installedInfo := ctx.InstallFileWithoutCheckbuild(android.PathForMainlineSdksInstall(ctx), info.Base(), info)
 	s.infoFile = android.OptionalPathForPath(installedInfo)
 
 	// Install the zip, making sure that the info file has been installed as well.
-	installedZip := ctx.InstallFile(android.PathForMainlineSdksInstall(ctx), outputZipFile.Base(), outputZipFile, installedInfo)
+	installedZip := ctx.InstallFileWithoutCheckbuild(android.PathForMainlineSdksInstall(ctx), outputZipFile.Base(), outputZipFile, installedInfo)
 	s.snapshotFile = android.OptionalPathForPath(installedZip)
 }
 
