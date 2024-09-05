@@ -1009,6 +1009,8 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		ctx.InstallFile(a.installDir, a.outputFile.Base(), a.outputFile, extraInstalledPaths...)
 	}
 
+	ctx.CheckbuildFile(a.outputFile)
+
 	a.buildAppDependencyInfo(ctx)
 
 	providePrebuiltInfo(ctx,
@@ -1109,7 +1111,7 @@ func collectJniDeps(ctx android.ModuleContext,
 						coverageFile:   dep.CoverageOutputFile(),
 						unstrippedFile: dep.UnstrippedOutputFile(),
 						partition:      dep.Partition(),
-						installPaths:   android.ModuleFilesToInstall(ctx, dep),
+						installPaths:   android.OtherModuleProviderOrDefault(ctx, dep, android.InstallFilesProvider).InstallFiles,
 					})
 				} else if ctx.Config().AllowMissingDependencies() {
 					ctx.AddMissingDependencies([]string{otherName})
@@ -1243,9 +1245,9 @@ func (a *AndroidApp) EnableCoverageIfNeeded() {}
 
 var _ cc.Coverage = (*AndroidApp)(nil)
 
-func (a *AndroidApp) IDEInfo(dpInfo *android.IdeInfo) {
-	a.Library.IDEInfo(dpInfo)
-	a.aapt.IDEInfo(dpInfo)
+func (a *AndroidApp) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
+	a.Library.IDEInfo(ctx, dpInfo)
+	a.aapt.IDEInfo(ctx, dpInfo)
 }
 
 func (a *AndroidApp) productCharacteristicsRROPackageName() string {
@@ -1471,7 +1473,23 @@ func (a *AndroidTest) FixTestConfig(ctx android.ModuleContext, testConfig androi
 	return testConfig
 }
 
+func (a *AndroidTestHelperApp) DepsMutator(ctx android.BottomUpMutatorContext) {
+	if len(a.ApexProperties.Apex_available) == 0 && ctx.Config().IsEnvTrue("EMMA_API_MAPPER") {
+		// Instrument the android_test_helper target to log potential API calls at the run time.
+		// Contact android-xts-infra team before using the environment var EMMA_API_MAPPER.
+		ctx.AddVariationDependencies(nil, staticLibTag, "apimapper-helper-device-lib")
+		a.setApiMapper(true)
+	}
+	a.AndroidApp.DepsMutator(ctx)
+}
+
 func (a *AndroidTest) DepsMutator(ctx android.BottomUpMutatorContext) {
+	if len(a.ApexProperties.Apex_available) == 0 && ctx.Config().IsEnvTrue("EMMA_API_MAPPER") {
+		// Instrument the android_test_helper target to log potential API calls at the run time.
+		// Contact android-xts-infra team before using the environment var EMMA_API_MAPPER.
+		ctx.AddVariationDependencies(nil, staticLibTag, "apimapper-helper-device-lib")
+		a.setApiMapper(true)
+	}
 	a.AndroidApp.DepsMutator(ctx)
 }
 

@@ -104,6 +104,7 @@ func TestBootclasspathFragments_FragmentDependency(t *testing.T) {
 			test: {
 				enabled: true,
 			},
+			sdk_version: "core_current",
 		}
 
 		java_library {
@@ -749,6 +750,7 @@ func TestBootclasspathFragment_HiddenAPIList(t *testing.T) {
 			],
 			srcs: ["b.java"],
 			compile_dex: true,
+			sdk_version: "core_current",
 		}
 
 		java_sdk_library {
@@ -922,6 +924,7 @@ func TestBootclasspathFragment_AndroidNonUpdatable_FromSource(t *testing.T) {
 			],
 			srcs: ["b.java"],
 			compile_dex: true,
+			sdk_version: "core_current",
 		}
 
 		java_library {
@@ -1093,6 +1096,7 @@ func TestBootclasspathFragment_AndroidNonUpdatable_FromText(t *testing.T) {
 			],
 			srcs: ["b.java"],
 			compile_dex: true,
+			sdk_version: "core_current",
 		}
 
 		java_library {
@@ -1245,6 +1249,7 @@ func TestBootclasspathFragment_AndroidNonUpdatable_AlwaysUsePrebuiltSdks(t *test
 			],
 			srcs: ["b.java"],
 			compile_dex: true,
+			sdk_version: "core_current",
 		}
 
 		java_library {

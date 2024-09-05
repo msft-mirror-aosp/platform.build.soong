@@ -1858,3 +1858,39 @@ func TestMultipleSdkLibraryPrebuilts(t *testing.T) {
 		android.AssertStringListContains(t, "Could not find the expected stub on classpath", inputs, tc.expectedStubPath)
 	}
 }
+
+func TestStubLinkType(t *testing.T) {
+	android.GroupFixturePreparers(
+		prepareForJavaTest,
+		PrepareForTestWithJavaSdkLibraryFiles,
+		FixtureWithLastReleaseApis("foo"),
+	).ExtendWithErrorHandler(android.FixtureExpectsOneErrorPattern(
+		`module "baz" variant "android_common": compiles against system API, but dependency `+
+			`"bar.stubs.system" is compiling against module API. In order to fix this, `+
+			`consider adjusting sdk_version: OR platform_apis: property of the source or `+
+			`target module so that target module is built with the same or smaller API set `+
+			`when compared to the source.`),
+	).RunTestWithBp(t, `
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java"],
+			sdk_version: "current",
+		}
+		java_library {
+			name: "bar.stubs.system",
+			srcs: ["a.java"],
+			sdk_version: "module_current",
+			is_stubs_module: false,
+		}
+
+		java_library {
+			name: "baz",
+			srcs: ["b.java"],
+			libs: [
+				"foo.stubs.system",
+				"bar.stubs.system",
+			],
+			sdk_version: "system_current",
+		}
+		`)
+}

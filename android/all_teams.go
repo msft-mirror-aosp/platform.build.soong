@@ -1,6 +1,7 @@
 package android
 
 import (
+	"path"
 	"path/filepath"
 
 	"android/soong/android/team_proto"
@@ -152,6 +153,11 @@ func (t *allTeamsSingleton) lookupTeamForAllModules() *team_proto.AllTeams {
 			teamProperties, found = t.teams[teamName]
 		} else {
 			teamProperties, found = t.lookupDefaultTeam(m.bpFile)
+		}
+		// Deal with one blueprint file including another by looking up the default
+		// in the main Android.bp rather than one listed with "build = [My.bp]"
+		if !found {
+			teamProperties, found = t.lookupDefaultTeam(path.Join(path.Dir(m.bpFile), "Android.bp"))
 		}
 
 		trendy_team_id := ""

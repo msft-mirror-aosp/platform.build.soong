@@ -41,6 +41,7 @@ import (
 const (
 	envConfigDir = "vendor/google/tools/soong_config"
 	jsonSuffix   = "json"
+	abfsSrcDir   = "/src"
 )
 
 var (
@@ -214,6 +215,10 @@ func NewConfig(ctx Context, args ...string) Config {
 		sandboxConfig:         &SandboxConfig{},
 		ninjaWeightListSource: DEFAULT,
 	}
+	wd, err := os.Getwd()
+	if err != nil {
+		ctx.Fatalln("Failed to get working directory:", err)
+	}
 
 	// Skip soong tests by default on Linux
 	if runtime.GOOS == "linux" {
@@ -245,17 +250,13 @@ func NewConfig(ctx Context, args ...string) Config {
 
 	// Make sure OUT_DIR is set appropriately
 	if outDir, ok := ret.environ.Get("OUT_DIR"); ok {
-		ret.environ.Set("OUT_DIR", filepath.Clean(outDir))
+		ret.environ.Set("OUT_DIR", ret.sandboxPath(wd, filepath.Clean(outDir)))
 	} else {
 		outDir := "out"
 		if baseDir, ok := ret.environ.Get("OUT_DIR_COMMON_BASE"); ok {
-			if wd, err := os.Getwd(); err != nil {
-				ctx.Fatalln("Failed to get working directory:", err)
-			} else {
-				outDir = filepath.Join(baseDir, filepath.Base(wd))
-			}
+			outDir = filepath.Join(baseDir, filepath.Base(wd))
 		}
-		ret.environ.Set("OUT_DIR", outDir)
+		ret.environ.Set("OUT_DIR", ret.sandboxPath(wd, outDir))
 	}
 
 	// loadEnvConfig needs to know what the OUT_DIR is, so it should
@@ -350,6 +351,9 @@ func NewConfig(ctx Context, args ...string) Config {
 
 		// Use config.useN2 instead.
 		"SOONG_USE_N2",
+
+		// Leaks usernames into environment.
+		"HOME",
 	)
 
 	if ret.UseGoma() || ret.ForceUseGoma() {
@@ -361,12 +365,12 @@ func NewConfig(ctx Context, args ...string) Config {
 	ret.environ.Set("PYTHONDONTWRITEBYTECODE", "1")
 
 	tmpDir := absPath(ctx, ret.TempDir())
-	ret.environ.Set("TMPDIR", tmpDir)
+	ret.environ.Set("TMPDIR", ret.sandboxPath(wd, tmpDir))
 
 	// Always set ASAN_SYMBOLIZER_PATH so that ASAN-based tools can symbolize any crashes
 	symbolizerPath := filepath.Join("prebuilts/clang/host", ret.HostPrebuiltTag(),
 		"llvm-binutils-stable/llvm-symbolizer")
-	ret.environ.Set("ASAN_SYMBOLIZER_PATH", absPath(ctx, symbolizerPath))
+	ret.environ.Set("ASAN_SYMBOLIZER_PATH", ret.sandboxPath(wd, absPath(ctx, symbolizerPath)))
 
 	// Precondition: the current directory is the top of the source tree
 	checkTopDir(ctx)
@@ -426,9 +430,9 @@ func NewConfig(ctx Context, args ...string) Config {
 	}
 
 	ret.environ.Unset("OVERRIDE_ANDROID_JAVA_HOME")
-	ret.environ.Set("JAVA_HOME", absJavaHome)
-	ret.environ.Set("ANDROID_JAVA_HOME", javaHome)
-	ret.environ.Set("ANDROID_JAVA8_HOME", java8Home)
+	ret.environ.Set("JAVA_HOME", ret.sandboxPath(wd, absJavaHome))
+	ret.environ.Set("ANDROID_JAVA_HOME", ret.sandboxPath(wd, javaHome))
+	ret.environ.Set("ANDROID_JAVA8_HOME", ret.sandboxPath(wd, java8Home))
 	ret.environ.Set("PATH", strings.Join(newPath, string(filepath.ListSeparator)))
 
 	// b/286885495, https://bugzilla.redhat.com/show_bug.cgi?id=2227130: some versions of Fedora include patches
@@ -444,7 +448,7 @@ func NewConfig(ctx Context, args ...string) Config {
 		ret.buildDateTime = strconv.FormatInt(time.Now().Unix(), 10)
 	}
 
-	ret.environ.Set("BUILD_DATETIME_FILE", buildDateTimeFile)
+	ret.environ.Set("BUILD_DATETIME_FILE", ret.sandboxPath(wd, buildDateTimeFile))
 
 	if _, ok := ret.environ.Get("BUILD_USERNAME"); !ok {
 		username := "unknown"
@@ -455,6 +459,7 @@ func NewConfig(ctx Context, args ...string) Config {
 		}
 		ret.environ.Set("BUILD_USERNAME", username)
 	}
+	ret.environ.Set("PWD", ret.sandboxPath(wd, wd))
 
 	if ret.UseRBE() {
 		for k, v := range getRBEVars(ctx, Config{ret}) {
@@ -1041,7 +1046,7 @@ func (c *configImpl) NamedGlobFile(name string) string {
 
 func (c *configImpl) UsedEnvFile(tag string) string {
 	if v, ok := c.environ.Get("TARGET_PRODUCT"); ok {
-		return shared.JoinPath(c.SoongOutDir(), usedEnvFile+"."+v+"."+tag)
+		return shared.JoinPath(c.SoongOutDir(), usedEnvFile+"."+v+c.CoverageSuffix()+"."+tag)
 	}
 	return shared.JoinPath(c.SoongOutDir(), usedEnvFile+"."+tag)
 }
@@ -1147,6 +1152,13 @@ func (c *configImpl) TargetProductOrErr() (string, error) {
 		return v, nil
 	}
 	return "", fmt.Errorf("TARGET_PRODUCT is not defined")
+}
+
+func (c *configImpl) CoverageSuffix() string {
+	if v := c.environ.IsEnvTrue("EMMA_INSTRUMENT"); v {
+		return ".coverage"
+	}
+	return ""
 }
 
 func (c *configImpl) TargetDevice() string {
@@ -1287,6 +1299,19 @@ func (c *configImpl) UseABFS() bool {
 	abfsBox := c.PrebuiltBuildTool("abfsbox")
 	err := exec.Command(abfsBox, "hash", srcDirFileCheck).Run()
 	return err == nil
+}
+
+func (c *configImpl) sandboxPath(base, in string) string {
+	if !c.UseABFS() {
+		return in
+	}
+
+	rel, err := filepath.Rel(base, in)
+	if err != nil {
+		return in
+	}
+
+	return filepath.Join(abfsSrcDir, rel)
 }
 
 func (c *configImpl) UseRBE() bool {
@@ -1520,7 +1545,7 @@ func (c *configImpl) SoongVarsFile() string {
 	if err != nil {
 		return filepath.Join(c.SoongOutDir(), "soong.variables")
 	} else {
-		return filepath.Join(c.SoongOutDir(), "soong."+targetProduct+".variables")
+		return filepath.Join(c.SoongOutDir(), "soong."+targetProduct+c.CoverageSuffix()+".variables")
 	}
 }
 
@@ -1529,7 +1554,7 @@ func (c *configImpl) SoongExtraVarsFile() string {
 	if err != nil {
 		return filepath.Join(c.SoongOutDir(), "soong.extra.variables")
 	} else {
-		return filepath.Join(c.SoongOutDir(), "soong."+targetProduct+".extra.variables")
+		return filepath.Join(c.SoongOutDir(), "soong."+targetProduct+c.CoverageSuffix()+".extra.variables")
 	}
 }
 
@@ -1538,7 +1563,7 @@ func (c *configImpl) SoongNinjaFile() string {
 	if err != nil {
 		return filepath.Join(c.SoongOutDir(), "build.ninja")
 	} else {
-		return filepath.Join(c.SoongOutDir(), "build."+targetProduct+".ninja")
+		return filepath.Join(c.SoongOutDir(), "build."+targetProduct+c.CoverageSuffix()+".ninja")
 	}
 }
 
@@ -1550,11 +1575,11 @@ func (c *configImpl) CombinedNinjaFile() string {
 }
 
 func (c *configImpl) SoongAndroidMk() string {
-	return filepath.Join(c.SoongOutDir(), "Android-"+c.TargetProduct()+".mk")
+	return filepath.Join(c.SoongOutDir(), "Android-"+c.TargetProduct()+c.CoverageSuffix()+".mk")
 }
 
 func (c *configImpl) SoongMakeVarsMk() string {
-	return filepath.Join(c.SoongOutDir(), "make_vars-"+c.TargetProduct()+".mk")
+	return filepath.Join(c.SoongOutDir(), "make_vars-"+c.TargetProduct()+c.CoverageSuffix()+".mk")
 }
 
 func (c *configImpl) SoongBuildMetrics() string {
@@ -1615,6 +1640,12 @@ func (c *configImpl) NinjaBin() string {
 		binName = "ninjago"
 	}
 	return c.PrebuiltBuildTool(binName)
+}
+
+func (c *configImpl) N2Bin() string {
+	path := c.PrebuiltBuildTool("n2")
+	// Use musl instead of glibc because glibc on the build server is old and has bugs
+	return strings.ReplaceAll(path, "/linux-x86/", "/linux_musl-x86/")
 }
 
 func (c *configImpl) PrebuiltBuildTool(name string) string {
@@ -1709,6 +1740,11 @@ func (c *configImpl) EmptyNinjaFile() bool {
 }
 
 func (c *configImpl) SkipMetricsUpload() bool {
+	// b/362625275 - Metrics upload sometimes prevents abfs unmount
+	if c.UseABFS() {
+		return true
+	}
+
 	return c.skipMetricsUpload
 }
 

@@ -108,7 +108,7 @@ type dexer struct {
 	resourcesInput          android.OptionalPath
 	resourcesOutput         android.OptionalPath
 
-	providesTransitiveHeaderJars
+	providesTransitiveHeaderJarsForR8
 }
 
 func (d *dexer) effectiveOptimizeEnabled() bool {
@@ -289,29 +289,32 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams) 
 	// - suppress ProGuard warnings of referencing symbols unknown to the lower SDK version.
 	// - prevent ProGuard stripping subclass in the support library that extends class added in the higher SDK version.
 	// See b/20667396
-	var proguardRaiseDeps classpath
-	ctx.VisitDirectDepsWithTag(proguardRaiseTag, func(m android.Module) {
-		if dep, ok := android.OtherModuleProvider(ctx, m, JavaInfoProvider); ok {
-			proguardRaiseDeps = append(proguardRaiseDeps, dep.RepackagedHeaderJars...)
-		}
-	})
+	// TODO(b/360905238): Remove SdkSystemServer exception after resolving missing class references.
+	if !dexParams.sdkVersion.Stable() || dexParams.sdkVersion.Kind == android.SdkSystemServer {
+		var proguardRaiseDeps classpath
+		ctx.VisitDirectDepsWithTag(proguardRaiseTag, func(m android.Module) {
+			if dep, ok := android.OtherModuleProvider(ctx, m, JavaInfoProvider); ok {
+				proguardRaiseDeps = append(proguardRaiseDeps, dep.RepackagedHeaderJars...)
+			}
+		})
+		r8Flags = append(r8Flags, proguardRaiseDeps.FormJavaClassPath("-libraryjars"))
+		r8Deps = append(r8Deps, proguardRaiseDeps...)
+	}
 
-	r8Flags = append(r8Flags, proguardRaiseDeps.FormJavaClassPath("-libraryjars"))
-	r8Deps = append(r8Deps, proguardRaiseDeps...)
 	r8Flags = append(r8Flags, flags.bootClasspath.FormJavaClassPath("-libraryjars"))
 	r8Deps = append(r8Deps, flags.bootClasspath...)
 	r8Flags = append(r8Flags, flags.dexClasspath.FormJavaClassPath("-libraryjars"))
 	r8Deps = append(r8Deps, flags.dexClasspath...)
 
 	transitiveStaticLibsLookupMap := map[android.Path]bool{}
-	if d.transitiveStaticLibsHeaderJars != nil {
-		for _, jar := range d.transitiveStaticLibsHeaderJars.ToList() {
+	if d.transitiveStaticLibsHeaderJarsForR8 != nil {
+		for _, jar := range d.transitiveStaticLibsHeaderJarsForR8.ToList() {
 			transitiveStaticLibsLookupMap[jar] = true
 		}
 	}
 	transitiveHeaderJars := android.Paths{}
-	if d.transitiveLibsHeaderJars != nil {
-		for _, jar := range d.transitiveLibsHeaderJars.ToList() {
+	if d.transitiveLibsHeaderJarsForR8 != nil {
+		for _, jar := range d.transitiveLibsHeaderJarsForR8.ToList() {
 			if _, ok := transitiveStaticLibsLookupMap[jar]; ok {
 				// don't include a lib if it is already packaged in the current JAR as a static lib
 				continue
