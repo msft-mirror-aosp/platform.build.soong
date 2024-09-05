@@ -15,6 +15,7 @@
 package java
 
 import (
+	"encoding/gob"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -2514,6 +2515,8 @@ var overridableJarJarPrefix = "com.android.internal.hidden_from_bootclasspath"
 
 func init() {
 	android.SetJarJarPrefixHandler(mergeJarJarPrefixes)
+
+	gob.Register(BaseJarJarProviderData{})
 }
 
 // BaseJarJarProviderData contains information that will propagate across dependencies regardless of
