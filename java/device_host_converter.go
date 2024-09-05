@@ -143,6 +143,7 @@ func (d *DeviceHostConverter) GenerateAndroidBuildActions(ctx android.ModuleCont
 		ResourceJars:                   d.resourceJars,
 		SrcJarArgs:                     d.srcJarArgs,
 		SrcJarDeps:                     d.srcJarDeps,
+		StubsLinkType:                  Implementation,
 	})
 
 }
