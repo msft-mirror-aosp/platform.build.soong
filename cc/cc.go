@@ -613,7 +613,7 @@ type linker interface {
 	coverageOutputFilePath() android.OptionalPath
 
 	// Get the deps that have been explicitly specified in the properties.
-	linkerSpecifiedDeps(specifiedDeps specifiedDeps) specifiedDeps
+	linkerSpecifiedDeps(ctx android.ConfigAndErrorContext, module *Module, specifiedDeps specifiedDeps) specifiedDeps
 
 	moduleInfoJSON(ctx ModuleContext, moduleInfoJSON *android.ModuleInfoJSON)
 }
@@ -2507,8 +2507,14 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		}
 
 		if c.isNDKStubLibrary() {
-			// ndk_headers do not have any variations
-			actx.AddFarVariationDependencies([]blueprint.Variation{}, depTag, lib)
+			variationExists := actx.OtherModuleDependencyVariantExists(nil, lib)
+			if variationExists {
+				actx.AddVariationDependencies(nil, depTag, lib)
+			} else {
+				// dependencies to ndk_headers fall here as ndk_headers do not have
+				// any variants.
+				actx.AddFarVariationDependencies([]blueprint.Variation{}, depTag, lib)
+			}
 		} else if c.IsStubs() && !c.isImportedApiLibrary() {
 			actx.AddFarVariationDependencies(append(ctx.Target().Variations(), c.ImageVariation()),
 				depTag, lib)
@@ -3042,7 +3048,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		}
 
 		if dep.Target().Os != ctx.Os() {
-			ctx.ModuleErrorf("OS mismatch between %q and %q", ctx.ModuleName(), depName)
+			ctx.ModuleErrorf("OS mismatch between %q (%s) and %q (%s)", ctx.ModuleName(), ctx.Os().Name, depName, dep.Target().Os.Name)
 			return
 		}
 		if dep.Target().Arch.ArchType != ctx.Arch().ArchType {

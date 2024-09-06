@@ -259,10 +259,10 @@ type JavaInfo struct {
 	RepackagedHeaderJars android.Paths
 
 	// set of header jars for all transitive libs deps
-	TransitiveLibsHeaderJars *android.DepSet[android.Path]
+	TransitiveLibsHeaderJarsForR8 *android.DepSet[android.Path]
 
 	// set of header jars for all transitive static libs deps
-	TransitiveStaticLibsHeaderJars *android.DepSet[android.Path]
+	TransitiveStaticLibsHeaderJarsForR8 *android.DepSet[android.Path]
 
 	// ImplementationAndResourceJars is a list of jars that contain the implementations of classes
 	// in the module as well as any resources included in the module.
@@ -421,8 +421,6 @@ var (
 	bootClasspathTag        = dependencyTag{name: "bootclasspath", runtimeLinked: true}
 	systemModulesTag        = dependencyTag{name: "system modules", runtimeLinked: true}
 	frameworkResTag         = dependencyTag{name: "framework-res"}
-	kotlinStdlibTag         = dependencyTag{name: "kotlin-stdlib", runtimeLinked: true}
-	kotlinAnnotationsTag    = dependencyTag{name: "kotlin-annotations", runtimeLinked: true}
 	kotlinPluginTag         = dependencyTag{name: "kotlin-plugin", toolchain: true}
 	proguardRaiseTag        = dependencyTag{name: "proguard-raise"}
 	certificateTag          = dependencyTag{name: "certificate"}
@@ -458,8 +456,6 @@ var (
 		bootClasspathTag,
 		systemModulesTag,
 		java9LibTag,
-		kotlinStdlibTag,
-		kotlinAnnotationsTag,
 		kotlinPluginTag,
 		syspropPublicStubDepTag,
 		instrumentationForTag,
@@ -557,7 +553,7 @@ type deps struct {
 	// are provided by systemModules.
 	java9Classpath classpath
 
-	processorPath           classpath
+	processorPath           classpath ``
 	errorProneProcessorPath classpath
 	processorClasses        []string
 	staticJars              android.Paths
@@ -568,8 +564,6 @@ type deps struct {
 	srcJars                 android.Paths
 	systemModules           *systemModules
 	aidlPreprocess          android.OptionalPath
-	kotlinStdlib            android.Paths
-	kotlinAnnotations       android.Paths
 	kotlinPlugins           android.Paths
 	aconfigProtoFiles       android.Paths
 
@@ -986,7 +980,7 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			j.dexpreopter.disableDexpreopt()
 		}
 	}
-	j.compile(ctx, nil, nil, nil)
+	j.compile(ctx, nil, nil, nil, nil)
 
 	// If this module is an impl library created from java_sdk_library,
 	// install the files under the java_sdk_library module outdir instead of this module outdir.
@@ -1870,10 +1864,12 @@ func (j *Binary) DepsMutator(ctx android.BottomUpMutatorContext) {
 	if ctx.Arch().ArchType == android.Common {
 		j.deps(ctx)
 	}
-	if ctx.Arch().ArchType != android.Common {
-		// These dependencies ensure the host installation rules will install the jar file and
-		// the jni libraries when the wrapper is installed.
+	// These dependencies ensure the installation rules will install the jar file when the
+	// wrapper is installed, and the jni libraries on host when the wrapper is installed.
+	if ctx.Arch().ArchType != android.Common && ctx.Os().Class == android.Host {
 		ctx.AddVariationDependencies(nil, jniInstallTag, j.binaryProperties.Jni_libs...)
+	}
+	if ctx.Arch().ArchType != android.Common {
 		ctx.AddVariationDependencies(
 			[]blueprint.Variation{{Mutator: "arch", Variation: android.CommonArch.String()}},
 			binaryInstallTag, ctx.ModuleName())
@@ -2408,15 +2404,15 @@ func (al *ApiLibrary) TargetSdkVersion(ctx android.EarlyModuleContext) android.A
 	return al.SdkVersion(ctx).ApiLevel
 }
 
-func (al *ApiLibrary) IDEInfo(i *android.IdeInfo) {
-	i.Deps = append(i.Deps, al.ideDeps()...)
+func (al *ApiLibrary) IDEInfo(ctx android.BaseModuleContext, i *android.IdeInfo) {
+	i.Deps = append(i.Deps, al.ideDeps(ctx)...)
 	i.Libs = append(i.Libs, al.properties.Libs...)
 	i.Static_libs = append(i.Static_libs, al.properties.Static_libs...)
 	i.SrcJars = append(i.SrcJars, al.stubsSrcJar.String())
 }
 
 // deps of java_api_library for module_bp_java_deps.json
-func (al *ApiLibrary) ideDeps() []string {
+func (al *ApiLibrary) ideDeps(ctx android.BaseModuleContext) []string {
 	ret := []string{}
 	ret = append(ret, al.properties.Libs...)
 	ret = append(ret, al.properties.Static_libs...)
@@ -2638,8 +2634,9 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	var flags javaBuilderFlags
 
-	j.collectTransitiveHeaderJars(ctx)
+	j.collectTransitiveHeaderJarsForR8(ctx)
 	var staticJars android.Paths
+	var staticResourceJars android.Paths
 	var staticHeaderJars android.Paths
 	ctx.VisitDirectDeps(func(module android.Module) {
 		tag := ctx.OtherModuleDependencyTag(module)
@@ -2650,7 +2647,8 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				flags.dexClasspath = append(flags.dexClasspath, dep.HeaderJars...)
 			case staticLibTag:
 				flags.classpath = append(flags.classpath, dep.HeaderJars...)
-				staticJars = append(staticJars, dep.ImplementationAndResourcesJars...)
+				staticJars = append(staticJars, dep.ImplementationJars...)
+				staticResourceJars = append(staticResourceJars, dep.ResourceJars...)
 				staticHeaderJars = append(staticHeaderJars, dep.HeaderJars...)
 			case bootClasspathTag:
 				flags.bootClasspath = append(flags.bootClasspath, dep.HeaderJars...)
@@ -2670,48 +2668,74 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Always pass the input jars to TransformJarsToJar, even if there is only a single jar, we need the output
 	// file of the module to be named jarName.
-	outputFile := android.PathForModuleOut(ctx, "combined", jarName)
+	var outputFile android.Path
+	combinedImplementationJar := android.PathForModuleOut(ctx, "combined", jarName)
 	implementationJars := append(slices.Clone(jars), staticJars...)
-	TransformJarsToJar(ctx, outputFile, "combine prebuilt implementation jars", implementationJars, android.OptionalPath{},
+	TransformJarsToJar(ctx, combinedImplementationJar, "combine prebuilt implementation jars", implementationJars, android.OptionalPath{},
 		false, j.properties.Exclude_files, j.properties.Exclude_dirs)
+	outputFile = combinedImplementationJar
 
 	// If no dependencies have separate header jars then there is no need to create a separate
 	// header jar for this module.
 	reuseImplementationJarAsHeaderJar := slices.Equal(staticJars, staticHeaderJars)
 
-	var headerOutputFile android.ModuleOutPath
+	var resourceJarFile android.Path
+	if len(staticResourceJars) > 1 {
+		combinedJar := android.PathForModuleOut(ctx, "res-combined", jarName)
+		TransformJarsToJar(ctx, combinedJar, "for resources", staticResourceJars, android.OptionalPath{},
+			false, nil, nil)
+		resourceJarFile = combinedJar
+	} else if len(staticResourceJars) == 1 {
+		resourceJarFile = staticResourceJars[0]
+	}
+
+	var headerJar android.Path
 	if reuseImplementationJarAsHeaderJar {
-		headerOutputFile = outputFile
+		headerJar = outputFile
 	} else {
 		headerJars := append(slices.Clone(jars), staticHeaderJars...)
-		headerOutputFile = android.PathForModuleOut(ctx, "turbine-combined", jarName)
+		headerOutputFile := android.PathForModuleOut(ctx, "turbine-combined", jarName)
 		TransformJarsToJar(ctx, headerOutputFile, "combine prebuilt header jars", headerJars, android.OptionalPath{},
 			false, j.properties.Exclude_files, j.properties.Exclude_dirs)
+		headerJar = headerOutputFile
 	}
 
 	if Bool(j.properties.Jetifier) {
-		inputFile := outputFile
-		outputFile = android.PathForModuleOut(ctx, "jetifier", jarName)
-		TransformJetifier(ctx, outputFile, inputFile)
+		jetifierOutputFile := android.PathForModuleOut(ctx, "jetifier", jarName)
+		TransformJetifier(ctx, jetifierOutputFile, outputFile)
+		outputFile = jetifierOutputFile
 
 		if !reuseImplementationJarAsHeaderJar {
-			headerInputFile := headerOutputFile
-			headerOutputFile = android.PathForModuleOut(ctx, "jetifier-headers", jarName)
-			TransformJetifier(ctx, headerOutputFile, headerInputFile)
+			jetifierHeaderJar := android.PathForModuleOut(ctx, "jetifier-headers", jarName)
+			TransformJetifier(ctx, jetifierHeaderJar, headerJar)
+			headerJar = jetifierHeaderJar
 		} else {
-			headerOutputFile = outputFile
+			headerJar = outputFile
 		}
+	}
+
+	implementationJarFile := outputFile
+
+	// merge implementation jar with resources if necessary
+	if resourceJarFile != nil {
+		jars := android.Paths{resourceJarFile, outputFile}
+		combinedJar := android.PathForModuleOut(ctx, "withres", jarName)
+		TransformJarsToJar(ctx, combinedJar, "for resources", jars, android.OptionalPath{},
+			false, nil, nil)
+		outputFile = combinedJar
 	}
 
 	// Save the output file with no relative path so that it doesn't end up in a subdirectory when used as a resource.
 	// Also strip the relative path from the header output file so that the reuseImplementationJarAsHeaderJar check
 	// in a module that depends on this module considers them equal.
-	j.combinedHeaderFile = headerOutputFile.WithoutRel()
+	j.combinedHeaderFile = headerJar.WithoutRel()
 	j.combinedImplementationFile = outputFile.WithoutRel()
 
 	j.maybeInstall(ctx, jarName, outputFile)
 
 	j.exportAidlIncludeDirs = android.PathsForModuleSrc(ctx, j.properties.Aidl.Export_include_dirs)
+
+	ctx.CheckbuildFile(outputFile)
 
 	if ctx.Device() {
 		// If this is a variant created for a prebuilt_apex then use the dex implementation jar
@@ -2779,6 +2803,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			if ctx.Failed() {
 				return
 			}
+			ctx.CheckbuildFile(dexOutputFile)
 
 			// Initialize the hiddenapi structure.
 			j.initHiddenAPI(ctx, makeDexJarPathFromPath(dexOutputFile), outputFile, j.dexProperties.Uncompress_dex)
@@ -2792,13 +2817,14 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	android.SetProvider(ctx, JavaInfoProvider, &JavaInfo{
-		HeaderJars:                     android.PathsIfNonNil(j.combinedHeaderFile),
-		TransitiveLibsHeaderJars:       j.transitiveLibsHeaderJars,
-		TransitiveStaticLibsHeaderJars: j.transitiveStaticLibsHeaderJars,
-		ImplementationAndResourcesJars: android.PathsIfNonNil(j.combinedImplementationFile),
-		ImplementationJars:             android.PathsIfNonNil(j.combinedImplementationFile),
-		AidlIncludeDirs:                j.exportAidlIncludeDirs,
-		StubsLinkType:                  j.stubsLinkType,
+		HeaderJars:                          android.PathsIfNonNil(j.combinedHeaderFile),
+		TransitiveLibsHeaderJarsForR8:       j.transitiveLibsHeaderJarsForR8,
+		TransitiveStaticLibsHeaderJarsForR8: j.transitiveStaticLibsHeaderJarsForR8,
+		ImplementationAndResourcesJars:      android.PathsIfNonNil(j.combinedImplementationFile),
+		ImplementationJars:                  android.PathsIfNonNil(implementationJarFile.WithoutRel()),
+		ResourceJars:                        android.PathsIfNonNil(resourceJarFile),
+		AidlIncludeDirs:                     j.exportAidlIncludeDirs,
+		StubsLinkType:                       j.stubsLinkType,
 		// TODO(b/289117800): LOCAL_ACONFIG_FILES for prebuilts
 	})
 
@@ -2910,7 +2936,7 @@ var _ android.IDECustomizedModuleName = (*Import)(nil)
 
 // Collect information for opening IDE project files in java/jdeps.go.
 
-func (j *Import) IDEInfo(dpInfo *android.IdeInfo) {
+func (j *Import) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
 	dpInfo.Jars = append(dpInfo.Jars, j.combinedHeaderFile.String())
 }
 
