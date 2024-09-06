@@ -17,6 +17,7 @@ package android
 import (
 	"bytes"
 	"encoding/csv"
+	"encoding/gob"
 	"fmt"
 	"slices"
 	"strconv"
@@ -129,6 +130,28 @@ func NewComplianceMetadataInfo() *ComplianceMetadataInfo {
 	return &ComplianceMetadataInfo{
 		properties: map[string]string{},
 	}
+}
+
+func (c *ComplianceMetadataInfo) GobEncode() ([]byte, error) {
+	w := new(bytes.Buffer)
+	encoder := gob.NewEncoder(w)
+	err := encoder.Encode(c.properties)
+	if err != nil {
+		return nil, err
+	}
+
+	return w.Bytes(), nil
+}
+
+func (c *ComplianceMetadataInfo) GobDecode(data []byte) error {
+	r := bytes.NewBuffer(data)
+	decoder := gob.NewDecoder(r)
+	err := decoder.Decode(&c.properties)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (c *ComplianceMetadataInfo) SetStringValue(propertyName string, value string) {
