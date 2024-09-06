@@ -884,7 +884,7 @@ func (a *AndroidLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 		extraSrcJars = android.Paths{a.aapt.aaptSrcJar}
 	}
 
-	a.Module.compile(ctx, extraSrcJars, extraClasspathJars, extraCombinedJars)
+	a.Module.compile(ctx, extraSrcJars, extraClasspathJars, extraCombinedJars, nil)
 
 	a.aarFile = android.PathForModuleOut(ctx, ctx.ModuleName()+".aar")
 	var res android.Paths
