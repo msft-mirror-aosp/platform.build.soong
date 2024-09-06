@@ -553,7 +553,7 @@ type deps struct {
 	// are provided by systemModules.
 	java9Classpath classpath
 
-	processorPath           classpath
+	processorPath           classpath ``
 	errorProneProcessorPath classpath
 	processorClasses        []string
 	staticJars              android.Paths
@@ -980,7 +980,7 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			j.dexpreopter.disableDexpreopt()
 		}
 	}
-	j.compile(ctx, nil, nil, nil)
+	j.compile(ctx, nil, nil, nil, nil)
 
 	// If this module is an impl library created from java_sdk_library,
 	// install the files under the java_sdk_library module outdir instead of this module outdir.
