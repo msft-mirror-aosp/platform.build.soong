@@ -15,6 +15,7 @@
 package java
 
 import (
+	"encoding/gob"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -1152,7 +1153,7 @@ func (j *Module) addGeneratedSrcJars(path android.Path) {
 	j.properties.Generated_srcjars = append(j.properties.Generated_srcjars, path)
 }
 
-func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspathJars, extraCombinedJars android.Paths) {
+func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspathJars, extraCombinedJars, extraDepCombinedJars android.Paths) {
 	// Auto-propagating jarjar rules
 	jarjarProviderData := j.collectJarJarRules(ctx)
 	if jarjarProviderData != nil {
@@ -1279,10 +1280,12 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		}
 		j.headerJarFile = combinedHeaderJarFile
 
+		ctx.CheckbuildFile(j.headerJarFile)
+
 		android.SetProvider(ctx, JavaInfoProvider, &JavaInfo{
 			HeaderJars:                          android.PathsIfNonNil(j.headerJarFile),
-			TransitiveLibsHeaderJars:            j.transitiveLibsHeaderJars,
-			TransitiveStaticLibsHeaderJars:      j.transitiveStaticLibsHeaderJars,
+			TransitiveLibsHeaderJarsForR8:       j.transitiveLibsHeaderJarsForR8,
+			TransitiveStaticLibsHeaderJarsForR8: j.transitiveStaticLibsHeaderJarsForR8,
 			AidlIncludeDirs:                     j.exportAidlIncludeDirs,
 			ExportedPlugins:                     j.exportedPluginJars,
 			ExportedPluginClasses:               j.exportedPluginClasses,
@@ -1512,6 +1515,8 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	if len(deps.staticJars) > 0 {
 		jars = append(jars, deps.staticJars...)
 	}
+
+	jars = append(jars, extraDepCombinedJars...)
 
 	manifest := j.overrideManifest
 	if !manifest.Valid() && j.properties.Manifest != nil {
@@ -1759,6 +1764,8 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			j.dexpreopt(ctx, libName, dexOutputFile)
 
 			outputFile = dexOutputFile
+
+			ctx.CheckbuildFile(dexOutputFile)
 		} else {
 			// There is no code to compile into a dex jar, make sure the resources are propagated
 			// to the APK if this is an app.
@@ -1802,13 +1809,14 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	j.collectTransitiveSrcFiles(ctx, srcFiles)
 
-	ctx.CheckbuildFile(outputFile)
+	ctx.CheckbuildFile(j.implementationJarFile)
+	ctx.CheckbuildFile(j.headerJarFile)
 
 	android.SetProvider(ctx, JavaInfoProvider, &JavaInfo{
 		HeaderJars:                          android.PathsIfNonNil(j.headerJarFile),
 		RepackagedHeaderJars:                android.PathsIfNonNil(j.repackagedHeaderJarFile),
-		TransitiveLibsHeaderJars:            j.transitiveLibsHeaderJars,
-		TransitiveStaticLibsHeaderJars:      j.transitiveStaticLibsHeaderJars,
+		TransitiveLibsHeaderJarsForR8:       j.transitiveLibsHeaderJarsForR8,
+		TransitiveStaticLibsHeaderJarsForR8: j.transitiveStaticLibsHeaderJarsForR8,
 		ImplementationAndResourcesJars:      android.PathsIfNonNil(j.implementationAndResourcesJar),
 		ImplementationJars:                  android.PathsIfNonNil(j.implementationJarFile),
 		ResourceJars:                        android.PathsIfNonNil(j.resourceJar),
@@ -1970,6 +1978,8 @@ func (j *Module) compileJavaHeader(ctx android.ModuleContext, srcFiles, srcJars 
 	TransformJarsToJar(ctx, combinedHeaderJarOutputPath, "for turbine", jars, android.OptionalPath{},
 		false, nil, []string{"META-INF/TRANSITIVE"})
 
+	ctx.CheckbuildFile(combinedHeaderJarOutputPath)
+
 	return headerJar, combinedHeaderJarOutputPath
 }
 
@@ -1986,22 +1996,18 @@ func (j *Module) instrument(ctx android.ModuleContext, flags javaBuilderFlags,
 	return instrumentedJar
 }
 
-type providesTransitiveHeaderJars struct {
+type providesTransitiveHeaderJarsForR8 struct {
 	// set of header jars for all transitive libs deps
-	transitiveLibsHeaderJars *android.DepSet[android.Path]
+	transitiveLibsHeaderJarsForR8 *android.DepSet[android.Path]
 	// set of header jars for all transitive static libs deps
-	transitiveStaticLibsHeaderJars *android.DepSet[android.Path]
+	transitiveStaticLibsHeaderJarsForR8 *android.DepSet[android.Path]
 }
 
-func (j *providesTransitiveHeaderJars) TransitiveLibsHeaderJars() *android.DepSet[android.Path] {
-	return j.transitiveLibsHeaderJars
-}
-
-func (j *providesTransitiveHeaderJars) TransitiveStaticLibsHeaderJars() *android.DepSet[android.Path] {
-	return j.transitiveStaticLibsHeaderJars
-}
-
-func (j *providesTransitiveHeaderJars) collectTransitiveHeaderJars(ctx android.ModuleContext) {
+// collectTransitiveHeaderJarsForR8 visits direct dependencies and collects all transitive libs and static_libs
+// header jars.  The semantics of the collected jars are odd (it collects combined jars that contain the static
+// libs, but also the static libs, and it collects transitive libs dependencies of static_libs), so these
+// are only used to expand the --lib arguments to R8.
+func (j *providesTransitiveHeaderJarsForR8) collectTransitiveHeaderJarsForR8(ctx android.ModuleContext) {
 	directLibs := android.Paths{}
 	directStaticLibs := android.Paths{}
 	transitiveLibs := []*android.DepSet[android.Path]{}
@@ -2024,16 +2030,16 @@ func (j *providesTransitiveHeaderJars) collectTransitiveHeaderJars(ctx android.M
 				return
 			}
 
-			if dep.TransitiveLibsHeaderJars != nil {
-				transitiveLibs = append(transitiveLibs, dep.TransitiveLibsHeaderJars)
+			if dep.TransitiveLibsHeaderJarsForR8 != nil {
+				transitiveLibs = append(transitiveLibs, dep.TransitiveLibsHeaderJarsForR8)
 			}
-			if dep.TransitiveStaticLibsHeaderJars != nil {
-				transitiveStaticLibs = append(transitiveStaticLibs, dep.TransitiveStaticLibsHeaderJars)
+			if dep.TransitiveStaticLibsHeaderJarsForR8 != nil {
+				transitiveStaticLibs = append(transitiveStaticLibs, dep.TransitiveStaticLibsHeaderJarsForR8)
 			}
 		}
 	})
-	j.transitiveLibsHeaderJars = android.NewDepSet(android.POSTORDER, directLibs, transitiveLibs)
-	j.transitiveStaticLibsHeaderJars = android.NewDepSet(android.POSTORDER, directStaticLibs, transitiveStaticLibs)
+	j.transitiveLibsHeaderJarsForR8 = android.NewDepSet(android.POSTORDER, directLibs, transitiveLibs)
+	j.transitiveStaticLibsHeaderJarsForR8 = android.NewDepSet(android.POSTORDER, directStaticLibs, transitiveStaticLibs)
 }
 
 func (j *Module) HeaderJars() android.Paths {
@@ -2299,7 +2305,7 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 
 	sdkLinkType, _ := j.getSdkLinkType(ctx, ctx.ModuleName())
 
-	j.collectTransitiveHeaderJars(ctx)
+	j.collectTransitiveHeaderJarsForR8(ctx)
 	ctx.VisitDirectDeps(func(module android.Module) {
 		otherName := ctx.OtherModuleName(module)
 		tag := ctx.OtherModuleDependencyTag(module)
@@ -2511,6 +2517,8 @@ var overridableJarJarPrefix = "com.android.internal.hidden_from_bootclasspath"
 
 func init() {
 	android.SetJarJarPrefixHandler(mergeJarJarPrefixes)
+
+	gob.Register(BaseJarJarProviderData{})
 }
 
 // BaseJarJarProviderData contains information that will propagate across dependencies regardless of
