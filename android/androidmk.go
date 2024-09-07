@@ -554,14 +554,6 @@ func (a *AndroidMkEntries) fillInEntries(ctx fillInEntriesContext, mod blueprint
 		a.SetBoolIfTrue("LOCAL_UNINSTALLABLE_MODULE", proptools.Bool(base.commonProperties.No_full_install))
 	}
 
-	if info.UncheckedModule {
-		a.SetBool("LOCAL_DONT_CHECK_MODULE", true)
-	} else if info.CheckbuildTarget != nil {
-		a.SetPath("LOCAL_CHECKED_MODULE", info.CheckbuildTarget)
-	} else {
-		a.SetOptionalPath("LOCAL_CHECKED_MODULE", a.OutputFile)
-	}
-
 	if len(info.TestData) > 0 {
 		a.AddStrings("LOCAL_TEST_DATA", androidMkDataPaths(info.TestData)...)
 	}
@@ -920,7 +912,6 @@ func translateAndroidModule(ctx SingletonContext, w io.Writer, moduleInfoJSONs *
 		case "*phony.PhonyRule": // writes phony deps and acts like `.PHONY`
 		case "*selinux.selinuxContextsModule": // license properties written
 		case "*sysprop.syspropLibrary": // license properties written
-		case "*vintf.vintfCompatibilityMatrixRule": // use case like phony
 		default:
 			if !ctx.Config().IsEnvFalse("ANDROID_REQUIRE_LICENSES") {
 				return fmt.Errorf("custom make rules not allowed for %q (%q) module %q", ctx.ModuleType(mod), reflect.TypeOf(mod), ctx.ModuleName(mod))

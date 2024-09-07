@@ -209,18 +209,13 @@ func disableSourceApexVariant(ctx android.BaseModuleContext) bool {
 			psi = prebuiltSelectionInfo
 		}
 	})
-
 	// Find the apex variant for this module
-	apexVariantsWithoutTestApexes := []string{}
+	var apexVariantsWithoutTestApexes []string
 	if apexInfo.BaseApexName != "" {
 		// This is a transitive dependency of an override_apex
-		apexVariantsWithoutTestApexes = append(apexVariantsWithoutTestApexes, apexInfo.BaseApexName)
+		apexVariantsWithoutTestApexes = []string{apexInfo.BaseApexName}
 	} else {
-		_, variants, _ := android.ListSetDifference(apexInfo.InApexVariants, apexInfo.TestApexes)
-		apexVariantsWithoutTestApexes = append(apexVariantsWithoutTestApexes, variants...)
-	}
-	if apexInfo.ApexAvailableName != "" {
-		apexVariantsWithoutTestApexes = append(apexVariantsWithoutTestApexes, apexInfo.ApexAvailableName)
+		_, apexVariantsWithoutTestApexes, _ = android.ListSetDifference(apexInfo.InApexVariants, apexInfo.TestApexes)
 	}
 	disableSource := false
 	// find the selected apexes
@@ -494,7 +489,6 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, libName string, dexJa
 
 	d.configPath = android.PathForModuleOut(ctx, "dexpreopt", dexJarStem, "dexpreopt.config")
 	dexpreopt.WriteModuleConfig(ctx, dexpreoptConfig, d.configPath)
-	ctx.CheckbuildFile(d.configPath)
 
 	if d.dexpreoptDisabled(ctx, libName) {
 		return
@@ -598,8 +592,7 @@ func (d *dexpreopter) dexpreopt(ctx android.ModuleContext, libName string, dexJa
 
 			}
 		} else if !d.preventInstall {
-			// Install without adding to checkbuild to match behavior of previous Make-based checkbuild rules
-			ctx.InstallFileWithoutCheckbuild(installPath, installBase, install.From)
+			ctx.InstallFile(installPath, installBase, install.From)
 		}
 	}
 

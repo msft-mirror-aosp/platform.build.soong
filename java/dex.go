@@ -108,7 +108,7 @@ type dexer struct {
 	resourcesInput          android.OptionalPath
 	resourcesOutput         android.OptionalPath
 
-	providesTransitiveHeaderJarsForR8
+	providesTransitiveHeaderJars
 }
 
 func (d *dexer) effectiveOptimizeEnabled() bool {
@@ -307,14 +307,14 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams) 
 	r8Deps = append(r8Deps, flags.dexClasspath...)
 
 	transitiveStaticLibsLookupMap := map[android.Path]bool{}
-	if d.transitiveStaticLibsHeaderJarsForR8 != nil {
-		for _, jar := range d.transitiveStaticLibsHeaderJarsForR8.ToList() {
+	if d.transitiveStaticLibsHeaderJars != nil {
+		for _, jar := range d.transitiveStaticLibsHeaderJars.ToList() {
 			transitiveStaticLibsLookupMap[jar] = true
 		}
 	}
 	transitiveHeaderJars := android.Paths{}
-	if d.transitiveLibsHeaderJarsForR8 != nil {
-		for _, jar := range d.transitiveLibsHeaderJarsForR8.ToList() {
+	if d.transitiveLibsHeaderJars != nil {
+		for _, jar := range d.transitiveLibsHeaderJars.ToList() {
 			if _, ok := transitiveStaticLibsLookupMap[jar]; ok {
 				// don't include a lib if it is already packaged in the current JAR as a static lib
 				continue

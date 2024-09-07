@@ -690,7 +690,7 @@ func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext) (android.Path, a
 			extraSrcJars = android.Paths{a.aapt.aaptSrcJar}
 		}
 
-		a.Module.compile(ctx, extraSrcJars, extraClasspathJars, extraCombinedJars, nil)
+		a.Module.compile(ctx, extraSrcJars, extraClasspathJars, extraCombinedJars)
 		if a.dexProperties.resourceShrinkingEnabled(ctx) {
 			binaryResources := android.PathForModuleOut(ctx, packageResources.Base()+".binary.out.apk")
 			aapt2Convert(ctx, binaryResources, a.dexer.resourcesOutput.Path(), "binary")
@@ -1008,8 +1008,6 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 		ctx.InstallFile(a.installDir, a.outputFile.Base(), a.outputFile, extraInstalledPaths...)
 	}
-
-	ctx.CheckbuildFile(a.outputFile)
 
 	a.buildAppDependencyInfo(ctx)
 

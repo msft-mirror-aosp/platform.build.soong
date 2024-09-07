@@ -1495,6 +1495,11 @@ func (c *deviceConfig) NativeCoverageEnabledForPath(path string) bool {
 		}
 	}
 	if coverage && len(c.config.productVariables.NativeCoverageExcludePaths) > 0 {
+		// Workaround coverage boot failure.
+		// http://b/269981180
+		if strings.HasPrefix(path, "external/protobuf") {
+			coverage = false
+		}
 		if HasAnyPrefix(path, c.config.productVariables.NativeCoverageExcludePaths) {
 			coverage = false
 		}
@@ -2063,20 +2068,4 @@ func (c *config) OdmPropFiles(ctx PathContext) Paths {
 
 func (c *config) EnableUffdGc() string {
 	return String(c.productVariables.EnableUffdGc)
-}
-
-func (c *config) DeviceFrameworkCompatibilityMatrixFile() []string {
-	return c.productVariables.DeviceFrameworkCompatibilityMatrixFile
-}
-
-func (c *config) DeviceProductCompatibilityMatrixFile() []string {
-	return c.productVariables.DeviceProductCompatibilityMatrixFile
-}
-
-func (c *config) BoardAvbEnable() bool {
-	return Bool(c.productVariables.BoardAvbEnable)
-}
-
-func (c *config) BoardAvbSystemAddHashtreeFooterArgs() []string {
-	return c.productVariables.BoardAvbSystemAddHashtreeFooterArgs
 }
