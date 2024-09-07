@@ -209,13 +209,18 @@ func disableSourceApexVariant(ctx android.BaseModuleContext) bool {
 			psi = prebuiltSelectionInfo
 		}
 	})
+
 	// Find the apex variant for this module
-	var apexVariantsWithoutTestApexes []string
+	apexVariantsWithoutTestApexes := []string{}
 	if apexInfo.BaseApexName != "" {
 		// This is a transitive dependency of an override_apex
-		apexVariantsWithoutTestApexes = []string{apexInfo.BaseApexName}
+		apexVariantsWithoutTestApexes = append(apexVariantsWithoutTestApexes, apexInfo.BaseApexName)
 	} else {
-		_, apexVariantsWithoutTestApexes, _ = android.ListSetDifference(apexInfo.InApexVariants, apexInfo.TestApexes)
+		_, variants, _ := android.ListSetDifference(apexInfo.InApexVariants, apexInfo.TestApexes)
+		apexVariantsWithoutTestApexes = append(apexVariantsWithoutTestApexes, variants...)
+	}
+	if apexInfo.ApexAvailableName != "" {
+		apexVariantsWithoutTestApexes = append(apexVariantsWithoutTestApexes, apexInfo.ApexAvailableName)
 	}
 	disableSource := false
 	// find the selected apexes
