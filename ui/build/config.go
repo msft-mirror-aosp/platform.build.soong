@@ -351,9 +351,6 @@ func NewConfig(ctx Context, args ...string) Config {
 
 		// Use config.useN2 instead.
 		"SOONG_USE_N2",
-
-		// Leaks usernames into environment.
-		"HOME",
 	)
 
 	if ret.UseGoma() || ret.ForceUseGoma() {
