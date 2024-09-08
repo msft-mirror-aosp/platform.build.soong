@@ -88,6 +88,9 @@ type ApexInfo struct {
 
 	// Returns the name of the overridden apex (com.android.foo)
 	BaseApexName string
+
+	// Returns the value of `apex_available_name`
+	ApexAvailableName string
 }
 
 // AllApexInfo holds the ApexInfo of all apexes that include this module.
@@ -712,7 +715,7 @@ func MutateApexTransition(ctx BaseModuleContext, variation string) {
 	base.ApexProperties.InAnyApex = true
 	base.ApexProperties.DirectlyInAnyApex = inApex == directlyInApex
 
-	if platformVariation && !ctx.Host() && !module.AvailableFor(AvailableToPlatform) {
+	if platformVariation && !ctx.Host() && !module.AvailableFor(AvailableToPlatform) && module.NotAvailableForPlatform() {
 		// Do not install the module for platform, but still allow it to output
 		// uninstallable AndroidMk entries in certain cases when they have side
 		// effects.  TODO(jiyong): move this routine to somewhere else
