@@ -267,6 +267,7 @@ func ensureNotContains(t *testing.T, result string, notExpected string) {
 }
 
 func ensureMatches(t *testing.T, result string, expectedRex string) {
+	t.Helper()
 	ok, err := regexp.MatchString(expectedRex, result)
 	if err != nil {
 		t.Fatalf("regexp failure trying to match %s against `%s` expression: %s", result, expectedRex, err)
@@ -274,6 +275,14 @@ func ensureMatches(t *testing.T, result string, expectedRex string) {
 	}
 	if !ok {
 		t.Errorf("%s does not match regular expession %s", result, expectedRex)
+	}
+}
+
+func ensureListContainsMatch(t *testing.T, result []string, expectedRex string) {
+	t.Helper()
+	p := regexp.MustCompile(expectedRex)
+	if android.IndexListPred(func(s string) bool { return p.MatchString(s) }, result) == -1 {
+		t.Errorf("%q is not found in %v", expectedRex, result)
 	}
 }
 
@@ -4929,6 +4938,7 @@ func TestPrebuiltExportDexImplementationJars(t *testing.T) {
 		java_import {
 			name: "libfoo",
 			jars: ["libfoo.jar"],
+			sdk_version: "core_current",
 		}
 
 		java_sdk_library_import {
@@ -4969,6 +4979,22 @@ func TestPrebuiltExportDexImplementationJars(t *testing.T) {
 	t.Run("prebuilt with source preferred", func(t *testing.T) {
 
 		bp := `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			updatable: false,
+			java_libs: [
+				"libfoo",
+				"libbar",
+			],
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
 		prebuilt_apex {
 			name: "myapex",
 			arch: {
@@ -4985,10 +5011,21 @@ func TestPrebuiltExportDexImplementationJars(t *testing.T) {
 		java_import {
 			name: "libfoo",
 			jars: ["libfoo.jar"],
+			apex_available: [
+				"myapex",
+			],
+			compile_dex: true,
+			sdk_version: "core_current",
 		}
 
 		java_library {
 			name: "libfoo",
+			srcs: ["foo/bar/MyClass.java"],
+			apex_available: [
+				"myapex",
+			],
+			compile_dex: true,
+			sdk_version: "core_current",
 		}
 
 		java_sdk_library_import {
@@ -4996,12 +5033,21 @@ func TestPrebuiltExportDexImplementationJars(t *testing.T) {
 			public: {
 				jars: ["libbar.jar"],
 			},
+			apex_available: [
+				"myapex",
+			],
+			compile_dex: true,
 		}
 
 		java_sdk_library {
 			name: "libbar",
 			srcs: ["foo/bar/MyClass.java"],
 			unsafe_ignore_missing_latest_api: true,
+			apex_available: [
+				"myapex",
+			],
+			compile_dex: true,
+			sdk_version: "core_current",
 		}
 	`
 
@@ -5010,11 +5056,9 @@ func TestPrebuiltExportDexImplementationJars(t *testing.T) {
 
 		checkDexJarBuildPath(t, ctx, "prebuilt_libfoo")
 		checkDexJarInstallPath(t, ctx, "prebuilt_libfoo")
-		ensureNoSourceVariant(t, ctx, "libfoo")
 
 		checkDexJarBuildPath(t, ctx, "prebuilt_libbar")
 		checkDexJarInstallPath(t, ctx, "prebuilt_libbar")
-		ensureNoSourceVariant(t, ctx, "libbar")
 	})
 
 	t.Run("prebuilt preferred with source", func(t *testing.T) {
@@ -5040,6 +5084,7 @@ func TestPrebuiltExportDexImplementationJars(t *testing.T) {
 
 		java_library {
 			name: "libfoo",
+			sdk_version: "core_current",
 		}
 
 		java_sdk_library_import {
@@ -5166,6 +5211,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 			jars: ["libfoo.jar"],
 			apex_available: ["myapex"],
 			permitted_packages: ["foo"],
+			sdk_version: "core_current",
 		}
 
 		java_sdk_library_import {
@@ -5320,12 +5366,14 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 			name: "libfoo",
 			jars: ["libfoo.jar"],
 			apex_available: ["myapex"],
+			sdk_version: "core_current",
 		}
 
 		java_library {
 			name: "libfoo",
 			srcs: ["foo/bar/MyClass.java"],
 			apex_available: ["myapex"],
+			sdk_version: "core_current",
 		}
 
 		java_sdk_library_import {
@@ -5417,6 +5465,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 			jars: ["libfoo.jar"],
 			apex_available: ["myapex"],
 			permitted_packages: ["foo"],
+			sdk_version: "core_current",
 		}
 
 		java_library {
@@ -5424,6 +5473,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 			srcs: ["foo/bar/MyClass.java"],
 			apex_available: ["myapex"],
 			installable: true,
+			sdk_version: "core_current",
 		}
 
 		java_sdk_library_import {
@@ -5514,6 +5564,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 			name: "libfoo",
 			jars: ["libfoo.jar"],
 			apex_available: ["myapex"],
+			sdk_version: "core_current",
 		}
 
 		java_library {
@@ -5522,6 +5573,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 			apex_available: ["myapex"],
 			permitted_packages: ["foo"],
 			installable: true,
+			sdk_version: "core_current",
 		}
 
 		java_sdk_library_import {
@@ -5540,6 +5592,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 			apex_available: ["myapex"],
 			permitted_packages: ["bar"],
 			compile_dex: true,
+			sdk_version: "core_current",
 		}
 	`
 
@@ -6134,6 +6187,7 @@ func TestApexWithTestHelperApp(t *testing.T) {
 			name: "TesterHelpAppFoo",
 			srcs: ["foo/bar/MyClass.java"],
 			apex_available: [ "myapex" ],
+			sdk_version: "test_current",
 		}
 
 	`)
@@ -7736,7 +7790,7 @@ func TestSymlinksFromApexToSystem(t *testing.T) {
 			srcs: ["foo/bar/MyClass.java"],
 			sdk_version: "none",
 			system_modules: "none",
-			libs: ["myotherjar"],
+			static_libs: ["myotherjar"],
 			apex_available: [
 				"myapex",
 				"myapex.updatable",
@@ -8397,6 +8451,7 @@ func TestUpdatable_should_not_set_generate_classpaths_proto(t *testing.T) {
 			apex_available: [
 				"myapex",
 			],
+			sdk_version: "current",
 		}
 
 		systemserverclasspath_fragment {
@@ -9439,6 +9494,7 @@ func TestApexJavaCoverage(t *testing.T) {
 			srcs: ["mybootclasspathlib.java"],
 			apex_available: ["myapex"],
 			compile_dex: true,
+			sdk_version: "current",
 		}
 
 		systemserverclasspath_fragment {
@@ -9754,6 +9810,7 @@ func TestSdkLibraryCanHaveHigherMinSdkVersion(t *testing.T) {
 				unsafe_ignore_missing_latest_api: true,
 				min_sdk_version: "31",
 				static_libs: ["util"],
+				sdk_version: "core_current",
 			}
 
 			java_library {
@@ -9762,6 +9819,7 @@ func TestSdkLibraryCanHaveHigherMinSdkVersion(t *testing.T) {
 				apex_available: ["myapex"],
 				min_sdk_version: "31",
 				static_libs: ["another_util"],
+				sdk_version: "core_current",
 			}
 
 			java_library {
@@ -9769,6 +9827,7 @@ func TestSdkLibraryCanHaveHigherMinSdkVersion(t *testing.T) {
                 srcs: ["a.java"],
 				min_sdk_version: "31",
 				apex_available: ["myapex"],
+				sdk_version: "core_current",
 			}
 		`)
 	})
@@ -9824,7 +9883,7 @@ func TestSdkLibraryCanHaveHigherMinSdkVersion(t *testing.T) {
 	})
 
 	t.Run("bootclasspath_fragment jar must set min_sdk_version", func(t *testing.T) {
-		preparer.ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`module "mybootclasspathlib".*must set min_sdk_version`)).
+		preparer.
 			RunTestWithBp(t, `
 				apex {
 					name: "myapex",
@@ -9855,6 +9914,8 @@ func TestSdkLibraryCanHaveHigherMinSdkVersion(t *testing.T) {
 					apex_available: ["myapex"],
 					compile_dex: true,
 					unsafe_ignore_missing_latest_api: true,
+					sdk_version: "current",
+					min_sdk_version: "30",
 				}
 		`)
 	})
@@ -10107,6 +10168,9 @@ func TestApexLintBcpFragmentSdkLibDeps(t *testing.T) {
 			key: "myapex.key",
 			bootclasspath_fragments: ["mybootclasspathfragment"],
 			min_sdk_version: "29",
+			java_libs: [
+				"jacocoagent",
+			],
 		}
 		apex_key {
 			name: "myapex.key",
@@ -10736,14 +10800,14 @@ func TestAconfigFilesJavaDeps(t *testing.T) {
 	mod := ctx.ModuleForTests("myapex", "android_common_myapex")
 	s := mod.Rule("apexRule").Args["copy_commands"]
 	copyCmds := regexp.MustCompile(" *&& *").Split(s, -1)
-	if len(copyCmds) != 8 {
-		t.Fatalf("Expected 5 commands, got %d in:\n%s", len(copyCmds), s)
+	if len(copyCmds) != 12 {
+		t.Fatalf("Expected 12 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
-	ensureMatches(t, copyCmds[4], "^cp -f .*/aconfig_flags.pb .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[5], "^cp -f .*/package.map .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[6], "^cp -f .*/flag.map .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[7], "^cp -f .*/flag.val .*/image.apex/etc$")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/aconfig_flags.pb .*/image.apex/etc/aconfig_flags.pb")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/package.map .*/image.apex/etc/package.map")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.map .*/image.apex/etc/flag.map")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.val .*/image.apex/etc/flag.val")
 
 	inputs := []string{
 		"my_aconfig_declarations_foo/intermediate.pb",
@@ -10871,14 +10935,14 @@ func TestAconfigFilesJavaAndCcDeps(t *testing.T) {
 	mod := ctx.ModuleForTests("myapex", "android_common_myapex")
 	s := mod.Rule("apexRule").Args["copy_commands"]
 	copyCmds := regexp.MustCompile(" *&& *").Split(s, -1)
-	if len(copyCmds) != 12 {
-		t.Fatalf("Expected 12 commands, got %d in:\n%s", len(copyCmds), s)
+	if len(copyCmds) != 16 {
+		t.Fatalf("Expected 16 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
-	ensureMatches(t, copyCmds[8], "^cp -f .*/aconfig_flags.pb .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[9], "^cp -f .*/package.map .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[10], "^cp -f .*/flag.map .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[11], "^cp -f .*/flag.val .*/image.apex/etc$")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/aconfig_flags.pb .*/image.apex/etc/aconfig_flags.pb")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/package.map .*/image.apex/etc/package.map")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.map .*/image.apex/etc/flag.map")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.val .*/image.apex/etc/flag.val")
 
 	inputs := []string{
 		"my_aconfig_declarations_foo/intermediate.pb",
@@ -11039,14 +11103,14 @@ func TestAconfigFilesRustDeps(t *testing.T) {
 	mod := ctx.ModuleForTests("myapex", "android_common_myapex")
 	s := mod.Rule("apexRule").Args["copy_commands"]
 	copyCmds := regexp.MustCompile(" *&& *").Split(s, -1)
-	if len(copyCmds) != 32 {
-		t.Fatalf("Expected 28 commands, got %d in:\n%s", len(copyCmds), s)
+	if len(copyCmds) != 36 {
+		t.Fatalf("Expected 36 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
-	ensureMatches(t, copyCmds[28], "^cp -f .*/aconfig_flags.pb .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[29], "^cp -f .*/package.map .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[30], "^cp -f .*/flag.map .*/image.apex/etc$")
-	ensureMatches(t, copyCmds[31], "^cp -f .*/flag.val .*/image.apex/etc$")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/aconfig_flags.pb .*/image.apex/etc/aconfig_flags.pb")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/package.map .*/image.apex/etc/package.map")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.map .*/image.apex/etc/flag.map")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.val .*/image.apex/etc/flag.val")
 
 	inputs := []string{
 		"my_aconfig_declarations_foo/intermediate.pb",

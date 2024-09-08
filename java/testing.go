@@ -184,6 +184,10 @@ var PrepareForTestWithJacocoInstrumentation = android.GroupFixturePreparers(
 			host_supported: true,
 			srcs: ["Test.java"],
 			sdk_version: "current",
+			apex_available: [
+				"//apex_available:anyapex",
+				"//apex_available:platform",
+			],
 		}
 	`)),
 )
@@ -408,7 +412,6 @@ func gatherRequiredDepsForTest() string {
 		"core.current.stubs",
 		"legacy.core.platform.api.stubs",
 		"stable.core.platform.api.stubs",
-
 		"android_stubs_current_exportable",
 		"android_system_stubs_current_exportable",
 		"android_test_stubs_current_exportable",
@@ -416,13 +419,11 @@ func gatherRequiredDepsForTest() string {
 		"android_system_server_stubs_current_exportable",
 		"core.current.stubs.exportable",
 		"legacy.core.platform.api.stubs.exportable",
-
 		"kotlin-stdlib",
 		"kotlin-stdlib-jdk7",
 		"kotlin-stdlib-jdk8",
 		"kotlin-annotations",
 		"stub-annotations",
-
 		"aconfig-annotations-lib",
 		"unsupportedappusage",
 	}
@@ -435,6 +436,7 @@ func gatherRequiredDepsForTest() string {
 				sdk_version: "none",
 				system_modules: "stable-core-platform-api-stubs-system-modules",
 				compile_dex: true,
+				is_stubs_module: true,
 			}
 		`, extra)
 	}

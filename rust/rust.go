@@ -947,6 +947,7 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 			sourceLib := sourceMod.(*Module).compiler.(*libraryDecorator)
 			mod.sourceProvider.setOutputFiles(sourceLib.sourceProvider.Srcs())
 		}
+		ctx.CheckbuildFile(mod.sourceProvider.Srcs()...)
 		android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: mod.sourceProvider.Srcs().Strings()})
 	}
 
@@ -957,15 +958,13 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 			return
 		}
 		mod.outputFile = android.OptionalPathForPath(buildOutput.outputFile)
+		ctx.CheckbuildFile(buildOutput.outputFile)
 		if buildOutput.kytheFile != nil {
 			mod.kytheFiles = append(mod.kytheFiles, buildOutput.kytheFile)
 		}
 		bloaty.MeasureSizeForPaths(ctx, mod.compiler.strippedOutputFilePath(), android.OptionalPathForPath(mod.compiler.unstrippedOutputFilePath()))
 
 		mod.docTimestampFile = mod.compiler.rustdoc(ctx, flags, deps)
-		if mod.docTimestampFile.Valid() {
-			ctx.CheckbuildFile(mod.docTimestampFile.Path())
-		}
 
 		apexInfo, _ := android.ModuleProvider(actx, android.ApexInfoProvider)
 		if !proptools.BoolDefault(mod.Installable(), mod.EverInstallable()) && !mod.ProcMacro() {
