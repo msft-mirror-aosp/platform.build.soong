@@ -41,6 +41,7 @@ import (
 const (
 	envConfigDir = "vendor/google/tools/soong_config"
 	jsonSuffix   = "json"
+	abfsSrcDir   = "/src"
 )
 
 var (
@@ -350,9 +351,6 @@ func NewConfig(ctx Context, args ...string) Config {
 
 		// Use config.useN2 instead.
 		"SOONG_USE_N2",
-
-		// Leaks usernames into environment.
-		"HOME",
 	)
 
 	if ret.UseGoma() || ret.ForceUseGoma() {
@@ -423,12 +421,9 @@ func NewConfig(ctx Context, args ...string) Config {
 
 	ret.configureLocale(ctx)
 
-	newPath := []string{ret.sandboxPath(wd, filepath.Join(absJavaHome, "bin"))}
+	newPath := []string{filepath.Join(absJavaHome, "bin")}
 	if path, ok := ret.environ.Get("PATH"); ok && path != "" {
-		entries := strings.Split(path, string(filepath.ListSeparator))
-		for _, ent := range entries {
-			newPath = append(newPath, ret.sandboxPath(wd, ent))
-		}
+		newPath = append(newPath, path)
 	}
 
 	ret.environ.Unset("OVERRIDE_ANDROID_JAVA_HOME")
