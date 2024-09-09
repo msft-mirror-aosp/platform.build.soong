@@ -570,6 +570,8 @@ type apexFile struct {
 	customStem string
 	symlinks   []string // additional symlinks
 
+	checkbuildTarget android.Path
+
 	// Info for Android.mk Module name of `module` in AndroidMk. Note the generated AndroidMk
 	// module for apexFile is named something like <AndroidMk module name>.<apex name>[<apex
 	// suffix>]
@@ -605,6 +607,9 @@ func newApexFile(ctx android.BaseModuleContext, builtFile android.Path, androidM
 		module:              module,
 	}
 	if module != nil {
+		if installFilesInfo, ok := android.OtherModuleProvider(ctx, module, android.InstallFilesProvider); ok {
+			ret.checkbuildTarget = installFilesInfo.CheckbuildTarget
+		}
 		ret.moduleDir = ctx.OtherModuleDir(module)
 		ret.partition = module.PartitionTag(ctx.DeviceConfig())
 		ret.requiredModuleNames = module.RequiredModuleNames(ctx)
@@ -1066,6 +1071,7 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		ApexContents:      []*android.ApexContents{apexContents},
 		TestApexes:        testApexes,
 		BaseApexName:      mctx.ModuleName(),
+		ApexAvailableName: proptools.String(a.properties.Apex_available_name),
 	}
 	mctx.WalkDeps(func(child, parent android.Module) bool {
 		if !continueApexDepsWalk(child, parent) {
