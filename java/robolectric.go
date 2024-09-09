@@ -177,10 +177,6 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 
 	extraCombinedJars := android.Paths{roboTestConfigJar}
 
-	if instrumentedApp != nil {
-		extraCombinedJars = append(extraCombinedJars, instrumentedApp.implementationAndResourcesJar)
-	}
-
 	handleLibDeps := func(dep android.Module) {
 		if !android.InList(ctx.OtherModuleName(dep), config.FrameworkLibraries) {
 			if m, ok := android.OtherModuleProvider(ctx, dep, JavaInfoProvider); ok {
@@ -200,10 +196,14 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		handleLibDeps(dep)
 	}
 
+	if instrumentedApp != nil {
+		extraCombinedJars = append(extraCombinedJars, instrumentedApp.implementationAndResourcesJar)
+	}
+
 	r.stem = proptools.StringDefault(r.overridableProperties.Stem, ctx.ModuleName())
 	r.classLoaderContexts = r.usesLibrary.classLoaderContextForUsesLibDeps(ctx)
 	r.dexpreopter.disableDexpreopt()
-	r.compile(ctx, nil, nil, extraCombinedJars)
+	r.compile(ctx, nil, nil, nil, extraCombinedJars)
 
 	installPath := android.PathForModuleInstall(ctx, r.BaseModuleName())
 	var installDeps android.InstallPaths

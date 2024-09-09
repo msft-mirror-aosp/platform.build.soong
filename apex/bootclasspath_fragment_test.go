@@ -835,6 +835,7 @@ func TestBootclasspathFragment_HiddenAPIList(t *testing.T) {
 	`)
 
 	java.CheckModuleDependencies(t, result.TestContext, "mybootclasspathfragment", "android_common_apex10000", []string{
+		"all_apex_contributions",
 		"art-bootclasspath-fragment",
 		"bar",
 		"dex2oatd",
@@ -1006,6 +1007,7 @@ func TestBootclasspathFragment_AndroidNonUpdatable_FromSource(t *testing.T) {
 	`)
 
 	java.CheckModuleDependencies(t, result.TestContext, "mybootclasspathfragment", "android_common_apex10000", []string{
+		"all_apex_contributions",
 		"android-non-updatable.stubs",
 		"android-non-updatable.stubs.module_lib",
 		"android-non-updatable.stubs.system",
@@ -1178,6 +1180,7 @@ func TestBootclasspathFragment_AndroidNonUpdatable_FromText(t *testing.T) {
 	`)
 
 	java.CheckModuleDependencies(t, result.TestContext, "mybootclasspathfragment", "android_common_apex10000", []string{
+		"all_apex_contributions",
 		"android-non-updatable.stubs",
 		"android-non-updatable.stubs.system",
 		"android-non-updatable.stubs.test",
@@ -1331,6 +1334,7 @@ func TestBootclasspathFragment_AndroidNonUpdatable_AlwaysUsePrebuiltSdks(t *test
 	`)
 
 	java.CheckModuleDependencies(t, result.TestContext, "mybootclasspathfragment", "android_common_apex10000", []string{
+		"all_apex_contributions",
 		"art-bootclasspath-fragment",
 		"bar",
 		"dex2oatd",

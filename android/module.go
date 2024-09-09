@@ -15,6 +15,9 @@
 package android
 
 import (
+	"bytes"
+	"encoding/gob"
+	"errors"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -1901,61 +1904,16 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			return
 		}
 
-		incrementalAnalysis := false
-		incrementalEnabled := false
-		var cacheKey *blueprint.BuildActionCacheKey = nil
-		var incrementalModule *blueprint.Incremental = nil
-		if ctx.bp.GetIncrementalEnabled() {
-			if im, ok := m.module.(blueprint.Incremental); ok {
-				incrementalModule = &im
-				incrementalEnabled = im.IncrementalSupported()
-				incrementalAnalysis = ctx.bp.GetIncrementalAnalysis() && incrementalEnabled
-			}
-		}
-		if incrementalEnabled {
-			hash, err := proptools.CalculateHash(m.GetProperties())
-			if err != nil {
-				ctx.ModuleErrorf("failed to calculate properties hash: %s", err)
-				return
-			}
-			cacheInput := new(blueprint.BuildActionCacheInput)
-			cacheInput.PropertiesHash = hash
-			ctx.VisitDirectDeps(func(module Module) {
-				cacheInput.ProvidersHash =
-					append(cacheInput.ProvidersHash, ctx.bp.OtherModuleProviderInitialValueHashes(module))
-			})
-			hash, err = proptools.CalculateHash(&cacheInput)
-			if err != nil {
-				ctx.ModuleErrorf("failed to calculate cache input hash: %s", err)
-				return
-			}
-			cacheKey = &blueprint.BuildActionCacheKey{
-				Id:        ctx.bp.ModuleCacheKey(),
-				InputHash: hash,
-			}
+		m.module.GenerateAndroidBuildActions(ctx)
+		if ctx.Failed() {
+			return
 		}
 
-		restored := false
-		if incrementalAnalysis && cacheKey != nil {
-			restored = ctx.bp.RestoreBuildActions(cacheKey)
-		}
-
-		if !restored {
-			m.module.GenerateAndroidBuildActions(ctx)
-			if ctx.Failed() {
-				return
-			}
-
-			if x, ok := m.module.(IDEInfo); ok {
-				var result IdeInfo
-				x.IDEInfo(ctx, &result)
-				result.BaseModuleName = x.BaseModuleName()
-				SetProvider(ctx, IdeInfoProviderKey, result)
-			}
-		}
-
-		if incrementalEnabled && cacheKey != nil {
-			ctx.bp.CacheBuildActions(cacheKey, incrementalModule)
+		if x, ok := m.module.(IDEInfo); ok {
+			var result IdeInfo
+			x.IDEInfo(ctx, &result)
+			result.BaseModuleName = x.BaseModuleName()
+			SetProvider(ctx, IdeInfoProviderKey, result)
 		}
 
 		// Create the set of tagged dist files after calling GenerateAndroidBuildActions
@@ -2039,7 +1997,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			TargetDependencies: targetRequired,
 			HostDependencies:   hostRequired,
 			Data:               data,
-			Required:           m.RequiredModuleNames(ctx),
+			Required:           append(m.RequiredModuleNames(ctx), m.VintfFragmentModuleNames(ctx)...),
 		}
 		SetProvider(ctx, ModuleInfoJSONProvider, ctx.moduleInfoJSON)
 	}
@@ -2142,9 +2100,59 @@ type katiInstall struct {
 	absFrom string
 }
 
+func (p *katiInstall) GobEncode() ([]byte, error) {
+	w := new(bytes.Buffer)
+	encoder := gob.NewEncoder(w)
+	err := errors.Join(encoder.Encode(p.from), encoder.Encode(p.to),
+		encoder.Encode(p.implicitDeps), encoder.Encode(p.orderOnlyDeps),
+		encoder.Encode(p.executable), encoder.Encode(p.extraFiles),
+		encoder.Encode(p.absFrom))
+	if err != nil {
+		return nil, err
+	}
+
+	return w.Bytes(), nil
+}
+
+func (p *katiInstall) GobDecode(data []byte) error {
+	r := bytes.NewBuffer(data)
+	decoder := gob.NewDecoder(r)
+	err := errors.Join(decoder.Decode(&p.from), decoder.Decode(&p.to),
+		decoder.Decode(&p.implicitDeps), decoder.Decode(&p.orderOnlyDeps),
+		decoder.Decode(&p.executable), decoder.Decode(&p.extraFiles),
+		decoder.Decode(&p.absFrom))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 type extraFilesZip struct {
 	zip Path
 	dir InstallPath
+}
+
+func (p *extraFilesZip) GobEncode() ([]byte, error) {
+	w := new(bytes.Buffer)
+	encoder := gob.NewEncoder(w)
+	err := errors.Join(encoder.Encode(p.zip), encoder.Encode(p.dir))
+	if err != nil {
+		return nil, err
+	}
+
+	return w.Bytes(), nil
+}
+
+func (p *extraFilesZip) GobDecode(data []byte) error {
+	r := bytes.NewBuffer(data)
+	decoder := gob.NewDecoder(r)
+	err := errors.Join(decoder.Decode(&p.zip), decoder.Decode(&p.dir))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 type katiInstalls []katiInstall
