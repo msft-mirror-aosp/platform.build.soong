@@ -136,6 +136,9 @@ type filesystemProperties struct {
 	// Install aconfig_flags.pb file for the modules installed in this partition.
 	Gen_aconfig_flags_pb *bool
 
+	// Update the Base_dir of the $PRODUCT_OUT directory with the packaging files.
+	Update_product_out *bool
+
 	Fsverity fsverityProperties
 }
 
@@ -312,6 +315,33 @@ func (f *filesystem) buildNonDepsFiles(ctx android.ModuleContext, builder *andro
 	}
 }
 
+func (f *filesystem) copyPackagingSpecs(ctx android.ModuleContext, builder *android.RuleBuilder, specs map[string]android.PackagingSpec, rootDir, rebasedDir android.WritablePath) []string {
+	rootDirSpecs := make(map[string]android.PackagingSpec)
+	rebasedDirSpecs := make(map[string]android.PackagingSpec)
+
+	for rel, spec := range specs {
+		if spec.Partition() == "root" {
+			rootDirSpecs[rel] = spec
+		} else {
+			rebasedDirSpecs[rel] = spec
+		}
+	}
+
+	dirsToSpecs := make(map[android.WritablePath]map[string]android.PackagingSpec)
+	dirsToSpecs[rootDir] = rootDirSpecs
+	dirsToSpecs[rebasedDir] = rebasedDirSpecs
+
+	return f.CopySpecsToDirs(ctx, builder, dirsToSpecs)
+}
+
+func (f *filesystem) copyFilesToProductOut(ctx android.ModuleContext, builder *android.RuleBuilder, rebasedDir android.OutputPath) {
+	if !proptools.Bool(f.properties.Update_product_out) {
+		return
+	}
+	installPath := android.PathForModuleInPartitionInstall(ctx, f.partitionName())
+	builder.Command().Textf("cp -prf %s/* %s", rebasedDir, installPath)
+}
+
 func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) android.OutputPath {
 	rootDir := android.PathForModuleOut(ctx, "root").OutputPath
 	rebasedDir := rootDir
@@ -322,13 +352,14 @@ func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) androi
 	// Wipe the root dir to get rid of leftover files from prior builds
 	builder.Command().Textf("rm -rf %s && mkdir -p %s", rootDir, rootDir)
 	specs := f.gatherFilteredPackagingSpecs(ctx)
-	f.entries = f.CopySpecsToDir(ctx, builder, specs, rebasedDir)
+	f.entries = f.copyPackagingSpecs(ctx, builder, specs, rootDir, rebasedDir)
 
 	f.buildNonDepsFiles(ctx, builder, rootDir)
 	f.addMakeBuiltFiles(ctx, builder, rootDir)
 	f.buildFsverityMetadataFiles(ctx, builder, specs, rootDir, rebasedDir)
 	f.buildEventLogtagsFile(ctx, builder, rebasedDir)
 	f.buildAconfigFlagsFiles(ctx, builder, specs, rebasedDir)
+	f.copyFilesToProductOut(ctx, builder, rebasedDir)
 
 	// run host_init_verifier
 	// Ideally we should have a concept of pluggable linters that verify the generated image.
@@ -465,12 +496,13 @@ func (f *filesystem) buildCpioImage(ctx android.ModuleContext, compressed bool) 
 	// Wipe the root dir to get rid of leftover files from prior builds
 	builder.Command().Textf("rm -rf %s && mkdir -p %s", rootDir, rootDir)
 	specs := f.gatherFilteredPackagingSpecs(ctx)
-	f.entries = f.CopySpecsToDir(ctx, builder, specs, rebasedDir)
+	f.entries = f.copyPackagingSpecs(ctx, builder, specs, rootDir, rebasedDir)
 
 	f.buildNonDepsFiles(ctx, builder, rootDir)
 	f.buildFsverityMetadataFiles(ctx, builder, specs, rootDir, rebasedDir)
 	f.buildEventLogtagsFile(ctx, builder, rebasedDir)
 	f.buildAconfigFlagsFiles(ctx, builder, specs, rebasedDir)
+	f.copyFilesToProductOut(ctx, builder, rebasedDir)
 
 	output := android.PathForModuleOut(ctx, f.installFileName()).OutputPath
 	cmd := builder.Command().
@@ -632,7 +664,7 @@ func sha1sum(values []string) string {
 
 var _ cc.UseCoverage = (*filesystem)(nil)
 
-func (*filesystem) IsNativeCoverageNeeded(ctx android.IncomingTransitionContext) bool {
+func (*filesystem) IsNativeCoverageNeeded(ctx cc.IsNativeCoverageNeededContext) bool {
 	return ctx.Device() && ctx.DeviceConfig().NativeCoverageEnabled()
 }
 

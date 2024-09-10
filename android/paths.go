@@ -237,6 +237,9 @@ type Path interface {
 	// directory, and OutputPath.Join("foo").Rel() would return "foo".
 	Rel() string
 
+	// WithoutRel returns a new Path with no relative path, i.e. Rel() will return the same value as Base().
+	WithoutRel() Path
+
 	// RelativeToTop returns a new path relative to the top, it is provided solely for use in tests.
 	//
 	// It is guaranteed to always return the same type as it is called on, e.g. if called on an
@@ -245,13 +248,13 @@ type Path interface {
 	// A standard build has the following structure:
 	//   ../top/
 	//          out/ - make install files go here.
-	//          out/soong - this is the soongOutDir passed to NewTestConfig()
+	//          out/soong - this is the outDir passed to NewTestConfig()
 	//          ... - the source files
 	//
 	// This function converts a path so that it appears relative to the ../top/ directory, i.e.
-	// * Make install paths, which have the pattern "soongOutDir/../<path>" are converted into the top
+	// * Make install paths, which have the pattern "outDir/../<path>" are converted into the top
 	//   relative path "out/<path>"
-	// * Soong install paths and other writable paths, which have the pattern "soongOutDir/<path>" are
+	// * Soong install paths and other writable paths, which have the pattern "outDir/soong/<path>" are
 	//   converted into the top relative path "out/soong/<path>".
 	// * Source paths are already relative to the top.
 	// * Phony paths are not relative to anything.
@@ -261,8 +264,9 @@ type Path interface {
 }
 
 const (
-	OutDir      = "out"
-	OutSoongDir = OutDir + "/soong"
+	testOutDir         = "out"
+	testOutSoongSubDir = "/soong"
+	TestOutSoongDir    = testOutDir + testOutSoongSubDir
 )
 
 // WritablePath is a type of path that can be used as an output for build rules.
@@ -463,8 +467,8 @@ func ExistentPathsForSources(ctx PathGlobContext, paths []string) Paths {
 //   - glob, relative to the local module directory, resolves as filepath(s), relative to the local
 //     source directory.
 //   - other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
-//     or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
-//     filepath.
+//     or set the OutputFilesProvider. These resolve as a filepath to an output filepath or generated
+//     source filepath.
 //
 // Properties passed as the paths argument must have been annotated with struct tag
 // `android:"path"` so that dependencies on SourceFileProducer modules will have already been handled by the
@@ -491,8 +495,8 @@ type SourceInput struct {
 //   - glob, relative to the local module directory, resolves as filepath(s), relative to the local
 //     source directory. Not valid in excludes.
 //   - other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
-//     or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
-//     filepath.
+//     or set the OutputFilesProvider. These resolve as a filepath to an output filepath or generated
+//     source filepath.
 //
 // excluding the items (similarly resolved
 // Properties passed as the paths argument must have been annotated with struct tag
@@ -620,8 +624,8 @@ func GetModuleFromPathDep(ctx ModuleWithDepsPathContext, moduleName, tag string)
 //   - glob, relative to the local module directory, resolves as filepath(s), relative to the local
 //     source directory. Not valid in excludes.
 //   - other modules using the ":name{.tag}" syntax. These modules must implement SourceFileProducer
-//     or OutputFileProducer. These resolve as a filepath to an output filepath or generated source
-//     filepath.
+//     or set the OutputFilesProvider. These resolve as a filepath to an output filepath or generated
+//     source filepath.
 //
 // and a list of the module names of missing module dependencies are returned as the second return.
 // Properties passed as the paths argument must have been annotated with struct tag
@@ -1118,8 +1122,8 @@ func (p basePath) withRel(rel string) basePath {
 	return p
 }
 
-func (p basePath) RelativeToTop() Path {
-	ensureTestOnly()
+func (p basePath) withoutRel() basePath {
+	p.rel = filepath.Base(p.path)
 	return p
 }
 
@@ -1132,6 +1136,11 @@ var _ Path = SourcePath{}
 
 func (p SourcePath) withRel(rel string) SourcePath {
 	p.basePath = p.basePath.withRel(rel)
+	return p
+}
+
+func (p SourcePath) RelativeToTop() Path {
+	ensureTestOnly()
 	return p
 }
 
@@ -1218,11 +1227,13 @@ func PathForSource(ctx PathContext, pathComponents ...string) SourcePath {
 // PathForArbitraryOutput creates a path for the given components. Unlike PathForOutput,
 // the path is relative to the root of the output folder, not the out/soong folder.
 func PathForArbitraryOutput(ctx PathContext, pathComponents ...string) Path {
-	p, err := validatePath(pathComponents...)
+	path, err := validatePath(pathComponents...)
 	if err != nil {
 		reportPathError(ctx, err)
 	}
-	return basePath{path: filepath.Join(ctx.Config().OutDir(), p)}
+	fullPath := filepath.Join(ctx.Config().OutDir(), path)
+	path = fullPath[len(fullPath)-len(path):]
+	return OutputPath{basePath{path, ""}, ctx.Config().OutDir(), fullPath}
 }
 
 // MaybeExistentPathForSource joins the provided path components and validates that the result
@@ -1275,6 +1286,11 @@ func (p SourcePath) String() string {
 	return p.path
 }
 
+func (p SourcePath) WithoutRel() Path {
+	p.basePath = p.basePath.withoutRel()
+	return p
+}
+
 // Join creates a new SourcePath with paths... joined with the current path. The
 // provided paths... may not use '..' to escape from the current path.
 func (p SourcePath) Join(ctx PathContext, paths ...string) SourcePath {
@@ -1325,8 +1341,8 @@ func (p SourcePath) OverlayPath(ctx ModuleMissingDepsPathContext, path Path) Opt
 type OutputPath struct {
 	basePath
 
-	// The soong build directory, i.e. Config.SoongOutDir()
-	soongOutDir string
+	// The base out directory for this path, either Config.SoongOutDir() or Config.OutDir()
+	outDir string
 
 	fullPath string
 }
@@ -1334,7 +1350,7 @@ type OutputPath struct {
 func (p OutputPath) GobEncode() ([]byte, error) {
 	w := new(bytes.Buffer)
 	encoder := gob.NewEncoder(w)
-	err := errors.Join(encoder.Encode(p.basePath), encoder.Encode(p.soongOutDir), encoder.Encode(p.fullPath))
+	err := errors.Join(encoder.Encode(p.basePath), encoder.Encode(p.outDir), encoder.Encode(p.fullPath))
 	if err != nil {
 		return nil, err
 	}
@@ -1345,7 +1361,7 @@ func (p OutputPath) GobEncode() ([]byte, error) {
 func (p *OutputPath) GobDecode(data []byte) error {
 	r := bytes.NewBuffer(data)
 	decoder := gob.NewDecoder(r)
-	err := errors.Join(decoder.Decode(&p.basePath), decoder.Decode(&p.soongOutDir), decoder.Decode(&p.fullPath))
+	err := errors.Join(decoder.Decode(&p.basePath), decoder.Decode(&p.outDir), decoder.Decode(&p.fullPath))
 	if err != nil {
 		return err
 	}
@@ -1359,13 +1375,13 @@ func (p OutputPath) withRel(rel string) OutputPath {
 	return p
 }
 
-func (p OutputPath) WithoutRel() OutputPath {
-	p.basePath.rel = filepath.Base(p.basePath.path)
+func (p OutputPath) WithoutRel() Path {
+	p.basePath = p.basePath.withoutRel()
 	return p
 }
 
 func (p OutputPath) getSoongOutDir() string {
-	return p.soongOutDir
+	return p.outDir
 }
 
 func (p OutputPath) RelativeToTop() Path {
@@ -1373,8 +1389,13 @@ func (p OutputPath) RelativeToTop() Path {
 }
 
 func (p OutputPath) outputPathRelativeToTop() OutputPath {
-	p.fullPath = StringPathRelativeToTop(p.soongOutDir, p.fullPath)
-	p.soongOutDir = OutSoongDir
+	p.fullPath = StringPathRelativeToTop(p.outDir, p.fullPath)
+	if strings.HasSuffix(p.outDir, testOutSoongSubDir) {
+		p.outDir = TestOutSoongDir
+	} else {
+		// Handle the PathForArbitraryOutput case
+		p.outDir = testOutDir
+	}
 	return p
 }
 
@@ -1389,6 +1410,11 @@ var _ objPathProvider = OutputPath{}
 // toolDepPath is a Path representing a dependency of the build tool.
 type toolDepPath struct {
 	basePath
+}
+
+func (t toolDepPath) WithoutRel() Path {
+	t.basePath = t.basePath.withoutRel()
+	return t
 }
 
 func (t toolDepPath) RelativeToTop() Path {
@@ -1420,7 +1446,7 @@ func PathForOutput(ctx PathContext, pathComponents ...string) OutputPath {
 	return OutputPath{basePath{path, ""}, ctx.Config().soongOutDir, fullPath}
 }
 
-// PathsForOutput returns Paths rooted from soongOutDir
+// PathsForOutput returns Paths rooted from outDir
 func PathsForOutput(ctx PathContext, paths []string) WritablePaths {
 	ret := make(WritablePaths, len(paths))
 	for i, path := range paths {
@@ -1740,6 +1766,32 @@ type InstallPath struct {
 	fullPath string
 }
 
+func (p *InstallPath) GobEncode() ([]byte, error) {
+	w := new(bytes.Buffer)
+	encoder := gob.NewEncoder(w)
+	err := errors.Join(encoder.Encode(p.basePath), encoder.Encode(p.soongOutDir),
+		encoder.Encode(p.partitionDir), encoder.Encode(p.partition),
+		encoder.Encode(p.makePath), encoder.Encode(p.fullPath))
+	if err != nil {
+		return nil, err
+	}
+
+	return w.Bytes(), nil
+}
+
+func (p *InstallPath) GobDecode(data []byte) error {
+	r := bytes.NewBuffer(data)
+	decoder := gob.NewDecoder(r)
+	err := errors.Join(decoder.Decode(&p.basePath), decoder.Decode(&p.soongOutDir),
+		decoder.Decode(&p.partitionDir), decoder.Decode(&p.partition),
+		decoder.Decode(&p.makePath), decoder.Decode(&p.fullPath))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // Will panic if called from outside a test environment.
 func ensureTestOnly() {
 	if PrefixInList(os.Args, "-test.") {
@@ -1751,11 +1803,16 @@ func ensureTestOnly() {
 func (p InstallPath) RelativeToTop() Path {
 	ensureTestOnly()
 	if p.makePath {
-		p.soongOutDir = OutDir
+		p.soongOutDir = testOutDir
 	} else {
-		p.soongOutDir = OutSoongDir
+		p.soongOutDir = TestOutSoongDir
 	}
 	p.fullPath = filepath.Join(p.soongOutDir, p.path)
+	return p
+}
+
+func (p InstallPath) WithoutRel() Path {
+	p.basePath = p.basePath.withoutRel()
 	return p
 }
 
@@ -2079,6 +2136,11 @@ func (p PhonyPath) RelativeToTop() Path {
 	return p
 }
 
+func (p PhonyPath) WithoutRel() Path {
+	p.basePath = p.basePath.withoutRel()
+	return p
+}
+
 func (p PhonyPath) ReplaceExtension(ctx PathContext, ext string) OutputPath {
 	panic("Not implemented")
 }
@@ -2092,6 +2154,11 @@ type testPath struct {
 
 func (p testPath) RelativeToTop() Path {
 	ensureTestOnly()
+	return p
+}
+
+func (p testPath) WithoutRel() Path {
+	p.basePath = p.basePath.withoutRel()
 	return p
 }
 

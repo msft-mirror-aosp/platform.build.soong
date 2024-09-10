@@ -302,7 +302,7 @@ func TestDataLibs(t *testing.T) {
 	ctx := testCcWithConfig(t, config)
 	testingModule := ctx.ModuleForTests("main_test", "android_arm_armv7-a-neon")
 	testBinary := testingModule.Module().(*Module).linker.(*testBinary)
-	outputFiles := testingModule.OutputFiles(t, "")
+	outputFiles := testingModule.OutputFiles(ctx, t, "")
 	if len(outputFiles) != 1 {
 		t.Errorf("expected exactly one output file. output files: [%s]", outputFiles)
 		return
@@ -355,7 +355,7 @@ func TestDataLibsRelativeInstallPath(t *testing.T) {
 	testingModule := ctx.ModuleForTests("main_test", "android_arm_armv7-a-neon")
 	module := testingModule.Module()
 	testBinary := module.(*Module).linker.(*testBinary)
-	outputFiles := testingModule.OutputFiles(t, "")
+	outputFiles := testingModule.OutputFiles(ctx, t, "")
 	if len(outputFiles) != 1 {
 		t.Fatalf("expected exactly one output file. output files: [%s]", outputFiles)
 	}
@@ -851,7 +851,7 @@ func TestStaticLibDepReordering(t *testing.T) {
 
 	variant := "android_arm64_armv8-a_static"
 	moduleA := ctx.ModuleForTests("a", variant).Module().(*Module)
-	staticLibInfo, _ := android.SingletonModuleProvider(ctx, moduleA, StaticLibraryInfoProvider)
+	staticLibInfo, _ := android.OtherModuleProvider(ctx, moduleA, StaticLibraryInfoProvider)
 	actual := android.Paths(staticLibInfo.TransitiveStaticLibrariesForOrdering.ToList()).RelativeToTop()
 	expected := GetOutputPaths(ctx, variant, []string{"a", "c", "b", "d"})
 
@@ -887,7 +887,7 @@ func TestStaticLibDepReorderingWithShared(t *testing.T) {
 
 	variant := "android_arm64_armv8-a_static"
 	moduleA := ctx.ModuleForTests("a", variant).Module().(*Module)
-	staticLibInfo, _ := android.SingletonModuleProvider(ctx, moduleA, StaticLibraryInfoProvider)
+	staticLibInfo, _ := android.OtherModuleProvider(ctx, moduleA, StaticLibraryInfoProvider)
 	actual := android.Paths(staticLibInfo.TransitiveStaticLibrariesForOrdering.ToList()).RelativeToTop()
 	expected := GetOutputPaths(ctx, variant, []string{"a", "c", "b"})
 
@@ -927,7 +927,7 @@ func TestLlndkLibrary(t *testing.T) {
 
 	cc_prebuilt_library_shared {
 		name: "libllndkprebuilt",
-		stubs: { versions: ["1", "2"] },
+		stubs: { versions: ["1", "2"] , symbol_file: "libllndkprebuilt.map.txt" },
 		llndk: {
 			symbol_file: "libllndkprebuilt.map.txt",
 		},
@@ -999,7 +999,7 @@ func TestLlndkLibrary(t *testing.T) {
 	checkExportedIncludeDirs := func(module, variant string, expectedSystemDirs []string, expectedDirs ...string) {
 		t.Helper()
 		m := result.ModuleForTests(module, variant).Module()
-		f, _ := android.SingletonModuleProvider(result, m, FlagExporterInfoProvider)
+		f, _ := android.OtherModuleProvider(result, m, FlagExporterInfoProvider)
 		android.AssertPathsRelativeToTopEquals(t, "exported include dirs for "+module+"["+variant+"]",
 			expectedDirs, f.IncludeDirs)
 		android.AssertPathsRelativeToTopEquals(t, "exported include dirs for "+module+"["+variant+"]",
@@ -1027,7 +1027,7 @@ func TestLlndkLibrary(t *testing.T) {
 			}
 		}
 		vendorModule := result.ModuleForTests(module, vendorVariant).Module()
-		vendorInfo, _ := android.SingletonModuleProvider(result, vendorModule, FlagExporterInfoProvider)
+		vendorInfo, _ := android.OtherModuleProvider(result, vendorModule, FlagExporterInfoProvider)
 		vendorDirs := android.Concat(vendorInfo.IncludeDirs, vendorInfo.SystemIncludeDirs)
 		android.AssertStringEquals(t, module+" has different exported include dirs for vendor variant and ABI check",
 			android.JoinPathsWithPrefix(vendorDirs, "-I"), abiCheckFlags)
@@ -1404,7 +1404,7 @@ func TestDataLibsPrebuiltSharedTestLibrary(t *testing.T) {
 	testingModule := ctx.ModuleForTests("main_test", "android_arm_armv7-a-neon")
 	module := testingModule.Module()
 	testBinary := module.(*Module).linker.(*testBinary)
-	outputFiles := testingModule.OutputFiles(t, "")
+	outputFiles := testingModule.OutputFiles(ctx, t, "")
 	if len(outputFiles) != 1 {
 		t.Errorf("expected exactly one output file. output files: [%s]", outputFiles)
 	}
@@ -2452,7 +2452,7 @@ func TestIncludeDirsExporting(t *testing.T) {
 
 	checkIncludeDirs := func(t *testing.T, ctx *android.TestContext, module android.Module, checkers ...exportedChecker) {
 		t.Helper()
-		exported, _ := android.SingletonModuleProvider(ctx, module, FlagExporterInfoProvider)
+		exported, _ := android.OtherModuleProvider(ctx, module, FlagExporterInfoProvider)
 		name := module.Name()
 
 		for _, checker := range checkers {
@@ -2760,7 +2760,7 @@ func TestIncludeDirectoryOrdering(t *testing.T) {
 		"external/foo/libarm",
 		"external/foo/lib32",
 		"external/foo/libandroid_arm",
-		"defaults/cc/common/ndk_libc++_shared",
+		"defaults/cc/common/ndk_libc++_shared_include_dirs",
 	}
 
 	conly := []string{"-fPIC", "${config.CommonGlobalConlyflags}"}
@@ -3111,7 +3111,7 @@ func TestStrippedAllOutputFile(t *testing.T) {
 	config := TestConfig(t.TempDir(), android.Android, nil, bp, nil)
 	ctx := testCcWithConfig(t, config)
 	testingModule := ctx.ModuleForTests("test_lib", "android_arm_armv7-a-neon_shared")
-	outputFile := testingModule.OutputFiles(t, "stripped_all")
+	outputFile := testingModule.OutputFiles(ctx, t, "stripped_all")
 	if !strings.HasSuffix(outputFile.Strings()[0], "/stripped_all/test_lib.so") {
 		t.Errorf("Unexpected output file: %s", outputFile.Strings()[0])
 		return
@@ -3194,12 +3194,7 @@ func TestVendorSdkVersion(t *testing.T) {
 
 	ctx = android.GroupFixturePreparers(
 		prepareForCcTest,
-		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-			if variables.BuildFlags == nil {
-				variables.BuildFlags = make(map[string]string)
-			}
-			variables.BuildFlags["RELEASE_BOARD_API_LEVEL_FROZEN"] = "true"
-		}),
+		android.PrepareForTestWithBuildFlag("RELEASE_BOARD_API_LEVEL_FROZEN", "true"),
 	).RunTestWithBp(t, bp)
 	testSdkVersionFlag("libfoo", "30")
 	testSdkVersionFlag("libbar", "29")

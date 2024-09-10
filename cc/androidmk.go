@@ -351,9 +351,6 @@ func (test *testBinary) AndroidMkEntries(ctx AndroidMkContext, entries *android.
 	ctx.subAndroidMk(entries, test.testDecorator)
 
 	entries.Class = "NATIVE_TESTS"
-	if Bool(test.Properties.Test_per_src) {
-		entries.SubName = "_" + String(test.binaryDecorator.Properties.Stem)
-	}
 	entries.ExtraEntries = append(entries.ExtraEntries, func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 		if test.testConfig != nil {
 			entries.SetString("LOCAL_FULL_TEST_CONFIG", test.testConfig.String())
@@ -452,10 +449,6 @@ func (c *vndkPrebuiltLibraryDecorator) AndroidMkEntries(ctx AndroidMkContext, en
 		// they are packaged in VNDK APEX and installed by APEX packages (apex/apex.go)
 		entries.SetBool("LOCAL_UNINSTALLABLE_MODULE", true)
 	})
-}
-
-func (c *ndkPrebuiltStlLinker) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {
-	entries.Class = "SHARED_LIBRARIES"
 }
 
 func (p *prebuiltLinker) AndroidMkEntries(ctx AndroidMkContext, entries *android.AndroidMkEntries) {

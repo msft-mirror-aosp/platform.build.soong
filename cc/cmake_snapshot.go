@@ -204,11 +204,27 @@ func parseTemplate(templateContents string) *template.Template {
 			return m.compiler.baseCompilerProps()
 		},
 		"getCflagsProperty": func(ctx android.ModuleContext, m *Module) []string {
-			cflags := m.compiler.baseCompilerProps().Cflags
-			return cflags.GetOrDefault(ctx, nil)
+			prop := m.compiler.baseCompilerProps().Cflags
+			return prop.GetOrDefault(ctx, nil)
 		},
 		"getLinkerProperties": func(m *Module) BaseLinkerProperties {
 			return m.linker.baseLinkerProps()
+		},
+		"getWholeStaticLibsProperty": func(ctx android.ModuleContext, m *Module) []string {
+			prop := m.linker.baseLinkerProps().Whole_static_libs
+			return prop.GetOrDefault(ctx, nil)
+		},
+		"getStaticLibsProperty": func(ctx android.ModuleContext, m *Module) []string {
+			prop := m.linker.baseLinkerProps().Static_libs
+			return prop.GetOrDefault(ctx, nil)
+		},
+		"getSharedLibsProperty": func(ctx android.ModuleContext, m *Module) []string {
+			prop := m.linker.baseLinkerProps().Shared_libs
+			return prop.GetOrDefault(ctx, nil)
+		},
+		"getHeaderLibsProperty": func(ctx android.ModuleContext, m *Module) []string {
+			prop := m.linker.baseLinkerProps().Header_libs
+			return prop.GetOrDefault(ctx, nil)
 		},
 		"getExtraLibs":   getExtraLibs,
 		"getIncludeDirs": getIncludeDirs,
@@ -347,8 +363,11 @@ func (m *CmakeSnapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		if slices.Contains(ignoredSystemLibs, moduleName) {
 			return false // system libs built in-tree for Android
 		}
+		if dep.IsPrebuilt() {
+			return false // prebuilts are not supported
+		}
 		if dep.compiler == nil {
-			return false // unsupported module type (e.g. prebuilt)
+			return false // unsupported module type
 		}
 		isAidlModule := dep.compiler.baseCompilerProps().AidlInterface.Lang != ""
 
@@ -473,7 +492,8 @@ func (m *CmakeSnapshot) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		var prebuiltsList android.Paths
 
 		ctx.VisitDirectDepsWithTag(cmakeSnapshotPrebuiltTag, func(dep android.Module) {
-			for _, file := range dep.FilesToInstall() {
+			for _, file := range android.OtherModuleProviderOrDefault(
+				ctx, dep, android.InstallFilesProvider).InstallFiles {
 				prebuiltsList = append(prebuiltsList, file)
 			}
 		})

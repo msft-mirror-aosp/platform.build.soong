@@ -2196,6 +2196,7 @@ cc_prebuilt_library_shared {
     prefer: false,
     visibility: ["//visibility:public"],
     apex_available: ["//apex_available:platform"],
+    stl: "none",
     compile_multilib: "both",
     stubs: {
         versions: [
@@ -2204,6 +2205,7 @@ cc_prebuilt_library_shared {
             "3",
             "current",
         ],
+        symbol_file: "stubslib.map.txt",
     },
     arch: {
         arm64: {
@@ -2267,6 +2269,7 @@ cc_prebuilt_library_shared {
             "3",
             "current",
         ],
+        symbol_file: "stubslib.map.txt",
     },
     target: {
         host: {

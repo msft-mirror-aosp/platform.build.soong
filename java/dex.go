@@ -91,6 +91,10 @@ type DexProperties struct {
 
 	// Exclude kotlinc generate files: *.kotlin_module, *.kotlin_builtins. Defaults to false.
 	Exclude_kotlinc_generated_files *bool
+
+	// Disable dex container (also known as "multi-dex").
+	// This may be necessary as a temporary workaround to mask toolchain bugs (see b/341652226).
+	No_dex_container *bool
 }
 
 type dexer struct {
@@ -104,7 +108,7 @@ type dexer struct {
 	resourcesInput          android.OptionalPath
 	resourcesOutput         android.OptionalPath
 
-	providesTransitiveHeaderJars
+	providesTransitiveHeaderJarsForR8
 }
 
 func (d *dexer) effectiveOptimizeEnabled() bool {
@@ -285,28 +289,32 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams) 
 	// - suppress ProGuard warnings of referencing symbols unknown to the lower SDK version.
 	// - prevent ProGuard stripping subclass in the support library that extends class added in the higher SDK version.
 	// See b/20667396
-	var proguardRaiseDeps classpath
-	ctx.VisitDirectDepsWithTag(proguardRaiseTag, func(m android.Module) {
-		dep, _ := android.OtherModuleProvider(ctx, m, JavaInfoProvider)
-		proguardRaiseDeps = append(proguardRaiseDeps, dep.RepackagedHeaderJars...)
-	})
+	// TODO(b/360905238): Remove SdkSystemServer exception after resolving missing class references.
+	if !dexParams.sdkVersion.Stable() || dexParams.sdkVersion.Kind == android.SdkSystemServer {
+		var proguardRaiseDeps classpath
+		ctx.VisitDirectDepsWithTag(proguardRaiseTag, func(m android.Module) {
+			if dep, ok := android.OtherModuleProvider(ctx, m, JavaInfoProvider); ok {
+				proguardRaiseDeps = append(proguardRaiseDeps, dep.RepackagedHeaderJars...)
+			}
+		})
+		r8Flags = append(r8Flags, proguardRaiseDeps.FormJavaClassPath("-libraryjars"))
+		r8Deps = append(r8Deps, proguardRaiseDeps...)
+	}
 
-	r8Flags = append(r8Flags, proguardRaiseDeps.FormJavaClassPath("-libraryjars"))
-	r8Deps = append(r8Deps, proguardRaiseDeps...)
 	r8Flags = append(r8Flags, flags.bootClasspath.FormJavaClassPath("-libraryjars"))
 	r8Deps = append(r8Deps, flags.bootClasspath...)
 	r8Flags = append(r8Flags, flags.dexClasspath.FormJavaClassPath("-libraryjars"))
 	r8Deps = append(r8Deps, flags.dexClasspath...)
 
 	transitiveStaticLibsLookupMap := map[android.Path]bool{}
-	if d.transitiveStaticLibsHeaderJars != nil {
-		for _, jar := range d.transitiveStaticLibsHeaderJars.ToList() {
+	if d.transitiveStaticLibsHeaderJarsForR8 != nil {
+		for _, jar := range d.transitiveStaticLibsHeaderJarsForR8.ToList() {
 			transitiveStaticLibsLookupMap[jar] = true
 		}
 	}
 	transitiveHeaderJars := android.Paths{}
-	if d.transitiveLibsHeaderJars != nil {
-		for _, jar := range d.transitiveLibsHeaderJars.ToList() {
+	if d.transitiveLibsHeaderJarsForR8 != nil {
+		for _, jar := range d.transitiveLibsHeaderJarsForR8.ToList() {
 			if _, ok := transitiveStaticLibsLookupMap[jar]; ok {
 				// don't include a lib if it is already packaged in the current JAR as a static lib
 				continue
@@ -424,7 +432,7 @@ func (d *dexer) addArtProfile(ctx android.ModuleContext, dexParams *compileDexPa
 }
 
 // Return the compiled dex jar and (optional) profile _after_ r8 optimization
-func (d *dexer) compileDex(ctx android.ModuleContext, dexParams *compileDexParams) (android.OutputPath, *android.OutputPath) {
+func (d *dexer) compileDex(ctx android.ModuleContext, dexParams *compileDexParams) (android.Path, android.Path) {
 
 	// Compile classes.jar into classes.dex and then javalib.jar
 	javalibJar := android.PathForModuleOut(ctx, "dex", dexParams.jarName).OutputPath

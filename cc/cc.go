@@ -48,11 +48,10 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("cc_defaults", defaultsFactory)
 
 	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("sdk", sdkMutator).Parallel()
+		ctx.Transition("sdk", &sdkTransitionMutator{})
 		ctx.BottomUp("llndk", llndkMutator).Parallel()
-		ctx.BottomUp("link", LinkageMutator).Parallel()
-		ctx.BottomUp("test_per_src", TestPerSrcMutator).Parallel()
-		ctx.BottomUp("version", versionMutator).Parallel()
+		ctx.Transition("link", &linkageTransitionMutator{})
+		ctx.Transition("version", &versionTransitionMutator{})
 		ctx.BottomUp("begin", BeginMutator).Parallel()
 	})
 
@@ -614,7 +613,7 @@ type linker interface {
 	coverageOutputFilePath() android.OptionalPath
 
 	// Get the deps that have been explicitly specified in the properties.
-	linkerSpecifiedDeps(specifiedDeps specifiedDeps) specifiedDeps
+	linkerSpecifiedDeps(ctx android.ConfigAndErrorContext, module *Module, specifiedDeps specifiedDeps) specifiedDeps
 
 	moduleInfoJSON(ctx ModuleContext, moduleInfoJSON *android.ModuleInfoJSON)
 }
@@ -799,7 +798,6 @@ var (
 	dataLibDepTag         = dependencyTag{name: "data lib"}
 	dataBinDepTag         = dependencyTag{name: "data bin"}
 	runtimeDepTag         = installDependencyTag{name: "runtime lib"}
-	testPerSrcDepTag      = dependencyTag{name: "test_per_src"}
 	stubImplDepTag        = dependencyTag{name: "stub_impl"}
 	JniFuzzLibTag         = dependencyTag{name: "jni_fuzz_lib_tag"}
 	FdoProfileTag         = dependencyTag{name: "fdo_profile"}
@@ -824,11 +822,6 @@ func IsHeaderDepTag(depTag blueprint.DependencyTag) bool {
 
 func IsRuntimeDepTag(depTag blueprint.DependencyTag) bool {
 	return depTag == runtimeDepTag
-}
-
-func IsTestPerSrcDepTag(depTag blueprint.DependencyTag) bool {
-	ccDepTag, ok := depTag.(dependencyTag)
-	return ok && ccDepTag == testPerSrcDepTag
 }
 
 // Module contains the properties and members used by all C/C++ module types, and implements
@@ -913,19 +906,17 @@ type Module struct {
 	logtagsPaths android.Paths
 
 	WholeRustStaticlib bool
+
+	hasAidl         bool
+	hasLex          bool
+	hasProto        bool
+	hasRenderscript bool
+	hasSysprop      bool
+	hasWinMsg       bool
+	hasYacc         bool
 }
 
 func (c *Module) AddJSONData(d *map[string]interface{}) {
-	var hasAidl, hasLex, hasProto, hasRenderscript, hasSysprop, hasWinMsg, hasYacc bool
-	if b, ok := c.compiler.(*baseCompiler); ok {
-		hasAidl = b.hasSrcExt(".aidl")
-		hasLex = b.hasSrcExt(".l") || b.hasSrcExt(".ll")
-		hasProto = b.hasSrcExt(".proto")
-		hasRenderscript = b.hasSrcExt(".rscript") || b.hasSrcExt(".fs")
-		hasSysprop = b.hasSrcExt(".sysprop")
-		hasWinMsg = b.hasSrcExt(".mc")
-		hasYacc = b.hasSrcExt(".y") || b.hasSrcExt(".yy")
-	}
 	c.AndroidModuleBase().AddJSONData(d)
 	(*d)["Cc"] = map[string]interface{}{
 		"SdkVersion":             c.SdkVersion(),
@@ -955,14 +946,14 @@ func (c *Module) AddJSONData(d *map[string]interface{}) {
 		"IsVendorPublicLibrary":  c.IsVendorPublicLibrary(),
 		"ApexSdkVersion":         c.apexSdkVersion,
 		"TestFor":                c.TestFor(),
-		"AidlSrcs":               hasAidl,
-		"LexSrcs":                hasLex,
-		"ProtoSrcs":              hasProto,
-		"RenderscriptSrcs":       hasRenderscript,
-		"SyspropSrcs":            hasSysprop,
-		"WinMsgSrcs":             hasWinMsg,
-		"YaccSrsc":               hasYacc,
-		"OnlyCSrcs":              !(hasAidl || hasLex || hasProto || hasRenderscript || hasSysprop || hasWinMsg || hasYacc),
+		"AidlSrcs":               c.hasAidl,
+		"LexSrcs":                c.hasLex,
+		"ProtoSrcs":              c.hasProto,
+		"RenderscriptSrcs":       c.hasRenderscript,
+		"SyspropSrcs":            c.hasSysprop,
+		"WinMsgSrcs":             c.hasWinMsg,
+		"YaccSrsc":               c.hasYacc,
+		"OnlyCSrcs":              !(c.hasAidl || c.hasLex || c.hasProto || c.hasRenderscript || c.hasSysprop || c.hasWinMsg || c.hasYacc),
 		"OptimizeForSize":        c.OptimizeForSize(),
 	}
 }
@@ -1035,13 +1026,6 @@ func (c *Module) SelectedStl() string {
 	return ""
 }
 
-func (c *Module) NdkPrebuiltStl() bool {
-	if _, ok := c.linker.(*ndkPrebuiltStlLinker); ok {
-		return true
-	}
-	return false
-}
-
 func (c *Module) StubDecorator() bool {
 	if _, ok := c.linker.(*stubDecorator); ok {
 		return true
@@ -1090,16 +1074,6 @@ func (c *Module) CcLibrary() bool {
 
 func (c *Module) CcLibraryInterface() bool {
 	if _, ok := c.linker.(libraryInterface); ok {
-		return true
-	}
-	return false
-}
-
-func (c *Module) IsNdkPrebuiltStl() bool {
-	if c.linker == nil {
-		return false
-	}
-	if _, ok := c.linker.(*ndkPrebuiltStlLinker); ok {
 		return true
 	}
 	return false
@@ -1386,17 +1360,11 @@ func (c *Module) isOrderfileCompile() bool {
 }
 
 func (c *Module) isCfi() bool {
-	if sanitize := c.sanitize; sanitize != nil {
-		return Bool(sanitize.Properties.SanitizeMutated.Cfi)
-	}
-	return false
+	return c.sanitize.isSanitizerEnabled(cfi)
 }
 
 func (c *Module) isFuzzer() bool {
-	if sanitize := c.sanitize; sanitize != nil {
-		return Bool(sanitize.Properties.SanitizeMutated.Fuzzer)
-	}
-	return false
+	return c.sanitize.isSanitizerEnabled(Fuzzer)
 }
 
 func (c *Module) isNDKStubLibrary() bool {
@@ -1786,11 +1754,6 @@ func (c *Module) Symlinks() []string {
 	return nil
 }
 
-func (c *Module) IsTestPerSrcAllTestsVariation() bool {
-	test, ok := c.linker.(testPerSrc)
-	return ok && test.isAllTestsVariation()
-}
-
 func (c *Module) DataPaths() []android.DataPath {
 	if p, ok := c.installer.(interface {
 		dataPaths() []android.DataPath
@@ -1885,8 +1848,10 @@ var (
 		"libdl":         true,
 		"libz":          true,
 		// art apex
+		// TODO(b/234351700): Remove this when com.android.art.debug is gone.
 		"libandroidio":    true,
 		"libdexfile":      true,
+		"libdexfiled":     true, // com.android.art.debug only
 		"libnativebridge": true,
 		"libnativehelper": true,
 		"libnativeloader": true,
@@ -1942,16 +1907,6 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		TestOnly:       testOnly,
 		TopLevelTarget: c.testModule,
 	})
-
-	// Handle the case of a test module split by `test_per_src` mutator.
-	//
-	// The `test_per_src` mutator adds an extra variation named "", depending on all the other
-	// `test_per_src` variations of the test module. Set `outputFile` to an empty path for this
-	// module and return early, as this module does not produce an output file per se.
-	if c.IsTestPerSrcAllTestsVariation() {
-		c.outputFile = android.OptionalPath{}
-		return
-	}
 
 	c.Properties.SubName = GetSubnameProperty(actx, c)
 	apexInfo, _ := android.ModuleProvider(actx, android.ApexInfoProvider)
@@ -2128,6 +2083,16 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	}
 
 	buildComplianceMetadataInfo(ctx, c, deps)
+
+	if b, ok := c.compiler.(*baseCompiler); ok {
+		c.hasAidl = b.hasSrcExt(ctx, ".aidl")
+		c.hasLex = b.hasSrcExt(ctx, ".l") || b.hasSrcExt(ctx, ".ll")
+		c.hasProto = b.hasSrcExt(ctx, ".proto")
+		c.hasRenderscript = b.hasSrcExt(ctx, ".rscript") || b.hasSrcExt(ctx, ".fs")
+		c.hasSysprop = b.hasSrcExt(ctx, ".sysprop")
+		c.hasWinMsg = b.hasSrcExt(ctx, ".mc")
+		c.hasYacc = b.hasSrcExt(ctx, ".y") || b.hasSrcExt(ctx, ".yy")
+	}
 
 	c.setOutputFiles(ctx)
 }
@@ -2542,8 +2507,14 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		}
 
 		if c.isNDKStubLibrary() {
-			// ndk_headers do not have any variations
-			actx.AddFarVariationDependencies([]blueprint.Variation{}, depTag, lib)
+			variationExists := actx.OtherModuleDependencyVariantExists(nil, lib)
+			if variationExists {
+				actx.AddVariationDependencies(nil, depTag, lib)
+			} else {
+				// dependencies to ndk_headers fall here as ndk_headers do not have
+				// any variants.
+				actx.AddFarVariationDependencies([]blueprint.Variation{}, depTag, lib)
+			}
 		} else if c.IsStubs() && !c.isImportedApiLibrary() {
 			actx.AddFarVariationDependencies(append(ctx.Target().Variations(), c.ImageVariation()),
 				depTag, lib)
@@ -2780,10 +2751,6 @@ func checkLinkType(ctx android.BaseModuleContext, from LinkableInterface, to Lin
 		return
 	}
 	if c, ok := to.(*Module); ok {
-		if c.NdkPrebuiltStl() {
-			// These are allowed, but they don't set sdk_version
-			return
-		}
 		if c.StubDecorator() {
 			// These aren't real libraries, but are the stub shared libraries that are included in
 			// the NDK.
@@ -3081,7 +3048,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		}
 
 		if dep.Target().Os != ctx.Os() {
-			ctx.ModuleErrorf("OS mismatch between %q and %q", ctx.ModuleName(), depName)
+			ctx.ModuleErrorf("OS mismatch between %q (%s) and %q (%s)", ctx.ModuleName(), ctx.Os().Name, depName, dep.Target().Os.Name)
 			return
 		}
 		if dep.Target().Arch.ArchType != ctx.Arch().ArchType {
@@ -3758,14 +3725,12 @@ func GetMakeLinkType(actx android.ModuleContext, c LinkableInterface) string {
 }
 
 // Overrides ApexModule.IsInstallabeToApex()
-// Only shared/runtime libraries and "test_per_src" tests are installable to APEX.
+// Only shared/runtime libraries .
 func (c *Module) IsInstallableToApex() bool {
 	if lib := c.library; lib != nil {
 		// Stub libs and prebuilt libs in a versioned SDK are not
 		// installable to APEX even though they are shared libs.
 		return lib.shared() && !lib.buildStubs()
-	} else if _, ok := c.linker.(testPerSrc); ok {
-		return true
 	}
 	return false
 }
@@ -3955,7 +3920,6 @@ const (
 	headerLibrary
 	testBin // testBinary already declared
 	ndkLibrary
-	ndkPrebuiltStl
 )
 
 func (c *Module) typ() moduleType {
@@ -3994,8 +3958,6 @@ func (c *Module) typ() moduleType {
 		return sharedLibrary
 	} else if c.isNDKStubLibrary() {
 		return ndkLibrary
-	} else if c.IsNdkPrebuiltStl() {
-		return ndkPrebuiltStl
 	}
 	return unknownType
 }
@@ -4105,6 +4067,13 @@ func (c *Module) BaseModuleName() string {
 		return smn.sourceModuleName()
 	}
 	return c.ModuleBase.BaseModuleName()
+}
+
+func (c *Module) stubsSymbolFilePath() android.Path {
+	if library, ok := c.linker.(*libraryDecorator); ok {
+		return library.stubsSymbolFilePath
+	}
+	return android.OptionalPath{}.Path()
 }
 
 var Bool = proptools.Bool

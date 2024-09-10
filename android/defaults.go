@@ -284,7 +284,8 @@ func defaultsDepsMutator(ctx BottomUpMutatorContext) {
 
 func defaultsMutator(ctx TopDownMutatorContext) {
 	if defaultable, ok := ctx.Module().(Defaultable); ok {
-		if len(defaultable.defaults().Defaults) > 0 {
+		defaults := defaultable.defaults().Defaults
+		if len(defaults) > 0 {
 			var defaultsList []Defaults
 			seen := make(map[Defaults]bool)
 
