@@ -920,6 +920,7 @@ func translateAndroidModule(ctx SingletonContext, w io.Writer, moduleInfoJSONs *
 		case "*phony.PhonyRule": // writes phony deps and acts like `.PHONY`
 		case "*selinux.selinuxContextsModule": // license properties written
 		case "*sysprop.syspropLibrary": // license properties written
+		case "*vintf.vintfCompatibilityMatrixRule": // use case like phony
 		default:
 			if !ctx.Config().IsEnvFalse("ANDROID_REQUIRE_LICENSES") {
 				return fmt.Errorf("custom make rules not allowed for %q (%q) module %q", ctx.ModuleType(mod), reflect.TypeOf(mod), ctx.ModuleName(mod))

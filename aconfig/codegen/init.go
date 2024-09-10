@@ -64,11 +64,12 @@ var (
 				` && ${aconfig} create-rust-lib` +
 				`    --mode ${mode}` +
 				`    --cache ${in}` +
+				`    --allow-instrumentation ${debug}` +
 				`    --out ${gendir}`,
 			CommandDeps: []string{
 				"$aconfig",
 			},
-		}, "gendir", "mode")
+		}, "gendir", "mode", "debug")
 )
 
 func init() {
