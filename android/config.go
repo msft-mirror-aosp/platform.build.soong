@@ -173,6 +173,13 @@ func (c Config) DisableVerifyOverlaps() bool {
 	return c.IsEnvTrue("DISABLE_VERIFY_OVERLAPS") || c.ReleaseDisableVerifyOverlaps() || !c.ReleaseDefaultModuleBuildFromSource()
 }
 
+func (c Config) CoverageSuffix() string {
+	if v := c.IsEnvTrue("EMMA_INSTRUMENT"); v {
+		return "coverage."
+	}
+	return ""
+}
+
 // MaxPageSizeSupported returns the max page size supported by the device. This
 // value will define the ELF segment alignment for binaries (executables and
 // shared libraries).
@@ -348,9 +355,6 @@ type config struct {
 	// modules that aren't mixed-built for at least one variant will cause a build
 	// failure
 	ensureAllowlistIntegrity bool
-
-	// List of Api libraries that contribute to Api surfaces.
-	apiLibraries map[string]struct{}
 }
 
 type deviceConfig struct {
@@ -599,40 +603,6 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 	setBuildMode(cmdArgs.BazelQueryViewDir, GenerateQueryView)
 	setBuildMode(cmdArgs.ModuleGraphFile, GenerateModuleGraph)
 	setBuildMode(cmdArgs.DocFile, GenerateDocFile)
-
-	// TODO(b/276958307): Replace the hardcoded list to a sdk_library local prop.
-	config.apiLibraries = map[string]struct{}{
-		"android.net.ipsec.ike":             {},
-		"art.module.public.api":             {},
-		"conscrypt.module.public.api":       {},
-		"framework-adservices":              {},
-		"framework-appsearch":               {},
-		"framework-bluetooth":               {},
-		"framework-configinfrastructure":    {},
-		"framework-connectivity":            {},
-		"framework-connectivity-t":          {},
-		"framework-devicelock":              {},
-		"framework-graphics":                {},
-		"framework-healthfitness":           {},
-		"framework-location":                {},
-		"framework-media":                   {},
-		"framework-mediaprovider":           {},
-		"framework-nfc":                     {},
-		"framework-ondevicepersonalization": {},
-		"framework-pdf":                     {},
-		"framework-pdf-v":                   {},
-		"framework-permission":              {},
-		"framework-permission-s":            {},
-		"framework-scheduling":              {},
-		"framework-sdkextensions":           {},
-		"framework-statsd":                  {},
-		"framework-sdksandbox":              {},
-		"framework-tethering":               {},
-		"framework-uwb":                     {},
-		"framework-virtualization":          {},
-		"framework-wifi":                    {},
-		"i18n.module.public.api":            {},
-	}
 
 	config.productVariables.Build_from_text_stub = boolPtr(config.BuildFromTextStub())
 
@@ -1525,11 +1495,6 @@ func (c *deviceConfig) NativeCoverageEnabledForPath(path string) bool {
 		}
 	}
 	if coverage && len(c.config.productVariables.NativeCoverageExcludePaths) > 0 {
-		// Workaround coverage boot failure.
-		// http://b/269981180
-		if strings.HasPrefix(path, "external/protobuf") {
-			coverage = false
-		}
 		if HasAnyPrefix(path, c.config.productVariables.NativeCoverageExcludePaths) {
 			coverage = false
 		}
@@ -1984,17 +1949,6 @@ func (c *config) SetBuildFromTextStub(b bool) {
 	c.productVariables.Build_from_text_stub = boolPtr(b)
 }
 
-func (c *config) SetApiLibraries(libs []string) {
-	c.apiLibraries = make(map[string]struct{})
-	for _, lib := range libs {
-		c.apiLibraries[lib] = struct{}{}
-	}
-}
-
-func (c *config) GetApiLibraries() map[string]struct{} {
-	return c.apiLibraries
-}
-
 func (c *deviceConfig) CheckVendorSeappViolations() bool {
 	return Bool(c.config.productVariables.CheckVendorSeappViolations)
 }
@@ -2008,42 +1962,46 @@ func (c *config) UseResourceProcessorByDefault() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_USE_RESOURCE_PROCESSOR_BY_DEFAULT")
 }
 
+func (c *config) UseTransitiveJarsInClasspath() bool {
+	return c.productVariables.GetBuildFlagBool("RELEASE_USE_TRANSITIVE_JARS_IN_CLASSPATH")
+}
+
 var (
-	mainlineApexContributionBuildFlags = []string{
-		"RELEASE_APEX_CONTRIBUTIONS_ADBD",
-		"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES",
-		"RELEASE_APEX_CONTRIBUTIONS_APPSEARCH",
-		"RELEASE_APEX_CONTRIBUTIONS_ART",
-		"RELEASE_APEX_CONTRIBUTIONS_BLUETOOTH",
-		"RELEASE_APEX_CONTRIBUTIONS_CAPTIVEPORTALLOGIN",
-		"RELEASE_APEX_CONTRIBUTIONS_CELLBROADCAST",
-		"RELEASE_APEX_CONTRIBUTIONS_CONFIGINFRASTRUCTURE",
-		"RELEASE_APEX_CONTRIBUTIONS_CONNECTIVITY",
-		"RELEASE_APEX_CONTRIBUTIONS_CONSCRYPT",
-		"RELEASE_APEX_CONTRIBUTIONS_CRASHRECOVERY",
-		"RELEASE_APEX_CONTRIBUTIONS_DEVICELOCK",
-		"RELEASE_APEX_CONTRIBUTIONS_DOCUMENTSUIGOOGLE",
-		"RELEASE_APEX_CONTRIBUTIONS_EXTSERVICES",
-		"RELEASE_APEX_CONTRIBUTIONS_HEALTHFITNESS",
-		"RELEASE_APEX_CONTRIBUTIONS_IPSEC",
-		"RELEASE_APEX_CONTRIBUTIONS_MEDIA",
-		"RELEASE_APEX_CONTRIBUTIONS_MEDIAPROVIDER",
-		"RELEASE_APEX_CONTRIBUTIONS_MODULE_METADATA",
-		"RELEASE_APEX_CONTRIBUTIONS_NETWORKSTACKGOOGLE",
-		"RELEASE_APEX_CONTRIBUTIONS_NEURALNETWORKS",
-		"RELEASE_APEX_CONTRIBUTIONS_ONDEVICEPERSONALIZATION",
-		"RELEASE_APEX_CONTRIBUTIONS_PERMISSION",
-		"RELEASE_APEX_CONTRIBUTIONS_PRIMARY_LIBS",
-		"RELEASE_APEX_CONTRIBUTIONS_REMOTEKEYPROVISIONING",
-		"RELEASE_APEX_CONTRIBUTIONS_RESOLV",
-		"RELEASE_APEX_CONTRIBUTIONS_SCHEDULING",
-		"RELEASE_APEX_CONTRIBUTIONS_SDKEXTENSIONS",
-		"RELEASE_APEX_CONTRIBUTIONS_SWCODEC",
-		"RELEASE_APEX_CONTRIBUTIONS_STATSD",
-		"RELEASE_APEX_CONTRIBUTIONS_TELEMETRY_TVP",
-		"RELEASE_APEX_CONTRIBUTIONS_TZDATA",
-		"RELEASE_APEX_CONTRIBUTIONS_UWB",
-		"RELEASE_APEX_CONTRIBUTIONS_WIFI",
+	mainlineApexContributionBuildFlagsToApexNames = map[string]string{
+		"RELEASE_APEX_CONTRIBUTIONS_ADBD":                    "com.android.adbd",
+		"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES":              "com.android.adservices",
+		"RELEASE_APEX_CONTRIBUTIONS_APPSEARCH":               "com.android.appsearch",
+		"RELEASE_APEX_CONTRIBUTIONS_ART":                     "com.android.art",
+		"RELEASE_APEX_CONTRIBUTIONS_BLUETOOTH":               "com.android.btservices",
+		"RELEASE_APEX_CONTRIBUTIONS_CAPTIVEPORTALLOGIN":      "",
+		"RELEASE_APEX_CONTRIBUTIONS_CELLBROADCAST":           "com.android.cellbroadcast",
+		"RELEASE_APEX_CONTRIBUTIONS_CONFIGINFRASTRUCTURE":    "com.android.configinfrastructure",
+		"RELEASE_APEX_CONTRIBUTIONS_CONNECTIVITY":            "com.android.tethering",
+		"RELEASE_APEX_CONTRIBUTIONS_CONSCRYPT":               "com.android.conscrypt",
+		"RELEASE_APEX_CONTRIBUTIONS_CRASHRECOVERY":           "",
+		"RELEASE_APEX_CONTRIBUTIONS_DEVICELOCK":              "com.android.devicelock",
+		"RELEASE_APEX_CONTRIBUTIONS_DOCUMENTSUIGOOGLE":       "",
+		"RELEASE_APEX_CONTRIBUTIONS_EXTSERVICES":             "com.android.extservices",
+		"RELEASE_APEX_CONTRIBUTIONS_HEALTHFITNESS":           "com.android.healthfitness",
+		"RELEASE_APEX_CONTRIBUTIONS_IPSEC":                   "com.android.ipsec",
+		"RELEASE_APEX_CONTRIBUTIONS_MEDIA":                   "com.android.media",
+		"RELEASE_APEX_CONTRIBUTIONS_MEDIAPROVIDER":           "com.android.mediaprovider",
+		"RELEASE_APEX_CONTRIBUTIONS_MODULE_METADATA":         "",
+		"RELEASE_APEX_CONTRIBUTIONS_NETWORKSTACKGOOGLE":      "",
+		"RELEASE_APEX_CONTRIBUTIONS_NEURALNETWORKS":          "com.android.neuralnetworks",
+		"RELEASE_APEX_CONTRIBUTIONS_ONDEVICEPERSONALIZATION": "com.android.ondevicepersonalization",
+		"RELEASE_APEX_CONTRIBUTIONS_PERMISSION":              "com.android.permission",
+		"RELEASE_APEX_CONTRIBUTIONS_PRIMARY_LIBS":            "",
+		"RELEASE_APEX_CONTRIBUTIONS_REMOTEKEYPROVISIONING":   "com.android.rkpd",
+		"RELEASE_APEX_CONTRIBUTIONS_RESOLV":                  "com.android.resolv",
+		"RELEASE_APEX_CONTRIBUTIONS_SCHEDULING":              "com.android.scheduling",
+		"RELEASE_APEX_CONTRIBUTIONS_SDKEXTENSIONS":           "com.android.sdkext",
+		"RELEASE_APEX_CONTRIBUTIONS_SWCODEC":                 "com.android.media.swcodec",
+		"RELEASE_APEX_CONTRIBUTIONS_STATSD":                  "com.android.os.statsd",
+		"RELEASE_APEX_CONTRIBUTIONS_TELEMETRY_TVP":           "",
+		"RELEASE_APEX_CONTRIBUTIONS_TZDATA":                  "com.android.tzdata",
+		"RELEASE_APEX_CONTRIBUTIONS_UWB":                     "com.android.uwb",
+		"RELEASE_APEX_CONTRIBUTIONS_WIFI":                    "com.android.wifi",
 	}
 )
 
@@ -2051,12 +2009,16 @@ var (
 // Each mainline module will have one entry in the list
 func (c *config) AllApexContributions() []string {
 	ret := []string{}
-	for _, f := range mainlineApexContributionBuildFlags {
+	for _, f := range SortedKeys(mainlineApexContributionBuildFlagsToApexNames) {
 		if val, exists := c.GetBuildFlag(f); exists && val != "" {
 			ret = append(ret, val)
 		}
 	}
 	return ret
+}
+
+func (c *config) AllMainlineApexNames() []string {
+	return SortedStringValues(mainlineApexContributionBuildFlagsToApexNames)
 }
 
 func (c *config) BuildIgnoreApexContributionContents() *bool {
@@ -2085,4 +2047,40 @@ func (c *config) UseDebugArt() bool {
 	}
 
 	return Bool(c.productVariables.Eng)
+}
+
+func (c *config) SystemPropFiles(ctx PathContext) Paths {
+	return PathsForSource(ctx, c.productVariables.SystemPropFiles)
+}
+
+func (c *config) SystemExtPropFiles(ctx PathContext) Paths {
+	return PathsForSource(ctx, c.productVariables.SystemExtPropFiles)
+}
+
+func (c *config) ProductPropFiles(ctx PathContext) Paths {
+	return PathsForSource(ctx, c.productVariables.ProductPropFiles)
+}
+
+func (c *config) OdmPropFiles(ctx PathContext) Paths {
+	return PathsForSource(ctx, c.productVariables.OdmPropFiles)
+}
+
+func (c *config) EnableUffdGc() string {
+	return String(c.productVariables.EnableUffdGc)
+}
+
+func (c *config) DeviceFrameworkCompatibilityMatrixFile() []string {
+	return c.productVariables.DeviceFrameworkCompatibilityMatrixFile
+}
+
+func (c *config) DeviceProductCompatibilityMatrixFile() []string {
+	return c.productVariables.DeviceProductCompatibilityMatrixFile
+}
+
+func (c *config) BoardAvbEnable() bool {
+	return Bool(c.productVariables.BoardAvbEnable)
+}
+
+func (c *config) BoardAvbSystemAddHashtreeFooterArgs() []string {
+	return c.productVariables.BoardAvbSystemAddHashtreeFooterArgs
 }

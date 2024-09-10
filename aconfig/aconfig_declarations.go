@@ -219,16 +219,4 @@ func (module *DeclarationsModule) GenerateAndroidBuildActions(ctx android.Module
 	android.SetProvider(ctx, android.AconfigReleaseDeclarationsProviderKey, providerData)
 }
 
-func (module *DeclarationsModule) BuildActionProviderKeys() []blueprint.AnyProviderKey {
-	return []blueprint.AnyProviderKey{android.AconfigDeclarationsProviderKey}
-}
-
-func (module *DeclarationsModule) PackageContextPath() string {
-	return pkgPath
-}
-
-func (module *DeclarationsModule) CachedRules() []blueprint.Rule {
-	return []blueprint.Rule{aconfigRule, aconfigTextRule}
-}
-
 var _ blueprint.Incremental = &DeclarationsModule{}

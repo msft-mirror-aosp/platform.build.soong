@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -910,6 +911,16 @@ func transformObjToDynamicBinary(ctx android.ModuleContext,
 		"ldFlags":       flags.globalLdFlags + " " + flags.localLdFlags,
 		"crtEnd":        strings.Join(crtEnd.Strings(), " "),
 	}
+
+	// On Windows, we always generate a PDB file
+	// --strip-debug is needed to also keep COFF symbols which are needed when
+	// we patch binaries with symbol_inject.
+	if ctx.Windows() {
+		pdb := outputFile.ReplaceExtension(ctx, "pdb")
+		args["ldFlags"] = args["ldFlags"] + " -Wl,--strip-debug -Wl,--pdb=" + pdb.String() + " "
+		implicitOutputs = append(slices.Clone(implicitOutputs), pdb)
+	}
+
 	if ctx.Config().UseRBE() && ctx.Config().IsEnvTrue("RBE_CXX_LINKS") {
 		rule = ldRE
 		args["implicitOutputs"] = strings.Join(implicitOutputs.Strings(), ",")

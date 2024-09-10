@@ -244,7 +244,6 @@ func (pb PrimaryBuilderFactory) primaryBuilderInvocation(config Config) bootstra
 	globfiles := bootstrap.GlobFileListFiles(bootstrap.GlobDirectory(config.SoongOutDir(), globPathName))
 
 	return bootstrap.PrimaryBuilderInvocation{
-		Inputs:      []string{"Android.bp"},
 		Implicits:   globfiles,
 		Outputs:     []string{pb.output},
 		Args:        allArgs,
@@ -663,7 +662,7 @@ func runSoong(ctx Context, config Config) {
 		ninjaArgs = append(ninjaArgs, targets...)
 		ninjaCmd := config.NinjaBin()
 		if config.useN2 {
-			ninjaCmd = config.PrebuiltBuildTool("n2")
+			ninjaCmd = config.N2Bin()
 		}
 
 		cmd := Command(ctx, config, "soong bootstrap",

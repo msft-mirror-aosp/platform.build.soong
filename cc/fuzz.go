@@ -373,7 +373,7 @@ func NewFuzzer(hod android.HostOrDeviceSupported) *Module {
 		}
 
 		if targetFramework == fuzz.AFL {
-			fuzzBin.baseCompiler.Properties.Srcs = append(fuzzBin.baseCompiler.Properties.Srcs, ":aflpp_driver", ":afl-compiler-rt")
+			fuzzBin.baseCompiler.Properties.Srcs.AppendSimpleValue([]string{":aflpp_driver", ":afl-compiler-rt"})
 			module.fuzzer.Properties.FuzzFramework = fuzz.AFL
 		}
 	})

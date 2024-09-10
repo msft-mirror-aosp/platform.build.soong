@@ -143,6 +143,9 @@ func (r *ravenwoodTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		HostTemplate:           "${RavenwoodTestConfigTemplate}",
 	})
 
+	// Always enable Ravenizer for ravenwood tests.
+	r.Library.ravenizer.enabled = true
+
 	r.Library.GenerateAndroidBuildActions(ctx)
 
 	// Start by depending on all files installed by dependencies
@@ -152,7 +155,8 @@ func (r *ravenwoodTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	var runtimeJniModuleNames map[string]bool
 
 	if utils := ctx.GetDirectDepsWithTag(ravenwoodUtilsTag)[0]; utils != nil {
-		for _, installFile := range utils.FilesToInstall() {
+		for _, installFile := range android.OtherModuleProviderOrDefault(
+			ctx, utils, android.InstallFilesProvider).InstallFiles {
 			installDeps = append(installDeps, installFile)
 		}
 		jniDeps, ok := android.OtherModuleProvider(ctx, utils, ravenwoodLibgroupJniDepProvider)
@@ -162,7 +166,8 @@ func (r *ravenwoodTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	if runtime := ctx.GetDirectDepsWithTag(ravenwoodRuntimeTag)[0]; runtime != nil {
-		for _, installFile := range runtime.FilesToInstall() {
+		for _, installFile := range android.OtherModuleProviderOrDefault(
+			ctx, runtime, android.InstallFilesProvider).InstallFiles {
 			installDeps = append(installDeps, installFile)
 		}
 		jniDeps, ok := android.OtherModuleProvider(ctx, runtime, ravenwoodLibgroupJniDepProvider)
@@ -191,7 +196,8 @@ func (r *ravenwoodTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	resApkInstallPath := installPath.Join(ctx, "ravenwood-res-apks")
 	if resApk := ctx.GetDirectDepsWithTag(ravenwoodTestResourceApkTag); len(resApk) > 0 {
-		for _, installFile := range resApk[0].FilesToInstall() {
+		for _, installFile := range android.OtherModuleProviderOrDefault(
+			ctx, resApk[0], android.InstallFilesProvider).InstallFiles {
 			installResApk := ctx.InstallFile(resApkInstallPath, "ravenwood-res.apk", installFile)
 			installDeps = append(installDeps, installResApk)
 		}
@@ -285,6 +291,14 @@ func (r *ravenwoodLibgroup) GenerateAndroidBuildActions(ctx android.ModuleContex
 	installPath := android.PathForModuleInstall(ctx, r.BaseModuleName())
 	for _, lib := range r.ravenwoodLibgroupProperties.Libs {
 		libModule := ctx.GetDirectDepWithTag(lib, ravenwoodLibContentTag)
+		if libModule == nil {
+			if ctx.Config().AllowMissingDependencies() {
+				ctx.AddMissingDependencies([]string{lib})
+			} else {
+				ctx.PropertyErrorf("lib", "missing dependency %q", lib)
+			}
+			continue
+		}
 		libJar := android.OutputFileForModule(ctx, libModule, "")
 		ctx.InstallFile(installPath, lib+".jar", libJar)
 	}

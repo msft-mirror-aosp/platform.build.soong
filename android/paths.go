@@ -237,6 +237,9 @@ type Path interface {
 	// directory, and OutputPath.Join("foo").Rel() would return "foo".
 	Rel() string
 
+	// WithoutRel returns a new Path with no relative path, i.e. Rel() will return the same value as Base().
+	WithoutRel() Path
+
 	// RelativeToTop returns a new path relative to the top, it is provided solely for use in tests.
 	//
 	// It is guaranteed to always return the same type as it is called on, e.g. if called on an
@@ -1119,6 +1122,11 @@ func (p basePath) withRel(rel string) basePath {
 	return p
 }
 
+func (p basePath) withoutRel() basePath {
+	p.rel = filepath.Base(p.path)
+	return p
+}
+
 // SourcePath is a Path representing a file path rooted from SrcDir
 type SourcePath struct {
 	basePath
@@ -1278,6 +1286,11 @@ func (p SourcePath) String() string {
 	return p.path
 }
 
+func (p SourcePath) WithoutRel() Path {
+	p.basePath = p.basePath.withoutRel()
+	return p
+}
+
 // Join creates a new SourcePath with paths... joined with the current path. The
 // provided paths... may not use '..' to escape from the current path.
 func (p SourcePath) Join(ctx PathContext, paths ...string) SourcePath {
@@ -1362,8 +1375,8 @@ func (p OutputPath) withRel(rel string) OutputPath {
 	return p
 }
 
-func (p OutputPath) WithoutRel() OutputPath {
-	p.basePath.rel = filepath.Base(p.basePath.path)
+func (p OutputPath) WithoutRel() Path {
+	p.basePath = p.basePath.withoutRel()
 	return p
 }
 
@@ -1397,6 +1410,11 @@ var _ objPathProvider = OutputPath{}
 // toolDepPath is a Path representing a dependency of the build tool.
 type toolDepPath struct {
 	basePath
+}
+
+func (t toolDepPath) WithoutRel() Path {
+	t.basePath = t.basePath.withoutRel()
+	return t
 }
 
 func (t toolDepPath) RelativeToTop() Path {
@@ -1748,6 +1766,32 @@ type InstallPath struct {
 	fullPath string
 }
 
+func (p *InstallPath) GobEncode() ([]byte, error) {
+	w := new(bytes.Buffer)
+	encoder := gob.NewEncoder(w)
+	err := errors.Join(encoder.Encode(p.basePath), encoder.Encode(p.soongOutDir),
+		encoder.Encode(p.partitionDir), encoder.Encode(p.partition),
+		encoder.Encode(p.makePath), encoder.Encode(p.fullPath))
+	if err != nil {
+		return nil, err
+	}
+
+	return w.Bytes(), nil
+}
+
+func (p *InstallPath) GobDecode(data []byte) error {
+	r := bytes.NewBuffer(data)
+	decoder := gob.NewDecoder(r)
+	err := errors.Join(decoder.Decode(&p.basePath), decoder.Decode(&p.soongOutDir),
+		decoder.Decode(&p.partitionDir), decoder.Decode(&p.partition),
+		decoder.Decode(&p.makePath), decoder.Decode(&p.fullPath))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // Will panic if called from outside a test environment.
 func ensureTestOnly() {
 	if PrefixInList(os.Args, "-test.") {
@@ -1764,6 +1808,11 @@ func (p InstallPath) RelativeToTop() Path {
 		p.soongOutDir = TestOutSoongDir
 	}
 	p.fullPath = filepath.Join(p.soongOutDir, p.path)
+	return p
+}
+
+func (p InstallPath) WithoutRel() Path {
+	p.basePath = p.basePath.withoutRel()
 	return p
 }
 
@@ -2087,6 +2136,11 @@ func (p PhonyPath) RelativeToTop() Path {
 	return p
 }
 
+func (p PhonyPath) WithoutRel() Path {
+	p.basePath = p.basePath.withoutRel()
+	return p
+}
+
 func (p PhonyPath) ReplaceExtension(ctx PathContext, ext string) OutputPath {
 	panic("Not implemented")
 }
@@ -2100,6 +2154,11 @@ type testPath struct {
 
 func (p testPath) RelativeToTop() Path {
 	ensureTestOnly()
+	return p
+}
+
+func (p testPath) WithoutRel() Path {
+	p.basePath = p.basePath.withoutRel()
 	return p
 }
 

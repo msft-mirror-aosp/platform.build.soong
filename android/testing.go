@@ -126,6 +126,10 @@ var PrepareForTestWithMakevars = FixtureRegisterWithContext(func(ctx Registratio
 	ctx.RegisterSingletonType("makevars", makeVarsSingletonFunc)
 })
 
+var PrepareForTestVintfFragmentModules = FixtureRegisterWithContext(func(ctx RegistrationContext) {
+	registerVintfFragmentComponents(ctx)
+})
+
 // Test fixture preparer that will register most java build components.
 //
 // Singletons and mutators should only be added here if they are needed for a majority of java
@@ -149,6 +153,7 @@ var PrepareForTestWithAndroidBuildComponents = GroupFixturePreparers(
 	PrepareForTestWithPackageModule,
 	PrepareForTestWithPrebuilts,
 	PrepareForTestWithVisibility,
+	PrepareForTestVintfFragmentModules,
 )
 
 // Prepares an integration test with all build components from the android package.
@@ -173,6 +178,16 @@ var PrepareForTestWithAllowMissingDependencies = GroupFixturePreparers(
 var PrepareForTestDisallowNonExistentPaths = FixtureModifyConfig(func(config Config) {
 	config.TestAllowNonExistentPaths = false
 })
+
+// PrepareForTestWithBuildFlag returns a FixturePreparer that sets the given flag to the given value.
+func PrepareForTestWithBuildFlag(flag, value string) FixturePreparer {
+	return FixtureModifyProductVariables(func(variables FixtureProductVariables) {
+		if variables.BuildFlags == nil {
+			variables.BuildFlags = make(map[string]string)
+		}
+		variables.BuildFlags[flag] = value
+	})
+}
 
 func NewTestArchContext(config Config) *TestContext {
 	ctx := NewTestContext(config)
@@ -202,7 +217,7 @@ func (ctx *TestContext) HardCodedPreArchMutators(f RegisterMutatorFunc) {
 	ctx.PreArchMutators(f)
 }
 
-func (ctx *TestContext) moduleProvider(m blueprint.Module, p blueprint.AnyProviderKey) (any, bool) {
+func (ctx *TestContext) otherModuleProvider(m blueprint.Module, p blueprint.AnyProviderKey) (any, bool) {
 	return ctx.Context.ModuleProvider(m, p)
 }
 
@@ -220,7 +235,7 @@ func (ctx *TestContext) FinalDepsMutators(f RegisterMutatorFunc) {
 
 func (ctx *TestContext) OtherModuleProviderAdaptor() OtherModuleProviderContext {
 	return NewOtherModuleProviderAdaptor(func(module blueprint.Module, provider blueprint.AnyProviderKey) (any, bool) {
-		return ctx.moduleProvider(module, provider)
+		return ctx.otherModuleProvider(module, provider)
 	})
 }
 
@@ -1023,8 +1038,8 @@ func (m TestingModule) VariablesForTestsRelativeToTop() map[string]string {
 // Exits the test immediately if there is an error and
 // otherwise returns the result of calling Paths.RelativeToTop
 // on the returned Paths.
-func (m TestingModule) OutputFiles(t *testing.T, tag string) Paths {
-	outputFiles := m.Module().base().outputFiles
+func (m TestingModule) OutputFiles(ctx *TestContext, t *testing.T, tag string) Paths {
+	outputFiles := OtherModuleProviderOrDefault(ctx.OtherModuleProviderAdaptor(), m.Module(), OutputFilesProvider)
 	if tag == "" && outputFiles.DefaultOutputFiles != nil {
 		return outputFiles.DefaultOutputFiles.RelativeToTop()
 	} else if taggedOutputFiles, hasTag := outputFiles.TaggedOutputFiles[tag]; hasTag {

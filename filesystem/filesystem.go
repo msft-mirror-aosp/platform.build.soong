@@ -136,6 +136,9 @@ type filesystemProperties struct {
 	// Install aconfig_flags.pb file for the modules installed in this partition.
 	Gen_aconfig_flags_pb *bool
 
+	// Update the Base_dir of the $PRODUCT_OUT directory with the packaging files.
+	Update_product_out *bool
+
 	Fsverity fsverityProperties
 }
 
@@ -331,6 +334,14 @@ func (f *filesystem) copyPackagingSpecs(ctx android.ModuleContext, builder *andr
 	return f.CopySpecsToDirs(ctx, builder, dirsToSpecs)
 }
 
+func (f *filesystem) copyFilesToProductOut(ctx android.ModuleContext, builder *android.RuleBuilder, rebasedDir android.OutputPath) {
+	if !proptools.Bool(f.properties.Update_product_out) {
+		return
+	}
+	installPath := android.PathForModuleInPartitionInstall(ctx, f.partitionName())
+	builder.Command().Textf("cp -prf %s/* %s", rebasedDir, installPath)
+}
+
 func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) android.OutputPath {
 	rootDir := android.PathForModuleOut(ctx, "root").OutputPath
 	rebasedDir := rootDir
@@ -348,6 +359,7 @@ func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) androi
 	f.buildFsverityMetadataFiles(ctx, builder, specs, rootDir, rebasedDir)
 	f.buildEventLogtagsFile(ctx, builder, rebasedDir)
 	f.buildAconfigFlagsFiles(ctx, builder, specs, rebasedDir)
+	f.copyFilesToProductOut(ctx, builder, rebasedDir)
 
 	// run host_init_verifier
 	// Ideally we should have a concept of pluggable linters that verify the generated image.
@@ -490,6 +502,7 @@ func (f *filesystem) buildCpioImage(ctx android.ModuleContext, compressed bool) 
 	f.buildFsverityMetadataFiles(ctx, builder, specs, rootDir, rebasedDir)
 	f.buildEventLogtagsFile(ctx, builder, rebasedDir)
 	f.buildAconfigFlagsFiles(ctx, builder, specs, rebasedDir)
+	f.copyFilesToProductOut(ctx, builder, rebasedDir)
 
 	output := android.PathForModuleOut(ctx, f.installFileName()).OutputPath
 	cmd := builder.Command().
