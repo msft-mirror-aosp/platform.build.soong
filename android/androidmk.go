@@ -913,6 +913,7 @@ func translateAndroidModule(ctx SingletonContext, w io.Writer, moduleInfoJSONs *
 		case "*android_sdk.sdkRepoHost": // doesn't go through base_rules
 		case "*apex.apexBundle": // license properties written
 		case "*bpf.bpf": // license properties written (both for module and objs)
+		case "*libbpf_prog.libbpfProg": // license properties written (both for module and objs)
 		case "*genrule.Module": // writes non-custom before adding .phony
 		case "*java.SystemModules": // doesn't go through base_rules
 		case "*java.systemModulesImport": // doesn't go through base_rules
