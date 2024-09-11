@@ -1063,8 +1063,29 @@ var vintfDepTag = struct {
 }{}
 
 func addVintfFragmentDeps(ctx BottomUpMutatorContext) {
+	// Vintf manifests in the recovery partition will be ignored.
+	if !ctx.Device() || ctx.Module().InstallInRecovery() {
+		return
+	}
+
+	deviceConfig := ctx.DeviceConfig()
+
 	mod := ctx.Module()
-	ctx.AddDependency(mod, vintfDepTag, mod.VintfFragmentModuleNames(ctx)...)
+	vintfModules := ctx.AddDependency(mod, vintfDepTag, mod.VintfFragmentModuleNames(ctx)...)
+
+	modPartition := mod.PartitionTag(deviceConfig)
+	for _, vintf := range vintfModules {
+		if vintfModule, ok := vintf.(*vintfFragmentModule); ok {
+			vintfPartition := vintfModule.PartitionTag(deviceConfig)
+			if modPartition != vintfPartition {
+				ctx.ModuleErrorf("Module %q(%q) and Vintf_fragment %q(%q) are installed to different partitions.",
+					mod.Name(), modPartition,
+					vintfModule.Name(), vintfPartition)
+			}
+		} else {
+			ctx.ModuleErrorf("Only vintf_fragment type module should be listed in vintf_fragment_modules : %q", vintf.Name())
+		}
+	}
 }
 
 // AddProperties "registers" the provided props
