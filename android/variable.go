@@ -121,6 +121,7 @@ type variableProperties struct {
 		// are used for dogfooding and performance testing, and should be as similar to user builds
 		// as possible.
 		Debuggable struct {
+			Apk             *string
 			Cflags          []string
 			Cppflags        []string
 			Init_rc         []string
@@ -421,6 +422,9 @@ type ProductVariables struct {
 	ProductPrivateSepolicyDirs []string `json:",omitempty"`
 
 	TargetFSConfigGen []string `json:",omitempty"`
+
+	UseSoongSystemImage            *bool   `json:",omitempty"`
+	ProductSoongDefinedSystemImage *string `json:",omitempty"`
 
 	EnforceProductPartitionInterface *bool `json:",omitempty"`
 

@@ -22,7 +22,6 @@ import (
 	"sort"
 	"strings"
 
-	"android/soong/apex"
 	"android/soong/cc"
 	"android/soong/java"
 
@@ -1137,9 +1136,6 @@ func (s *snapshotBuilder) AddPrebuiltModule(member android.SdkMember, moduleType
 			apexAvailable = []string{android.AvailableToPlatform}
 		}
 
-		// Add in any baseline apex available settings.
-		apexAvailable = append(apexAvailable, apex.BaselineApexAvailable(member.Name())...)
-
 		// Remove duplicates and sort.
 		apexAvailable = android.FirstUniqueStrings(apexAvailable)
 		sort.Strings(apexAvailable)
@@ -1991,14 +1987,6 @@ func (m *memberContext) RequiresTrait(trait android.SdkMemberTrait) bool {
 
 func (m *memberContext) IsTargetBuildBeforeTiramisu() bool {
 	return m.builder.targetBuildRelease.EarlierThan(buildReleaseT)
-}
-
-func (m *memberContext) Config() android.Config {
-	return m.sdkMemberContext.Config()
-}
-
-func (m *memberContext) OtherModulePropertyErrorf(module android.Module, property string, fmt string, args ...interface{}) {
-	m.sdkMemberContext.OtherModulePropertyErrorf(module, property, fmt, args)
 }
 
 var _ android.SdkMemberContext = (*memberContext)(nil)
