@@ -94,6 +94,7 @@ type ModuleWithDepsPathContext interface {
 	EarlyModulePathContext
 	VisitDirectDepsBlueprint(visit func(blueprint.Module))
 	OtherModuleDependencyTag(m blueprint.Module) blueprint.DependencyTag
+	HasMutatorFinished(mutatorName string) bool
 }
 
 // ModuleMissingDepsPathContext is a subset of *ModuleContext methods required by

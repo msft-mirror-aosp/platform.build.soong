@@ -1663,6 +1663,17 @@ func (c *config) ApexTrimEnabled() bool {
 	return Bool(c.productVariables.TrimmedApex)
 }
 
+func (c *config) UseSoongSystemImage() bool {
+	return Bool(c.productVariables.UseSoongSystemImage)
+}
+
+func (c *config) SoongDefinedSystemImage() string {
+	if c.UseSoongSystemImage() {
+		return String(c.productVariables.ProductSoongDefinedSystemImage)
+	}
+	return ""
+}
+
 func (c *config) EnforceSystemCertificate() bool {
 	return Bool(c.productVariables.EnforceSystemCertificate)
 }
