@@ -2700,7 +2700,7 @@ func collectDirectDepsProviders(ctx android.ModuleContext) (result *JarJarProvid
 	module := ctx.Module()
 	moduleName := module.Name()
 
-	ctx.VisitDirectDepsIgnoreBlueprint(func(m android.Module) {
+	ctx.VisitDirectDeps(func(m android.Module) {
 		tag := ctx.OtherModuleDependencyTag(m)
 		// This logic mirrors that in (*Module).collectDeps above.  There are several places
 		// where we explicitly return RenameUseExclude, even though it is the default, to

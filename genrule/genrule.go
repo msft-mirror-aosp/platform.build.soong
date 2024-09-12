@@ -313,16 +313,14 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 	if len(g.properties.Tools) > 0 {
 		seenTools := make(map[string]bool)
 
-		ctx.VisitDirectDepsBlueprint(func(module blueprint.Module) {
+		ctx.VisitDirectDepsAllowDisabled(func(module android.Module) {
 			switch tag := ctx.OtherModuleDependencyTag(module).(type) {
 			case hostToolDependencyTag:
 				tool := ctx.OtherModuleName(module)
-				if m, ok := module.(android.Module); ok {
-					// Necessary to retrieve any prebuilt replacement for the tool, since
-					// toolDepsMutator runs too late for the prebuilt mutators to have
-					// replaced the dependency.
-					module = android.PrebuiltGetPreferred(ctx, m)
-				}
+				// Necessary to retrieve any prebuilt replacement for the tool, since
+				// toolDepsMutator runs too late for the prebuilt mutators to have
+				// replaced the dependency.
+				module = android.PrebuiltGetPreferred(ctx, module)
 
 				switch t := module.(type) {
 				case android.HostToolProvider:
