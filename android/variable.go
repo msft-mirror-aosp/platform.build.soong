@@ -121,6 +121,7 @@ type variableProperties struct {
 		// are used for dogfooding and performance testing, and should be as similar to user builds
 		// as possible.
 		Debuggable struct {
+			Apk             *string
 			Cflags          []string
 			Cppflags        []string
 			Init_rc         []string

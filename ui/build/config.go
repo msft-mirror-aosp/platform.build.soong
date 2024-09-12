@@ -1037,10 +1037,6 @@ func (c *configImpl) HostToolDir() string {
 	}
 }
 
-func (c *configImpl) NamedGlobFile(name string) string {
-	return shared.JoinPath(c.SoongOutDir(), "globs-"+name+".ninja")
-}
-
 func (c *configImpl) UsedEnvFile(tag string) string {
 	if v, ok := c.environ.Get("TARGET_PRODUCT"); ok {
 		return shared.JoinPath(c.SoongOutDir(), usedEnvFile+"."+v+c.CoverageSuffix()+"."+tag)
