@@ -1326,7 +1326,7 @@ func (ctx *panickingConfigAndErrorContext) Config() Config {
 	return ctx.ctx.Config()
 }
 
-func PanickingConfigAndErrorContext(ctx *TestContext) ConfigAndErrorContext {
+func PanickingConfigAndErrorContext(ctx *TestContext) ConfigurableEvaluatorContext {
 	return &panickingConfigAndErrorContext{
 		ctx: ctx,
 	}
