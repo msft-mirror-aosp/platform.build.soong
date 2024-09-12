@@ -274,7 +274,6 @@ func TestPrebuiltSystemserverclasspathFragmentContents(t *testing.T) {
 	ctx := result.TestContext
 
 	java.CheckModuleDependencies(t, ctx, "myapex", "android_common_myapex", []string{
-		`all_apex_contributions`,
 		`dex2oatd`,
 		`prebuilt_myapex.apex.selector`,
 		`prebuilt_myapex.deapexer`,
@@ -282,7 +281,6 @@ func TestPrebuiltSystemserverclasspathFragmentContents(t *testing.T) {
 	})
 
 	java.CheckModuleDependencies(t, ctx, "mysystemserverclasspathfragment", "android_common_myapex", []string{
-		`all_apex_contributions`,
 		`prebuilt_bar`,
 		`prebuilt_foo`,
 		`prebuilt_myapex.deapexer`,
@@ -434,7 +432,6 @@ func TestPrebuiltStandaloneSystemserverclasspathFragmentContents(t *testing.T) {
 	ctx := result.TestContext
 
 	java.CheckModuleDependencies(t, ctx, "mysystemserverclasspathfragment", "android_common_myapex", []string{
-		`all_apex_contributions`,
 		`prebuilt_bar`,
 		`prebuilt_foo`,
 		`prebuilt_myapex.deapexer`,

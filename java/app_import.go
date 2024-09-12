@@ -17,7 +17,6 @@ package java
 // This file contains the module implementations for android_app_import and android_test_import.
 
 import (
-	"fmt"
 	"reflect"
 	"strings"
 
@@ -422,6 +421,8 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 		},
 	)
 
+	ctx.SetOutputFiles([]android.Path{a.outputFile}, "")
+
 	// TODO: androidmk converter jni libs
 }
 
@@ -459,15 +460,6 @@ func (a *AndroidAppImport) Name() string {
 
 func (a *AndroidAppImport) OutputFile() android.Path {
 	return a.outputFile
-}
-
-func (a *AndroidAppImport) OutputFiles(tag string) (android.Paths, error) {
-	switch tag {
-	case "":
-		return []android.Path{a.outputFile}, nil
-	default:
-		return nil, fmt.Errorf("unsupported module reference tag %q", tag)
-	}
 }
 
 func (a *AndroidAppImport) JacocoReportClassesFile() android.Path {

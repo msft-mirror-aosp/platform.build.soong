@@ -15,13 +15,16 @@
 package aconfig
 
 import (
+	"encoding/gob"
+
 	"android/soong/android"
 
 	"github.com/google/blueprint"
 )
 
 var (
-	pctx = android.NewPackageContext("android/soong/aconfig")
+	pkgPath = "android/soong/aconfig"
+	pctx    = android.NewPackageContext(pkgPath)
 
 	// For aconfig_declarations: Generate cache file
 	aconfigRule = pctx.AndroidStaticRule("aconfig",
@@ -106,6 +109,9 @@ func init() {
 	RegisterBuildComponents(android.InitRegistrationContext)
 	pctx.HostBinToolVariable("aconfig", "aconfig")
 	pctx.HostBinToolVariable("soong_zip", "soong_zip")
+
+	gob.Register(android.AconfigDeclarationsProviderData{})
+	gob.Register(android.ModuleOutPath{})
 }
 
 func RegisterBuildComponents(ctx android.RegistrationContext) {

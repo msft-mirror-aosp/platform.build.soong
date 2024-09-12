@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	DarwinRustFlags     = []string{}
+	DarwinRustFlags     = []string{"-C split-debuginfo=off"}
 	DarwinRustLinkFlags = []string{
 		"-B${cc_config.MacToolPath}",
 	}

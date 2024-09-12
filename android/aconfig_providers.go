@@ -43,6 +43,10 @@ type AconfigDeclarationsProviderData struct {
 
 var AconfigDeclarationsProviderKey = blueprint.NewProvider[AconfigDeclarationsProviderData]()
 
+type AconfigReleaseDeclarationsProviderData map[string]AconfigDeclarationsProviderData
+
+var AconfigReleaseDeclarationsProviderKey = blueprint.NewProvider[AconfigReleaseDeclarationsProviderData]()
+
 type ModeInfo struct {
 	Container string
 	Mode      string
@@ -112,6 +116,8 @@ func aconfigUpdateAndroidBuildActions(ctx ModuleContext) {
 		if dep, ok := OtherModuleProvider(ctx, module, AconfigDeclarationsProviderKey); ok {
 			mergedAconfigFiles[dep.Container] = append(mergedAconfigFiles[dep.Container], dep.IntermediateCacheOutputPath)
 		}
+		// If we were generating on-device artifacts for other release configs, we would need to add code here to propagate
+		// those artifacts as well.  See also b/298444886.
 		if dep, ok := OtherModuleProvider(ctx, module, AconfigPropagatingProviderKey); ok {
 			for container, v := range dep.AconfigFiles {
 				mergedAconfigFiles[container] = append(mergedAconfigFiles[container], v...)

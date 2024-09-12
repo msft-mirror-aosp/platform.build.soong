@@ -45,8 +45,7 @@ func buildLicenseMetadata(ctx ModuleContext, licenseMetadataFile WritablePath) {
 	}
 
 	var outputFiles Paths
-	if outputFileProducer, ok := ctx.Module().(OutputFileProducer); ok {
-		outputFiles, _ = outputFileProducer.OutputFiles("")
+	if outputFiles, err := outputFilesForModule(ctx, ctx.Module(), ""); err == nil {
 		outputFiles = PathsIfNonNil(outputFiles...)
 	}
 

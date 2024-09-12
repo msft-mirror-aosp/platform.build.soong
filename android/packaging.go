@@ -17,6 +17,7 @@ package android
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -377,31 +378,59 @@ func (p *PackagingBase) GatherPackagingSpecs(ctx ModuleContext) map[string]Packa
 // CopySpecsToDir is a helper that will add commands to the rule builder to copy the PackagingSpec
 // entries into the specified directory.
 func (p *PackagingBase) CopySpecsToDir(ctx ModuleContext, builder *RuleBuilder, specs map[string]PackagingSpec, dir WritablePath) (entries []string) {
-	if len(specs) == 0 {
+	dirsToSpecs := make(map[WritablePath]map[string]PackagingSpec)
+	dirsToSpecs[dir] = specs
+	return p.CopySpecsToDirs(ctx, builder, dirsToSpecs)
+}
+
+// CopySpecsToDirs is a helper that will add commands to the rule builder to copy the PackagingSpec
+// entries into corresponding directories.
+func (p *PackagingBase) CopySpecsToDirs(ctx ModuleContext, builder *RuleBuilder, dirsToSpecs map[WritablePath]map[string]PackagingSpec) (entries []string) {
+	empty := true
+	for _, specs := range dirsToSpecs {
+		if len(specs) > 0 {
+			empty = false
+			break
+		}
+	}
+	if empty {
 		return entries
 	}
+
 	seenDir := make(map[string]bool)
 	preparerPath := PathForModuleOut(ctx, "preparer.sh")
 	cmd := builder.Command().Tool(preparerPath)
 	var sb strings.Builder
 	sb.WriteString("set -e\n")
-	for _, k := range SortedKeys(specs) {
-		ps := specs[k]
-		destPath := filepath.Join(dir.String(), ps.relPathInPackage)
-		destDir := filepath.Dir(destPath)
-		entries = append(entries, ps.relPathInPackage)
-		if _, ok := seenDir[destDir]; !ok {
-			seenDir[destDir] = true
-			sb.WriteString(fmt.Sprintf("mkdir -p %s\n", destDir))
-		}
-		if ps.symlinkTarget == "" {
-			cmd.Implicit(ps.srcPath)
-			sb.WriteString(fmt.Sprintf("cp %s %s\n", ps.srcPath, destPath))
-		} else {
-			sb.WriteString(fmt.Sprintf("ln -sf %s %s\n", ps.symlinkTarget, destPath))
-		}
-		if ps.executable {
-			sb.WriteString(fmt.Sprintf("chmod a+x %s\n", destPath))
+
+	dirs := make([]WritablePath, 0, len(dirsToSpecs))
+	for dir, _ := range dirsToSpecs {
+		dirs = append(dirs, dir)
+	}
+	sort.Slice(dirs, func(i, j int) bool {
+		return dirs[i].String() < dirs[j].String()
+	})
+
+	for _, dir := range dirs {
+		specs := dirsToSpecs[dir]
+		for _, k := range SortedKeys(specs) {
+			ps := specs[k]
+			destPath := filepath.Join(dir.String(), ps.relPathInPackage)
+			destDir := filepath.Dir(destPath)
+			entries = append(entries, ps.relPathInPackage)
+			if _, ok := seenDir[destDir]; !ok {
+				seenDir[destDir] = true
+				sb.WriteString(fmt.Sprintf("mkdir -p %s\n", destDir))
+			}
+			if ps.symlinkTarget == "" {
+				cmd.Implicit(ps.srcPath)
+				sb.WriteString(fmt.Sprintf("cp %s %s\n", ps.srcPath, destPath))
+			} else {
+				sb.WriteString(fmt.Sprintf("ln -sf %s %s\n", ps.symlinkTarget, destPath))
+			}
+			if ps.executable {
+				sb.WriteString(fmt.Sprintf("chmod a+x %s\n", destPath))
+			}
 		}
 	}
 

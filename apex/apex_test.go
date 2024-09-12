@@ -5244,7 +5244,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		myApex := ctx.ModuleForTests("myapex", "android_common_myapex").Module()
 
 		overrideNames := []string{
-			"",
+			"myapex",
 			"myjavalib.myapex",
 			"libfoo.myapex",
 			"libbar.myapex",
@@ -5728,7 +5728,6 @@ func TestApexWithTests(t *testing.T) {
 			updatable: false,
 			tests: [
 				"mytest",
-				"mytests",
 			],
 		}
 
@@ -5771,25 +5770,6 @@ func TestApexWithTests(t *testing.T) {
 				"testdata/baz"
 			],
 		}
-
-		cc_test {
-			name: "mytests",
-			gtest: false,
-			srcs: [
-				"mytest1.cpp",
-				"mytest2.cpp",
-				"mytest3.cpp",
-			],
-			test_per_src: true,
-			relative_install_path: "test",
-			system_shared_libs: [],
-			static_executable: true,
-			stl: "none",
-			data: [
-				":fg",
-				":fg2",
-			],
-		}
 	`)
 
 	apexRule := ctx.ModuleForTests("myapex", "android_common_myapex").Rule("apexRule")
@@ -5803,11 +5783,6 @@ func TestApexWithTests(t *testing.T) {
 	ensureContains(t, copyCmds, "image.apex/bin/test/baz")
 	ensureContains(t, copyCmds, "image.apex/bin/test/bar/baz")
 
-	// Ensure that test deps built with `test_per_src` are copied into apex.
-	ensureContains(t, copyCmds, "image.apex/bin/test/mytest1")
-	ensureContains(t, copyCmds, "image.apex/bin/test/mytest2")
-	ensureContains(t, copyCmds, "image.apex/bin/test/mytest3")
-
 	// Ensure the module is correctly translated.
 	bundle := ctx.ModuleForTests("myapex", "android_common_myapex").Module().(*apexBundle)
 	data := android.AndroidMkDataForTest(t, ctx, bundle)
@@ -5817,9 +5792,6 @@ func TestApexWithTests(t *testing.T) {
 	data.Custom(&builder, name, prefix, "", data)
 	androidMk := builder.String()
 	ensureContains(t, androidMk, "LOCAL_MODULE := mytest.myapex\n")
-	ensureContains(t, androidMk, "LOCAL_MODULE := mytest1.myapex\n")
-	ensureContains(t, androidMk, "LOCAL_MODULE := mytest2.myapex\n")
-	ensureContains(t, androidMk, "LOCAL_MODULE := mytest3.myapex\n")
 	ensureContains(t, androidMk, "LOCAL_MODULE := myapex\n")
 }
 
@@ -7125,6 +7097,46 @@ func TestJavaSDKLibrary(t *testing.T) {
 	ensureMatches(t, contents, "<library\\n\\s+name=\\\"foo\\\"\\n\\s+file=\\\"/apex/myapex/javalib/foo.jar\\\"")
 }
 
+func TestJavaSDKLibraryOverrideApexes(t *testing.T) {
+	ctx := testApex(t, `
+		override_apex {
+			name: "mycompanyapex",
+			base: "myapex",
+		}
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			java_libs: ["foo"],
+			updatable: false,
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		java_sdk_library {
+			name: "foo",
+			srcs: ["a.java"],
+			api_packages: ["foo"],
+			apex_available: [ "myapex" ],
+		}
+
+		prebuilt_apis {
+			name: "sdk",
+			api_dirs: ["100"],
+		}
+	`, withFiles(filesForSdkLibrary))
+
+	// Permission XML should point to the activated path of impl jar of java_sdk_library.
+	// Since override variants (com.mycompany.android.foo) are installed in the same package as the overridden variant
+	// (com.android.foo), the filepath should not contain override apex name.
+	sdkLibrary := ctx.ModuleForTests("foo.xml", "android_common_mycompanyapex").Output("foo.xml")
+	contents := android.ContentFromFileRuleForTests(t, ctx, sdkLibrary)
+	ensureMatches(t, contents, "<library\\n\\s+name=\\\"foo\\\"\\n\\s+file=\\\"/apex/myapex/javalib/foo.jar\\\"")
+}
+
 func TestJavaSDKLibrary_WithinApex(t *testing.T) {
 	ctx := testApex(t, `
 		apex {
@@ -8228,60 +8240,6 @@ func TestUpdatableDefault_should_set_min_sdk_version(t *testing.T) {
 		apex {
 			name: "myapex",
 			key: "myapex.key",
-		}
-
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-	`)
-}
-
-func Test_use_vndk_as_stable_shouldnt_be_used_for_updatable_vendor_apexes(t *testing.T) {
-	testApexError(t, `"myapex" .*: use_vndk_as_stable: updatable APEXes can't use external VNDK libs`, `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			updatable: true,
-			use_vndk_as_stable: true,
-			soc_specific: true,
-		}
-
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-	`)
-}
-
-func Test_use_vndk_as_stable_shouldnt_be_used_with_min_sdk_version(t *testing.T) {
-	testApexError(t, `"myapex" .*: use_vndk_as_stable: not supported when min_sdk_version is set`, `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			updatable: false,
-			min_sdk_version: "29",
-			use_vndk_as_stable: true,
-			vendor: true,
-		}
-
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-	`)
-}
-
-func Test_use_vndk_as_stable_shouldnt_be_used_for_non_vendor_apexes(t *testing.T) {
-	testApexError(t, `"myapex" .*: use_vndk_as_stable: not supported for system/system_ext APEXes`, `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			updatable: false,
-			use_vndk_as_stable: true,
 		}
 
 		apex_key {
@@ -9997,6 +9955,56 @@ func TestApexStrictUpdtabilityLintBcpFragmentDeps(t *testing.T) {
 	}
 }
 
+func TestApexLintBcpFragmentSdkLibDeps(t *testing.T) {
+	bp := `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			bootclasspath_fragments: ["mybootclasspathfragment"],
+			min_sdk_version: "29",
+		}
+		apex_key {
+			name: "myapex.key",
+		}
+		bootclasspath_fragment {
+			name: "mybootclasspathfragment",
+			contents: ["foo"],
+			apex_available: ["myapex"],
+			hidden_api: {
+				split_packages: ["*"],
+			},
+		}
+		java_sdk_library {
+			name: "foo",
+			srcs: ["MyClass.java"],
+			apex_available: [ "myapex" ],
+			sdk_version: "current",
+			min_sdk_version: "29",
+			compile_dex: true,
+		}
+		`
+	fs := android.MockFS{
+		"lint-baseline.xml": nil,
+	}
+
+	result := android.GroupFixturePreparers(
+		prepareForApexTest,
+		java.PrepareForTestWithJavaSdkLibraryFiles,
+		java.PrepareForTestWithJacocoInstrumentation,
+		java.FixtureWithLastReleaseApis("foo"),
+		android.FixtureModifyConfig(func(config android.Config) {
+			config.SetApiLibraries([]string{"foo"})
+		}),
+		android.FixtureMergeMockFs(fs),
+	).RunTestWithBp(t, bp)
+
+	myapex := result.ModuleForTests("myapex", "android_common_myapex")
+	lintReportInputs := strings.Join(myapex.Output("lint-report-xml.zip").Inputs.Strings(), " ")
+	android.AssertStringDoesContain(t,
+		"myapex lint report expected to contain that of the sdk library impl lib as an input",
+		lintReportInputs, "foo.impl")
+}
+
 // updatable apexes should propagate updatable=true to its apps
 func TestUpdatableApexEnforcesAppUpdatability(t *testing.T) {
 	bp := `
@@ -11286,6 +11294,13 @@ func TestBootDexJarsMultipleApexPrebuilts(t *testing.T) {
 // Test that product packaging installs the selected mainline module (either source or a specific prebuilt)
 // RELEASE_APEX_CONTIRBUTIONS_* build flags will be used to select the correct prebuilt for a specific release config
 func TestInstallationRulesForMultipleApexPrebuilts(t *testing.T) {
+	// check that the LOCAL_MODULE in the generated mk file matches the name used in PRODUCT_PACKAGES
+	// Since the name used in PRODUCT_PACKAGES does not contain prebuilt_ prefix, LOCAL_MODULE should not contain any prefix either
+	checkLocalModuleName := func(t *testing.T, ctx *android.TestContext, soongApexModuleName string, expectedLocalModuleName string) {
+		// Variations are created based on apex_name
+		entries := android.AndroidMkEntriesForTest(t, ctx, ctx.ModuleForTests(soongApexModuleName, "android_common_com.android.foo").Module())
+		android.AssertStringEquals(t, "LOCAL_MODULE of the prebuilt apex must match the name listed in PRODUCT_PACKAGES", expectedLocalModuleName, entries[0].EntryMap["LOCAL_MODULE"][0])
+	}
 	// for a mainline module family, check that only the flagged soong module is visible to make
 	checkHideFromMake := func(t *testing.T, ctx *android.TestContext, visibleModuleName string, hiddenModuleNames []string) {
 		variation := func(moduleName string) string {
@@ -11340,7 +11355,7 @@ func TestInstallationRulesForMultipleApexPrebuilts(t *testing.T) {
 		prebuilt_apex {
 			name: "com.google.android.foo.v2",
 			apex_name: "com.android.foo",
-			source_apex_name: "com.google.android.foo",
+			source_apex_name: "com.google.android.foo", // source_apex_name becomes LOCAL_MODULE in the generated mk file
 			src: "com.android.foo-arm.apex",
 			prefer: true, // prefer is set to true on both the prebuilts to induce an error if flagging is not present
 		}
@@ -11426,122 +11441,15 @@ func TestInstallationRulesForMultipleApexPrebuilts(t *testing.T) {
 		}
 		ctx := testApex(t, bp, preparer)
 
+		// Check that the LOCAL_MODULE of the two prebuilts is com.android.foo
+		// This ensures that product packaging can pick them for installation if it has been flagged by apex_contributions
+		checkLocalModuleName(t, ctx, "prebuilt_com.google.android.foo", "com.google.android.foo")
+		checkLocalModuleName(t, ctx, "prebuilt_com.google.android.foo.v2", "com.google.android.foo")
+
 		// Check that
 		// 1. The contents of the selected apex_contributions are visible to make
 		// 2. The rest of the apexes in the mainline module family (source or other prebuilt) is hidden from make
 		checkHideFromMake(t, ctx, tc.expectedVisibleModuleName, tc.expectedHiddenModuleNames)
-	}
-}
-
-// Test that product packaging installs the selected mainline module in workspaces withtout source mainline module
-func TestInstallationRulesForMultipleApexPrebuiltsWithoutSource(t *testing.T) {
-	// for a mainline module family, check that only the flagged soong module is visible to make
-	checkHideFromMake := func(t *testing.T, ctx *android.TestContext, visibleModuleNames []string, hiddenModuleNames []string) {
-		variation := func(moduleName string) string {
-			ret := "android_common_com.android.adservices"
-			if moduleName == "com.google.android.foo" {
-				ret = "android_common_com.google.android.foo_com.google.android.foo"
-			}
-			return ret
-		}
-
-		for _, visibleModuleName := range visibleModuleNames {
-			visibleModule := ctx.ModuleForTests(visibleModuleName, variation(visibleModuleName)).Module()
-			android.AssertBoolEquals(t, "Apex "+visibleModuleName+" selected using apex_contributions should be visible to make", false, visibleModule.IsHideFromMake())
-		}
-
-		for _, hiddenModuleName := range hiddenModuleNames {
-			hiddenModule := ctx.ModuleForTests(hiddenModuleName, variation(hiddenModuleName)).Module()
-			android.AssertBoolEquals(t, "Apex "+hiddenModuleName+" not selected using apex_contributions should be hidden from make", true, hiddenModule.IsHideFromMake())
-
-		}
-	}
-
-	bp := `
-		apex_key {
-			name: "com.android.adservices.key",
-			public_key: "com.android.adservices.avbpubkey",
-			private_key: "com.android.adservices.pem",
-		}
-
-		// AOSP source apex
-		apex {
-			name: "com.android.adservices",
-			key: "com.android.adservices.key",
-			updatable: false,
-		}
-
-		// Prebuilt Google APEX.
-
-		prebuilt_apex {
-			name: "com.google.android.adservices",
-			apex_name: "com.android.adservices",
-			src: "com.android.foo-arm.apex",
-		}
-
-		// Another Prebuilt Google APEX
-		prebuilt_apex {
-			name: "com.google.android.adservices.v2",
-			apex_name: "com.android.adservices",
-			src: "com.android.foo-arm.apex",
-		}
-
-		// APEX contribution modules
-
-
-		apex_contributions {
-			name: "adservices.prebuilt.contributions",
-			api_domain: "com.android.adservices",
-			contents: ["prebuilt_com.google.android.adservices"],
-		}
-
-		apex_contributions {
-			name: "adservices.prebuilt.v2.contributions",
-			api_domain: "com.android.adservices",
-			contents: ["prebuilt_com.google.android.adservices.v2"],
-		}
-	`
-
-	testCases := []struct {
-		desc                       string
-		selectedApexContributions  string
-		expectedVisibleModuleNames []string
-		expectedHiddenModuleNames  []string
-	}{
-		{
-			desc:                       "No apex contributions selected, source aosp apex should be visible, and mainline prebuilts should be hidden",
-			selectedApexContributions:  "",
-			expectedVisibleModuleNames: []string{"com.android.adservices"},
-			expectedHiddenModuleNames:  []string{"com.google.android.adservices", "com.google.android.adservices.v2"},
-		},
-		{
-			desc:                       "Prebuilt apex prebuilt_com.android.foo is selected",
-			selectedApexContributions:  "adservices.prebuilt.contributions",
-			expectedVisibleModuleNames: []string{"com.android.adservices", "com.google.android.adservices"},
-			expectedHiddenModuleNames:  []string{"com.google.android.adservices.v2"},
-		},
-		{
-			desc:                       "Prebuilt apex prebuilt_com.android.foo.v2 is selected",
-			selectedApexContributions:  "adservices.prebuilt.v2.contributions",
-			expectedVisibleModuleNames: []string{"com.android.adservices", "com.google.android.adservices.v2"},
-			expectedHiddenModuleNames:  []string{"com.google.android.adservices"},
-		},
-	}
-
-	for _, tc := range testCases {
-		preparer := android.GroupFixturePreparers(
-			android.FixtureMergeMockFs(map[string][]byte{
-				"system/sepolicy/apex/com.android.adservices-file_contexts": nil,
-			}),
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.BuildFlags = map[string]string{
-					"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES": tc.selectedApexContributions,
-				}
-			}),
-		)
-		ctx := testApex(t, bp, preparer)
-
-		checkHideFromMake(t, ctx, tc.expectedVisibleModuleNames, tc.expectedHiddenModuleNames)
 	}
 }
 
@@ -11812,4 +11720,21 @@ func TestOverrideApexWithPrebuiltApexPreferred(t *testing.T) {
 	`)
 
 	java.CheckModuleHasDependency(t, res.TestContext, "myoverrideapex", "android_common_myoverrideapex_myoverrideapex", "foo")
+}
+
+func TestUpdatableApexMinSdkVersionCurrent(t *testing.T) {
+	testApexError(t, `"myapex" .*: updatable: updatable APEXes should not set min_sdk_version to current. Please use a finalized API level or a recognized in-development codename`, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			updatable: true,
+			min_sdk_version: "current",
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`)
 }
