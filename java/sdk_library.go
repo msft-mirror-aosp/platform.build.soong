@@ -248,7 +248,7 @@ func (scope *apiScope) apiLibraryModuleName(baseName string) string {
 	return scope.stubsLibraryModuleName(baseName) + ".from-text"
 }
 
-func (scope *apiScope) sourceStubLibraryModuleName(baseName string) string {
+func (scope *apiScope) sourceStubsLibraryModuleName(baseName string) string {
 	return scope.stubsLibraryModuleName(baseName) + ".from-source"
 }
 
@@ -830,16 +830,6 @@ func (paths *scopePaths) extractLatestRemovedApiPath(ctx android.ModuleContext, 
 }
 
 type commonToSdkLibraryAndImportProperties struct {
-	// The naming scheme to use for the components that this module creates.
-	//
-	// If not specified then it defaults to "default".
-	//
-	// This is a temporary mechanism to simplify conversion from separate modules for each
-	// component that follow a different naming pattern to the default one.
-	//
-	// TODO(b/155480189) - Remove once naming inconsistencies have been resolved.
-	Naming_scheme *string
-
 	// Specifies whether this module can be used as an Android shared library; defaults
 	// to true.
 	//
@@ -915,8 +905,6 @@ type commonToSdkLibraryAndImport struct {
 
 	scopePaths map[*apiScope]*scopePaths
 
-	namingScheme sdkLibraryComponentNamingScheme
-
 	commonSdkLibraryProperties commonToSdkLibraryAndImportProperties
 
 	// Paths to commonSdkLibraryProperties.Doctag_files
@@ -944,15 +932,6 @@ func (c *commonToSdkLibraryAndImport) initCommon(module commonSdkLibraryAndImpor
 }
 
 func (c *commonToSdkLibraryAndImport) initCommonAfterDefaultsApplied(ctx android.DefaultableHookContext) bool {
-	schemeProperty := proptools.StringDefault(c.commonSdkLibraryProperties.Naming_scheme, "default")
-	switch schemeProperty {
-	case "default":
-		c.namingScheme = &defaultNamingScheme{}
-	default:
-		ctx.PropertyErrorf("naming_scheme", "expected 'default' but was %q", schemeProperty)
-		return false
-	}
-
 	namePtr := proptools.StringPtr(c.module.RootLibraryName())
 	c.sdkLibraryComponentProperties.SdkLibraryName = namePtr
 
@@ -995,41 +974,41 @@ func (c *commonToSdkLibraryAndImport) xmlPermissionsModuleName() string {
 // Name of the java_library module that compiles the stubs source.
 func (c *commonToSdkLibraryAndImport) stubsLibraryModuleName(apiScope *apiScope) string {
 	baseName := c.module.RootLibraryName()
-	return c.namingScheme.stubsLibraryModuleName(apiScope, baseName)
+	return apiScope.stubsLibraryModuleName(baseName)
 }
 
 // Name of the java_library module that compiles the exportable stubs source.
 func (c *commonToSdkLibraryAndImport) exportableStubsLibraryModuleName(apiScope *apiScope) string {
 	baseName := c.module.RootLibraryName()
-	return c.namingScheme.exportableStubsLibraryModuleName(apiScope, baseName)
+	return apiScope.exportableStubsLibraryModuleName(baseName)
 }
 
 // Name of the droidstubs module that generates the stubs source and may also
 // generate/check the API.
 func (c *commonToSdkLibraryAndImport) stubsSourceModuleName(apiScope *apiScope) string {
 	baseName := c.module.RootLibraryName()
-	return c.namingScheme.stubsSourceModuleName(apiScope, baseName)
+	return apiScope.stubsSourceModuleName(baseName)
 }
 
 // Name of the java_api_library module that generates the from-text stubs source
 // and compiles to a jar file.
 func (c *commonToSdkLibraryAndImport) apiLibraryModuleName(apiScope *apiScope) string {
 	baseName := c.module.RootLibraryName()
-	return c.namingScheme.apiLibraryModuleName(apiScope, baseName)
+	return apiScope.apiLibraryModuleName(baseName)
 }
 
 // Name of the java_library module that compiles the stubs
 // generated from source Java files.
 func (c *commonToSdkLibraryAndImport) sourceStubsLibraryModuleName(apiScope *apiScope) string {
 	baseName := c.module.RootLibraryName()
-	return c.namingScheme.sourceStubsLibraryModuleName(apiScope, baseName)
+	return apiScope.sourceStubsLibraryModuleName(baseName)
 }
 
 // Name of the java_library module that compiles the exportable stubs
 // generated from source Java files.
 func (c *commonToSdkLibraryAndImport) exportableSourceStubsLibraryModuleName(apiScope *apiScope) string {
 	baseName := c.module.RootLibraryName()
-	return c.namingScheme.exportableSourceStubsLibraryModuleName(apiScope, baseName)
+	return apiScope.exportableSourceStubsLibraryModuleName(baseName)
 }
 
 // The component names for different outputs of the java_sdk_library.
@@ -2395,50 +2374,6 @@ func (module *SdkLibrary) defaultsToStubs() bool {
 	return proptools.Bool(module.sdkLibraryProperties.Default_to_stubs)
 }
 
-// Defines how to name the individual component modules the sdk library creates.
-type sdkLibraryComponentNamingScheme interface {
-	stubsLibraryModuleName(scope *apiScope, baseName string) string
-
-	stubsSourceModuleName(scope *apiScope, baseName string) string
-
-	apiLibraryModuleName(scope *apiScope, baseName string) string
-
-	sourceStubsLibraryModuleName(scope *apiScope, baseName string) string
-
-	exportableStubsLibraryModuleName(scope *apiScope, baseName string) string
-
-	exportableSourceStubsLibraryModuleName(scope *apiScope, baseName string) string
-}
-
-type defaultNamingScheme struct {
-}
-
-func (s *defaultNamingScheme) stubsLibraryModuleName(scope *apiScope, baseName string) string {
-	return scope.stubsLibraryModuleName(baseName)
-}
-
-func (s *defaultNamingScheme) stubsSourceModuleName(scope *apiScope, baseName string) string {
-	return scope.stubsSourceModuleName(baseName)
-}
-
-func (s *defaultNamingScheme) apiLibraryModuleName(scope *apiScope, baseName string) string {
-	return scope.apiLibraryModuleName(baseName)
-}
-
-func (s *defaultNamingScheme) sourceStubsLibraryModuleName(scope *apiScope, baseName string) string {
-	return scope.sourceStubLibraryModuleName(baseName)
-}
-
-func (s *defaultNamingScheme) exportableStubsLibraryModuleName(scope *apiScope, baseName string) string {
-	return scope.exportableStubsLibraryModuleName(baseName)
-}
-
-func (s *defaultNamingScheme) exportableSourceStubsLibraryModuleName(scope *apiScope, baseName string) string {
-	return scope.exportableSourceStubsLibraryModuleName(baseName)
-}
-
-var _ sdkLibraryComponentNamingScheme = (*defaultNamingScheme)(nil)
-
 func moduleStubLinkType(j *Module) (stub bool, ret sdkLinkType) {
 	kind := android.ToSdkKind(proptools.String(j.properties.Stub_contributing_api))
 	switch kind {
@@ -3510,7 +3445,6 @@ func (s *sdkLibrarySdkMemberProperties) PopulateFromVariant(ctx android.SdkMembe
 		}
 	}
 
-	s.Naming_scheme = sdk.commonSdkLibraryProperties.Naming_scheme
 	s.Shared_library = proptools.BoolPtr(sdk.sharedLibrary())
 	s.Compile_dex = sdk.dexProperties.Compile_dex
 	s.Doctag_paths = sdk.doctagPaths

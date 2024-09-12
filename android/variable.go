@@ -423,6 +423,9 @@ type ProductVariables struct {
 
 	TargetFSConfigGen []string `json:",omitempty"`
 
+	UseSoongSystemImage            *bool   `json:",omitempty"`
+	ProductSoongDefinedSystemImage *string `json:",omitempty"`
+
 	EnforceProductPartitionInterface *bool `json:",omitempty"`
 
 	EnforceInterPartitionJavaSdkLibrary *bool    `json:",omitempty"`
