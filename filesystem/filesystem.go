@@ -136,9 +136,6 @@ type filesystemProperties struct {
 	// Install aconfig_flags.pb file for the modules installed in this partition.
 	Gen_aconfig_flags_pb *bool
 
-	// Update the Base_dir of the $PRODUCT_OUT directory with the packaging files.
-	Update_product_out *bool
-
 	Fsverity fsverityProperties
 }
 
@@ -335,7 +332,7 @@ func (f *filesystem) copyPackagingSpecs(ctx android.ModuleContext, builder *andr
 }
 
 func (f *filesystem) copyFilesToProductOut(ctx android.ModuleContext, builder *android.RuleBuilder, rebasedDir android.OutputPath) {
-	if !proptools.Bool(f.properties.Update_product_out) {
+	if f.Name() != ctx.Config().SoongDefinedSystemImage() {
 		return
 	}
 	installPath := android.PathForModuleInPartitionInstall(ctx, f.partitionName())

@@ -32,7 +32,6 @@ import (
 	prebuilt_etc "android/soong/etc"
 	"android/soong/filesystem"
 	"android/soong/java"
-	"android/soong/multitree"
 	"android/soong/rust"
 	"android/soong/sh"
 )
@@ -431,7 +430,6 @@ type apexBundle struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
 	android.OverridableModuleBase
-	multitree.ExportableModuleBase
 
 	// Properties
 	properties            apexBundleProperties
@@ -1398,8 +1396,6 @@ func (a *apexBundle) DepIsInSameApex(_ android.BaseModuleContext, _ android.Modu
 	// TODO(jiyong): shouldn't we look into the payload field of the dependencyTag?
 	return true
 }
-
-var _ multitree.Exportable = (*apexBundle)(nil)
 
 func (a *apexBundle) Exportable() bool {
 	return true
@@ -2528,7 +2524,6 @@ func newApexBundle() *apexBundle {
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
 	android.InitOverridableModule(module, &module.overridableProperties.Overrides)
-	multitree.InitExportableModule(module)
 	return module
 }
 
