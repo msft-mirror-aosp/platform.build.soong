@@ -1326,6 +1326,10 @@ func (ctx *panickingConfigAndErrorContext) Config() Config {
 	return ctx.ctx.Config()
 }
 
+func (ctx *panickingConfigAndErrorContext) HasMutatorFinished(mutatorName string) bool {
+	return ctx.ctx.HasMutatorFinished(mutatorName)
+}
+
 func PanickingConfigAndErrorContext(ctx *TestContext) ConfigurableEvaluatorContext {
 	return &panickingConfigAndErrorContext{
 		ctx: ctx,
