@@ -1375,8 +1375,10 @@ func (c *configImpl) shouldCleanupRBELogsDir() bool {
 	// Perform a log directory cleanup only when the log directory
 	// is auto created by the build rather than user-specified.
 	for _, f := range []string{"RBE_proxy_log_dir", "FLAG_output_dir"} {
-		if _, ok := c.environ.Get(f); ok {
-			return false
+		if v, ok := c.environ.Get(f); ok {
+			if v != c.rbeTmpDir() {
+				return false
+			}
 		}
 	}
 	return true

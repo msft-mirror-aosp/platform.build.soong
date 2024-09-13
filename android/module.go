@@ -1346,6 +1346,14 @@ func (m *ModuleBase) Enabled(ctx ConfigurableEvaluatorContext) bool {
 	return m.commonProperties.Enabled.GetOrDefault(m.ConfigurableEvaluator(ctx), !m.Os().DefaultDisabled)
 }
 
+// Returns a copy of the enabled property, useful for passing it on to sub-modules
+func (m *ModuleBase) EnabledProperty() proptools.Configurable[bool] {
+	if m.commonProperties.ForcedDisabled {
+		return proptools.NewSimpleConfigurable(false)
+	}
+	return m.commonProperties.Enabled.Clone()
+}
+
 func (m *ModuleBase) Disable() {
 	m.commonProperties.ForcedDisabled = true
 }
