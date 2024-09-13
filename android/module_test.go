@@ -746,7 +746,6 @@ test {
 			foo := result.ModuleForTests("foo", "").Module().base()
 
 			AssertDeepEquals(t, "foo ", tc.expectedProps, foo.propertiesWithValues())
-
 		})
 	}
 }
@@ -994,6 +993,10 @@ func (p *pathContextAddMissingDependenciesWrapper) OtherModuleName(module bluepr
 }
 
 func (p *pathContextAddMissingDependenciesWrapper) Module() Module { return nil }
+
+func (p *pathContextAddMissingDependenciesWrapper) GetOutputFiles() OutputFilesInfo {
+	return OutputFilesInfo{}
+}
 
 func TestOutputFileForModule(t *testing.T) {
 	testcases := []struct {

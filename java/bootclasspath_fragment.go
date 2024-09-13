@@ -445,7 +445,7 @@ func (b *BootclasspathFragmentModule) ComponentDepsMutator(ctx android.BottomUpM
 func (b *BootclasspathFragmentModule) DepsMutator(ctx android.BottomUpMutatorContext) {
 	// Add dependencies onto all the modules that provide the API stubs for classes on this
 	// bootclasspath fragment.
-	hiddenAPIAddStubLibDependencies(ctx, b.properties.apiScopeToStubLibs())
+	hiddenAPIAddStubLibDependencies(ctx, b.properties.apiScopeToStubLibs(ctx))
 
 	for _, additionalStubModule := range b.properties.Additional_stubs {
 		for _, apiScope := range hiddenAPISdkLibrarySupportedScopes {
@@ -463,6 +463,12 @@ func (b *BootclasspathFragmentModule) DepsMutator(ctx android.BottomUpMutatorCon
 	// Add a dependency onto the dex2oat tool which is needed for creating the boot image. The
 	// path is retrieved from the dependency by GetGlobalSoongConfig(ctx).
 	dexpreopt.RegisterToolDeps(ctx)
+
+	// Add a dependency to `all_apex_contributions` to determine if prebuilts are active.
+	// If prebuilts are active, `contents` validation on the source bootclasspath fragment should be disabled.
+	if _, isPrebuiltModule := ctx.Module().(*PrebuiltBootclasspathFragmentModule); !isPrebuiltModule {
+		ctx.AddDependency(b, android.AcDepTag, "all_apex_contributions")
+	}
 }
 
 func (b *BootclasspathFragmentModule) BootclasspathDepsMutator(ctx android.BottomUpMutatorContext) {
@@ -836,7 +842,7 @@ func (b *BootclasspathFragmentModule) getProfilePath() android.Path {
 }
 
 // Collect information for opening IDE project files in java/jdeps.go.
-func (b *BootclasspathFragmentModule) IDEInfo(dpInfo *android.IdeInfo) {
+func (b *BootclasspathFragmentModule) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
 	dpInfo.Deps = append(dpInfo.Deps, b.properties.Contents...)
 }
 
@@ -933,8 +939,8 @@ func (b *bootclasspathFragmentSdkMemberProperties) PopulateFromVariant(ctx andro
 	b.Filtered_flags_path = android.OptionalPathForPath(hiddenAPIInfo.FilteredFlagsPath)
 
 	// Copy stub_libs properties.
-	b.Stub_libs = module.properties.Api.Stub_libs
-	b.Core_platform_stub_libs = module.properties.Core_platform_api.Stub_libs
+	b.Stub_libs = module.properties.Api.Stub_libs.GetOrDefault(mctx, nil)
+	b.Core_platform_stub_libs = module.properties.Core_platform_api.Stub_libs.GetOrDefault(mctx, nil)
 
 	// Copy fragment properties.
 	b.Fragments = module.properties.Fragments

@@ -19,10 +19,10 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/google/blueprint"
-	"github.com/google/blueprint/bootstrap"
 	"github.com/google/blueprint/proptools"
 )
 
@@ -396,33 +396,8 @@ func (target Target) Variations() []blueprint.Variation {
 // device_supported and host_supported properties to determine which OsTypes are enabled for this
 // module, then searches through the Targets to determine which have enabled Targets for this
 // module.
-func osMutator(bpctx blueprint.BottomUpMutatorContext) {
-	var module Module
-	var ok bool
-	if module, ok = bpctx.Module().(Module); !ok {
-		// The module is not a Soong module, it is a Blueprint module.
-		if bootstrap.IsBootstrapModule(bpctx.Module()) {
-			// Bootstrap Go modules are always the build OS or linux bionic.
-			config := bpctx.Config().(Config)
-			osNames := []string{config.BuildOSTarget.OsVariation()}
-			for _, hostCrossTarget := range config.Targets[LinuxBionic] {
-				if hostCrossTarget.Arch.ArchType == config.BuildOSTarget.Arch.ArchType {
-					osNames = append(osNames, hostCrossTarget.OsVariation())
-				}
-			}
-			osNames = FirstUniqueStrings(osNames)
-			bpctx.CreateVariations(osNames...)
-		}
-		return
-	}
-
-	// Bootstrap Go module support above requires this mutator to be a
-	// blueprint.BottomUpMutatorContext because android.BottomUpMutatorContext
-	// filters out non-Soong modules.  Now that we've handled them, create a
-	// normal android.BottomUpMutatorContext.
-	mctx := bottomUpMutatorContextFactory(bpctx, module, false)
-	defer bottomUpMutatorContextPool.Put(mctx)
-
+func osMutator(mctx BottomUpMutatorContext) {
+	module := mctx.Module()
 	base := module.base()
 
 	// Nothing to do for modules that are not architecture specific (e.g. a genrule).
@@ -552,24 +527,8 @@ var DarwinUniversalVariantTag = archDepTag{name: "darwin universal binary"}
 //
 // Modules can be initialized with InitAndroidMultiTargetsArchModule, in which case they will be split by OsClass,
 // but will have a common Target that is expected to handle all other selected Targets via ctx.MultiTargets().
-func archMutator(bpctx blueprint.BottomUpMutatorContext) {
-	var module Module
-	var ok bool
-	if module, ok = bpctx.Module().(Module); !ok {
-		if bootstrap.IsBootstrapModule(bpctx.Module()) {
-			// Bootstrap Go modules are always the build architecture.
-			bpctx.CreateVariations(bpctx.Config().(Config).BuildOSTarget.ArchVariation())
-		}
-		return
-	}
-
-	// Bootstrap Go module support above requires this mutator to be a
-	// blueprint.BottomUpMutatorContext because android.BottomUpMutatorContext
-	// filters out non-Soong modules.  Now that we've handled them, create a
-	// normal android.BottomUpMutatorContext.
-	mctx := bottomUpMutatorContextFactory(bpctx, module, false)
-	defer bottomUpMutatorContextPool.Put(mctx)
-
+func archMutator(mctx BottomUpMutatorContext) {
+	module := mctx.Module()
 	base := module.base()
 
 	if !base.ArchSpecific() {
@@ -587,19 +546,21 @@ func archMutator(bpctx blueprint.BottomUpMutatorContext) {
 	}
 
 	osTargets := mctx.Config().Targets[os]
+
 	image := base.commonProperties.ImageVariation
 	// Filter NativeBridge targets unless they are explicitly supported.
 	// Skip creating native bridge variants for non-core modules.
 	if os == Android && !(base.IsNativeBridgeSupported() && image == CoreVariation) {
+		osTargets = slices.DeleteFunc(slices.Clone(osTargets), func(t Target) bool {
+			return bool(t.NativeBridge)
+		})
+	}
 
-		var targets []Target
-		for _, t := range osTargets {
-			if !t.NativeBridge {
-				targets = append(targets, t)
-			}
-		}
-
-		osTargets = targets
+	// Filter HostCross targets if disabled.
+	if base.HostSupported() && !base.HostCrossSupported() {
+		osTargets = slices.DeleteFunc(slices.Clone(osTargets), func(t Target) bool {
+			return t.HostCross
+		})
 	}
 
 	// only the primary arch in the ramdisk / vendor_ramdisk / recovery partition

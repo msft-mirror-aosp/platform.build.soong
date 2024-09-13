@@ -88,6 +88,13 @@ func (module *DeclarationsModule) DepsMutator(ctx android.BottomUpMutatorContext
 		ctx.PropertyErrorf("container", "missing container property")
 	}
 
+	// treating system_ext as system partition as we are combining them as one container
+	// TODO remove this logic once we start enforcing that system_ext cannot be specified as
+	// container in the container field.
+	if module.properties.Container == "system_ext" {
+		module.properties.Container = "system"
+	}
+
 	// Add a dependency on the aconfig_value_sets defined in
 	// RELEASE_ACONFIG_VALUE_SETS, and add any aconfig_values that
 	// match our package.
@@ -217,18 +224,6 @@ func (module *DeclarationsModule) GenerateAndroidBuildActions(ctx android.Module
 	}
 	android.SetProvider(ctx, android.AconfigDeclarationsProviderKey, providerData[""])
 	android.SetProvider(ctx, android.AconfigReleaseDeclarationsProviderKey, providerData)
-}
-
-func (module *DeclarationsModule) BuildActionProviderKeys() []blueprint.AnyProviderKey {
-	return []blueprint.AnyProviderKey{android.AconfigDeclarationsProviderKey}
-}
-
-func (module *DeclarationsModule) PackageContextPath() string {
-	return pkgPath
-}
-
-func (module *DeclarationsModule) CachedRules() []blueprint.Rule {
-	return []blueprint.Rule{aconfigRule, aconfigTextRule}
 }
 
 var _ blueprint.Incremental = &DeclarationsModule{}

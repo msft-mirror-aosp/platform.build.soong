@@ -27,7 +27,7 @@ type systemImage struct {
 
 type systemImageProperties struct {
 	// Path to the input linker config json file.
-	Linker_config_src *string
+	Linker_config_src *string `android:"path"`
 }
 
 // android_system_image is a specialization of android_filesystem for the 'system' partition.
@@ -61,7 +61,8 @@ func (s *systemImage) buildLinkerConfigFile(ctx android.ModuleContext, root andr
 
 	deps := s.gatherFilteredPackagingSpecs(ctx)
 	ctx.WalkDeps(func(child, parent android.Module) bool {
-		for _, ps := range child.PackagingSpecs() {
+		for _, ps := range android.OtherModuleProviderOrDefault(
+			ctx, child, android.InstallFilesProvider).PackagingSpecs {
 			if _, ok := deps[ps.RelPathInPackage()]; ok {
 				modulesInPackageByModule[child] = true
 				modulesInPackageByName[child.Name()] = true
