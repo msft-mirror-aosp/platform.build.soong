@@ -1727,6 +1727,7 @@ func (module *SdkLibrary) createImplLibrary(mctx android.DefaultableHookContext)
 	staticLibs.AppendSimpleValue(module.sdkLibraryProperties.Impl_only_static_libs)
 	props := struct {
 		Name           *string
+		Enabled        proptools.Configurable[bool]
 		Visibility     []string
 		Libs           []string
 		Static_libs    proptools.Configurable[[]string]
@@ -1734,6 +1735,7 @@ func (module *SdkLibrary) createImplLibrary(mctx android.DefaultableHookContext)
 		Stem           *string
 	}{
 		Name:       proptools.StringPtr(module.implLibraryModuleName()),
+		Enabled:    module.EnabledProperty(),
 		Visibility: visibility,
 
 		Libs: append(module.properties.Libs, module.sdkLibraryProperties.Impl_only_libs...),
@@ -1762,6 +1764,7 @@ func (module *SdkLibrary) createImplLibrary(mctx android.DefaultableHookContext)
 
 type libraryProperties struct {
 	Name           *string
+	Enabled        proptools.Configurable[bool]
 	Visibility     []string
 	Srcs           []string
 	Installable    *bool
@@ -1788,6 +1791,7 @@ type libraryProperties struct {
 
 func (module *SdkLibrary) stubsLibraryProps(mctx android.DefaultableHookContext, apiScope *apiScope) libraryProperties {
 	props := libraryProperties{}
+	props.Enabled = module.EnabledProperty()
 	props.Visibility = []string{"//visibility:override", "//visibility:private"}
 	// sources are generated from the droiddoc
 	sdkVersion := module.sdkVersionForStubsLibrary(mctx, apiScope)
@@ -1838,6 +1842,7 @@ func (module *SdkLibrary) createExportableStubsLibrary(mctx android.DefaultableH
 func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookContext, apiScope *apiScope, name string, scopeSpecificDroidstubsArgs []string) {
 	props := struct {
 		Name                             *string
+		Enabled                          proptools.Configurable[bool]
 		Visibility                       []string
 		Srcs                             []string
 		Installable                      *bool
@@ -1879,6 +1884,7 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 	// * libs (static_libs/libs)
 
 	props.Name = proptools.StringPtr(name)
+	props.Enabled = module.EnabledProperty()
 	props.Visibility = childModuleVisibility(module.sdkLibraryProperties.Stubs_source_visibility)
 	props.Srcs = append(props.Srcs, module.properties.Srcs...)
 	props.Srcs = append(props.Srcs, module.sdkLibraryProperties.Api_srcs...)
@@ -2004,6 +2010,7 @@ func (module *SdkLibrary) createStubsSourcesAndApi(mctx android.DefaultableHookC
 func (module *SdkLibrary) createApiLibrary(mctx android.DefaultableHookContext, apiScope *apiScope) {
 	props := struct {
 		Name              *string
+		Enabled           proptools.Configurable[bool]
 		Visibility        []string
 		Api_contributions []string
 		Libs              proptools.Configurable[[]string]
@@ -2016,6 +2023,7 @@ func (module *SdkLibrary) createApiLibrary(mctx android.DefaultableHookContext, 
 	}{}
 
 	props.Name = proptools.StringPtr(module.apiLibraryModuleName(apiScope))
+	props.Enabled = module.EnabledProperty()
 	props.Visibility = []string{"//visibility:override", "//visibility:private"}
 
 	apiContributions := []string{}
@@ -2066,6 +2074,7 @@ func (module *SdkLibrary) createApiLibrary(mctx android.DefaultableHookContext, 
 func (module *SdkLibrary) topLevelStubsLibraryProps(mctx android.DefaultableHookContext, apiScope *apiScope, doDist bool) libraryProperties {
 	props := libraryProperties{}
 
+	props.Enabled = module.EnabledProperty()
 	props.Visibility = childModuleVisibility(module.sdkLibraryProperties.Stubs_library_visibility)
 	sdkVersion := module.sdkVersionForStubsLibrary(mctx, apiScope)
 	props.Sdk_version = proptools.StringPtr(sdkVersion)
@@ -2158,6 +2167,7 @@ func (module *SdkLibrary) createXmlFile(mctx android.DefaultableHookContext) {
 	}
 	props := struct {
 		Name                      *string
+		Enabled                   proptools.Configurable[bool]
 		Lib_name                  *string
 		Apex_available            []string
 		On_bootclasspath_since    *string
@@ -2168,6 +2178,7 @@ func (module *SdkLibrary) createXmlFile(mctx android.DefaultableHookContext) {
 		Uses_libs_dependencies    []string
 	}{
 		Name:                      proptools.StringPtr(module.xmlPermissionsModuleName()),
+		Enabled:                   module.EnabledProperty(),
 		Lib_name:                  proptools.StringPtr(module.BaseModuleName()),
 		Apex_available:            module.ApexProperties.Apex_available,
 		On_bootclasspath_since:    module.commonSdkLibraryProperties.On_bootclasspath_since,
@@ -2263,11 +2274,6 @@ func (module *SdkLibrary) getApiDir() string {
 // runtime libs and xml file. If requested, the stubs and docs are created twice
 // once for public API level and once for system API level
 func (module *SdkLibrary) CreateInternalModules(mctx android.DefaultableHookContext) {
-	// If the module has been disabled then don't create any child modules.
-	if !module.Enabled(mctx) {
-		return
-	}
-
 	if len(module.properties.Srcs) == 0 {
 		mctx.PropertyErrorf("srcs", "java_sdk_library must specify srcs")
 		return

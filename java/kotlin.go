@@ -65,8 +65,6 @@ var kotlinc = pctx.AndroidRemoteStaticRule("kotlinc", android.RemoteRuleSupports
 	"headerClassesDir", "headerJar", "kotlinJvmTarget", "kotlinBuildFile", "emptyDir", "name")
 
 var kotlinKytheExtract = pctx.AndroidStaticRule("kotlinKythe",
-	// TODO (b/265428637): To prevent kotlinc version skew between android builds and internal kotlin indexers (g3), consider embedding the kotlinc used by android into the kzip file.
-	// This has an impact on .kzip sizes, so defer that for now.
 	blueprint.RuleParams{
 		Command: `rm -rf "$srcJarDir" && mkdir -p "$srcJarDir" && ` +
 			`${config.ZipSyncCmd} -d $srcJarDir -l $srcJarDir/list -f "*.java" -f "*.kt" $srcJars && ` +
@@ -76,7 +74,8 @@ var kotlinKytheExtract = pctx.AndroidStaticRule("kotlinKythe",
 			// Skip header jars, those should not have an effect on kythe results.
 			` --args '${config.KotlincGlobalFlags} ` +
 			` ${config.KotlincSuppressJDK9Warnings} ${config.JavacHeapFlags} ` +
-			` $kotlincFlags -jvm-target $kotlinJvmTarget'`,
+			` $kotlincFlags -jvm-target $kotlinJvmTarget ` +
+			`${config.KotlincKytheGlobalFlags}'`,
 		CommandDeps: []string{
 			"${config.KotlinKytheExtractor}",
 			"${config.ZipSyncCmd}",
