@@ -96,15 +96,29 @@ func (g *GoBinary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	outputFile := android.PathForArbitraryOutput(ctx, android.Rel(ctx, ctx.Config().OutDir(), g.IntermediateFile())).WithoutRel()
 	g.outputFile = outputFile
 
-	installPath := ctx.InstallFile(android.PathForModuleInstall(ctx, "bin"), ctx.ModuleName(), outputFile)
+	// Don't create install rules for modules used by bootstrap, the install command line will differ from
+	// what was used during bootstrap, which will cause ninja to rebuild the module on the next run,
+	// triggering reanalysis.
+	if !usedByBootstrap(ctx.ModuleName()) {
+		installPath := ctx.InstallFile(android.PathForModuleInstall(ctx, "bin"), ctx.ModuleName(), outputFile)
 
-	if !ctx.Config().KatiEnabled() || g.ExportedToMake() {
 		// Modules in an unexported namespace have no install rule, only add modules in the exported namespaces
 		// to the blueprint_tools phony rules.
-		ctx.Phony("blueprint_tools", installPath)
+		if !ctx.Config().KatiEnabled() || g.ExportedToMake() {
+			ctx.Phony("blueprint_tools", installPath)
+		}
 	}
 
 	ctx.SetOutputFiles(android.Paths{outputFile}, "")
+}
+
+func usedByBootstrap(name string) bool {
+	switch name {
+	case "loadplugins", "soong_build":
+		return true
+	default:
+		return false
+	}
 }
 
 func (g *GoBinary) HostToolPath() android.OptionalPath {
