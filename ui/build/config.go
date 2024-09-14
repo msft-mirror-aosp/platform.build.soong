@@ -54,6 +54,16 @@ func init() {
 	rbeRandPrefix = rand.Intn(1000)
 }
 
+// Which builder are we using?
+type ninjaCommandType = int
+
+const (
+	_ = iota
+	NINJA_NINJA
+	NINJA_N2
+	NINJA_SISO
+)
+
 type Config struct{ *configImpl }
 
 type configImpl struct {
@@ -123,9 +133,8 @@ type configImpl struct {
 	// could consider merging them.
 	moduleDebugFile string
 
-	// Whether to use n2 instead of ninja.  This is controlled with the
-	// environment variable SOONG_USE_N2
-	useN2 bool
+	// Which builder are we using
+	ninjaCommand ninjaCommandType
 }
 
 type NinjaWeightListSource uint
@@ -288,8 +297,16 @@ func NewConfig(ctx Context, args ...string) Config {
 		ret.moduleDebugFile, _ = filepath.Abs(shared.JoinPath(ret.SoongOutDir(), "soong-debug-info.json"))
 	}
 
-	if os.Getenv("SOONG_USE_N2") == "true" {
-		ret.useN2 = true
+	ret.ninjaCommand = NINJA_NINJA
+	switch os.Getenv("SOONG_NINJA") {
+	case "n2":
+		ret.ninjaCommand = NINJA_N2
+	case "siso":
+		ret.ninjaCommand = NINJA_SISO
+	default:
+		if os.Getenv("SOONG_USE_N2") == "true" {
+			ret.ninjaCommand = NINJA_N2
+		}
 	}
 
 	ret.environ.Unset(
@@ -349,7 +366,8 @@ func NewConfig(ctx Context, args ...string) Config {
 		// We read it here already, don't let others share in the fun
 		"GENERATE_SOONG_DEBUG",
 
-		// Use config.useN2 instead.
+		// Use config.ninjaCommand instead.
+		"SOONG_NINJA",
 		"SOONG_USE_N2",
 	)
 
@@ -1639,6 +1657,12 @@ func (c *configImpl) NinjaBin() string {
 
 func (c *configImpl) N2Bin() string {
 	path := c.PrebuiltBuildTool("n2")
+	// Use musl instead of glibc because glibc on the build server is old and has bugs
+	return strings.ReplaceAll(path, "/linux-x86/", "/linux_musl-x86/")
+}
+
+func (c *configImpl) SisoBin() string {
+	path := c.PrebuiltBuildTool("siso")
 	// Use musl instead of glibc because glibc on the build server is old and has bugs
 	return strings.ReplaceAll(path, "/linux-x86/", "/linux_musl-x86/")
 }
