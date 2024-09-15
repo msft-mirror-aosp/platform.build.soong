@@ -169,6 +169,10 @@ var ContainerDependencyViolationAllowlist = map[string][]string{
 		"framework", // cts -> unstable
 	},
 
+	"CtsAppStartTestCases": {
+		"framework", // cts -> unstable
+	},
+
 	"CtsAppTestStubsApp2": {
 		"framework", // cts -> unstable
 	},
@@ -273,11 +277,19 @@ var ContainerDependencyViolationAllowlist = map[string][]string{
 		"framework", // cts -> unstable
 	},
 
+	"CtsDocumentContentTestCases": {
+		"framework", // cts -> unstable
+	},
+
 	"CtsDreamsTestCases": {
 		"framework", // cts -> unstable
 	},
 
 	"CtsDrmTestCases": {
+		"framework", // cts -> unstable
+	},
+
+	"CtsEmptyTestApp_RejectedByVerifier": {
 		"framework", // cts -> unstable
 	},
 
@@ -301,7 +313,15 @@ var ContainerDependencyViolationAllowlist = map[string][]string{
 		"framework", // cts -> unstable
 	},
 
+	"CtsFgsTimeoutTestCases": {
+		"framework", // cts -> unstable
+	},
+
 	"CtsFileDescriptorTestCases": {
+		"framework", // cts -> unstable
+	},
+
+	"CtsFingerprintTestCases": {
 		"framework", // cts -> unstable
 	},
 
@@ -433,6 +453,10 @@ var ContainerDependencyViolationAllowlist = map[string][]string{
 		"framework", // cts -> unstable
 	},
 
+	"CtsMediaProviderTestCases": {
+		"framework", // cts -> unstable
+	},
+
 	"CtsMediaProviderTranscodeTests": {
 		"framework", // cts -> unstable
 	},
@@ -501,6 +525,10 @@ var ContainerDependencyViolationAllowlist = map[string][]string{
 		"framework", // cts -> unstable
 	},
 
+	"CtsOnDeviceIntelligenceServiceTestCases": {
+		"framework", // cts -> unstable
+	},
+
 	"CtsOnDevicePersonalizationTestCases": {
 		"framework", // cts -> unstable
 	},
@@ -518,6 +546,10 @@ var ContainerDependencyViolationAllowlist = map[string][]string{
 	},
 
 	"CtsPackageSchemeTestsWithVisibility": {
+		"framework", // cts -> unstable
+	},
+
+	"CtsPackageWatchdogTestCases": {
 		"framework", // cts -> unstable
 	},
 
@@ -669,6 +701,10 @@ var ContainerDependencyViolationAllowlist = map[string][]string{
 		"framework", // cts -> unstable
 	},
 
+	"CtsTvTunerTestCases": {
+		"framework", // cts -> unstable
+	},
+
 	"CtsUsageStatsTestCases": {
 		"framework", // cts -> unstable
 	},
@@ -799,6 +835,11 @@ var ContainerDependencyViolationAllowlist = map[string][]string{
 		"ondevicepersonalization_flags_lib", // apex [com.android.ondevicepersonalization] -> system
 	},
 
+	"framework-pdf-v.impl": {
+		"app-compat-annotations",      // apex [com.android.mediaprovider, test_com.android.mediaprovider] -> system
+		"modules-utils-preconditions", // apex [com.android.mediaprovider, test_com.android.mediaprovider] -> apex [com.android.adservices, com.android.appsearch, com.android.cellbroadcast, com.android.extservices, com.android.ondevicepersonalization, com.android.tethering, com.android.uwb, com.android.wifi, test_com.android.cellbroadcast, test_com.android.wifi]
+	},
+
 	"framework-pdf.impl": {
 		"modules-utils-preconditions", // apex [com.android.mediaprovider, test_com.android.mediaprovider] -> apex [com.android.adservices, com.android.appsearch, com.android.cellbroadcast, com.android.extservices, com.android.ondevicepersonalization, com.android.tethering, com.android.uwb, com.android.wifi, test_com.android.cellbroadcast, test_com.android.wifi]
 	},
@@ -837,11 +878,51 @@ var ContainerDependencyViolationAllowlist = map[string][]string{
 		"libnativeloader_vendor_shared_lib", // system -> vendor
 	},
 
+	"MctsMediaBetterTogetherTestCases": {
+		"framework", // cts -> unstable
+	},
+
+	"MctsMediaCodecTestCases": {
+		"framework", // cts -> unstable
+	},
+
+	"MctsMediaDecoderTestCases": {
+		"framework", // cts -> unstable
+	},
+
 	"MctsMediaDrmFrameworkTestCases": {
 		"framework", // cts -> unstable
 	},
 
+	"MctsMediaEncoderTestCases": {
+		"framework", // cts -> unstable
+	},
+
+	"MctsMediaExtractorTestCases": {
+		"framework", // cts -> unstable
+	},
+
+	"MctsMediaMiscTestCases": {
+		"framework", // cts -> unstable
+	},
+
+	"MctsMediaMuxerTestCases": {
+		"framework", // cts -> unstable
+	},
+
+	"MctsMediaPlayerTestCases": {
+		"framework", // cts -> unstable
+	},
+
+	"MctsMediaRecorderTestCases": {
+		"framework", // cts -> unstable
+	},
+
 	"MctsMediaTranscodingTestCases": {
+		"framework", // cts -> unstable
+	},
+
+	"MctsMediaV2TestCases": {
 		"framework", // cts -> unstable
 	},
 

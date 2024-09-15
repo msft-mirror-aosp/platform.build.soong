@@ -351,9 +351,6 @@ func NewConfig(ctx Context, args ...string) Config {
 
 		// Use config.useN2 instead.
 		"SOONG_USE_N2",
-
-		// Leaks usernames into environment.
-		"HOME",
 	)
 
 	if ret.UseGoma() || ret.ForceUseGoma() {
@@ -1038,10 +1035,6 @@ func (c *configImpl) HostToolDir() string {
 	} else {
 		return filepath.Join(c.OutDir(), "host", c.PrebuiltOS(), "bin")
 	}
-}
-
-func (c *configImpl) NamedGlobFile(name string) string {
-	return shared.JoinPath(c.SoongOutDir(), "globs-"+name+".ninja")
 }
 
 func (c *configImpl) UsedEnvFile(tag string) string {
