@@ -588,19 +588,11 @@ func runSoong(ctx Context, config Config) {
 		nr := status.NewNinjaReader(ctx, ctx.Status.StartTool(), fifo)
 		defer nr.Close()
 
-		ninjaArgs := []string{
-			"-d", "keepdepfile",
-			"-d", "stats",
-			"-o", "usesphonyoutputs=yes",
-			"-o", "preremoveoutputs=yes",
-			"-w", "dupbuild=err",
-			"-w", "outputdir=err",
-			"-w", "missingoutfile=err",
-			"-j", strconv.Itoa(config.Parallel()),
-			"--frontend_file", fifo,
-			"-f", filepath.Join(config.SoongOutDir(), "bootstrap.ninja"),
-		}
-		if config.useN2 {
+		var ninjaCmd string
+		var ninjaArgs []string
+		switch config.ninjaCommand {
+		case NINJA_N2:
+			ninjaCmd = config.N2Bin()
 			ninjaArgs = []string{
 				// TODO: implement these features, or remove them.
 				//"-d", "keepdepfile",
@@ -615,6 +607,39 @@ func runSoong(ctx Context, config Config) {
 				"--frontend-file", fifo,
 				"-f", filepath.Join(config.SoongOutDir(), "bootstrap.ninja"),
 			}
+		case NINJA_SISO:
+			ninjaCmd = config.SisoBin()
+			ninjaArgs = []string{
+				"ninja",
+				// TODO: implement these features, or remove them.
+				//"-d", "keepdepfile",
+				//"-d", "stats",
+				//"-o", "usesphonyoutputs=yes",
+				//"-o", "preremoveoutputs=yes",
+				//"-w", "dupbuild=err",
+				//"-w", "outputdir=err",
+				//"-w", "missingoutfile=err",
+				"-v",
+				"-j", strconv.Itoa(config.Parallel()),
+				//"--frontend-file", fifo,
+				"--log_dir", config.SoongOutDir(),
+				"-f", filepath.Join(config.SoongOutDir(), "bootstrap.ninja"),
+			}
+		default:
+			// NINJA_NINJA is the default.
+			ninjaCmd = config.NinjaBin()
+			ninjaArgs = []string{
+				"-d", "keepdepfile",
+				"-d", "stats",
+				"-o", "usesphonyoutputs=yes",
+				"-o", "preremoveoutputs=yes",
+				"-w", "dupbuild=err",
+				"-w", "outputdir=err",
+				"-w", "missingoutfile=err",
+				"-j", strconv.Itoa(config.Parallel()),
+				"--frontend_file", fifo,
+				"-f", filepath.Join(config.SoongOutDir(), "bootstrap.ninja"),
+			}
 		}
 
 		if extra, ok := config.Environment().Get("SOONG_UI_NINJA_ARGS"); ok {
@@ -623,10 +648,6 @@ func runSoong(ctx Context, config Config) {
 		}
 
 		ninjaArgs = append(ninjaArgs, targets...)
-		ninjaCmd := config.NinjaBin()
-		if config.useN2 {
-			ninjaCmd = config.N2Bin()
-		}
 
 		cmd := Command(ctx, config, "soong bootstrap",
 			ninjaCmd, ninjaArgs...)

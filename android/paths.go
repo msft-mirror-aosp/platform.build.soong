@@ -27,7 +27,6 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
-	"github.com/google/blueprint/bootstrap"
 	"github.com/google/blueprint/pathtools"
 )
 
@@ -555,13 +554,6 @@ func (p OutputPaths) Strings() []string {
 	return ret
 }
 
-// PathForGoBinary returns the path to the installed location of a bootstrap_go_binary module.
-func PathForGoBinary(ctx PathContext, goBinary bootstrap.GoBinaryTool) Path {
-	goBinaryInstallDir := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "bin")
-	rel := Rel(ctx, goBinaryInstallDir.String(), goBinary.InstallPath())
-	return goBinaryInstallDir.Join(ctx, rel)
-}
-
 // Expands Paths to a SourceFileProducer or OutputFileProducer module dependency referenced via ":name" or ":name{.tag}" syntax.
 // If the dependency is not found, a missingErrorDependency is returned.
 // If the module dependency is not a SourceFileProducer or OutputFileProducer, appropriate errors will be returned.
@@ -572,10 +564,6 @@ func getPathsFromModuleDep(ctx ModuleWithDepsPathContext, path, moduleName, tag 
 	}
 	if aModule, ok := module.(Module); ok && !aModule.Enabled(ctx) {
 		return nil, missingDependencyError{[]string{moduleName}}
-	}
-	if goBinary, ok := module.(bootstrap.GoBinaryTool); ok && tag == "" {
-		goBinaryPath := PathForGoBinary(ctx, goBinary)
-		return Paths{goBinaryPath}, nil
 	}
 	outputFiles, err := outputFilesForModule(ctx, module, tag)
 	if outputFiles != nil && err == nil {
