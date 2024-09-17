@@ -245,6 +245,16 @@ func (d *dexer) dexCommonFlags(ctx android.ModuleContext,
 	if err != nil {
 		ctx.PropertyErrorf("min_sdk_version", "%s", err)
 	}
+	if !Bool(d.dexProperties.No_dex_container) && effectiveVersion.FinalOrFutureInt() >= 36 {
+		// W is 36, but we have not bumped the SDK version yet, so check for both.
+		if ctx.Config().PlatformSdkVersion().FinalInt() >= 36 ||
+			ctx.Config().PlatformSdkCodename() == "Wear" {
+			// TODO(b/329465418): Skip this module since it causes issue with app DRM
+			if ctx.ModuleName() != "framework-minus-apex" {
+				flags = append([]string{"-JDcom.android.tools.r8.dexContainerExperiment"}, flags...)
+			}
+		}
+	}
 
 	// If the specified SDK level is 10000, then configure the compiler to use the
 	// current platform SDK level and to compile the build as a platform build.

@@ -34,7 +34,6 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
-	"github.com/google/blueprint/bootstrap"
 	"github.com/google/blueprint/pathtools"
 	"github.com/google/blueprint/proptools"
 )
@@ -815,8 +814,6 @@ func translateAndroidMkModule(ctx SingletonContext, w io.Writer, moduleInfoJSONs
 		switch x := mod.(type) {
 		case AndroidMkDataProvider:
 			err = translateAndroidModule(ctx, w, moduleInfoJSONs, mod, x)
-		case bootstrap.GoBinaryTool:
-			err = translateGoBinaryModule(ctx, w, mod, x)
 		case AndroidMkEntriesProvider:
 			err = translateAndroidMkEntriesModule(ctx, w, moduleInfoJSONs, mod, x)
 		default:
@@ -829,23 +826,6 @@ func translateAndroidMkModule(ctx SingletonContext, w io.Writer, moduleInfoJSONs
 	}
 
 	return err
-}
-
-// A simple, special Android.mk entry output func to make it possible to build blueprint tools using
-// m by making them phony targets.
-func translateGoBinaryModule(ctx SingletonContext, w io.Writer, mod blueprint.Module,
-	goBinary bootstrap.GoBinaryTool) error {
-
-	name := ctx.ModuleName(mod)
-	fmt.Fprintln(w, ".PHONY:", name)
-	fmt.Fprintln(w, name+":", goBinary.InstallPath())
-	fmt.Fprintln(w, "")
-	// Assuming no rules in make include go binaries in distributables.
-	// If the assumption is wrong, make will fail to build without the necessary .meta_lic and .meta_module files.
-	// In that case, add the targets and rules here to build a .meta_lic file for `name` and a .meta_module for
-	// `goBinary.InstallPath()` pointing to the `name`.meta_lic file.
-
-	return nil
 }
 
 func (data *AndroidMkData) fillInData(ctx fillInEntriesContext, mod blueprint.Module) {
