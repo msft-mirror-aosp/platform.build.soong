@@ -443,12 +443,6 @@ type commonProperties struct {
 	// Set at module initialization time by calling InitCommonOSAndroidMultiTargetsArchModule
 	CreateCommonOSVariant bool `blueprint:"mutated"`
 
-	// If set to true then this variant is the CommonOS variant that has dependencies on its
-	// OsType specific variants.
-	//
-	// Set by osMutator.
-	CommonOSVariant bool `blueprint:"mutated"`
-
 	// When set to true, this module is not installed to the full install path (ex: under
 	// out/target/product/<name>/<partition>). It can be installed only to the packaging
 	// modules like android_filesystem.
@@ -1221,7 +1215,7 @@ func (m *ModuleBase) ArchSpecific() bool {
 
 // True if the current variant is a CommonOS variant, false otherwise.
 func (m *ModuleBase) IsCommonOSVariant() bool {
-	return m.commonProperties.CommonOSVariant
+	return m.commonProperties.CompileOS == CommonOS
 }
 
 // supportsTarget returns true if the given Target is supported by the current module.
@@ -2210,6 +2204,10 @@ func (m *ModuleBase) MakeAsSystemExt() {
 // IsNativeBridgeSupported returns true if "native_bridge_supported" is explicitly set as "true"
 func (m *ModuleBase) IsNativeBridgeSupported() bool {
 	return proptools.Bool(m.commonProperties.Native_bridge_supported)
+}
+
+type ConfigContext interface {
+	Config() Config
 }
 
 type ConfigurableEvaluatorContext interface {
