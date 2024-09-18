@@ -148,9 +148,9 @@ var preArch = []RegisterMutatorFunc{
 }
 
 func registerArchMutator(ctx RegisterMutatorsContext) {
-	ctx.BottomUp("os", osMutator).Parallel()
+	ctx.Transition("os", &osTransitionMutator{})
 	ctx.Transition("image", &imageTransitionMutator{})
-	ctx.BottomUp("arch", archMutator).Parallel()
+	ctx.Transition("arch", &archTransitionMutator{})
 }
 
 var preDeps = []RegisterMutatorFunc{
@@ -516,6 +516,9 @@ type androidTransitionMutator struct {
 }
 
 func (a *androidTransitionMutator) Split(ctx blueprint.BaseModuleContext) []string {
+	if a.finalPhase {
+		panic("TransitionMutator not allowed in FinalDepsMutators")
+	}
 	if m, ok := ctx.Module().(Module); ok {
 		moduleContext := m.base().baseModuleContextFactory(ctx)
 		return a.mutator.Split(&moduleContext)
