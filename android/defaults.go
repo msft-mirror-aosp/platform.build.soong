@@ -101,6 +101,7 @@ func InitDefaultableModule(module DefaultableModule) {
 // A restricted subset of context methods, similar to LoadHookContext.
 type DefaultableHookContext interface {
 	EarlyModuleContext
+	OtherModuleProviderContext
 
 	CreateModule(ModuleFactory, ...interface{}) Module
 	AddMissingDependencies(missingDeps []string)
