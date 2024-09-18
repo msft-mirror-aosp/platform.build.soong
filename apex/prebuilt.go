@@ -265,7 +265,7 @@ func (p *prebuiltCommon) AndroidMkEntries() []android.AndroidMkEntries {
 // prebuiltApexModuleCreator defines the methods that need to be implemented by prebuilt_apex and
 // apex_set in order to create the modules needed to provide access to the prebuilt .apex file.
 type prebuiltApexModuleCreator interface {
-	createPrebuiltApexModules(ctx android.TopDownMutatorContext)
+	createPrebuiltApexModules(ctx android.BottomUpMutatorContext)
 }
 
 // prebuiltApexModuleCreatorMutator is the mutator responsible for invoking the
@@ -275,7 +275,7 @@ type prebuiltApexModuleCreator interface {
 // will need to access dependencies added by that (exported modules) but must run before the
 // DepsMutator so that the deapexer module it creates can add dependencies onto itself from the
 // exported modules.
-func prebuiltApexModuleCreatorMutator(ctx android.TopDownMutatorContext) {
+func prebuiltApexModuleCreatorMutator(ctx android.BottomUpMutatorContext) {
 	module := ctx.Module()
 	if creator, ok := module.(prebuiltApexModuleCreator); ok {
 		creator.createPrebuiltApexModules(ctx)
@@ -543,7 +543,7 @@ func PrebuiltFactory() android.Module {
 	return module
 }
 
-func createApexSelectorModule(ctx android.TopDownMutatorContext, name string, apexFileProperties *ApexFileProperties) {
+func createApexSelectorModule(ctx android.BottomUpMutatorContext, name string, apexFileProperties *ApexFileProperties) {
 	props := struct {
 		Name *string
 	}{
@@ -561,7 +561,7 @@ func createApexSelectorModule(ctx android.TopDownMutatorContext, name string, ap
 // A deapexer module is only needed when the prebuilt apex specifies one or more modules in either
 // the `exported_java_libs` or `exported_bootclasspath_fragments` properties as that indicates that
 // the listed modules need access to files from within the prebuilt .apex file.
-func (p *prebuiltCommon) createDeapexerModuleIfNeeded(ctx android.TopDownMutatorContext, deapexerName string, apexFileSource string) {
+func (p *prebuiltCommon) createDeapexerModuleIfNeeded(ctx android.BottomUpMutatorContext, deapexerName string, apexFileSource string) {
 	// Only create the deapexer module if it is needed.
 	if !p.hasExportedDeps() {
 		return
@@ -703,7 +703,7 @@ var _ prebuiltApexModuleCreator = (*Prebuilt)(nil)
 //     /         |         \
 //     V            V            V
 //     selector  <---  deapexer  <---  exported java lib
-func (p *Prebuilt) createPrebuiltApexModules(ctx android.TopDownMutatorContext) {
+func (p *Prebuilt) createPrebuiltApexModules(ctx android.BottomUpMutatorContext) {
 	apexSelectorModuleName := apexSelectorModuleName(p.Name())
 	createApexSelectorModule(ctx, apexSelectorModuleName, &p.properties.ApexFileProperties)
 
@@ -958,7 +958,7 @@ func apexSetFactory() android.Module {
 	return module
 }
 
-func createApexExtractorModule(ctx android.TopDownMutatorContext, name string, apexExtractorProperties *ApexExtractorProperties) {
+func createApexExtractorModule(ctx android.BottomUpMutatorContext, name string, apexExtractorProperties *ApexExtractorProperties) {
 	props := struct {
 		Name *string
 	}{
@@ -984,7 +984,7 @@ var _ prebuiltApexModuleCreator = (*ApexSet)(nil)
 // prebuilt_apex except that instead of creating a selector module which selects one .apex file
 // from those provided this creates an extractor module which extracts the appropriate .apex file
 // from the zip file containing them.
-func (a *ApexSet) createPrebuiltApexModules(ctx android.TopDownMutatorContext) {
+func (a *ApexSet) createPrebuiltApexModules(ctx android.BottomUpMutatorContext) {
 	apexExtractorModuleName := apexExtractorModuleName(a.Name())
 	createApexExtractorModule(ctx, apexExtractorModuleName, &a.properties.ApexExtractorProperties)
 

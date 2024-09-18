@@ -2211,6 +2211,7 @@ type ConfigContext interface {
 }
 
 type ConfigurableEvaluatorContext interface {
+	OtherModuleProviderContext
 	Config() Config
 	OtherModulePropertyErrorf(module Module, property string, fmt string, args ...interface{})
 	HasMutatorFinished(mutatorName string) bool
