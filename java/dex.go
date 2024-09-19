@@ -120,7 +120,7 @@ func (d *DexProperties) resourceShrinkingEnabled(ctx android.ModuleContext) bool
 }
 
 func (d *DexProperties) optimizedResourceShrinkingEnabled(ctx android.ModuleContext) bool {
-	return d.resourceShrinkingEnabled(ctx) && Bool(d.Optimize.Optimized_shrink_resources)
+	return d.resourceShrinkingEnabled(ctx) && BoolDefault(d.Optimize.Optimized_shrink_resources, ctx.Config().UseOptimizedResourceShrinkingByDefault())
 }
 
 func (d *dexer) optimizeOrObfuscateEnabled() bool {
@@ -400,7 +400,7 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams) 
 		r8Flags = append(r8Flags, "--resource-input", d.resourcesInput.Path().String())
 		r8Deps = append(r8Deps, d.resourcesInput.Path())
 		r8Flags = append(r8Flags, "--resource-output", d.resourcesOutput.Path().String())
-		if Bool(opt.Optimized_shrink_resources) {
+		if d.dexProperties.optimizedResourceShrinkingEnabled(ctx) {
 			r8Flags = append(r8Flags, "--optimized-resource-shrinking")
 		}
 	}
