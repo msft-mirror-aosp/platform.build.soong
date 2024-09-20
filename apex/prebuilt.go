@@ -107,11 +107,6 @@ type PrebuiltCommonProperties struct {
 	// from PRODUCT_PACKAGES.
 	Overrides []string
 
-	// List of java libraries that are embedded inside this prebuilt APEX bundle and for which this
-	// APEX bundle will create an APEX variant and provide dex implementation jars for use by
-	// dexpreopt and boot jars package check.
-	Exported_java_libs []string
-
 	// List of bootclasspath fragments inside this prebuilt APEX bundle and for which this APEX
 	// bundle will create an APEX variant.
 	Exported_bootclasspath_fragments []string
@@ -283,19 +278,13 @@ func prebuiltApexModuleCreatorMutator(ctx android.BottomUpMutatorContext) {
 }
 
 func (p *prebuiltCommon) hasExportedDeps() bool {
-	return len(p.prebuiltCommonProperties.Exported_java_libs) > 0 ||
-		len(p.prebuiltCommonProperties.Exported_bootclasspath_fragments) > 0 ||
+	return len(p.prebuiltCommonProperties.Exported_bootclasspath_fragments) > 0 ||
 		len(p.prebuiltCommonProperties.Exported_systemserverclasspath_fragments) > 0
 }
 
 // prebuiltApexContentsDeps adds dependencies onto the prebuilt apex module's contents.
 func (p *prebuiltCommon) prebuiltApexContentsDeps(ctx android.BottomUpMutatorContext) {
 	module := ctx.Module()
-
-	for _, dep := range p.prebuiltCommonProperties.Exported_java_libs {
-		prebuiltDep := android.PrebuiltNameFromSource(dep)
-		ctx.AddDependency(module, exportedJavaLibTag, prebuiltDep)
-	}
 
 	for _, dep := range p.prebuiltCommonProperties.Exported_bootclasspath_fragments {
 		prebuiltDep := android.PrebuiltNameFromSource(dep)
@@ -559,7 +548,7 @@ func createApexSelectorModule(ctx android.BottomUpMutatorContext, name string, a
 // createDeapexerModuleIfNeeded will create a deapexer module if it is needed.
 //
 // A deapexer module is only needed when the prebuilt apex specifies one or more modules in either
-// the `exported_java_libs` or `exported_bootclasspath_fragments` properties as that indicates that
+// the `exported_bootclasspath_fragments` properties as that indicates that
 // the listed modules need access to files from within the prebuilt .apex file.
 func (p *prebuiltCommon) createDeapexerModuleIfNeeded(ctx android.BottomUpMutatorContext, deapexerName string, apexFileSource string) {
 	// Only create the deapexer module if it is needed.
@@ -666,7 +655,6 @@ func (t exportedDependencyTag) RequiresFilesFromPrebuiltApex() {}
 var _ android.RequiresFilesFromPrebuiltApexTag = exportedDependencyTag{}
 
 var (
-	exportedJavaLibTag                       = exportedDependencyTag{name: "exported_java_libs"}
 	exportedBootclasspathFragmentTag         = exportedDependencyTag{name: "exported_bootclasspath_fragments"}
 	exportedSystemserverclasspathFragmentTag = exportedDependencyTag{name: "exported_systemserverclasspath_fragments"}
 )
@@ -677,7 +665,7 @@ var _ prebuiltApexModuleCreator = (*Prebuilt)(nil)
 // build.
 //
 // If this needs to make files from within a `.apex` file available for use by other Soong modules,
-// e.g. make dex implementation jars available for java_import modules listed in exported_java_libs,
+// e.g. make dex implementation jars available for `contents` listed in exported_bootclasspath_fragments,
 // it does so as follows:
 //
 //  1. It creates a `deapexer` module that actually extracts the files from the `.apex` file and

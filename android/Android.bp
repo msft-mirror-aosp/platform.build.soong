@@ -155,4 +155,6 @@ bootstrap_go_package {
         "vintf_fragment_test.go",
         "visibility_test.go",
     ],
+    // Used by plugins
+    visibility: ["//visibility:public"],
 }
