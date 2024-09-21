@@ -71,9 +71,11 @@ EOF
   cp -pr out/soong/build_aosp_arm_ninja_incremental out/soong/*.mk out/soong/build.aosp_arm.*.ninja ${OUTPUT_DIR}/after
 
   compare_files
+  echo "Tests passed"
 }
 
 function compare_files() {
+  count=0
   for file_before in ${OUTPUT_DIR}/before/*.ninja; do
     file_after="${OUTPUT_DIR}/after/$(basename "$file_before")"
     assert_files_equal $file_before $file_after
@@ -82,8 +84,11 @@ function compare_files() {
       echo "Files have identical mtime: $file_before $file_after"
       exit 1
     fi
+    ((count++))
   done
+  echo "Compared $count ninja files"
 
+  count=0
   for file_before in ${OUTPUT_DIR}/before/*.mk; do
     file_after="${OUTPUT_DIR}/after/$(basename "$file_before")"
     assert_files_equal $file_before $file_after
@@ -93,8 +98,11 @@ function compare_files() {
       echo "Files have different mtimes: $file_before $file_after"
       exit 1
     fi
+    ((count++))
   done
+  echo "Compared $count mk files"
 
+  count=0
   for file_before in ${OUTPUT_DIR}/before/build_aosp_arm_ninja_incremental/*.ninja; do
     file_after="${OUTPUT_DIR}/after/build_aosp_arm_ninja_incremental/$(basename "$file_before")"
     assert_files_equal $file_before $file_after
@@ -104,7 +112,9 @@ function compare_files() {
       echo "Files have different mtimes: $file_before $file_after"
       exit 1
     fi
+    ((count++))
   done
+  echo "Compared $count incremental ninja files"
 }
 
 test_build_action_restoring
