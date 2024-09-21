@@ -381,7 +381,7 @@ type commonProperties struct {
 	Native_bridge_supported *bool `android:"arch_variant"`
 
 	// init.rc files to be installed if this module is installed
-	Init_rc []string `android:"arch_variant,path"`
+	Init_rc proptools.Configurable[[]string] `android:"arch_variant,path"`
 
 	// VINTF manifest fragments to be installed if this module is installed
 	Vintf_fragments proptools.Configurable[[]string] `android:"path"`
@@ -1855,7 +1855,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			// so only a single rule is created for each init.rc or vintf fragment file.
 
 			if !m.InVendorRamdisk() {
-				ctx.initRcPaths = PathsForModuleSrc(ctx, m.commonProperties.Init_rc)
+				ctx.initRcPaths = PathsForModuleSrc(ctx, m.commonProperties.Init_rc.GetOrDefault(ctx, nil))
 				rcDir := PathForModuleInstall(ctx, "etc", "init")
 				for _, src := range ctx.initRcPaths {
 					installedInitRc := rcDir.Join(ctx, src.Base())
