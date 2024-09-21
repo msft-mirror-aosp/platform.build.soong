@@ -193,16 +193,16 @@ type BaseMutatorContext interface {
 	// Rename all variants of a module.  The new name is not visible to calls to ModuleName,
 	// AddDependency or OtherModuleName until after this mutator pass is complete.
 	Rename(name string)
+
+	// CreateModule creates a new module by calling the factory method for the specified moduleType, and applies
+	// the specified property structs to it as if the properties were set in a blueprint file.
+	CreateModule(ModuleFactory, ...interface{}) Module
 }
 
 type TopDownMutator func(TopDownMutatorContext)
 
 type TopDownMutatorContext interface {
 	BaseMutatorContext
-
-	// CreateModule creates a new module by calling the factory method for the specified moduleType, and applies
-	// the specified property structs to it as if the properties were set in a blueprint file.
-	CreateModule(ModuleFactory, ...interface{}) Module
 }
 
 type topDownMutatorContext struct {
@@ -740,6 +740,14 @@ func (b *bottomUpMutatorContext) MutatorName() string {
 func (b *bottomUpMutatorContext) Rename(name string) {
 	b.bp.Rename(name)
 	b.Module().base().commonProperties.DebugName = name
+}
+
+func (b *bottomUpMutatorContext) createModule(factory blueprint.ModuleFactory, name string, props ...interface{}) blueprint.Module {
+	return b.bp.CreateModule(factory, name, props...)
+}
+
+func (b *bottomUpMutatorContext) CreateModule(factory ModuleFactory, props ...interface{}) Module {
+	return createModule(b, factory, "_bottomUpMutatorModule", props...)
 }
 
 func (b *bottomUpMutatorContext) AddDependency(module blueprint.Module, tag blueprint.DependencyTag, name ...string) []blueprint.Module {
