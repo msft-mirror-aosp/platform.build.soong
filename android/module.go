@@ -443,12 +443,6 @@ type commonProperties struct {
 	// Set at module initialization time by calling InitCommonOSAndroidMultiTargetsArchModule
 	CreateCommonOSVariant bool `blueprint:"mutated"`
 
-	// If set to true then this variant is the CommonOS variant that has dependencies on its
-	// OsType specific variants.
-	//
-	// Set by osMutator.
-	CommonOSVariant bool `blueprint:"mutated"`
-
 	// When set to true, this module is not installed to the full install path (ex: under
 	// out/target/product/<name>/<partition>). It can be installed only to the packaging
 	// modules like android_filesystem.
@@ -1221,7 +1215,7 @@ func (m *ModuleBase) ArchSpecific() bool {
 
 // True if the current variant is a CommonOS variant, false otherwise.
 func (m *ModuleBase) IsCommonOSVariant() bool {
-	return m.commonProperties.CommonOSVariant
+	return m.commonProperties.CompileOS == CommonOS
 }
 
 // supportsTarget returns true if the given Target is supported by the current module.
@@ -1344,6 +1338,14 @@ func (m *ModuleBase) Enabled(ctx ConfigurableEvaluatorContext) bool {
 		return false
 	}
 	return m.commonProperties.Enabled.GetOrDefault(m.ConfigurableEvaluator(ctx), !m.Os().DefaultDisabled)
+}
+
+// Returns a copy of the enabled property, useful for passing it on to sub-modules
+func (m *ModuleBase) EnabledProperty() proptools.Configurable[bool] {
+	if m.commonProperties.ForcedDisabled {
+		return proptools.NewSimpleConfigurable(false)
+	}
+	return m.commonProperties.Enabled.Clone()
 }
 
 func (m *ModuleBase) Disable() {
@@ -2204,9 +2206,15 @@ func (m *ModuleBase) IsNativeBridgeSupported() bool {
 	return proptools.Bool(m.commonProperties.Native_bridge_supported)
 }
 
+type ConfigContext interface {
+	Config() Config
+}
+
 type ConfigurableEvaluatorContext interface {
+	OtherModuleProviderContext
 	Config() Config
 	OtherModulePropertyErrorf(module Module, property string, fmt string, args ...interface{})
+	HasMutatorFinished(mutatorName string) bool
 }
 
 type configurationEvalutor struct {
@@ -2228,6 +2236,12 @@ func (e configurationEvalutor) PropertyErrorf(property string, fmt string, args 
 func (e configurationEvalutor) EvaluateConfiguration(condition proptools.ConfigurableCondition, property string) proptools.ConfigurableValue {
 	ctx := e.ctx
 	m := e.m
+
+	if !ctx.HasMutatorFinished("defaults") {
+		ctx.OtherModulePropertyErrorf(m, property, "Cannot evaluate configurable property before the defaults mutator has run")
+		return proptools.ConfigurableValueUndefined()
+	}
+
 	switch condition.FunctionName() {
 	case "release_flag":
 		if condition.NumArgs() != 1 {

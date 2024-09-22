@@ -356,10 +356,15 @@ type UsesLibraryDependency interface {
 // TODO(jungjw): Move this to kythe.go once it's created.
 type xref interface {
 	XrefJavaFiles() android.Paths
+	XrefKotlinFiles() android.Paths
 }
 
 func (j *Module) XrefJavaFiles() android.Paths {
 	return j.kytheFiles
+}
+
+func (j *Module) XrefKotlinFiles() android.Paths {
+	return j.kytheKotlinFiles
 }
 
 func (d dependencyTag) PropagateAconfigValidation() bool {
@@ -3304,14 +3309,19 @@ type kytheExtractJavaSingleton struct {
 
 func (ks *kytheExtractJavaSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 	var xrefTargets android.Paths
+	var xrefKotlinTargets android.Paths
 	ctx.VisitAllModules(func(module android.Module) {
 		if javaModule, ok := module.(xref); ok {
 			xrefTargets = append(xrefTargets, javaModule.XrefJavaFiles()...)
+			xrefKotlinTargets = append(xrefKotlinTargets, javaModule.XrefKotlinFiles()...)
 		}
 	})
 	// TODO(asmundak): perhaps emit a rule to output a warning if there were no xrefTargets
 	if len(xrefTargets) > 0 {
 		ctx.Phony("xref_java", xrefTargets...)
+	}
+	if len(xrefKotlinTargets) > 0 {
+		ctx.Phony("xref_kotlin", xrefKotlinTargets...)
 	}
 }
 
@@ -3335,6 +3345,10 @@ func addCLCFromDep(ctx android.ModuleContext, depModule android.Module,
 	if lib, ok := depModule.(SdkLibraryDependency); ok && lib.sharedLibrary() {
 		// A shared SDK library. This should be added as a top-level CLC element.
 		sdkLib = &depName
+	} else if lib, ok := depModule.(SdkLibraryComponentDependency); ok && lib.OptionalSdkLibraryImplementation() != nil {
+		if depModule.Name() == proptools.String(lib.OptionalSdkLibraryImplementation())+".impl" {
+			sdkLib = lib.OptionalSdkLibraryImplementation()
+		}
 	} else if ulib, ok := depModule.(ProvidesUsesLib); ok {
 		// A non-SDK library disguised as an SDK library by the means of `provides_uses_lib`
 		// property. This should be handled in the same way as a shared SDK library.

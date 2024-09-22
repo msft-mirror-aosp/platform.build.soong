@@ -233,7 +233,8 @@ func getAconfigFilePaths(m *ModuleBase, aconfigFiles map[string]Paths) (paths Pa
 	} else if m.ProductSpecific() {
 		container = "product"
 	} else if m.SystemExtSpecific() {
-		container = "system_ext"
+		// system_ext and system partitions should be treated as one container
+		container = "system"
 	}
 
 	paths = append(paths, aconfigFiles[container]...)
