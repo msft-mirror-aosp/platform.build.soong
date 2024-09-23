@@ -72,7 +72,6 @@ bootstrap_go_package {
         "rro.go",
         "sdk.go",
         "sdk_library.go",
-        "sdk_library_external.go",
         "sdk_library_internal.go",
         "support_libraries.go",
         "system_modules.go",
