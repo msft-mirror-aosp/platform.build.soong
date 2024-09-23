@@ -2700,13 +2700,13 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 					transitiveBootClasspathHeaderJars = append(transitiveBootClasspathHeaderJars, dep.TransitiveStaticLibsHeaderJars)
 				}
 			}
-		} else if dep, ok := module.(SdkLibraryDependency); ok {
+		} else if _, ok := module.(SdkLibraryDependency); ok {
 			switch tag {
 			case libTag, sdkLibTag:
-				depHeaderJars := dep.SdkHeaderJars(ctx, j.SdkVersion(ctx))
-				flags.classpath = append(flags.classpath, depHeaderJars...)
-				transitiveClasspathHeaderJars = append(transitiveClasspathHeaderJars,
-					android.NewDepSet(android.PREORDER, depHeaderJars, nil))
+				sdkInfo, _ := android.OtherModuleProvider(ctx, module, SdkLibraryInfoProvider)
+				generatingLibsString := android.PrettyConcat(
+					getGeneratingLibs(ctx, j.SdkVersion(ctx), module.Name(), sdkInfo), true, "or")
+				ctx.ModuleErrorf("cannot depend directly on java_sdk_library %q; try depending on %s instead", module.Name(), generatingLibsString)
 			}
 		}
 
