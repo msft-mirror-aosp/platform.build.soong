@@ -670,7 +670,7 @@ func TestPrebuilts(t *testing.T) {
 		java_library {
 			name: "foo",
 			srcs: ["a.java", ":stubs-source"],
-			libs: ["bar", "sdklib"],
+			libs: ["bar", "sdklib.stubs"],
 			static_libs: ["baz"],
 		}
 

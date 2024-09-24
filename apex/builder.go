@@ -96,6 +96,7 @@ var createStorageInfo = []createStorageStruct{
 	{"package.map", "create_aconfig_package_map_file", "package_map"},
 	{"flag.map", "create_aconfig_flag_map_file", "flag_map"},
 	{"flag.val", "create_aconfig_flag_val_file", "flag_val"},
+	{"flag.info", "create_aconfig_flag_info_file", "flag_info"},
 }
 
 var (
