@@ -5429,11 +5429,11 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 			apex_available: ["myapex"],
 			shared_library: false,
 			permitted_packages: ["bar"],
+			prefer: true,
 		}
 
 		java_sdk_library {
 			name: "libbar",
-			enabled: false,
 			srcs: ["foo/bar/MyClass.java"],
 			unsafe_ignore_missing_latest_api: true,
 			apex_available: ["myapex"],
