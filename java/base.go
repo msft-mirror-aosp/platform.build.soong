@@ -1735,8 +1735,12 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		return
 	}
 
+	completeStaticLibsImplementationJarsToCombine := completeStaticLibsImplementationJars
+
 	if j.shouldInstrument(ctx) {
-		outputFile = j.instrument(ctx, flags, outputFile, jarName, specs)
+		instrumentedOutputFile := j.instrument(ctx, flags, outputFile, jarName, specs)
+		completeStaticLibsImplementationJarsToCombine = android.NewDepSet(android.PREORDER, android.Paths{instrumentedOutputFile}, nil)
+		outputFile = instrumentedOutputFile
 	}
 
 	// merge implementation jar with resources if necessary
@@ -1744,7 +1748,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	if ctx.Config().UseTransitiveJarsInClasspath() {
 		resourceJars := completeStaticLibsResourceJars.ToList()
 		if len(resourceJars) > 0 {
-			implementationAndResourcesJarsToCombine = append(resourceJars, completeStaticLibsImplementationJars.ToList()...)
+			implementationAndResourcesJarsToCombine = append(resourceJars, completeStaticLibsImplementationJarsToCombine.ToList()...)
 			implementationAndResourcesJarsToCombine = append(implementationAndResourcesJarsToCombine, extraDepCombinedJars...)
 		}
 	} else {
