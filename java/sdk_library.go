@@ -2768,40 +2768,14 @@ func (module *SdkLibraryImport) GenerateAndroidBuildActions(ctx android.ModuleCo
 	}
 
 	if ctx.Device() {
-		// If this is a variant created for a prebuilt_apex then use the dex implementation jar
-		// obtained from the associated deapexer module.
+		// Shared libraries deapexed from prebuilt apexes are no longer supported.
+		// Set the dexJarBuildPath to a fake path.
+		// This allows soong analysis pass, but will be an error during ninja execution if there are
+		// any rdeps.
 		ai, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 		if ai.ForPrebuiltApex {
-			// Get the path of the dex implementation jar from the `deapexer` module.
-			di, err := android.FindDeapexerProviderForModule(ctx)
-			if err != nil {
-				// An error was found, possibly due to multiple apexes in the tree that export this library
-				// Defer the error till a client tries to call DexJarBuildPath
-				module.dexJarFileErr = err
-				module.initHiddenAPIError(err)
-				return
-			}
-			dexJarFileApexRootRelative := ApexRootRelativePathToJavaLib(module.BaseModuleName())
-			if dexOutputPath := di.PrebuiltExportPath(dexJarFileApexRootRelative); dexOutputPath != nil {
-				dexJarFile := makeDexJarPathFromPath(dexOutputPath)
-				module.dexJarFile = dexJarFile
-				installPath := android.PathForModuleInPartitionInstall(
-					ctx, "apex", ai.ApexVariationName, dexJarFileApexRootRelative)
-				module.installFile = installPath
-				module.initHiddenAPI(ctx, dexJarFile, module.findScopePaths(apiScopePublic).stubsImplPath[0], nil)
-
-				module.dexpreopter.installPath = module.dexpreopter.getInstallPath(ctx, android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName()), installPath)
-				module.dexpreopter.isSDKLibrary = true
-				module.dexpreopter.uncompressedDex = shouldUncompressDex(ctx, android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName()), &module.dexpreopter)
-
-				if profilePath := di.PrebuiltExportPath(dexJarFileApexRootRelative + ".prof"); profilePath != nil {
-					module.dexpreopter.inputProfilePathOnHost = profilePath
-				}
-			} else {
-				// This should never happen as a variant for a prebuilt_apex is only created if the
-				// prebuilt_apex has been configured to export the java library dex file.
-				ctx.ModuleErrorf("internal error: no dex implementation jar available from prebuilt APEX %s", di.ApexModuleName())
-			}
+			module.dexJarFile = makeDexJarPathFromPath(android.PathForModuleInstall(ctx, "intentionally_no_longer_supported"))
+			module.initHiddenAPI(ctx, module.dexJarFile, module.findScopePaths(apiScopePublic).stubsImplPath[0], nil)
 		}
 	}
 
