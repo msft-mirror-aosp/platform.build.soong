@@ -3241,7 +3241,7 @@ func TestUsesLibraries(t *testing.T) {
 		java_library {
 			name: "static-runtime-helper",
 			srcs: ["a.java"],
-			libs: ["runtime-library"],
+			libs: ["runtime-library.impl"],
 			sdk_version: "current",
 		}
 
@@ -3305,7 +3305,7 @@ func TestUsesLibraries(t *testing.T) {
 			name: "app",
 			srcs: ["a.java"],
 			libs: [
-				"qux",
+				"qux.impl",
 				"quuz.stubs"
 			],
 			static_libs: [
