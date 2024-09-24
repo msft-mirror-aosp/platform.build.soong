@@ -49,13 +49,8 @@ func registerApexBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("override_apex", OverrideApexFactory)
 	ctx.RegisterModuleType("apex_set", apexSetFactory)
 
-	ctx.PreArchMutators(registerPreArchMutators)
 	ctx.PreDepsMutators(RegisterPreDepsMutators)
 	ctx.PostDepsMutators(RegisterPostDepsMutators)
-}
-
-func registerPreArchMutators(ctx android.RegisterMutatorsContext) {
-	ctx.BottomUp("prebuilt_apex_module_creator", prebuiltApexModuleCreatorMutator).Parallel()
 }
 
 func RegisterPreDepsMutators(ctx android.RegisterMutatorsContext) {
@@ -2742,6 +2737,12 @@ func (a *apexBundle) checkApexAvailability(ctx android.ModuleContext) {
 	// Because APEXes targeting other than system/system_ext partitions can't set
 	// apex_available, we skip checks for these APEXes
 	if a.SocSpecific() || a.DeviceSpecific() || (a.ProductSpecific() && ctx.Config().EnforceProductPartitionInterface()) {
+		return
+	}
+
+	// Temporarily bypass /product APEXes with a specific prefix.
+	// TODO: b/352818241 - Remove this after APEX availability is enforced for /product APEXes.
+	if a.ProductSpecific() && strings.HasPrefix(a.ApexVariationName(), "com.sdv.") {
 		return
 	}
 

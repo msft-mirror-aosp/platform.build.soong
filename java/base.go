@@ -2414,18 +2414,13 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			return
 		}
 
-		if dep, ok := module.(SdkLibraryDependency); ok {
+		if _, ok := module.(SdkLibraryDependency); ok {
 			switch tag {
-			case sdkLibTag, libTag:
-				depHeaderJars := dep.SdkHeaderJars(ctx, j.SdkVersion(ctx))
-				deps.classpath = append(deps.classpath, depHeaderJars...)
-				deps.dexClasspath = append(deps.dexClasspath, depHeaderJars...)
-
-				// TODO: SDK libraries should export a provider with TransitiveClasspathHeaderJars
-				depHeaderJarsSet := android.NewDepSet(android.PREORDER, depHeaderJars, nil)
-				transitiveClasspathHeaderJars = append(transitiveClasspathHeaderJars, depHeaderJarsSet)
-			case staticLibTag:
-				ctx.ModuleErrorf("dependency on java_sdk_library %q can only be in libs", otherName)
+			case sdkLibTag, libTag, staticLibTag:
+				sdkInfo, _ := android.OtherModuleProvider(ctx, module, SdkLibraryInfoProvider)
+				generatingLibsString := android.PrettyConcat(
+					getGeneratingLibs(ctx, j.SdkVersion(ctx), module.Name(), sdkInfo), true, "or")
+				ctx.ModuleErrorf("cannot depend directly on java_sdk_library %q; try depending on %s instead", module.Name(), generatingLibsString)
 			}
 		} else if dep, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
 			if sdkLinkType != javaPlatform {
