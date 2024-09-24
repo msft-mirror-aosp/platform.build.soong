@@ -429,41 +429,45 @@ func (this *stubDecorator) diffAbi(ctx ModuleContext) {
 	// Also ensure that the ABI of the next API level (if there is one) matches
 	// this API level. *New* ABI is allowed, but any changes to APIs that exist
 	// in this API level are disallowed.
-	if !this.apiLevel.IsCurrent() && prebuiltAbiDump.Valid() {
+	if prebuiltAbiDump.Valid() {
 		nextApiLevel := findNextApiLevel(ctx, this.apiLevel)
 		if nextApiLevel == nil {
 			panic(fmt.Errorf("could not determine which API level follows "+
 				"non-current API level %s", this.apiLevel))
 		}
-		nextAbiDiffPath := android.PathForModuleOut(ctx,
-			"abidiff_next.timestamp")
-		nextAbiDump := this.findPrebuiltAbiDump(ctx, *nextApiLevel)
-		missingNextPrebuiltError := fmt.Sprintf(
-			missingPrebuiltErrorTemplate, this.libraryName(ctx),
-			nextAbiDump.InvalidReason())
-		if !nextAbiDump.Valid() {
-			ctx.Build(pctx, android.BuildParams{
-				Rule:   android.ErrorRule,
-				Output: nextAbiDiffPath,
-				Args: map[string]string{
-					"error": missingNextPrebuiltError,
-				},
-			})
-		} else {
-			ctx.Build(pctx, android.BuildParams{
-				Rule: stgdiff,
-				Description: fmt.Sprintf(
-					"Comparing ABI to the next API level %s %s",
-					prebuiltAbiDump, nextAbiDump),
-				Output: nextAbiDiffPath,
-				Inputs: android.Paths{
-					prebuiltAbiDump.Path(), nextAbiDump.Path()},
-				Args: map[string]string{
-					"args": "--format=small --ignore=interface_addition",
-				},
-			})
+
+		// "current" ABI is not tracked.
+		if !nextApiLevel.IsCurrent() {
+			nextAbiDiffPath := android.PathForModuleOut(ctx,
+				"abidiff_next.timestamp")
+			nextAbiDump := this.findPrebuiltAbiDump(ctx, *nextApiLevel)
+			missingNextPrebuiltError := fmt.Sprintf(
+				missingPrebuiltErrorTemplate, this.libraryName(ctx),
+				nextAbiDump.InvalidReason())
+			if !nextAbiDump.Valid() {
+				ctx.Build(pctx, android.BuildParams{
+					Rule:   android.ErrorRule,
+					Output: nextAbiDiffPath,
+					Args: map[string]string{
+						"error": missingNextPrebuiltError,
+					},
+				})
+			} else {
+				ctx.Build(pctx, android.BuildParams{
+					Rule: stgdiff,
+					Description: fmt.Sprintf(
+						"Comparing ABI to the next API level %s %s",
+						prebuiltAbiDump, nextAbiDump),
+					Output: nextAbiDiffPath,
+					Inputs: android.Paths{
+						prebuiltAbiDump.Path(), nextAbiDump.Path()},
+					Args: map[string]string{
+						"args": "--format=small --ignore=interface_addition",
+					},
+				})
+			}
+			this.abiDiffPaths = append(this.abiDiffPaths, nextAbiDiffPath)
 		}
-		this.abiDiffPaths = append(this.abiDiffPaths, nextAbiDiffPath)
 	}
 }
 

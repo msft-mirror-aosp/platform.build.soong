@@ -73,6 +73,7 @@ bootstrap_go_package {
         "sdk.go",
         "sdk_library.go",
         "sdk_library_external.go",
+        "sdk_library_internal.go",
         "support_libraries.go",
         "system_modules.go",
         "systemserver_classpath_fragment.go",
@@ -120,4 +121,5 @@ bootstrap_go_package {
         "test_spec_test.go",
     ],
     pluginFor: ["soong_build"],
+    visibility: ["//visibility:public"],
 }
