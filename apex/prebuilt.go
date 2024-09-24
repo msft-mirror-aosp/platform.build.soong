@@ -253,28 +253,6 @@ func (p *prebuiltCommon) AndroidMkEntries() []android.AndroidMkEntries {
 	return entriesList
 }
 
-// DEPRECATED. // TODO (spandandas): Remove this interface.
-
-// prebuiltApexModuleCreator defines the methods that need to be implemented by prebuilt_apex and
-// apex_set in order to create the modules needed to provide access to the prebuilt .apex file.
-type prebuiltApexModuleCreator interface {
-	createPrebuiltApexModules(ctx android.BottomUpMutatorContext)
-}
-
-// prebuiltApexModuleCreatorMutator is the mutator responsible for invoking the
-// prebuiltApexModuleCreator's createPrebuiltApexModules method.
-//
-// It is registered as a pre-arch mutator as it must run after the ComponentDepsMutator because it
-// will need to access dependencies added by that (exported modules) but must run before the
-// DepsMutator so that the deapexer module it creates can add dependencies onto itself from the
-// exported modules.
-func prebuiltApexModuleCreatorMutator(ctx android.BottomUpMutatorContext) {
-	module := ctx.Module()
-	if creator, ok := module.(prebuiltApexModuleCreator); ok {
-		creator.createPrebuiltApexModules(ctx)
-	}
-}
-
 func (p *prebuiltCommon) hasExportedDeps() bool {
 	return len(p.prebuiltCommonProperties.Exported_bootclasspath_fragments) > 0 ||
 		len(p.prebuiltCommonProperties.Exported_systemserverclasspath_fragments) > 0
