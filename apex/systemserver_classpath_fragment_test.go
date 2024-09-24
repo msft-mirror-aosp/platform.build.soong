@@ -278,7 +278,6 @@ func TestPrebuiltSystemserverclasspathFragmentContents(t *testing.T) {
 		`all_apex_contributions`,
 		`dex2oatd`,
 		`prebuilt_myapex.apex.selector`,
-		`prebuilt_myapex.deapexer`,
 		`prebuilt_mysystemserverclasspathfragment`,
 	})
 
@@ -286,10 +285,9 @@ func TestPrebuiltSystemserverclasspathFragmentContents(t *testing.T) {
 		`all_apex_contributions`,
 		`prebuilt_bar`,
 		`prebuilt_foo`,
-		`prebuilt_myapex.deapexer`,
 	})
 
-	ensureExactDeapexedContents(t, ctx, "prebuilt_myapex", "android_common", []string{
+	ensureExactDeapexedContents(t, ctx, "myapex", "android_common_myapex", []string{
 		"javalib/foo.jar",
 		"javalib/bar.jar",
 		"javalib/bar.jar.prof",
@@ -439,10 +437,9 @@ func TestPrebuiltStandaloneSystemserverclasspathFragmentContents(t *testing.T) {
 		`all_apex_contributions`,
 		`prebuilt_bar`,
 		`prebuilt_foo`,
-		`prebuilt_myapex.deapexer`,
 	})
 
-	ensureExactDeapexedContents(t, ctx, "prebuilt_myapex", "android_common", []string{
+	ensureExactDeapexedContents(t, ctx, "myapex", "android_common_myapex", []string{
 		"javalib/foo.jar",
 		"javalib/bar.jar",
 		"javalib/bar.jar.prof",
