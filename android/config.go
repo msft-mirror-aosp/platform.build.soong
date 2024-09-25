@@ -1252,7 +1252,7 @@ func (c *config) TidyChecks() string {
 }
 
 func (c *config) LibartImgHostBaseAddress() string {
-	return "0x60000000"
+	return "0x70000000"
 }
 
 func (c *config) LibartImgDeviceBaseAddress() string {
