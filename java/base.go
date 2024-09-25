@@ -1737,9 +1737,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	}
 
 	if j.shouldInstrument(ctx) {
-		instrumentedOutputFile := j.instrument(ctx, flags, outputFile, jarName, specs)
-		completeStaticLibsImplementationJars = android.NewDepSet(android.PREORDER, android.Paths{instrumentedOutputFile}, nil)
-		outputFile = instrumentedOutputFile
+		outputFile = j.instrument(ctx, flags, outputFile, jarName, specs)
 	}
 
 	// merge implementation jar with resources if necessary
