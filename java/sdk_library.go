@@ -1376,7 +1376,7 @@ func (module *SdkLibrary) CheckMinSdkVersion(ctx android.ModuleContext) {
 }
 
 func CheckMinSdkVersion(ctx android.ModuleContext, module *Library) {
-	android.CheckMinSdkVersion(ctx, module.MinSdkVersion(ctx), func(c android.ModuleContext, do android.PayloadDepsCallback) {
+	android.CheckMinSdkVersion(ctx, module.MinSdkVersion(ctx), func(c android.BaseModuleContext, do android.PayloadDepsCallback) {
 		ctx.WalkDeps(func(child android.Module, parent android.Module) bool {
 			isExternal := !module.depIsInSameApex(ctx, child)
 			if am, ok := child.(android.ApexModule); ok {
