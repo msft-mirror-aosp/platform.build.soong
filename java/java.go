@@ -2607,10 +2607,6 @@ func (a *Import) JacocoReportClassesFile() android.Path {
 	return nil
 }
 
-func (j *Import) LintDepSets() LintDepSets {
-	return LintDepSets{}
-}
-
 func (j *Import) getStrictUpdatabilityLinting() bool {
 	return false
 }
@@ -3118,10 +3114,6 @@ func (j *DexImport) Stem() string {
 
 func (a *DexImport) JacocoReportClassesFile() android.Path {
 	return nil
-}
-
-func (a *DexImport) LintDepSets() LintDepSets {
-	return LintDepSets{}
 }
 
 func (j *DexImport) IsInstallable() bool {

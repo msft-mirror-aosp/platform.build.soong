@@ -707,9 +707,6 @@ func setOutputFiles(ctx android.ModuleContext, m Module) {
 		ctx.SetOutputFiles(android.Paths{m.dexer.proguardDictionary.Path()}, ".proguard_map")
 	}
 	ctx.SetOutputFiles(m.properties.Generated_srcjars, ".generated_srcjars")
-	if m.linter.outputs.xml != nil {
-		ctx.SetOutputFiles(android.Paths{m.linter.outputs.xml}, ".lint")
-	}
 }
 
 func InitJavaModule(module android.DefaultableModule, hod android.HostOrDeviceSupported) {

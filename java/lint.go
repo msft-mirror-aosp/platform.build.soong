@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
@@ -90,7 +91,6 @@ type linter struct {
 	compileSdkKind          android.SdkKind
 	javaLanguageLevel       string
 	kotlinLanguageLevel     string
-	outputs                 lintOutputs
 	properties              LintProperties
 	extraMainlineLintErrors []string
 	compile_data            android.Paths
@@ -100,22 +100,7 @@ type linter struct {
 	buildModuleReportZip bool
 }
 
-type lintOutputs struct {
-	html              android.Path
-	text              android.Path
-	xml               android.Path
-	referenceBaseline android.Path
-
-	depSets LintDepSets
-}
-
-type lintOutputsIntf interface {
-	lintOutputs() *lintOutputs
-}
-
 type LintDepSetsIntf interface {
-	LintDepSets() LintDepSets
-
 	// Methods used to propagate strict_updatability_linting values.
 	GetStrictUpdatabilityLinting() bool
 	SetStrictUpdatabilityLinting(bool)
@@ -144,15 +129,15 @@ func (l LintDepSetsBuilder) Direct(html, text, xml android.Path) LintDepSetsBuil
 	return l
 }
 
-func (l LintDepSetsBuilder) Transitive(depSets LintDepSets) LintDepSetsBuilder {
-	if depSets.HTML != nil {
-		l.HTML.Transitive(depSets.HTML)
+func (l LintDepSetsBuilder) Transitive(info *LintInfo) LintDepSetsBuilder {
+	if info.TransitiveHTML != nil {
+		l.HTML.Transitive(info.TransitiveHTML)
 	}
-	if depSets.Text != nil {
-		l.Text.Transitive(depSets.Text)
+	if info.TransitiveText != nil {
+		l.Text.Transitive(info.TransitiveText)
 	}
-	if depSets.XML != nil {
-		l.XML.Transitive(depSets.XML)
+	if info.TransitiveXML != nil {
+		l.XML.Transitive(info.TransitiveXML)
 	}
 	return l
 }
@@ -209,10 +194,6 @@ var allLintDatabasefiles = map[android.SdkKind]lintDatabaseFiles{
 	},
 }
 
-func (l *linter) LintDepSets() LintDepSets {
-	return l.outputs.depSets
-}
-
 func (l *linter) GetStrictUpdatabilityLinting() bool {
 	return BoolDefault(l.properties.Lint.Strict_updatability_linting, false)
 }
@@ -223,10 +204,17 @@ func (l *linter) SetStrictUpdatabilityLinting(strictLinting bool) {
 
 var _ LintDepSetsIntf = (*linter)(nil)
 
-var _ lintOutputsIntf = (*linter)(nil)
+var LintProvider = blueprint.NewProvider[*LintInfo]()
 
-func (l *linter) lintOutputs() *lintOutputs {
-	return &l.outputs
+type LintInfo struct {
+	HTML              android.Path
+	Text              android.Path
+	XML               android.Path
+	ReferenceBaseline android.Path
+
+	TransitiveHTML *android.DepSet[android.Path]
+	TransitiveText *android.DepSet[android.Path]
+	TransitiveXML  *android.DepSet[android.Path]
 }
 
 func (l *linter) enabled() bool {
@@ -447,10 +435,12 @@ func (l *linter) lint(ctx android.ModuleContext) {
 	depSetsBuilder := NewLintDepSetBuilder().Direct(html, text, xml)
 
 	ctx.VisitDirectDepsWithTag(staticLibTag, func(dep android.Module) {
-		if depLint, ok := dep.(LintDepSetsIntf); ok {
-			depSetsBuilder.Transitive(depLint.LintDepSets())
+		if info, ok := android.OtherModuleProvider(ctx, dep, LintProvider); ok {
+			depSetsBuilder.Transitive(info)
 		}
 	})
+
+	depSets := depSetsBuilder.Build()
 
 	rule.Command().Text("rm -rf").Flag(lintPaths.cacheDir.String()).Flag(lintPaths.homeDir.String())
 	rule.Command().Text("mkdir -p").Flag(lintPaths.cacheDir.String()).Flag(lintPaths.homeDir.String())
@@ -530,22 +520,26 @@ func (l *linter) lint(ctx android.ModuleContext) {
 
 	rule.Build("lint", "lint")
 
-	l.outputs = lintOutputs{
-		html:              html,
-		text:              text,
-		xml:               xml,
-		referenceBaseline: referenceBaseline,
+	android.SetProvider(ctx, LintProvider, &LintInfo{
+		HTML:              html,
+		Text:              text,
+		XML:               xml,
+		ReferenceBaseline: referenceBaseline,
 
-		depSets: depSetsBuilder.Build(),
-	}
+		TransitiveHTML: depSets.HTML,
+		TransitiveText: depSets.Text,
+		TransitiveXML:  depSets.XML,
+	})
 
 	if l.buildModuleReportZip {
-		l.reports = BuildModuleLintReportZips(ctx, l.LintDepSets())
+		l.reports = BuildModuleLintReportZips(ctx, depSets)
 	}
 
 	// Create a per-module phony target to run the lint check.
 	phonyName := ctx.ModuleName() + "-lint"
 	ctx.Phony(phonyName, xml)
+
+	ctx.SetOutputFiles(android.Paths{xml}, ".lint")
 }
 
 func BuildModuleLintReportZips(ctx android.ModuleContext, depSets LintDepSets) android.Paths {
@@ -642,7 +636,7 @@ func (l *lintSingleton) generateLintReportZips(ctx android.SingletonContext) {
 		return
 	}
 
-	var outputs []*lintOutputs
+	var outputs []*LintInfo
 	var dirs []string
 	ctx.VisitAllModules(func(m android.Module) {
 		if ctx.Config().KatiEnabled() && !m.ExportedToMake() {
@@ -658,14 +652,14 @@ func (l *lintSingleton) generateLintReportZips(ctx android.SingletonContext) {
 			}
 		}
 
-		if l, ok := m.(lintOutputsIntf); ok {
-			outputs = append(outputs, l.lintOutputs())
+		if lintInfo, ok := android.OtherModuleProvider(ctx, m, LintProvider); ok {
+			outputs = append(outputs, lintInfo)
 		}
 	})
 
 	dirs = android.SortedUniqueStrings(dirs)
 
-	zip := func(outputPath android.WritablePath, get func(*lintOutputs) android.Path) {
+	zip := func(outputPath android.WritablePath, get func(*LintInfo) android.Path) {
 		var paths android.Paths
 
 		for _, output := range outputs {
@@ -678,16 +672,16 @@ func (l *lintSingleton) generateLintReportZips(ctx android.SingletonContext) {
 	}
 
 	l.htmlZip = android.PathForOutput(ctx, "lint-report-html.zip")
-	zip(l.htmlZip, func(l *lintOutputs) android.Path { return l.html })
+	zip(l.htmlZip, func(l *LintInfo) android.Path { return l.HTML })
 
 	l.textZip = android.PathForOutput(ctx, "lint-report-text.zip")
-	zip(l.textZip, func(l *lintOutputs) android.Path { return l.text })
+	zip(l.textZip, func(l *LintInfo) android.Path { return l.Text })
 
 	l.xmlZip = android.PathForOutput(ctx, "lint-report-xml.zip")
-	zip(l.xmlZip, func(l *lintOutputs) android.Path { return l.xml })
+	zip(l.xmlZip, func(l *LintInfo) android.Path { return l.XML })
 
 	l.referenceBaselineZip = android.PathForOutput(ctx, "lint-report-reference-baselines.zip")
-	zip(l.referenceBaselineZip, func(l *lintOutputs) android.Path { return l.referenceBaseline })
+	zip(l.referenceBaselineZip, func(l *LintInfo) android.Path { return l.ReferenceBaseline })
 
 	ctx.Phony("lint-check", l.htmlZip, l.textZip, l.xmlZip, l.referenceBaselineZip)
 }
