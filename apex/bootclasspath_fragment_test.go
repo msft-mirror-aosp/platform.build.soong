@@ -577,7 +577,6 @@ func TestBootclasspathFragmentInPrebuiltArtApex(t *testing.T) {
 			`all_apex_contributions`,
 			`dex2oatd`,
 			`prebuilt_art-bootclasspath-fragment`,
-			`prebuilt_com.android.art.apex.selector`,
 		})
 
 		java.CheckModuleDependencies(t, result.TestContext, "art-bootclasspath-fragment", "android_common_com.android.art", []string{
