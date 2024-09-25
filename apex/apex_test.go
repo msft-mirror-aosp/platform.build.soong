@@ -6013,6 +6013,87 @@ func TestApexAvailable_DirectDep(t *testing.T) {
 		system_shared_libs: [],
 		apex_available: ["otherapex"],
 	}`)
+
+	// 'apex_available' check is bypassed for /product apex with a specific prefix.
+	// TODO: b/352818241 - Remove below two cases after APEX availability is enforced for /product APEXes.
+	testApex(t, `
+	apex {
+		name: "com.sdv.myapex",
+		key: "myapex.key",
+		native_shared_libs: ["libfoo"],
+		updatable: false,
+		product_specific: true,
+	}
+
+	apex_key {
+		name: "myapex.key",
+		public_key: "testkey.avbpubkey",
+		private_key: "testkey.pem",
+	}
+
+	apex {
+		name: "com.any.otherapex",
+		key: "otherapex.key",
+		native_shared_libs: ["libfoo"],
+		updatable: false,
+	}
+
+	apex_key {
+		name: "otherapex.key",
+		public_key: "testkey.avbpubkey",
+		private_key: "testkey.pem",
+	}
+
+	cc_library {
+		name: "libfoo",
+		stl: "none",
+		system_shared_libs: [],
+		apex_available: ["com.any.otherapex"],
+		product_specific: true,
+	}`,
+		android.FixtureMergeMockFs(android.MockFS{
+			"system/sepolicy/apex/com.sdv.myapex-file_contexts":    nil,
+			"system/sepolicy/apex/com.any.otherapex-file_contexts": nil,
+		}))
+
+	// 'apex_available' check is not bypassed for non-product apex with a specific prefix.
+	testApexError(t, "requires \"libfoo\" that doesn't list the APEX under 'apex_available'.", `
+	apex {
+		name: "com.sdv.myapex",
+		key: "myapex.key",
+		native_shared_libs: ["libfoo"],
+		updatable: false,
+	}
+
+	apex_key {
+		name: "myapex.key",
+		public_key: "testkey.avbpubkey",
+		private_key: "testkey.pem",
+	}
+
+	apex {
+		name: "com.any.otherapex",
+		key: "otherapex.key",
+		native_shared_libs: ["libfoo"],
+		updatable: false,
+	}
+
+	apex_key {
+		name: "otherapex.key",
+		public_key: "testkey.avbpubkey",
+		private_key: "testkey.pem",
+	}
+
+	cc_library {
+		name: "libfoo",
+		stl: "none",
+		system_shared_libs: [],
+		apex_available: ["com.any.otherapex"],
+	}`,
+		android.FixtureMergeMockFs(android.MockFS{
+			"system/sepolicy/apex/com.sdv.myapex-file_contexts":    nil,
+			"system/sepolicy/apex/com.any.otherapex-file_contexts": nil,
+		}))
 }
 
 func TestApexAvailable_IndirectDep(t *testing.T) {
@@ -6058,6 +6139,91 @@ func TestApexAvailable_IndirectDep(t *testing.T) {
 		stl: "none",
 		system_shared_libs: [],
 	}`)
+
+	// 'apex_available' check is bypassed for /product apex with a specific prefix.
+	// TODO: b/352818241 - Remove below two cases after APEX availability is enforced for /product APEXes.
+	testApex(t, `
+		apex {
+			name: "com.sdv.myapex",
+			key: "myapex.key",
+			native_shared_libs: ["libfoo"],
+			updatable: false,
+			product_specific: true,
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		cc_library {
+			name: "libfoo",
+			stl: "none",
+			shared_libs: ["libbar"],
+			system_shared_libs: [],
+			apex_available: ["com.sdv.myapex"],
+			product_specific: true,
+		}
+
+		cc_library {
+			name: "libbar",
+			stl: "none",
+			shared_libs: ["libbaz"],
+			system_shared_libs: [],
+			apex_available: ["com.sdv.myapex"],
+			product_specific: true,
+		}
+
+		cc_library {
+			name: "libbaz",
+			stl: "none",
+			system_shared_libs: [],
+			product_specific: true,
+		}`,
+		android.FixtureMergeMockFs(android.MockFS{
+			"system/sepolicy/apex/com.sdv.myapex-file_contexts": nil,
+		}))
+
+	// 'apex_available' check is not bypassed for non-product apex with a specific prefix.
+	testApexError(t, `requires "libbaz" that doesn't list the APEX under 'apex_available'.`, `
+		apex {
+			name: "com.sdv.myapex",
+			key: "myapex.key",
+			native_shared_libs: ["libfoo"],
+			updatable: false,
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		cc_library {
+			name: "libfoo",
+			stl: "none",
+			shared_libs: ["libbar"],
+			system_shared_libs: [],
+			apex_available: ["com.sdv.myapex"],
+		}
+
+		cc_library {
+			name: "libbar",
+			stl: "none",
+			shared_libs: ["libbaz"],
+			system_shared_libs: [],
+			apex_available: ["com.sdv.myapex"],
+		}
+
+		cc_library {
+			name: "libbaz",
+			stl: "none",
+			system_shared_libs: [],
+		}`,
+		android.FixtureMergeMockFs(android.MockFS{
+			"system/sepolicy/apex/com.sdv.myapex-file_contexts": nil,
+		}))
 }
 
 func TestApexAvailable_IndirectStaticDep(t *testing.T) {
@@ -7861,9 +8027,9 @@ func TestAppSetBundlePrebuilt(t *testing.T) {
 	ctx := testApex(t, bp, prepareForTestWithSantitizeHwaddress)
 
 	// Check that the extractor produces the correct output file from the correct input file.
-	extractorOutput := "out/soong/.intermediates/prebuilt_myapex.apex.extractor/android_common/extracted/myapex.hwasan.apks"
+	extractorOutput := "out/soong/.intermediates/myapex/android_common_myapex/extracted/myapex.hwasan.apks"
 
-	m := ctx.ModuleForTests("prebuilt_myapex.apex.extractor", "android_common")
+	m := ctx.ModuleForTests("myapex", "android_common_myapex")
 	extractedApex := m.Output(extractorOutput)
 
 	android.AssertArrayString(t, "extractor input", []string{"myapex.hwasan.apks"}, extractedApex.Inputs.Strings())
@@ -7888,10 +8054,10 @@ func TestApexSetApksModuleAssignment(t *testing.T) {
 		}
 	`)
 
-	m := ctx.ModuleForTests("prebuilt_myapex.apex.extractor", "android_common")
+	m := ctx.ModuleForTests("myapex", "android_common_myapex")
 
 	// Check that the extractor produces the correct apks file from the input module
-	extractorOutput := "out/soong/.intermediates/prebuilt_myapex.apex.extractor/android_common/extracted/myapex.apks"
+	extractorOutput := "out/soong/.intermediates/myapex/android_common_myapex/extracted/myapex.apks"
 	extractedApex := m.Output(extractorOutput)
 
 	android.AssertArrayString(t, "extractor input", []string{"myapex.apks"}, extractedApex.Inputs.Strings())
@@ -8453,7 +8619,7 @@ func TestApexSet(t *testing.T) {
 		}),
 	)
 
-	m := ctx.ModuleForTests("prebuilt_myapex.apex.extractor", "android_common")
+	m := ctx.ModuleForTests("myapex", "android_common_myapex")
 
 	// Check extract_apks tool parameters.
 	extractedApex := m.Output("extracted/myapex.apks")
@@ -8494,7 +8660,7 @@ func TestApexSet_NativeBridge(t *testing.T) {
 		}),
 	)
 
-	m := ctx.ModuleForTests("prebuilt_myapex.apex.extractor", "android_common")
+	m := ctx.ModuleForTests("myapex", "android_common_myapex")
 
 	// Check extract_apks tool parameters. No native bridge arch expected
 	extractedApex := m.Output("extracted/myapex.apks")
@@ -10110,14 +10276,15 @@ func TestAconfigFilesJavaDeps(t *testing.T) {
 	mod := ctx.ModuleForTests("myapex", "android_common_myapex")
 	s := mod.Rule("apexRule").Args["copy_commands"]
 	copyCmds := regexp.MustCompile(" *&& *").Split(s, -1)
-	if len(copyCmds) != 12 {
-		t.Fatalf("Expected 12 commands, got %d in:\n%s", len(copyCmds), s)
+	if len(copyCmds) != 14 {
+		t.Fatalf("Expected 14 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/aconfig_flags.pb .*/image.apex/etc/aconfig_flags.pb")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/package.map .*/image.apex/etc/package.map")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.map .*/image.apex/etc/flag.map")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.val .*/image.apex/etc/flag.val")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.info.*/image.apex/etc/flag.info")
 
 	inputs := []string{
 		"my_aconfig_declarations_foo/intermediate.pb",
@@ -10127,6 +10294,7 @@ func TestAconfigFilesJavaDeps(t *testing.T) {
 	VerifyAconfigRule(t, &mod, "create_aconfig_package_map_file", inputs, "android_common_myapex/package.map", "myapex", "package_map")
 	VerifyAconfigRule(t, &mod, "create_aconfig_flag_map_file", inputs, "android_common_myapex/flag.map", "myapex", "flag_map")
 	VerifyAconfigRule(t, &mod, "create_aconfig_flag_val_file", inputs, "android_common_myapex/flag.val", "myapex", "flag_val")
+	VerifyAconfigRule(t, &mod, "create_aconfig_flag_info_file", inputs, "android_common_myapex/flag.info", "myapex", "flag_info")
 }
 
 func TestAconfigFilesJavaAndCcDeps(t *testing.T) {
@@ -10245,14 +10413,15 @@ func TestAconfigFilesJavaAndCcDeps(t *testing.T) {
 	mod := ctx.ModuleForTests("myapex", "android_common_myapex")
 	s := mod.Rule("apexRule").Args["copy_commands"]
 	copyCmds := regexp.MustCompile(" *&& *").Split(s, -1)
-	if len(copyCmds) != 16 {
-		t.Fatalf("Expected 16 commands, got %d in:\n%s", len(copyCmds), s)
+	if len(copyCmds) != 18 {
+		t.Fatalf("Expected 18 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/aconfig_flags.pb .*/image.apex/etc/aconfig_flags.pb")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/package.map .*/image.apex/etc/package.map")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.map .*/image.apex/etc/flag.map")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.val .*/image.apex/etc/flag.val")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.info .*/image.apex/etc/flag.info")
 
 	inputs := []string{
 		"my_aconfig_declarations_foo/intermediate.pb",
@@ -10263,6 +10432,7 @@ func TestAconfigFilesJavaAndCcDeps(t *testing.T) {
 	VerifyAconfigRule(t, &mod, "create_aconfig_package_map_file", inputs, "android_common_myapex/package.map", "myapex", "package_map")
 	VerifyAconfigRule(t, &mod, "create_aconfig_flag_map_file", inputs, "android_common_myapex/flag.map", "myapex", "flag_map")
 	VerifyAconfigRule(t, &mod, "create_aconfig_flag_val_file", inputs, "android_common_myapex/flag.val", "myapex", "flag_val")
+	VerifyAconfigRule(t, &mod, "create_aconfig_flag_info_file", inputs, "android_common_myapex/flag.info", "myapex", "flag_info")
 }
 
 func TestAconfigFilesRustDeps(t *testing.T) {
@@ -10413,14 +10583,15 @@ func TestAconfigFilesRustDeps(t *testing.T) {
 	mod := ctx.ModuleForTests("myapex", "android_common_myapex")
 	s := mod.Rule("apexRule").Args["copy_commands"]
 	copyCmds := regexp.MustCompile(" *&& *").Split(s, -1)
-	if len(copyCmds) != 36 {
-		t.Fatalf("Expected 36 commands, got %d in:\n%s", len(copyCmds), s)
+	if len(copyCmds) != 38 {
+		t.Fatalf("Expected 38 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/aconfig_flags.pb .*/image.apex/etc/aconfig_flags.pb")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/package.map .*/image.apex/etc/package.map")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.map .*/image.apex/etc/flag.map")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.val .*/image.apex/etc/flag.val")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.info .*/image.apex/etc/flag.info")
 
 	inputs := []string{
 		"my_aconfig_declarations_foo/intermediate.pb",
@@ -10432,6 +10603,7 @@ func TestAconfigFilesRustDeps(t *testing.T) {
 	VerifyAconfigRule(t, &mod, "create_aconfig_package_map_file", inputs, "android_common_myapex/package.map", "myapex", "package_map")
 	VerifyAconfigRule(t, &mod, "create_aconfig_flag_map_file", inputs, "android_common_myapex/flag.map", "myapex", "flag_map")
 	VerifyAconfigRule(t, &mod, "create_aconfig_flag_val_file", inputs, "android_common_myapex/flag.val", "myapex", "flag_val")
+	VerifyAconfigRule(t, &mod, "create_aconfig_flag_info_file", inputs, "android_common_myapex/flag.info", "myapex", "flag_info")
 }
 
 func VerifyAconfigRule(t *testing.T, mod *android.TestingModule, desc string, inputs []string, output string, container string, file_type string) {
