@@ -2414,10 +2414,9 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			return
 		}
 
-		if _, ok := module.(SdkLibraryDependency); ok {
+		if sdkInfo, ok := android.OtherModuleProvider(ctx, module, SdkLibraryInfoProvider); ok {
 			switch tag {
 			case sdkLibTag, libTag, staticLibTag:
-				sdkInfo, _ := android.OtherModuleProvider(ctx, module, SdkLibraryInfoProvider)
 				generatingLibsString := android.PrettyConcat(
 					getGeneratingLibs(ctx, j.SdkVersion(ctx), module.Name(), sdkInfo), true, "or")
 				ctx.ModuleErrorf("cannot depend directly on java_sdk_library %q; try depending on %s instead", module.Name(), generatingLibsString)
@@ -2749,7 +2748,7 @@ func collectDirectDepsProviders(ctx android.ModuleContext) (result *JarJarProvid
 			if IsJniDepTag(tag) || tag == certificateTag || tag == proguardRaiseTag {
 				return RenameUseExclude, "tags"
 			}
-			if _, ok := m.(SdkLibraryDependency); ok {
+			if _, ok := android.OtherModuleProvider(ctx, m, SdkLibraryInfoProvider); ok {
 				switch tag {
 				case sdkLibTag, libTag:
 					return RenameUseExclude, "sdklibdep" // matches collectDeps()
