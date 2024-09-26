@@ -2696,7 +2696,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 					transitiveBootClasspathHeaderJars = append(transitiveBootClasspathHeaderJars, dep.TransitiveStaticLibsHeaderJars)
 				}
 			}
-		} else if _, ok := module.(SdkLibraryDependency); ok {
+		} else if _, ok := android.OtherModuleProvider(ctx, module, SdkLibraryInfoProvider); ok {
 			switch tag {
 			case libTag, sdkLibTag:
 				sdkInfo, _ := android.OtherModuleProvider(ctx, module, SdkLibraryInfoProvider)
@@ -3307,7 +3307,7 @@ func addCLCFromDep(ctx android.ModuleContext, depModule android.Module,
 	depName := android.RemoveOptionalPrebuiltPrefix(ctx.OtherModuleName(depModule))
 
 	var sdkLib *string
-	if lib, ok := depModule.(SdkLibraryDependency); ok && lib.sharedLibrary() {
+	if lib, ok := android.OtherModuleProvider(ctx, depModule, SdkLibraryInfoProvider); ok && lib.SharedLibrary {
 		// A shared SDK library. This should be added as a top-level CLC element.
 		sdkLib = &depName
 	} else if lib, ok := depModule.(SdkLibraryComponentDependency); ok && lib.OptionalSdkLibraryImplementation() != nil {
