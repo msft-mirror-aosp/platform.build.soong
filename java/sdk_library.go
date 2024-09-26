@@ -1323,7 +1323,7 @@ func (module *SdkLibrary) CheckMinSdkVersion(ctx android.ModuleContext) {
 }
 
 func CheckMinSdkVersion(ctx android.ModuleContext, module *Library) {
-	android.CheckMinSdkVersion(ctx, module.MinSdkVersion(ctx), func(c android.ModuleContext, do android.PayloadDepsCallback) {
+	android.CheckMinSdkVersion(ctx, module.MinSdkVersion(ctx), func(c android.BaseModuleContext, do android.PayloadDepsCallback) {
 		ctx.WalkDeps(func(child android.Module, parent android.Module) bool {
 			isExternal := !module.depIsInSameApex(ctx, child)
 			if am, ok := child.(android.ApexModule); ok {
@@ -1515,7 +1515,10 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		module.dexer.proguardDictionary = module.implLibraryModule.dexer.proguardDictionary
 		module.dexer.proguardUsageZip = module.implLibraryModule.dexer.proguardUsageZip
 		module.linter.reports = module.implLibraryModule.linter.reports
-		module.linter.outputs.depSets = module.implLibraryModule.LintDepSets()
+
+		if lintInfo, ok := android.OtherModuleProvider(ctx, module.implLibraryModule, LintProvider); ok {
+			android.SetProvider(ctx, LintProvider, lintInfo)
+		}
 
 		if !module.Host() {
 			module.hostdexInstallFile = module.implLibraryModule.hostdexInstallFile
@@ -2254,14 +2257,6 @@ func (module *SdkLibraryImport) JacocoReportClassesFile() android.Path {
 }
 
 // to satisfy apex.javaDependency interface
-func (module *SdkLibraryImport) LintDepSets() LintDepSets {
-	if module.implLibraryModule == nil {
-		return LintDepSets{}
-	} else {
-		return module.implLibraryModule.LintDepSets()
-	}
-}
-
 func (module *SdkLibraryImport) GetStrictUpdatabilityLinting() bool {
 	if module.implLibraryModule == nil {
 		return false

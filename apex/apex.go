@@ -576,7 +576,7 @@ type apexFile struct {
 	dataPaths                 []android.DataPath // becomes LOCAL_TEST_DATA
 
 	jacocoReportClassesFile android.Path     // only for javalibs and apps
-	lintDepSets             java.LintDepSets // only for javalibs and apps
+	lintInfo                *java.LintInfo   // only for javalibs and apps
 	certificate             java.Certificate // only for apps
 	overriddenPackageName   string           // only for apps
 
@@ -1115,19 +1115,11 @@ func apexStrictUpdatibilityLintMutator(mctx android.TopDownMutatorContext) {
 		return
 	}
 	if apex, ok := mctx.Module().(*apexBundle); ok && apex.checkStrictUpdatabilityLinting(mctx) {
-		mctx.WalkDeps(func(child, parent android.Module) bool {
-			// b/208656169 Do not propagate strict updatability linting to libcore/
-			// These libs are available on the classpath during compilation
-			// These libs are transitive deps of the sdk. See java/sdk.go:decodeSdkDep
-			// Only skip libraries defined in libcore root, not subdirectories
-			if mctx.OtherModuleDir(child) == "libcore" {
-				// Do not traverse transitive deps of libcore/ libs
+		apex.WalkPayloadDeps(mctx, func(mctx android.BaseModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
+			if externalDep {
 				return false
 			}
-			if android.InList(child.Name(), skipLintJavalibAllowlist) {
-				return false
-			}
-			if lintable, ok := child.(java.LintDepSetsIntf); ok {
+			if lintable, ok := to.(java.LintDepSetsIntf); ok {
 				lintable.SetStrictUpdatabilityLinting(true)
 			}
 			// visit transitive deps
@@ -1195,17 +1187,6 @@ var (
 		"test_imgdiag_com.android.art",
 		"test_jitzygote_com.android.art",
 		// go/keep-sorted end
-	}
-
-	// TODO: b/215736885 Remove this list
-	skipLintJavalibAllowlist = []string{
-		"conscrypt.module.platform.api.stubs",
-		"conscrypt.module.public.api.stubs",
-		"conscrypt.module.public.api.stubs.system",
-		"conscrypt.module.public.api.stubs.module_lib",
-		"framework-media.stubs",
-		"framework-media.stubs.system",
-		"framework-media.stubs.module_lib",
 	}
 )
 
@@ -1650,7 +1631,6 @@ type javaModule interface {
 	BaseModuleName() string
 	DexJarBuildPath(ctx android.ModuleErrorfContext) java.OptionalDexJarPath
 	JacocoReportClassesFile() android.Path
-	LintDepSets() java.LintDepSets
 	Stem() string
 }
 
@@ -1670,7 +1650,9 @@ func apexFileForJavaModuleWithFile(ctx android.ModuleContext, module javaModule,
 	dirInApex := "javalib"
 	af := newApexFile(ctx, dexImplementationJar, module.BaseModuleName(), dirInApex, javaSharedLib, module)
 	af.jacocoReportClassesFile = module.JacocoReportClassesFile()
-	af.lintDepSets = module.LintDepSets()
+	if lintInfo, ok := android.OtherModuleProvider(ctx, module, java.LintProvider); ok {
+		af.lintInfo = lintInfo
+	}
 	af.customStem = module.Stem() + ".jar"
 	// TODO: b/338641779 - Remove special casing of sdkLibrary once bcpf and sscpf depends
 	// on the implementation library
@@ -1708,7 +1690,6 @@ type androidApp interface {
 	JacocoReportClassesFile() android.Path
 	Certificate() java.Certificate
 	BaseModuleName() string
-	LintDepSets() java.LintDepSets
 	PrivAppAllowlist() android.OptionalPath
 }
 
@@ -1744,7 +1725,9 @@ func apexFilesForAndroidApp(ctx android.BaseModuleContext, aapp androidApp) []ap
 
 	af := newApexFile(ctx, fileToCopy, aapp.BaseModuleName(), dirInApex, app, aapp)
 	af.jacocoReportClassesFile = aapp.JacocoReportClassesFile()
-	af.lintDepSets = aapp.LintDepSets()
+	if lintInfo, ok := android.OtherModuleProvider(ctx, aapp, java.LintProvider); ok {
+		af.lintInfo = lintInfo
+	}
 	af.certificate = aapp.Certificate()
 
 	if app, ok := aapp.(interface {
@@ -1795,7 +1778,7 @@ func apexFileForFilesystem(ctx android.BaseModuleContext, buildFile android.Path
 // visited module, the `do` callback is executed. Returning true in the callback continues the visit
 // to the child modules. Returning false makes the visit to continue in the sibling or the parent
 // modules. This is used in check* functions below.
-func (a *apexBundle) WalkPayloadDeps(ctx android.ModuleContext, do android.PayloadDepsCallback) {
+func (a *apexBundle) WalkPayloadDeps(ctx android.BaseModuleContext, do android.PayloadDepsCallback) {
 	ctx.WalkDeps(func(child, parent android.Module) bool {
 		am, ok := child.(android.ApexModule)
 		if !ok || !am.CanHaveApexVariants() {
@@ -2641,7 +2624,7 @@ func (a *apexBundle) checkStaticLinkingToStubLibraries(ctx android.ModuleContext
 
 	abInfo, _ := android.ModuleProvider(ctx, android.ApexBundleInfoProvider)
 
-	a.WalkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
+	a.WalkPayloadDeps(ctx, func(ctx android.BaseModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
 		if ccm, ok := to.(*cc.Module); ok {
 			apexName := ctx.ModuleName()
 			fromName := ctx.OtherModuleName(from)
@@ -2753,7 +2736,7 @@ func (a *apexBundle) checkApexAvailability(ctx android.ModuleContext) {
 		return
 	}
 
-	a.WalkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
+	a.WalkPayloadDeps(ctx, func(ctx android.BaseModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
 		// As soon as the dependency graph crosses the APEX boundary, don't go further.
 		if externalDep {
 			return false
