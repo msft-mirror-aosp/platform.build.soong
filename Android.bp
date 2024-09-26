@@ -116,6 +116,11 @@ dex_bootjars {
     visibility: ["//visibility:public"],
 }
 
+art_boot_images {
+    name: "art_boot_images",
+    visibility: ["//art:__subpackages__"],
+}
+
 // Pseudo-test that's run on checkbuilds to ensure that get_clang_version can
 // parse cc/config/global.go.
 genrule {
