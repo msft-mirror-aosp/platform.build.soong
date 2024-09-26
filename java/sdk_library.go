@@ -922,7 +922,7 @@ func (c *commonToSdkLibraryAndImport) initCommon(module commonSdkLibraryAndImpor
 	c.initSdkLibraryComponent(module)
 }
 
-func (c *commonToSdkLibraryAndImport) initCommonAfterDefaultsApplied(ctx android.DefaultableHookContext) bool {
+func (c *commonToSdkLibraryAndImport) initCommonAfterDefaultsApplied() bool {
 	namePtr := proptools.StringPtr(c.module.RootLibraryName())
 	c.sdkLibraryComponentProperties.SdkLibraryName = namePtr
 
@@ -944,12 +944,32 @@ func (c *commonToSdkLibraryAndImport) uniqueApexVariations() bool {
 	return c.sharedLibrary()
 }
 
-func (c *commonToSdkLibraryAndImport) generateCommonBuildActions(ctx android.ModuleContext) {
+func (c *commonToSdkLibraryAndImport) generateCommonBuildActions(ctx android.ModuleContext) SdkLibraryInfo {
 	c.doctagPaths = android.PathsForModuleSrc(ctx, c.commonSdkLibraryProperties.Doctag_files)
-}
 
-func (c *commonToSdkLibraryAndImport) getImplLibraryModule() *Library {
-	return c.implLibraryModule
+	everythingStubPaths := make(map[android.SdkKind]OptionalDexJarPath)
+	exportableStubPaths := make(map[android.SdkKind]OptionalDexJarPath)
+	removedApiFilePaths := make(map[android.SdkKind]android.OptionalPath)
+	for kind := android.SdkNone; kind <= android.SdkPrivate; kind += 1 {
+		everythingStubPath := makeUnsetDexJarPath()
+		exportableStubPath := makeUnsetDexJarPath()
+		removedApiFilePath := android.OptionalPath{}
+		if scopePath := c.findClosestScopePath(sdkKindToApiScope(kind)); scopePath != nil {
+			everythingStubPath = scopePath.stubsDexJarPath
+			exportableStubPath = scopePath.exportableStubsDexJarPath
+			removedApiFilePath = scopePath.removedApiFilePath
+		}
+		everythingStubPaths[kind] = everythingStubPath
+		exportableStubPaths[kind] = exportableStubPath
+		removedApiFilePaths[kind] = removedApiFilePath
+	}
+
+	return SdkLibraryInfo{
+		EverythingStubDexJarPaths: everythingStubPaths,
+		ExportableStubDexJarPaths: exportableStubPaths,
+		RemovedTxtFiles:           removedApiFilePaths,
+		SharedLibrary:             c.sharedLibrary(),
+	}
 }
 
 // The component names for different outputs of the java_sdk_library.
@@ -1023,29 +1043,6 @@ func (c *commonToSdkLibraryAndImport) findClosestScopePath(scope *apiScope) *sco
 	return nil
 }
 
-// selectScopePaths returns the *scopePaths appropriate for the specific kind.
-//
-// If the module does not support the specific kind then it will return the *scopePaths for the
-// closest kind which is a subset of the requested kind. e.g. if requesting android.SdkModule then
-// it will return *scopePaths for android.SdkSystem if available or android.SdkPublic of not.
-func (c *commonToSdkLibraryAndImport) selectScopePaths(ctx android.BaseModuleContext, kind android.SdkKind) *scopePaths {
-	apiScope := sdkKindToApiScope(kind)
-
-	paths := c.findClosestScopePath(apiScope)
-	if paths == nil {
-		var scopes []string
-		for _, s := range AllApiScopes {
-			if c.findScopePaths(s) != nil {
-				scopes = append(scopes, s.name)
-			}
-		}
-		ctx.ModuleErrorf("requires api scope %s from %s but it only has %q available", apiScope.name, c.module.RootLibraryName(), scopes)
-		return nil
-	}
-
-	return paths
-}
-
 // sdkKindToApiScope maps from android.SdkKind to apiScope.
 func sdkKindToApiScope(kind android.SdkKind) *apiScope {
 	var apiScope *apiScope
@@ -1062,37 +1059,6 @@ func sdkKindToApiScope(kind android.SdkKind) *apiScope {
 		apiScope = apiScopePublic
 	}
 	return apiScope
-}
-
-// to satisfy SdkLibraryDependency interface
-func (c *commonToSdkLibraryAndImport) SdkApiStubDexJar(ctx android.BaseModuleContext, kind android.SdkKind) OptionalDexJarPath {
-	paths := c.selectScopePaths(ctx, kind)
-	if paths == nil {
-		return makeUnsetDexJarPath()
-	}
-
-	return paths.stubsDexJarPath
-}
-
-// to satisfy SdkLibraryDependency interface
-func (c *commonToSdkLibraryAndImport) SdkApiExportableStubDexJar(ctx android.BaseModuleContext, kind android.SdkKind) OptionalDexJarPath {
-	paths := c.selectScopePaths(ctx, kind)
-	if paths == nil {
-		return makeUnsetDexJarPath()
-	}
-
-	return paths.exportableStubsDexJarPath
-}
-
-// to satisfy SdkLibraryDependency interface
-func (c *commonToSdkLibraryAndImport) SdkRemovedTxtFile(ctx android.BaseModuleContext, kind android.SdkKind) android.OptionalPath {
-	apiScope := sdkKindToApiScope(kind)
-	paths := c.findScopePaths(apiScope)
-	if paths == nil {
-		return android.OptionalPath{}
-	}
-
-	return paths.removedApiFilePath
 }
 
 func (c *commonToSdkLibraryAndImport) sdkComponentPropertiesForChildLibrary() interface{} {
@@ -1185,36 +1151,25 @@ var _ SdkLibraryComponentDependency = (*Import)(nil)
 var _ SdkLibraryComponentDependency = (*SdkLibrary)(nil)
 var _ SdkLibraryComponentDependency = (*SdkLibraryImport)(nil)
 
-// Provides access to sdk_version related files, e.g. header and implementation jars.
-type SdkLibraryDependency interface {
-	SdkLibraryComponentDependency
-
-	// SdkApiStubDexJar returns the dex jar for the stubs for the prebuilt
-	// java_sdk_library_import module. It is needed by the hiddenapi processing tool which
-	// processes dex files.
-	SdkApiStubDexJar(ctx android.BaseModuleContext, kind android.SdkKind) OptionalDexJarPath
-
-	// SdkApiExportableStubDexJar returns the exportable dex jar for the stubs for
-	// java_sdk_library module. It is needed by the hiddenapi processing tool which processes
-	// dex files.
-	SdkApiExportableStubDexJar(ctx android.BaseModuleContext, kind android.SdkKind) OptionalDexJarPath
-
-	// SdkRemovedTxtFile returns the optional path to the removed.txt file for the specified sdk kind.
-	SdkRemovedTxtFile(ctx android.BaseModuleContext, kind android.SdkKind) android.OptionalPath
-
-	// sharedLibrary returns true if this can be used as a shared library.
-	sharedLibrary() bool
-
-	// getImplLibraryModule returns the pointer to the implementation library submodule of this
-	// sdk library.
-	getImplLibraryModule() *Library
-}
-
 type SdkLibraryInfo struct {
 	// GeneratingLibs is the names of the library modules that this sdk library
 	// generates. Note that this only includes the name of the modules that other modules can
 	// depend on, and is not a holistic list of generated modules.
 	GeneratingLibs []string
+
+	// Map of sdk kind to the dex jar for the "everything" stubs.
+	// It is needed by the hiddenapi processing tool which processes dex files.
+	EverythingStubDexJarPaths map[android.SdkKind]OptionalDexJarPath
+
+	// Map of sdk kind to the dex jar for the "exportable" stubs.
+	// It is needed by the hiddenapi processing tool which processes dex files.
+	ExportableStubDexJarPaths map[android.SdkKind]OptionalDexJarPath
+
+	// Map of sdk kind to the optional path to the removed.txt file.
+	RemovedTxtFiles map[android.SdkKind]android.OptionalPath
+
+	// Whether if this can be used as a shared library.
+	SharedLibrary bool
 }
 
 var SdkLibraryInfoProvider = blueprint.NewProvider[SdkLibraryInfo]()
@@ -1248,12 +1203,13 @@ type SdkLibrary struct {
 	builtInstalledForApex []dexpreopterInstall
 }
 
-var _ SdkLibraryDependency = (*SdkLibrary)(nil)
-
 func (module *SdkLibrary) generateTestAndSystemScopesByDefault() bool {
 	return module.sdkLibraryProperties.Generate_system_and_test_apis
 }
 
+var _ UsesLibraryDependency = (*SdkLibrary)(nil)
+
+// To satisfy the UsesLibraryDependency interface
 func (module *SdkLibrary) DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath {
 	if module.implLibraryModule != nil {
 		return module.implLibraryModule.DexJarBuildPath(ctx)
@@ -1261,6 +1217,7 @@ func (module *SdkLibrary) DexJarBuildPath(ctx android.ModuleErrorfContext) Optio
 	return makeUnsetDexJarPath()
 }
 
+// To satisfy the UsesLibraryDependency interface
 func (module *SdkLibrary) DexJarInstallPath() android.Path {
 	if module.implLibraryModule != nil {
 		return module.implLibraryModule.DexJarInstallPath()
@@ -1448,8 +1405,6 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		module.HideFromMake()
 	}
 
-	module.generateCommonBuildActions(ctx)
-
 	module.stem = proptools.StringDefault(module.overridableProperties.Stem, ctx.ModuleName())
 
 	module.provideHiddenAPIPropertyInfo(ctx)
@@ -1487,6 +1442,7 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		}
 	})
 
+	sdkLibInfo := module.generateCommonBuildActions(ctx)
 	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 	if !apexInfo.IsForPlatform() {
 		module.hideApexVariantFromMake = true
@@ -1573,9 +1529,8 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		setOutputFiles(ctx, module.implLibraryModule.Module)
 	}
 
-	android.SetProvider(ctx, SdkLibraryInfoProvider, SdkLibraryInfo{
-		GeneratingLibs: generatingLibs,
-	})
+	sdkLibInfo.GeneratingLibs = generatingLibs
+	android.SetProvider(ctx, SdkLibraryInfoProvider, sdkLibInfo)
 }
 
 func (module *SdkLibrary) BuiltInstalledForApex() []dexpreopterInstall {
@@ -1886,7 +1841,7 @@ func SdkLibraryFactory() android.Module {
 			module.commonSdkLibraryProperties.Shared_library = proptools.BoolPtr(false)
 		}
 
-		if module.initCommonAfterDefaultsApplied(ctx) {
+		if module.initCommonAfterDefaultsApplied() {
 			module.CreateInternalModules(ctx)
 		}
 	})
@@ -1965,8 +1920,6 @@ type SdkLibraryImport struct {
 	installFile android.Path
 }
 
-var _ SdkLibraryDependency = (*SdkLibraryImport)(nil)
-
 // The type of a structure that contains a field of type sdkLibraryScopeProperties
 // for each apiscope in allApiScopes, e.g. something like:
 //
@@ -2022,7 +1975,7 @@ func sdkLibraryImportFactory() android.Module {
 	InitJavaModule(module, android.HostAndDeviceSupported)
 
 	module.SetDefaultableHook(func(mctx android.DefaultableHookContext) {
-		if module.initCommonAfterDefaultsApplied(mctx) {
+		if module.initCommonAfterDefaultsApplied() {
 			module.createInternalModules(mctx)
 		}
 	})
@@ -2143,8 +2096,6 @@ func (module *SdkLibraryImport) MinSdkVersion(ctx android.EarlyModuleContext) an
 var _ hiddenAPIModule = (*SdkLibraryImport)(nil)
 
 func (module *SdkLibraryImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	module.generateCommonBuildActions(ctx)
-
 	// Assume that source module(sdk_library) is installed in /<sdk_library partition>/framework
 	module.installFile = android.PathForModuleInstall(ctx, "framework", module.Stem()+".jar")
 
@@ -2174,6 +2125,7 @@ func (module *SdkLibraryImport) GenerateAndroidBuildActions(ctx android.ModuleCo
 			}
 		}
 	})
+	sdkLibInfo := module.generateCommonBuildActions(ctx)
 
 	// Populate the scope paths with information from the properties.
 	for apiScope, scopeProperties := range module.scopeProperties {
@@ -2215,10 +2167,11 @@ func (module *SdkLibraryImport) GenerateAndroidBuildActions(ctx android.ModuleCo
 		setOutputFiles(ctx, module.implLibraryModule.Module)
 	}
 
-	android.SetProvider(ctx, SdkLibraryInfoProvider, SdkLibraryInfo{
-		GeneratingLibs: generatingLibs,
-	})
+	sdkLibInfo.GeneratingLibs = generatingLibs
+	android.SetProvider(ctx, SdkLibraryInfoProvider, sdkLibInfo)
 }
+
+var _ UsesLibraryDependency = (*SdkLibraryImport)(nil)
 
 // to satisfy UsesLibraryDependency interface
 func (module *SdkLibraryImport) DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath {
@@ -2457,7 +2410,7 @@ func (s *sdkLibrarySdkMemberProperties) PopulateFromVariant(ctx android.SdkMembe
 	s.Min_device_sdk = sdk.commonSdkLibraryProperties.Min_device_sdk
 	s.Max_device_sdk = sdk.commonSdkLibraryProperties.Max_device_sdk
 
-	implLibrary := sdk.getImplLibraryModule()
+	implLibrary := sdk.implLibraryModule
 	if implLibrary != nil && implLibrary.dexpreopter.dexpreoptProperties.Dex_preopt_result.Profile_guided {
 		s.DexPreoptProfileGuided = proptools.BoolPtr(true)
 	}
