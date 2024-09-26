@@ -1252,7 +1252,7 @@ func (c *config) TidyChecks() string {
 }
 
 func (c *config) LibartImgHostBaseAddress() string {
-	return "0x60000000"
+	return "0x70000000"
 }
 
 func (c *config) LibartImgDeviceBaseAddress() string {
@@ -1689,14 +1689,6 @@ func (c *config) EnforceSystemCertificateAllowList() []string {
 
 func (c *config) EnforceProductPartitionInterface() bool {
 	return Bool(c.productVariables.EnforceProductPartitionInterface)
-}
-
-func (c *config) EnforceInterPartitionJavaSdkLibrary() bool {
-	return Bool(c.productVariables.EnforceInterPartitionJavaSdkLibrary)
-}
-
-func (c *config) InterPartitionJavaLibraryAllowList() []string {
-	return c.productVariables.InterPartitionJavaLibraryAllowList
 }
 
 func (c *config) ProductHiddenAPIStubs() []string {
