@@ -576,7 +576,7 @@ type apexFile struct {
 	dataPaths                 []android.DataPath // becomes LOCAL_TEST_DATA
 
 	jacocoReportClassesFile android.Path     // only for javalibs and apps
-	lintDepSets             java.LintDepSets // only for javalibs and apps
+	lintInfo                *java.LintInfo   // only for javalibs and apps
 	certificate             java.Certificate // only for apps
 	overriddenPackageName   string           // only for apps
 
@@ -1650,7 +1650,6 @@ type javaModule interface {
 	BaseModuleName() string
 	DexJarBuildPath(ctx android.ModuleErrorfContext) java.OptionalDexJarPath
 	JacocoReportClassesFile() android.Path
-	LintDepSets() java.LintDepSets
 	Stem() string
 }
 
@@ -1670,7 +1669,9 @@ func apexFileForJavaModuleWithFile(ctx android.ModuleContext, module javaModule,
 	dirInApex := "javalib"
 	af := newApexFile(ctx, dexImplementationJar, module.BaseModuleName(), dirInApex, javaSharedLib, module)
 	af.jacocoReportClassesFile = module.JacocoReportClassesFile()
-	af.lintDepSets = module.LintDepSets()
+	if lintInfo, ok := android.OtherModuleProvider(ctx, module, java.LintProvider); ok {
+		af.lintInfo = lintInfo
+	}
 	af.customStem = module.Stem() + ".jar"
 	// TODO: b/338641779 - Remove special casing of sdkLibrary once bcpf and sscpf depends
 	// on the implementation library
@@ -1708,7 +1709,6 @@ type androidApp interface {
 	JacocoReportClassesFile() android.Path
 	Certificate() java.Certificate
 	BaseModuleName() string
-	LintDepSets() java.LintDepSets
 	PrivAppAllowlist() android.OptionalPath
 }
 
@@ -1744,7 +1744,9 @@ func apexFilesForAndroidApp(ctx android.BaseModuleContext, aapp androidApp) []ap
 
 	af := newApexFile(ctx, fileToCopy, aapp.BaseModuleName(), dirInApex, app, aapp)
 	af.jacocoReportClassesFile = aapp.JacocoReportClassesFile()
-	af.lintDepSets = aapp.LintDepSets()
+	if lintInfo, ok := android.OtherModuleProvider(ctx, aapp, java.LintProvider); ok {
+		af.lintInfo = lintInfo
+	}
 	af.certificate = aapp.Certificate()
 
 	if app, ok := aapp.(interface {
