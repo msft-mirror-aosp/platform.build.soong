@@ -3,6 +3,7 @@ package {
     default_visibility: [
         "//build/soong:__subpackages__",
     ],
+    default_team: "trendy_team_build",
 }
 
 subdirs = [
