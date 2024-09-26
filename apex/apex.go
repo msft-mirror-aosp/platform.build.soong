@@ -1122,19 +1122,11 @@ func apexStrictUpdatibilityLintMutator(mctx android.TopDownMutatorContext) {
 		return
 	}
 	if apex, ok := mctx.Module().(*apexBundle); ok && apex.checkStrictUpdatabilityLinting(mctx) {
-		mctx.WalkDeps(func(child, parent android.Module) bool {
-			// b/208656169 Do not propagate strict updatability linting to libcore/
-			// These libs are available on the classpath during compilation
-			// These libs are transitive deps of the sdk. See java/sdk.go:decodeSdkDep
-			// Only skip libraries defined in libcore root, not subdirectories
-			if mctx.OtherModuleDir(child) == "libcore" {
-				// Do not traverse transitive deps of libcore/ libs
+		apex.WalkPayloadDeps(mctx, func(mctx android.BaseModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
+			if externalDep {
 				return false
 			}
-			if android.InList(child.Name(), skipLintJavalibAllowlist) {
-				return false
-			}
-			if lintable, ok := child.(java.LintDepSetsIntf); ok {
+			if lintable, ok := to.(java.LintDepSetsIntf); ok {
 				lintable.SetStrictUpdatabilityLinting(true)
 			}
 			// visit transitive deps
@@ -1202,17 +1194,6 @@ var (
 		"test_imgdiag_com.android.art",
 		"test_jitzygote_com.android.art",
 		// go/keep-sorted end
-	}
-
-	// TODO: b/215736885 Remove this list
-	skipLintJavalibAllowlist = []string{
-		"conscrypt.module.platform.api.stubs",
-		"conscrypt.module.public.api.stubs",
-		"conscrypt.module.public.api.stubs.system",
-		"conscrypt.module.public.api.stubs.module_lib",
-		"framework-media.stubs",
-		"framework-media.stubs.system",
-		"framework-media.stubs.module_lib",
 	}
 )
 
