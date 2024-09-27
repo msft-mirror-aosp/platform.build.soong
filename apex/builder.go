@@ -1152,7 +1152,18 @@ func (a *apexBundle) buildLintReports(ctx android.ModuleContext) {
 		}
 	}
 
-	a.lintReports = java.BuildModuleLintReportZips(ctx, depSetsBuilder.Build())
+	depSets := depSetsBuilder.Build()
+	var validations android.Paths
+
+	if a.checkStrictUpdatabilityLinting(ctx) {
+		baselines := depSets.Baseline.ToList()
+		if len(baselines) > 0 {
+			outputFile := java.VerifyStrictUpdatabilityChecks(ctx, baselines)
+			validations = append(validations, outputFile)
+		}
+	}
+
+	a.lintReports = java.BuildModuleLintReportZips(ctx, depSets, validations)
 }
 
 func (a *apexBundle) buildCannedFsConfig(ctx android.ModuleContext) android.OutputPath {
