@@ -3,6 +3,7 @@ package {
     default_visibility: [
         "//build/soong:__subpackages__",
     ],
+    default_team: "trendy_team_build",
 }
 
 subdirs = [
@@ -114,6 +115,11 @@ cc_genrule {
 dex_bootjars {
     name: "dex_bootjars",
     visibility: ["//visibility:public"],
+}
+
+art_boot_images {
+    name: "art_boot_images",
+    visibility: ["//art:__subpackages__"],
 }
 
 // Pseudo-test that's run on checkbuilds to ensure that get_clang_version can
