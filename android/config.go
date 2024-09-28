@@ -1278,12 +1278,18 @@ func (c *config) EnforceRROForModule(name string) bool {
 	}
 	return false
 }
+
 func (c *config) EnforceRROExcludedOverlay(path string) bool {
 	excluded := c.productVariables.EnforceRROExcludedOverlays
 	if len(excluded) > 0 {
 		return HasAnyPrefix(path, excluded)
 	}
 	return false
+}
+
+func (c *config) EnforceRROGlobally() bool {
+	enforceList := c.productVariables.EnforceRROTargets
+	return InList("*", enforceList)
 }
 
 func (c *config) ExportedNamespaces() []string {
