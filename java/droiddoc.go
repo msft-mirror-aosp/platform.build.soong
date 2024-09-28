@@ -373,8 +373,7 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 				panic(fmt.Errorf("unknown dependency %q for %q", otherName, ctx.ModuleName()))
 			}
 		case libTag, sdkLibTag:
-			if _, ok := module.(SdkLibraryDependency); ok {
-				sdkInfo, _ := android.OtherModuleProvider(ctx, module, SdkLibraryInfoProvider)
+			if sdkInfo, ok := android.OtherModuleProvider(ctx, module, SdkLibraryInfoProvider); ok {
 				generatingLibsString := android.PrettyConcat(
 					getGeneratingLibs(ctx, j.SdkVersion(ctx), module.Name(), sdkInfo), true, "or")
 				ctx.ModuleErrorf("cannot depend directly on java_sdk_library %q; try depending on %s instead", module.Name(), generatingLibsString)
