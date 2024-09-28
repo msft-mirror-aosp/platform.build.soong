@@ -209,8 +209,7 @@ import (
 //
 // The primary boot image and the Framework extension are installed in different ways. The primary
 // boot image is part of the ART APEX: it is copied into the APEX intermediate files, packaged
-// together with other APEX contents, extracted and mounted on device. The Framework boot image
-// extension is installed by the rules defined in makefiles (make/core/dex_preopt_libart.mk). Soong
+// together with other APEX contents, extracted and mounted on device. Soong
 // writes out a few DEXPREOPT_IMAGE_* variables for Make; these variables contain boot image names,
 // paths and so on.
 //
@@ -1365,9 +1364,7 @@ func writeGlobalConfigForMake(ctx android.SingletonContext, path android.Writabl
 	android.WriteFileRule(ctx, path, string(data))
 }
 
-// Define Make variables for boot image names, paths, etc. These variables are used in makefiles
-// (make/core/dex_preopt_libart.mk) to generate install rules that copy boot image files to the
-// correct output directories.
+// Define Make variables for boot image names, paths, etc.
 func (d *dexpreoptBootJars) MakeVars(ctx android.MakeVarsContext) {
 	if d.dexpreoptConfigForMake != nil && !SkipDexpreoptBootJars(ctx) {
 		ctx.Strict("DEX_PREOPT_CONFIG_FOR_MAKE", d.dexpreoptConfigForMake.String())
@@ -1375,18 +1372,7 @@ func (d *dexpreoptBootJars) MakeVars(ctx android.MakeVarsContext) {
 	}
 
 	image := d.defaultBootImage
-	if image != nil {
-		if profileInstallInfo, ok := android.OtherModuleProvider(ctx, d, profileInstallInfoProvider); ok {
-			ctx.Strict("DEXPREOPT_IMAGE_PROFILE_BUILT_INSTALLED", profileInstallInfo.profileInstalls.String())
-			if profileInstallInfo.profileLicenseMetadataFile.Valid() {
-				ctx.Strict("DEXPREOPT_IMAGE_PROFILE_LICENSE_METADATA", profileInstallInfo.profileLicenseMetadataFile.String())
-			}
-		}
-
-		if SkipDexpreoptBootJars(ctx) {
-			return
-		}
-
+	if image != nil && !SkipDexpreoptBootJars(ctx) {
 		global := dexpreopt.GetGlobalConfig(ctx)
 		dexPaths, dexLocations := bcpForDexpreopt(ctx, global.PreoptWithUpdatableBcp)
 		ctx.Strict("DEXPREOPT_BOOTCLASSPATH_DEX_FILES", strings.Join(dexPaths.Strings(), " "))
@@ -1401,21 +1387,14 @@ func (d *dexpreoptBootJars) MakeVars(ctx android.MakeVarsContext) {
 					suffix = "_host"
 				}
 				sfx := variant.name + suffix + "_" + variant.target.Arch.ArchType.String()
-				ctx.Strict("DEXPREOPT_IMAGE_VDEX_BUILT_INSTALLED_"+sfx, variant.vdexInstalls.String())
+				// `DEXPREOPT_IMAGE_boot_` is a dependency of the phony target art-boot-image
 				ctx.Strict("DEXPREOPT_IMAGE_"+sfx, variant.imagePathOnHost.String())
-				ctx.Strict("DEXPREOPT_IMAGE_DEPS_"+sfx, strings.Join(variant.imagesDeps.Strings(), " "))
-				ctx.Strict("DEXPREOPT_IMAGE_BUILT_INSTALLED_"+sfx, variant.installs.String())
-				ctx.Strict("DEXPREOPT_IMAGE_UNSTRIPPED_BUILT_INSTALLED_"+sfx, variant.unstrippedInstalls.String())
-				if variant.licenseMetadataFile.Valid() {
-					ctx.Strict("DEXPREOPT_IMAGE_LICENSE_METADATA_"+sfx, variant.licenseMetadataFile.String())
-				}
 			}
+			ctx.Strict("DEXPREOPT_IMAGE_ZIP_"+current.name, current.zip.String())
 			imageLocationsOnHost, imageLocationsOnDevice := current.getAnyAndroidVariant().imageLocations()
 			ctx.Strict("DEXPREOPT_IMAGE_LOCATIONS_ON_HOST"+current.name, strings.Join(imageLocationsOnHost, ":"))
 			ctx.Strict("DEXPREOPT_IMAGE_LOCATIONS_ON_DEVICE"+current.name, strings.Join(imageLocationsOnDevice, ":"))
-			ctx.Strict("DEXPREOPT_IMAGE_ZIP_"+current.name, current.zip.String())
 		}
-		ctx.Strict("DEXPREOPT_IMAGE_NAMES", strings.Join(getImageNames(), " "))
 	}
 }
 

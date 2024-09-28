@@ -1417,7 +1417,8 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	testConfig := tradefed.AutoGenInstrumentationTestConfig(ctx, a.testProperties.Test_config,
-		a.testProperties.Test_config_template, a.manifestPath, a.testProperties.Test_suites, a.testProperties.Auto_gen_config, configs)
+		a.testProperties.Test_config_template, a.manifestPath, a.testProperties.Test_suites,
+		a.testProperties.Auto_gen_config, configs, a.testProperties.Test_options.Test_runner_options)
 	a.testConfig = a.FixTestConfig(ctx, testConfig)
 	a.extraTestConfigs = android.PathsForModuleSrc(ctx, a.testProperties.Test_options.Extra_test_configs)
 	a.data = android.PathsForModuleSrc(ctx, a.testProperties.Data)
@@ -1781,16 +1782,15 @@ func (u *usesLibrary) classLoaderContextForUsesLibDeps(ctx android.ModuleContext
 			}
 		}
 
-		// Skip java_sdk_library dependencies that provide stubs, but not an implementation.
-		// This will be restricted to optional_uses_libs
-		if sdklib, ok := m.(SdkLibraryDependency); ok {
-			if tag == usesLibOptTag && sdklib.DexJarBuildPath(ctx).PathOrNil() == nil {
-				u.shouldDisableDexpreopt = true
-				return
-			}
-		}
-
 		if lib, ok := m.(UsesLibraryDependency); ok {
+			if _, ok := android.OtherModuleProvider(ctx, m, SdkLibraryInfoProvider); ok {
+				// Skip java_sdk_library dependencies that provide stubs, but not an implementation.
+				// This will be restricted to optional_uses_libs
+				if tag == usesLibOptTag && lib.DexJarBuildPath(ctx).PathOrNil() == nil {
+					u.shouldDisableDexpreopt = true
+					return
+				}
+			}
 			libName := dep
 			if ulib, ok := m.(ProvidesUsesLib); ok && ulib.ProvidesUsesLib() != nil {
 				libName = *ulib.ProvidesUsesLib()

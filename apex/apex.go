@@ -68,8 +68,6 @@ func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
 	ctx.Transition("apex", &apexTransitionMutator{})
 	ctx.BottomUp("apex_directly_in_any", apexDirectlyInAnyMutator).Parallel()
 	ctx.BottomUp("apex_dcla_deps", apexDCLADepsMutator).Parallel()
-	// Register after apex_info mutator so that it can use ApexVariationName
-	ctx.TopDown("apex_strict_updatability_lint", apexStrictUpdatibilityLintMutator).Parallel()
 }
 
 type apexBundleProperties struct {
@@ -1108,26 +1106,6 @@ func apexInfoMutator(mctx android.TopDownMutatorContext) {
 	enforceAppUpdatability(mctx)
 }
 
-// apexStrictUpdatibilityLintMutator propagates strict_updatability_linting to transitive deps of a mainline module
-// This check is enforced for updatable modules
-func apexStrictUpdatibilityLintMutator(mctx android.TopDownMutatorContext) {
-	if !mctx.Module().Enabled(mctx) {
-		return
-	}
-	if apex, ok := mctx.Module().(*apexBundle); ok && apex.checkStrictUpdatabilityLinting(mctx) {
-		apex.WalkPayloadDeps(mctx, func(mctx android.BaseModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
-			if externalDep {
-				return false
-			}
-			if lintable, ok := to.(java.LintDepSetsIntf); ok {
-				lintable.SetStrictUpdatabilityLinting(true)
-			}
-			// visit transitive deps
-			return true
-		})
-	}
-}
-
 // enforceAppUpdatability propagates updatable=true to apps of updatable apexes
 func enforceAppUpdatability(mctx android.TopDownMutatorContext) {
 	if !mctx.Module().Enabled(mctx) {
@@ -1190,7 +1168,7 @@ var (
 	}
 )
 
-func (a *apexBundle) checkStrictUpdatabilityLinting(mctx android.TopDownMutatorContext) bool {
+func (a *apexBundle) checkStrictUpdatabilityLinting(mctx android.ModuleContext) bool {
 	// The allowlist contains the base apex name, so use that instead of the ApexVariationName
 	return a.Updatable() && !android.InList(mctx.ModuleName(), skipStrictUpdatabilityLintAllowlist)
 }
