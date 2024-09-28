@@ -33,9 +33,13 @@ const (
 	implLibSuffix    = ".impl"
 )
 
+func implLibraryModuleName(sdkLibName string) string {
+	return sdkLibName + implLibSuffix
+}
+
 // Module name of the runtime implementation library
 func (c *commonToSdkLibraryAndImport) implLibraryModuleName() string {
-	return c.module.RootLibraryName() + implLibSuffix
+	return implLibraryModuleName(c.module.RootLibraryName())
 }
 
 // Module name of the XML file for the lib
