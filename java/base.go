@@ -854,33 +854,6 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 	// Add dependency on libraries that provide additional hidden api annotations.
 	ctx.AddVariationDependencies(nil, hiddenApiAnnotationsTag, j.properties.Hiddenapi_additional_annotations...)
 
-	if ctx.Config().EnforceInterPartitionJavaSdkLibrary() {
-		// Require java_sdk_library at inter-partition java dependency to ensure stable
-		// interface between partitions. If inter-partition java_library dependency is detected,
-		// raise build error because java_library doesn't have a stable interface.
-		//
-		// Inputs:
-		//    PRODUCT_ENFORCE_INTER_PARTITION_JAVA_SDK_LIBRARY
-		//      if true, enable enforcement
-		//    PRODUCT_INTER_PARTITION_JAVA_LIBRARY_ALLOWLIST
-		//      exception list of java_library names to allow inter-partition dependency
-		for idx := range j.properties.Libs {
-			if libDeps[idx] == nil {
-				continue
-			}
-
-			if javaDep, ok := libDeps[idx].(javaSdkLibraryEnforceContext); ok {
-				// java_sdk_library is always allowed at inter-partition dependency.
-				// So, skip check.
-				if _, ok := javaDep.(*SdkLibrary); ok {
-					continue
-				}
-
-				j.checkPartitionsForJavaDependency(ctx, "libs", javaDep)
-			}
-		}
-	}
-
 	// For library dependencies that are component libraries (like stubs), add the implementation
 	// as a dependency (dexpreopt needs to be against the implementation library, not stubs).
 	for _, dep := range libDeps {
@@ -1790,14 +1763,14 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 				classesJar:    outputFile,
 				jarName:       jarName,
 			}
-			if j.GetProfileGuided() && j.optimizeOrObfuscateEnabled() && !j.EnableProfileRewriting() {
+			if j.GetProfileGuided(ctx) && j.optimizeOrObfuscateEnabled() && !j.EnableProfileRewriting(ctx) {
 				ctx.PropertyErrorf("enable_profile_rewriting",
 					"Enable_profile_rewriting must be true when profile_guided dexpreopt and R8 optimization/obfuscation is turned on. The attached profile should be sourced from an unoptimized/unobfuscated APK.",
 				)
 			}
-			if j.EnableProfileRewriting() {
-				profile := j.GetProfile()
-				if profile == "" || !j.GetProfileGuided() {
+			if j.EnableProfileRewriting(ctx) {
+				profile := j.GetProfile(ctx)
+				if profile == "" || !j.GetProfileGuided(ctx) {
 					ctx.PropertyErrorf("enable_profile_rewriting", "Profile and Profile_guided must be set when enable_profile_rewriting is true")
 				}
 				params.artProfileInput = &profile
@@ -2414,18 +2387,13 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 			return
 		}
 
-		if dep, ok := module.(SdkLibraryDependency); ok {
+		if _, ok := module.(SdkLibraryDependency); ok {
 			switch tag {
-			case sdkLibTag, libTag:
-				depHeaderJars := dep.SdkHeaderJars(ctx, j.SdkVersion(ctx))
-				deps.classpath = append(deps.classpath, depHeaderJars...)
-				deps.dexClasspath = append(deps.dexClasspath, depHeaderJars...)
-
-				// TODO: SDK libraries should export a provider with TransitiveClasspathHeaderJars
-				depHeaderJarsSet := android.NewDepSet(android.PREORDER, depHeaderJars, nil)
-				transitiveClasspathHeaderJars = append(transitiveClasspathHeaderJars, depHeaderJarsSet)
-			case staticLibTag:
-				ctx.ModuleErrorf("dependency on java_sdk_library %q can only be in libs", otherName)
+			case sdkLibTag, libTag, staticLibTag:
+				sdkInfo, _ := android.OtherModuleProvider(ctx, module, SdkLibraryInfoProvider)
+				generatingLibsString := android.PrettyConcat(
+					getGeneratingLibs(ctx, j.SdkVersion(ctx), module.Name(), sdkInfo), true, "or")
+				ctx.ModuleErrorf("cannot depend directly on java_sdk_library %q; try depending on %s instead", module.Name(), generatingLibsString)
 			}
 		} else if dep, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
 			if sdkLinkType != javaPlatform {

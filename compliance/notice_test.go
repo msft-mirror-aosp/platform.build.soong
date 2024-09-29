@@ -1,4 +1,4 @@
-// Copyright 2023 Google Inc. All rights reserved.
+// Copyright 2024 Google Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,23 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cc
+package compliance
 
 import (
+	"testing"
+
 	"android/soong/android"
 )
 
-func GeneratedCcLibraryModuleFactory(callbacks Generator) android.Module {
-	module, _ := NewLibrary(android.HostAndDeviceSupported)
+var prepareForNoticeXmlTest = android.GroupFixturePreparers(
+	android.PrepareForTestWithArchMutator,
+	PrepareForTestWithNoticeXml,
+)
 
-	// Can be used as both a static and a shared library.
-	module.sdkMemberTypes = []android.SdkMemberType{
-		sharedLibrarySdkMemberType,
-		staticLibrarySdkMemberType,
-		staticAndSharedLibrarySdkMemberType,
-	}
+func TestPrebuiltEtcOutputFile(t *testing.T) {
+	result := prepareForNoticeXmlTest.RunTestWithBp(t, `
+		notice_xml {
+			name: "notice_xml_system",
+			partition_name: "system",
+		}
+	`)
 
-	module.generators = append(module.generators, callbacks)
-
-	return module.Init()
+	m := result.Module("notice_xml_system", "android_arm64_armv8-a").(*NoticeXmlModule)
+	android.AssertStringEquals(t, "output file", "NOTICE.xml.gz", m.outputFile.Base())
 }
