@@ -5429,11 +5429,11 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 			apex_available: ["myapex"],
 			shared_library: false,
 			permitted_packages: ["bar"],
+			prefer: true,
 		}
 
 		java_sdk_library {
 			name: "libbar",
-			enabled: false,
 			srcs: ["foo/bar/MyClass.java"],
 			unsafe_ignore_missing_latest_api: true,
 			apex_available: ["myapex"],
@@ -9692,120 +9692,84 @@ func TestApexStrictUpdtabilityLint(t *testing.T) {
 	}
 
 	testCases := []struct {
-		testCaseName              string
-		apexUpdatable             bool
-		javaStrictUpdtabilityLint bool
-		lintFileExists            bool
-		disallowedFlagExpected    bool
+		testCaseName                    string
+		apexUpdatable                   bool
+		javaStrictUpdtabilityLint       bool
+		lintFileExists                  bool
+		disallowedFlagExpectedOnApex    bool
+		disallowedFlagExpectedOnJavalib bool
 	}{
 		{
-			testCaseName:              "lint-baseline.xml does not exist, no disallowed flag necessary in lint cmd",
-			apexUpdatable:             true,
-			javaStrictUpdtabilityLint: true,
-			lintFileExists:            false,
-			disallowedFlagExpected:    false,
+			testCaseName:                    "lint-baseline.xml does not exist, no disallowed flag necessary in lint cmd",
+			apexUpdatable:                   true,
+			javaStrictUpdtabilityLint:       true,
+			lintFileExists:                  false,
+			disallowedFlagExpectedOnApex:    false,
+			disallowedFlagExpectedOnJavalib: false,
 		},
 		{
-			testCaseName:              "non-updatable apex respects strict_updatability of javalib",
-			apexUpdatable:             false,
-			javaStrictUpdtabilityLint: false,
-			lintFileExists:            true,
-			disallowedFlagExpected:    false,
+			testCaseName:                    "non-updatable apex respects strict_updatability of javalib",
+			apexUpdatable:                   false,
+			javaStrictUpdtabilityLint:       false,
+			lintFileExists:                  true,
+			disallowedFlagExpectedOnApex:    false,
+			disallowedFlagExpectedOnJavalib: false,
 		},
 		{
-			testCaseName:              "non-updatable apex respects strict updatability of javalib",
-			apexUpdatable:             false,
-			javaStrictUpdtabilityLint: true,
-			lintFileExists:            true,
-			disallowedFlagExpected:    true,
+			testCaseName:                    "non-updatable apex respects strict updatability of javalib",
+			apexUpdatable:                   false,
+			javaStrictUpdtabilityLint:       true,
+			lintFileExists:                  true,
+			disallowedFlagExpectedOnApex:    false,
+			disallowedFlagExpectedOnJavalib: true,
 		},
 		{
-			testCaseName:              "updatable apex sets strict updatability of javalib to true",
-			apexUpdatable:             true,
-			javaStrictUpdtabilityLint: false, // will be set to true by mutator
-			lintFileExists:            true,
-			disallowedFlagExpected:    true,
+			testCaseName:                    "updatable apex checks strict updatability of javalib",
+			apexUpdatable:                   true,
+			javaStrictUpdtabilityLint:       false,
+			lintFileExists:                  true,
+			disallowedFlagExpectedOnApex:    true,
+			disallowedFlagExpectedOnJavalib: false,
 		},
 	}
 
 	for _, testCase := range testCases {
-		fixtures := []android.FixturePreparer{}
-		baselineProperty := ""
-		if testCase.lintFileExists {
-			fixtures = append(fixtures, fs.AddToFixture())
-			baselineProperty = "baseline_filename: \"lint-baseline.xml\""
-		}
-		bp := fmt.Sprintf(bpTemplate, testCase.apexUpdatable, testCase.javaStrictUpdtabilityLint, baselineProperty)
-
-		result := testApex(t, bp, fixtures...)
-		myjavalib := result.ModuleForTests("myjavalib", "android_common_apex29")
-		sboxProto := android.RuleBuilderSboxProtoForTests(t, result, myjavalib.Output("lint.sbox.textproto"))
-		disallowedFlagActual := strings.Contains(*sboxProto.Commands[0].Command, "--baseline lint-baseline.xml --disallowed_issues NewApi")
-
-		if disallowedFlagActual != testCase.disallowedFlagExpected {
-			t.Errorf("Failed testcase: %v \nActual lint cmd: %v", testCase.testCaseName, *sboxProto.Commands[0].Command)
-		}
-	}
-}
-
-func TestUpdatabilityLintSkipLibcore(t *testing.T) {
-	bp := `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			java_libs: ["myjavalib"],
-			updatable: true,
-			min_sdk_version: "29",
-		}
-		apex_key {
-			name: "myapex.key",
-		}
-		java_library {
-			name: "myjavalib",
-			srcs: ["MyClass.java"],
-			apex_available: [ "myapex" ],
-			sdk_version: "current",
-			min_sdk_version: "29",
-			lint: {
-				baseline_filename: "lint-baseline.xml",
+		t.Run(testCase.testCaseName, func(t *testing.T) {
+			fixtures := []android.FixturePreparer{}
+			baselineProperty := ""
+			if testCase.lintFileExists {
+				fixtures = append(fixtures, fs.AddToFixture())
+				baselineProperty = "baseline_filename: \"lint-baseline.xml\""
 			}
-		}
-		`
+			bp := fmt.Sprintf(bpTemplate, testCase.apexUpdatable, testCase.javaStrictUpdtabilityLint, baselineProperty)
 
-	testCases := []struct {
-		testCaseName           string
-		moduleDirectory        string
-		disallowedFlagExpected bool
-	}{
-		{
-			testCaseName:           "lintable module defined outside libcore",
-			moduleDirectory:        "",
-			disallowedFlagExpected: true,
-		},
-		{
-			testCaseName:           "lintable module defined in libcore root directory",
-			moduleDirectory:        "libcore/",
-			disallowedFlagExpected: false,
-		},
-		{
-			testCaseName:           "lintable module defined in libcore child directory",
-			moduleDirectory:        "libcore/childdir/",
-			disallowedFlagExpected: true,
-		},
-	}
+			result := testApex(t, bp, fixtures...)
 
-	for _, testCase := range testCases {
-		lintFileCreator := android.FixtureAddTextFile(testCase.moduleDirectory+"lint-baseline.xml", "")
-		bpFileCreator := android.FixtureAddTextFile(testCase.moduleDirectory+"Android.bp", bp)
-		result := testApex(t, "", lintFileCreator, bpFileCreator)
-		myjavalib := result.ModuleForTests("myjavalib", "android_common_apex29")
-		sboxProto := android.RuleBuilderSboxProtoForTests(t, result, myjavalib.Output("lint.sbox.textproto"))
-		cmdFlags := fmt.Sprintf("--baseline %vlint-baseline.xml --disallowed_issues NewApi", testCase.moduleDirectory)
-		disallowedFlagActual := strings.Contains(*sboxProto.Commands[0].Command, cmdFlags)
+			checkModule := func(m android.TestingBuildParams, name string, expectStrictUpdatability bool) {
+				if expectStrictUpdatability {
+					if m.Rule == nil {
+						t.Errorf("expected strict updatability check rule on %s", name)
+					} else {
+						android.AssertStringDoesContain(t, fmt.Sprintf("strict updatability check rule for %s", name),
+							m.RuleParams.Command, "--disallowed_issues NewApi")
+						android.AssertStringListContains(t, fmt.Sprintf("strict updatability check baselines for %s", name),
+							m.Inputs.Strings(), "lint-baseline.xml")
+					}
+				} else {
+					if m.Rule != nil {
+						t.Errorf("expected no strict updatability check rule on %s", name)
+					}
+				}
+			}
 
-		if disallowedFlagActual != testCase.disallowedFlagExpected {
-			t.Errorf("Failed testcase: %v \nActual lint cmd: %v", testCase.testCaseName, *sboxProto.Commands[0].Command)
-		}
+			myjavalib := result.ModuleForTests("myjavalib", "android_common_apex29")
+			apex := result.ModuleForTests("myapex", "android_common_myapex")
+			apexStrictUpdatabilityCheck := apex.MaybeOutput("lint_strict_updatability_check.stamp")
+			javalibStrictUpdatabilityCheck := myjavalib.MaybeOutput("lint_strict_updatability_check.stamp")
+
+			checkModule(apexStrictUpdatabilityCheck, "myapex", testCase.disallowedFlagExpectedOnApex)
+			checkModule(javalibStrictUpdatabilityCheck, "myjavalib", testCase.disallowedFlagExpectedOnJavalib)
+		})
 	}
 }
 
@@ -9847,11 +9811,12 @@ func TestApexStrictUpdtabilityLintBcpFragmentDeps(t *testing.T) {
 	}
 
 	result := testApex(t, bp, dexpreopt.FixtureSetApexBootJars("myapex:myjavalib"), fs.AddToFixture())
-	myjavalib := result.ModuleForTests("myjavalib", "android_common_apex29")
-	sboxProto := android.RuleBuilderSboxProtoForTests(t, result, myjavalib.Output("lint.sbox.textproto"))
-	if !strings.Contains(*sboxProto.Commands[0].Command, "--baseline lint-baseline.xml --disallowed_issues NewApi") {
-		t.Errorf("Strict updabality lint missing in myjavalib coming from bootclasspath_fragment mybootclasspath-fragment\nActual lint cmd: %v", *sboxProto.Commands[0].Command)
-	}
+	apex := result.ModuleForTests("myapex", "android_common_myapex")
+	apexStrictUpdatabilityCheck := apex.Output("lint_strict_updatability_check.stamp")
+	android.AssertStringDoesContain(t, "strict updatability check rule for myapex",
+		apexStrictUpdatabilityCheck.RuleParams.Command, "--disallowed_issues NewApi")
+	android.AssertStringListContains(t, "strict updatability check baselines for myapex",
+		apexStrictUpdatabilityCheck.Inputs.Strings(), "lint-baseline.xml")
 }
 
 func TestApexLintBcpFragmentSdkLibDeps(t *testing.T) {
@@ -10276,14 +10241,15 @@ func TestAconfigFilesJavaDeps(t *testing.T) {
 	mod := ctx.ModuleForTests("myapex", "android_common_myapex")
 	s := mod.Rule("apexRule").Args["copy_commands"]
 	copyCmds := regexp.MustCompile(" *&& *").Split(s, -1)
-	if len(copyCmds) != 12 {
-		t.Fatalf("Expected 12 commands, got %d in:\n%s", len(copyCmds), s)
+	if len(copyCmds) != 14 {
+		t.Fatalf("Expected 14 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/aconfig_flags.pb .*/image.apex/etc/aconfig_flags.pb")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/package.map .*/image.apex/etc/package.map")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.map .*/image.apex/etc/flag.map")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.val .*/image.apex/etc/flag.val")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.info.*/image.apex/etc/flag.info")
 
 	inputs := []string{
 		"my_aconfig_declarations_foo/intermediate.pb",
@@ -10293,6 +10259,7 @@ func TestAconfigFilesJavaDeps(t *testing.T) {
 	VerifyAconfigRule(t, &mod, "create_aconfig_package_map_file", inputs, "android_common_myapex/package.map", "myapex", "package_map")
 	VerifyAconfigRule(t, &mod, "create_aconfig_flag_map_file", inputs, "android_common_myapex/flag.map", "myapex", "flag_map")
 	VerifyAconfigRule(t, &mod, "create_aconfig_flag_val_file", inputs, "android_common_myapex/flag.val", "myapex", "flag_val")
+	VerifyAconfigRule(t, &mod, "create_aconfig_flag_info_file", inputs, "android_common_myapex/flag.info", "myapex", "flag_info")
 }
 
 func TestAconfigFilesJavaAndCcDeps(t *testing.T) {
@@ -10411,14 +10378,15 @@ func TestAconfigFilesJavaAndCcDeps(t *testing.T) {
 	mod := ctx.ModuleForTests("myapex", "android_common_myapex")
 	s := mod.Rule("apexRule").Args["copy_commands"]
 	copyCmds := regexp.MustCompile(" *&& *").Split(s, -1)
-	if len(copyCmds) != 16 {
-		t.Fatalf("Expected 16 commands, got %d in:\n%s", len(copyCmds), s)
+	if len(copyCmds) != 18 {
+		t.Fatalf("Expected 18 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/aconfig_flags.pb .*/image.apex/etc/aconfig_flags.pb")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/package.map .*/image.apex/etc/package.map")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.map .*/image.apex/etc/flag.map")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.val .*/image.apex/etc/flag.val")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.info .*/image.apex/etc/flag.info")
 
 	inputs := []string{
 		"my_aconfig_declarations_foo/intermediate.pb",
@@ -10429,6 +10397,7 @@ func TestAconfigFilesJavaAndCcDeps(t *testing.T) {
 	VerifyAconfigRule(t, &mod, "create_aconfig_package_map_file", inputs, "android_common_myapex/package.map", "myapex", "package_map")
 	VerifyAconfigRule(t, &mod, "create_aconfig_flag_map_file", inputs, "android_common_myapex/flag.map", "myapex", "flag_map")
 	VerifyAconfigRule(t, &mod, "create_aconfig_flag_val_file", inputs, "android_common_myapex/flag.val", "myapex", "flag_val")
+	VerifyAconfigRule(t, &mod, "create_aconfig_flag_info_file", inputs, "android_common_myapex/flag.info", "myapex", "flag_info")
 }
 
 func TestAconfigFilesRustDeps(t *testing.T) {
@@ -10579,14 +10548,15 @@ func TestAconfigFilesRustDeps(t *testing.T) {
 	mod := ctx.ModuleForTests("myapex", "android_common_myapex")
 	s := mod.Rule("apexRule").Args["copy_commands"]
 	copyCmds := regexp.MustCompile(" *&& *").Split(s, -1)
-	if len(copyCmds) != 36 {
-		t.Fatalf("Expected 36 commands, got %d in:\n%s", len(copyCmds), s)
+	if len(copyCmds) != 38 {
+		t.Fatalf("Expected 38 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/aconfig_flags.pb .*/image.apex/etc/aconfig_flags.pb")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/package.map .*/image.apex/etc/package.map")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.map .*/image.apex/etc/flag.map")
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.val .*/image.apex/etc/flag.val")
+	ensureListContainsMatch(t, copyCmds, "^cp -f .*/flag.info .*/image.apex/etc/flag.info")
 
 	inputs := []string{
 		"my_aconfig_declarations_foo/intermediate.pb",
@@ -10598,6 +10568,7 @@ func TestAconfigFilesRustDeps(t *testing.T) {
 	VerifyAconfigRule(t, &mod, "create_aconfig_package_map_file", inputs, "android_common_myapex/package.map", "myapex", "package_map")
 	VerifyAconfigRule(t, &mod, "create_aconfig_flag_map_file", inputs, "android_common_myapex/flag.map", "myapex", "flag_map")
 	VerifyAconfigRule(t, &mod, "create_aconfig_flag_val_file", inputs, "android_common_myapex/flag.val", "myapex", "flag_val")
+	VerifyAconfigRule(t, &mod, "create_aconfig_flag_info_file", inputs, "android_common_myapex/flag.info", "myapex", "flag_info")
 }
 
 func VerifyAconfigRule(t *testing.T, mod *android.TestingModule, desc string, inputs []string, output string, container string, file_type string) {
