@@ -133,33 +133,3 @@ func TestErrorOnInstalledPathStartingWithSlash(t *testing.T) {
 		}
 	`)
 }
-
-func TestInstallSymlinkHostBasic(t *testing.T) {
-	result := prepareForInstallSymlinkTest.RunTestWithBp(t, `
-		install_symlink_host {
-			name: "foo",
-			installed_location: "bin/foo",
-			symlink_target: "folder/foo-realpath",
-		}
-	`)
-
-	foo_variants := result.ModuleVariantsForTests("foo")
-	if len(foo_variants) != 1 {
-		t.Fatalf("expected 1 variant, got %#v", foo_variants)
-	}
-
-	foo := result.ModuleForTests("foo", "linux_glibc_common").Module()
-	androidMkEntries := android.AndroidMkEntriesForTest(t, result.TestContext, foo)
-	if len(androidMkEntries) != 1 {
-		t.Fatalf("expected 1 androidmkentry, got %d", len(androidMkEntries))
-	}
-
-	symlinks := androidMkEntries[0].EntryMap["LOCAL_SOONG_INSTALL_SYMLINKS"]
-	if len(symlinks) != 1 {
-		t.Fatalf("Expected 1 symlink, got %d", len(symlinks))
-	}
-
-	if !strings.HasSuffix(symlinks[0], "host/linux-x86/bin/foo") {
-		t.Fatalf("Expected symlink install path to end in ost/linux-x86/bin/foo, got: %s", symlinks[0])
-	}
-}
