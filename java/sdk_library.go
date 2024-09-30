@@ -1437,7 +1437,6 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 			if dep, ok := android.OtherModuleProvider(ctx, to, JavaInfoProvider); ok {
 				module.implLibraryHeaderJars = append(module.implLibraryHeaderJars, dep.HeaderJars...)
 				module.implLibraryModule = to.(*Library)
-				android.SetProvider(ctx, JavaInfoProvider, dep)
 			}
 		}
 	})
