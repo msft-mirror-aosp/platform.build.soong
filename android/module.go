@@ -2296,6 +2296,8 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 		}
 		variable := condition.Arg(0)
 		switch variable {
+		case "build_from_text_stub":
+			return proptools.ConfigurableValueBool(ctx.Config().BuildFromTextStub())
 		case "debuggable":
 			return proptools.ConfigurableValueBool(ctx.Config().Debuggable())
 		case "use_debug_art":
