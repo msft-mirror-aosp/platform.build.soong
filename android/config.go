@@ -250,6 +250,13 @@ func (c Config) ReleaseDefaultModuleBuildFromSource() bool {
 		Bool(c.config.productVariables.ReleaseDefaultModuleBuildFromSource)
 }
 
+func (c Config) ReleaseDefaultUpdatableModuleVersion() string {
+	if val, exists := c.GetBuildFlag("RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION"); exists {
+		return val
+	}
+	panic("RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION is missing from build flags.")
+}
+
 func (c Config) ReleaseDisableVerifyOverlaps() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_DISABLE_VERIFY_OVERLAPS_CHECK")
 }
