@@ -6425,14 +6425,14 @@ func TestApexAvailable_ApexAvailableNameWithVersionCode(t *testing.T) {
 	`)
 
 	fooManifestRule := result.ModuleForTests("foo", "android_common_foo").Rule("apexManifestRule")
-	fooExpectedDefaultVersion := android.DefaultUpdatableModuleVersion
+	fooExpectedDefaultVersion := testDefaultUpdatableModuleVersion
 	fooActualDefaultVersion := fooManifestRule.Args["default_version"]
 	if fooActualDefaultVersion != fooExpectedDefaultVersion {
 		t.Errorf("expected to find defaultVersion %q; got %q", fooExpectedDefaultVersion, fooActualDefaultVersion)
 	}
 
 	barManifestRule := result.ModuleForTests("bar", "android_common_bar").Rule("apexManifestRule")
-	defaultVersionInt, _ := strconv.Atoi(android.DefaultUpdatableModuleVersion)
+	defaultVersionInt, _ := strconv.Atoi(testDefaultUpdatableModuleVersion)
 	barExpectedDefaultVersion := fmt.Sprint(defaultVersionInt + 3)
 	barActualDefaultVersion := barManifestRule.Args["default_version"]
 	if barActualDefaultVersion != barExpectedDefaultVersion {
