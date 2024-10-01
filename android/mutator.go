@@ -32,11 +32,11 @@ import (
 // collateGloballyRegisteredMutators constructs the list of mutators that have been registered
 // with the InitRegistrationContext and will be used at runtime.
 func collateGloballyRegisteredMutators() sortableComponents {
-	return collateRegisteredMutators(preArch, preDeps, postDeps, finalDeps)
+	return collateRegisteredMutators(preArch, preDeps, postDeps, postApex, finalDeps)
 }
 
 // collateRegisteredMutators constructs a single list of mutators from the separate lists.
-func collateRegisteredMutators(preArch, preDeps, postDeps, finalDeps []RegisterMutatorFunc) sortableComponents {
+func collateRegisteredMutators(preArch, preDeps, postDeps, postApex, finalDeps []RegisterMutatorFunc) sortableComponents {
 	mctx := &registerMutatorsContext{}
 
 	register := func(funcs []RegisterMutatorFunc) {
@@ -52,6 +52,8 @@ func collateRegisteredMutators(preArch, preDeps, postDeps, finalDeps []RegisterM
 	register([]RegisterMutatorFunc{registerDepsMutator})
 
 	register(postDeps)
+
+	register(postApex)
 
 	mctx.finalPhase = true
 	register(finalDeps)
@@ -166,6 +168,8 @@ var postDeps = []RegisterMutatorFunc{
 	RegisterOverridePostDepsMutators,
 }
 
+var postApex = []RegisterMutatorFunc{}
+
 var finalDeps = []RegisterMutatorFunc{}
 
 func PreArchMutators(f RegisterMutatorFunc) {
@@ -178,6 +182,10 @@ func PreDepsMutators(f RegisterMutatorFunc) {
 
 func PostDepsMutators(f RegisterMutatorFunc) {
 	postDeps = append(postDeps, f)
+}
+
+func PostApexMutators(f RegisterMutatorFunc) {
+	postApex = append(postApex, f)
 }
 
 func FinalDepsMutators(f RegisterMutatorFunc) {
