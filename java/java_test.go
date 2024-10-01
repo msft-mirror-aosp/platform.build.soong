@@ -3132,3 +3132,37 @@ func assertTestOnlyAndTopLevel(t *testing.T, ctx *android.TestResult, expectedTe
 		t.Errorf("top-level: Expected but not found: %v, Found but not expected: %v", left, right)
 	}
 }
+
+// Test that a dependency edge is created to the "first" variant of a native library listed in `required` of java_binary
+func TestNativeRequiredDepOfJavaBinary(t *testing.T) {
+	findDepsOfModule := func(ctx *android.TestContext, module android.Module, depName string) []blueprint.Module {
+		var ret []blueprint.Module
+		ctx.VisitDirectDeps(module, func(dep blueprint.Module) {
+			if dep.Name() == depName {
+				ret = append(ret, dep)
+			}
+		})
+		return ret
+	}
+
+	bp := cc.GatherRequiredDepsForTest(android.Android) + `
+java_binary {
+	name: "myjavabin",
+	main_class: "com.android.MyJava",
+	required: ["mynativelib"],
+}
+cc_library_shared {
+	name: "mynativelib",
+}
+`
+	res, _ := testJava(t, bp)
+	// The first variant installs the native library via the common variant, so check the deps of both variants.
+	nativeVariantDepsWithDups := findDepsOfModule(res, res.ModuleForTests("myjavabin", "android_arm64_armv8-a").Module(), "mynativelib")
+	nativeVariantDepsWithDups = append(nativeVariantDepsWithDups, findDepsOfModule(res, res.ModuleForTests("myjavabin", "android_common").Module(), "mynativelib")...)
+
+	nativeVariantDepsUnique := map[blueprint.Module]bool{}
+	for _, dep := range nativeVariantDepsWithDups {
+		nativeVariantDepsUnique[dep] = true
+	}
+	android.AssertIntEquals(t, "Create a dep on the first variant", 1, len(nativeVariantDepsUnique))
+}
