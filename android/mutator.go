@@ -242,6 +242,16 @@ type BottomUpMutatorContext interface {
 	// be ordered correctly for all future mutator passes.
 	AddVariationDependencies(variations []blueprint.Variation, tag blueprint.DependencyTag, names ...string) []blueprint.Module
 
+	// AddReverseVariationDependencies adds a dependency from the named module to the current
+	// module. The given variations will be added to the current module's varations, and then the
+	// result will be used to find the correct variation of the depending module, which must exist.
+	//
+	// Does not affect the ordering of the current mutator pass, but will be ordered
+	// correctly for all future mutator passes.  All reverse dependencies for a destination module are
+	// collected until the end of the mutator pass, sorted by name, and then appended to the destination
+	// module's dependency list.
+	AddReverseVariationDependency([]blueprint.Variation, blueprint.DependencyTag, string)
+
 	// AddFarVariationDependencies adds deps as dependencies of the current module, but uses the
 	// variations argument to select which variant of the dependency to use.  It returns a slice of
 	// modules for each dependency (some entries may be nil).  A variant of the dependency must
@@ -703,6 +713,14 @@ func (b *bottomUpMutatorContext) AddReverseDependency(module blueprint.Module, t
 	}
 	b.bp.AddReverseDependency(module, tag, name)
 }
+
+func (b *bottomUpMutatorContext) AddReverseVariationDependency(variations []blueprint.Variation, tag blueprint.DependencyTag, name string) {
+	if b.baseModuleContext.checkedMissingDeps() {
+		panic("Adding deps not allowed after checking for missing deps")
+	}
+	b.bp.AddReverseVariationDependency(variations, tag, name)
+}
+
 func (b *bottomUpMutatorContext) AddVariationDependencies(variations []blueprint.Variation, tag blueprint.DependencyTag,
 	names ...string) []blueprint.Module {
 	if b.baseModuleContext.checkedMissingDeps() {
