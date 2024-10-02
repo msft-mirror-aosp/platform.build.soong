@@ -520,6 +520,8 @@ type ProductVariables struct {
 	BoardAvbSystemAddHashtreeFooterArgs    []string `json:",omitempty"`
 	DeviceFrameworkCompatibilityMatrixFile []string `json:",omitempty"`
 	DeviceProductCompatibilityMatrixFile   []string `json:",omitempty"`
+
+	PartitionVarsForSoongMigrationOnlyDoNotUse PartitionVariables
 }
 
 type PartitionQualifiedVariablesType struct {
@@ -576,7 +578,8 @@ type PartitionVariables struct {
 
 	BoardAvbEnable bool `json:",omitempty"`
 
-	ProductPackages []string `json:",omitempty"`
+	ProductPackages      []string `json:",omitempty"`
+	ProductPackagesDebug []string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
