@@ -18,5 +18,6 @@ import "encoding/gob"
 
 func init() {
 	gob.Register(ModuleOutPath{})
+	gob.Register(PhonyPath{})
 	gob.Register(unstableInfo{})
 }

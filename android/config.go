@@ -238,11 +238,23 @@ func (c Config) ReleaseAconfigFlagDefaultPermission() string {
 	return c.config.productVariables.ReleaseAconfigFlagDefaultPermission
 }
 
+// Enable object size sanitizer
+func (c Config) ReleaseBuildObjectSizeSanitizer() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_BUILD_OBJECT_SIZE_SANITIZER")
+}
+
 // The flag indicating behavior for the tree wrt building modules or using prebuilts
 // derived from RELEASE_DEFAULT_MODULE_BUILD_FROM_SOURCE
 func (c Config) ReleaseDefaultModuleBuildFromSource() bool {
 	return c.config.productVariables.ReleaseDefaultModuleBuildFromSource == nil ||
 		Bool(c.config.productVariables.ReleaseDefaultModuleBuildFromSource)
+}
+
+func (c Config) ReleaseDefaultUpdatableModuleVersion() string {
+	if val, exists := c.GetBuildFlag("RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION"); exists {
+		return val
+	}
+	panic("RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION is missing from build flags.")
 }
 
 func (c Config) ReleaseDisableVerifyOverlaps() bool {
@@ -1247,7 +1259,7 @@ func (c *config) TidyChecks() string {
 }
 
 func (c *config) LibartImgHostBaseAddress() string {
-	return "0x60000000"
+	return "0x70000000"
 }
 
 func (c *config) LibartImgDeviceBaseAddress() string {
@@ -1273,12 +1285,18 @@ func (c *config) EnforceRROForModule(name string) bool {
 	}
 	return false
 }
+
 func (c *config) EnforceRROExcludedOverlay(path string) bool {
 	excluded := c.productVariables.EnforceRROExcludedOverlays
 	if len(excluded) > 0 {
 		return HasAnyPrefix(path, excluded)
 	}
 	return false
+}
+
+func (c *config) EnforceRROGlobally() bool {
+	enforceList := c.productVariables.EnforceRROTargets
+	return InList("*", enforceList)
 }
 
 func (c *config) ExportedNamespaces() []string {
@@ -1684,14 +1702,6 @@ func (c *config) EnforceSystemCertificateAllowList() []string {
 
 func (c *config) EnforceProductPartitionInterface() bool {
 	return Bool(c.productVariables.EnforceProductPartitionInterface)
-}
-
-func (c *config) EnforceInterPartitionJavaSdkLibrary() bool {
-	return Bool(c.productVariables.EnforceInterPartitionJavaSdkLibrary)
-}
-
-func (c *config) InterPartitionJavaLibraryAllowList() []string {
-	return c.productVariables.InterPartitionJavaLibraryAllowList
 }
 
 func (c *config) ProductHiddenAPIStubs() []string {

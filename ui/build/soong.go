@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"android/soong/ui/tracer"
@@ -765,7 +766,11 @@ func checkGlobs(ctx Context, finalOutFile string) error {
 	globsChan := make(chan pathtools.GlobResult)
 	errorsChan := make(chan error)
 	wg := sync.WaitGroup{}
+
 	hasChangedGlobs := false
+	var changedGlobNameMutex sync.Mutex
+	var changedGlobName string
+
 	for i := 0; i < runtime.NumCPU()*2; i++ {
 		wg.Add(1)
 		go func() {
@@ -780,7 +785,7 @@ func checkGlobs(ctx Context, finalOutFile string) error {
 				hasNewDep := false
 				for _, dep := range cachedGlob.Deps {
 					info, err := os.Stat(dep)
-					if errors.Is(err, fs.ErrNotExist) {
+					if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 						hasNewDep = true
 						break
 					} else if err != nil {
@@ -803,6 +808,13 @@ func checkGlobs(ctx Context, finalOutFile string) error {
 				} else {
 					if !slices.Equal(result.Matches, cachedGlob.Matches) {
 						hasChangedGlobs = true
+
+						changedGlobNameMutex.Lock()
+						defer changedGlobNameMutex.Unlock()
+						changedGlobName = result.Pattern
+						if len(result.Excludes) > 0 {
+							changedGlobName += " (excluding " + strings.Join(result.Excludes, ", ") + ")"
+						}
 					}
 				}
 			}
@@ -854,6 +866,7 @@ func checkGlobs(ctx Context, finalOutFile string) error {
 
 	if hasChangedGlobs {
 		fmt.Fprintf(os.Stdout, "Globs changed, rerunning soong...\n")
+		fmt.Fprintf(os.Stdout, "One culprit glob (may be more): %s\n", changedGlobName)
 		// Write the current time to the glob_results file. We just need
 		// some unique value to trigger a rerun, it doesn't matter what it is.
 		err = os.WriteFile(

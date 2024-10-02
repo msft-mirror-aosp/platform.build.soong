@@ -428,9 +428,6 @@ type ProductVariables struct {
 
 	EnforceProductPartitionInterface *bool `json:",omitempty"`
 
-	EnforceInterPartitionJavaSdkLibrary *bool    `json:",omitempty"`
-	InterPartitionJavaLibraryAllowList  []string `json:",omitempty"`
-
 	BoardUsesRecoveryAsBoot *bool `json:",omitempty"`
 
 	BoardKernelBinaries                []string `json:",omitempty"`
@@ -523,6 +520,8 @@ type ProductVariables struct {
 	BoardAvbSystemAddHashtreeFooterArgs    []string `json:",omitempty"`
 	DeviceFrameworkCompatibilityMatrixFile []string `json:",omitempty"`
 	DeviceProductCompatibilityMatrixFile   []string `json:",omitempty"`
+
+	PartitionVarsForSoongMigrationOnlyDoNotUse PartitionVariables
 }
 
 type PartitionQualifiedVariablesType struct {
@@ -579,7 +578,8 @@ type PartitionVariables struct {
 
 	BoardAvbEnable bool `json:",omitempty"`
 
-	ProductPackages []string `json:",omitempty"`
+	ProductPackages      []string `json:",omitempty"`
+	ProductPackagesDebug []string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {

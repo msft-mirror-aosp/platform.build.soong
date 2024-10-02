@@ -34,6 +34,7 @@ var ravenwoodLibContentTag = dependencyTag{name: "ravenwoodlibcontent"}
 var ravenwoodUtilsTag = dependencyTag{name: "ravenwoodutils"}
 var ravenwoodRuntimeTag = dependencyTag{name: "ravenwoodruntime"}
 var ravenwoodTestResourceApkTag = dependencyTag{name: "ravenwoodtestresapk"}
+var ravenwoodTestInstResourceApkTag = dependencyTag{name: "ravenwoodtest-inst-res-apk"}
 
 const ravenwoodUtilsName = "ravenwood-utils"
 const ravenwoodRuntimeName = "ravenwood-runtime"
@@ -53,14 +54,20 @@ func getLibPath(archType android.ArchType) string {
 }
 
 type ravenwoodTestProperties struct {
-	Jni_libs []string
+	Jni_libs proptools.Configurable[[]string]
 
 	// Specify another android_app module here to copy it to the test directory, so that
-	// the ravenwood test can access it.
+	// the ravenwood test can access it. This APK will be loaded as resources of the test
+	// target app.
 	// TODO: For now, we simply refer to another android_app module and copy it to the
 	// test directory. Eventually, android_ravenwood_test should support all the resource
 	// related properties and build resources from the `res/` directory.
 	Resource_apk *string
+
+	// Specify another android_app module here to copy it to the test directory, so that
+	// the ravenwood test can access it. This APK will be loaded as resources of the test
+	// instrumentation app itself.
+	Inst_resource_apk *string
 }
 
 type ravenwoodTest struct {
@@ -119,13 +126,17 @@ func (r *ravenwoodTest) DepsMutator(ctx android.BottomUpMutatorContext) {
 	}
 
 	// Add jni libs
-	for _, lib := range r.ravenwoodTestProperties.Jni_libs {
+	for _, lib := range r.ravenwoodTestProperties.Jni_libs.GetOrDefault(ctx, nil) {
 		ctx.AddVariationDependencies(ctx.Config().BuildOSTarget.Variations(), jniLibTag, lib)
 	}
 
 	// Resources APK
 	if resourceApk := proptools.String(r.ravenwoodTestProperties.Resource_apk); resourceApk != "" {
 		ctx.AddVariationDependencies(nil, ravenwoodTestResourceApkTag, resourceApk)
+	}
+
+	if resourceApk := proptools.String(r.ravenwoodTestProperties.Inst_resource_apk); resourceApk != "" {
+		ctx.AddVariationDependencies(nil, ravenwoodTestInstResourceApkTag, resourceApk)
 	}
 }
 
@@ -194,13 +205,16 @@ func (r *ravenwoodTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	resApkInstallPath := installPath.Join(ctx, "ravenwood-res-apks")
-	if resApk := ctx.GetDirectDepsWithTag(ravenwoodTestResourceApkTag); len(resApk) > 0 {
-		for _, installFile := range android.OtherModuleProviderOrDefault(
-			ctx, resApk[0], android.InstallFilesProvider).InstallFiles {
-			installResApk := ctx.InstallFile(resApkInstallPath, "ravenwood-res.apk", installFile)
+
+	copyResApk := func(tag blueprint.DependencyTag, toFileName string) {
+		if resApk := ctx.GetDirectDepsWithTag(tag); len(resApk) > 0 {
+			installFile := android.OutputFileForModule(ctx, resApk[0], "")
+			installResApk := ctx.InstallFile(resApkInstallPath, toFileName, installFile)
 			installDeps = append(installDeps, installResApk)
 		}
 	}
+	copyResApk(ravenwoodTestResourceApkTag, "ravenwood-res.apk")
+	copyResApk(ravenwoodTestInstResourceApkTag, "ravenwood-inst-res.apk")
 
 	// Install our JAR with all dependencies
 	ctx.InstallFile(installPath, ctx.ModuleName()+".jar", r.outputFile, installDeps...)
@@ -224,7 +238,7 @@ func (r *ravenwoodTest) AndroidMkEntries() []android.AndroidMkEntries {
 type ravenwoodLibgroupProperties struct {
 	Libs []string
 
-	Jni_libs []string
+	Jni_libs proptools.Configurable[[]string]
 
 	// We use this to copy framework-res.apk to the ravenwood runtime directory.
 	Data []string `android:"path,arch_variant"`
@@ -266,7 +280,7 @@ func (r *ravenwoodLibgroup) DepsMutator(ctx android.BottomUpMutatorContext) {
 	for _, lib := range r.ravenwoodLibgroupProperties.Libs {
 		ctx.AddVariationDependencies(nil, ravenwoodLibContentTag, lib)
 	}
-	for _, lib := range r.ravenwoodLibgroupProperties.Jni_libs {
+	for _, lib := range r.ravenwoodLibgroupProperties.Jni_libs.GetOrDefault(ctx, nil) {
 		ctx.AddVariationDependencies(ctx.Config().BuildOSTarget.Variations(), jniLibTag, lib)
 	}
 }

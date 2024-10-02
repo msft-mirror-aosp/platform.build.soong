@@ -381,7 +381,7 @@ type commonProperties struct {
 	Native_bridge_supported *bool `android:"arch_variant"`
 
 	// init.rc files to be installed if this module is installed
-	Init_rc []string `android:"arch_variant,path"`
+	Init_rc proptools.Configurable[[]string] `android:"arch_variant,path"`
 
 	// VINTF manifest fragments to be installed if this module is installed
 	Vintf_fragments proptools.Configurable[[]string] `android:"path"`
@@ -1005,6 +1005,14 @@ func addRequiredDeps(ctx BottomUpMutatorContext) {
 			return
 		}
 
+		// Do not create a dependency from common variant to arch variant for `common_first` modules
+		if multilib, _ := decodeMultilib(ctx, ctx.Module().base()); multilib == string(MultilibCommonFirst) {
+			commonVariant := ctx.Arch().ArchType.Multilib == ""
+			if bothInAndroid && commonVariant && InList(target.Arch.ArchType.Multilib, []string{"lib32", "lib64"}) {
+				return
+			}
+		}
+
 		variation := target.Variations()
 		if ctx.OtherModuleFarDependencyVariantExists(variation, depName) {
 			ctx.AddFarVariationDependencies(variation, RequiredDepTag, depName)
@@ -1057,8 +1065,29 @@ var vintfDepTag = struct {
 }{}
 
 func addVintfFragmentDeps(ctx BottomUpMutatorContext) {
+	// Vintf manifests in the recovery partition will be ignored.
+	if !ctx.Device() || ctx.Module().InstallInRecovery() {
+		return
+	}
+
+	deviceConfig := ctx.DeviceConfig()
+
 	mod := ctx.Module()
-	ctx.AddDependency(mod, vintfDepTag, mod.VintfFragmentModuleNames(ctx)...)
+	vintfModules := ctx.AddDependency(mod, vintfDepTag, mod.VintfFragmentModuleNames(ctx)...)
+
+	modPartition := mod.PartitionTag(deviceConfig)
+	for _, vintf := range vintfModules {
+		if vintfModule, ok := vintf.(*vintfFragmentModule); ok {
+			vintfPartition := vintfModule.PartitionTag(deviceConfig)
+			if modPartition != vintfPartition {
+				ctx.ModuleErrorf("Module %q(%q) and Vintf_fragment %q(%q) are installed to different partitions.",
+					mod.Name(), modPartition,
+					vintfModule.Name(), vintfPartition)
+			}
+		} else {
+			ctx.ModuleErrorf("Only vintf_fragment type module should be listed in vintf_fragment_modules : %q", vintf.Name())
+		}
+	}
 }
 
 // AddProperties "registers" the provided props
@@ -1840,10 +1869,8 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 
 	if m.Enabled(ctx) {
 		// ensure all direct android.Module deps are enabled
-		ctx.VisitDirectDepsBlueprint(func(bm blueprint.Module) {
-			if m, ok := bm.(Module); ok {
-				ctx.validateAndroidModule(bm, ctx.OtherModuleDependencyTag(m), ctx.baseModuleContext.strictVisitDeps, false)
-			}
+		ctx.VisitDirectDeps(func(m Module) {
+			ctx.validateAndroidModule(m, ctx.OtherModuleDependencyTag(m), ctx.baseModuleContext.strictVisitDeps)
 		})
 
 		if m.Device() {
@@ -1855,7 +1882,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			// so only a single rule is created for each init.rc or vintf fragment file.
 
 			if !m.InVendorRamdisk() {
-				ctx.initRcPaths = PathsForModuleSrc(ctx, m.commonProperties.Init_rc)
+				ctx.initRcPaths = PathsForModuleSrc(ctx, m.commonProperties.Init_rc.GetOrDefault(ctx, nil))
 				rcDir := PathForModuleInstall(ctx, "etc", "init")
 				for _, src := range ctx.initRcPaths {
 					installedInitRc := rcDir.Join(ctx, src.Base())
@@ -2269,6 +2296,8 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 		}
 		variable := condition.Arg(0)
 		switch variable {
+		case "build_from_text_stub":
+			return proptools.ConfigurableValueBool(ctx.Config().BuildFromTextStub())
 		case "debuggable":
 			return proptools.ConfigurableValueBool(ctx.Config().Debuggable())
 		case "use_debug_art":
