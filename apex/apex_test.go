@@ -5450,7 +5450,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 			android.PrepareForTestWithAllowMissingDependencies,
 			android.FixtureMergeMockFs(map[string][]byte{
 				"build/soong/scripts/check_boot_jars/package_allowed_list.txt": nil,
-				"frameworks/base/config/boot-profile.txt":                      nil,
+				"frameworks/base/boot/boot-profile.txt":                      nil,
 			}),
 		)
 
@@ -6425,14 +6425,14 @@ func TestApexAvailable_ApexAvailableNameWithVersionCode(t *testing.T) {
 	`)
 
 	fooManifestRule := result.ModuleForTests("foo", "android_common_foo").Rule("apexManifestRule")
-	fooExpectedDefaultVersion := android.DefaultUpdatableModuleVersion
+	fooExpectedDefaultVersion := testDefaultUpdatableModuleVersion
 	fooActualDefaultVersion := fooManifestRule.Args["default_version"]
 	if fooActualDefaultVersion != fooExpectedDefaultVersion {
 		t.Errorf("expected to find defaultVersion %q; got %q", fooExpectedDefaultVersion, fooActualDefaultVersion)
 	}
 
 	barManifestRule := result.ModuleForTests("bar", "android_common_bar").Rule("apexManifestRule")
-	defaultVersionInt, _ := strconv.Atoi(android.DefaultUpdatableModuleVersion)
+	defaultVersionInt, _ := strconv.Atoi(testDefaultUpdatableModuleVersion)
 	barExpectedDefaultVersion := fmt.Sprint(defaultVersionInt + 3)
 	barActualDefaultVersion := barManifestRule.Args["default_version"]
 	if barActualDefaultVersion != barExpectedDefaultVersion {
