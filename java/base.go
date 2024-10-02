@@ -83,9 +83,6 @@ type CommonProperties struct {
 	// list of java libraries that will be compiled into the resulting jar
 	Static_libs proptools.Configurable[[]string] `android:"arch_variant"`
 
-	// list of java libraries that should not be used to build this module
-	Exclude_static_libs []string `android:"arch_variant"`
-
 	// manifest file to be included in resulting jar
 	Manifest *string `android:"path"`
 
@@ -827,7 +824,7 @@ func (j *Module) AvailableFor(what string) bool {
 }
 
 func (j *Module) staticLibs(ctx android.BaseModuleContext) []string {
-	return android.RemoveListFromList(j.properties.Static_libs.GetOrDefault(ctx, nil), j.properties.Exclude_static_libs)
+	return j.properties.Static_libs.GetOrDefault(ctx, nil)
 }
 
 func (j *Module) deps(ctx android.BottomUpMutatorContext) {
