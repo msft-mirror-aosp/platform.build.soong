@@ -63,6 +63,16 @@ func RegisterAppBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("override_android_test", OverrideAndroidTestModuleFactory)
 }
 
+type AppInfo struct {
+	// Updatable is set to the value of the updatable property
+	Updatable bool
+
+	// TestHelperApp is true if the module is a android_test_helper_app
+	TestHelperApp bool
+}
+
+var AppInfoProvider = blueprint.NewProvider[*AppInfo]()
+
 // AndroidManifest.xml merging
 // package splits
 
@@ -385,7 +395,10 @@ func (a *AndroidTestHelperApp) GenerateAndroidBuildActions(ctx android.ModuleCon
 	android.SetProvider(ctx, android.TestOnlyProviderKey, android.TestModuleInformation{
 		TestOnly: true,
 	})
-
+	android.SetProvider(ctx, AppInfoProvider, &AppInfo{
+		Updatable:     Bool(a.appProperties.Updatable),
+		TestHelperApp: true,
+	})
 }
 
 func (a *AndroidApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -393,6 +406,10 @@ func (a *AndroidApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.checkEmbedJnis(ctx)
 	a.generateAndroidBuildActions(ctx)
 	a.generateJavaUsedByApex(ctx)
+	android.SetProvider(ctx, AppInfoProvider, &AppInfo{
+		Updatable:     Bool(a.appProperties.Updatable),
+		TestHelperApp: false,
+	})
 }
 
 func (a *AndroidApp) checkAppSdkVersions(ctx android.ModuleContext) {
@@ -1204,10 +1221,6 @@ func (a *AndroidApp) SetEnforceDefaultTargetSdkVersion(val bool) {
 
 func (a *AndroidApp) Updatable() bool {
 	return Bool(a.appProperties.Updatable)
-}
-
-func (a *AndroidApp) SetUpdatable(val bool) {
-	a.appProperties.Updatable = &val
 }
 
 func (a *AndroidApp) getCertString(ctx android.BaseModuleContext) string {

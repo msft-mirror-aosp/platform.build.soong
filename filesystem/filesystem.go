@@ -37,7 +37,7 @@ func init() {
 func registerBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("android_filesystem", filesystemFactory)
 	ctx.RegisterModuleType("android_filesystem_defaults", filesystemDefaultsFactory)
-	ctx.RegisterModuleType("android_system_image", systemImageFactory)
+	ctx.RegisterModuleType("android_system_image", SystemImageFactory)
 	ctx.RegisterModuleType("avb_add_hash_footer", avbAddHashFooterFactory)
 	ctx.RegisterModuleType("avb_add_hash_footer_defaults", avbAddHashFooterDefaultsFactory)
 	ctx.RegisterModuleType("avb_gen_vbmeta_image", avbGenVbmetaImageFactory)
@@ -49,7 +49,7 @@ type filesystem struct {
 	android.PackagingBase
 	android.DefaultableModuleBase
 
-	properties filesystemProperties
+	properties FilesystemProperties
 
 	// Function that builds extra files under the root directory and returns the files
 	buildExtraFiles func(ctx android.ModuleContext, root android.OutputPath) android.OutputPaths
@@ -71,7 +71,7 @@ type symlinkDefinition struct {
 	Name   *string
 }
 
-type filesystemProperties struct {
+type FilesystemProperties struct {
 	// When set to true, sign the image with avbtool. Default is false.
 	Use_avb *bool
 
