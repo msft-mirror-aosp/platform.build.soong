@@ -388,7 +388,7 @@ type overridableProperties struct {
 
 	// Apex Container package name. Override value for attribute package:name in
 	// AndroidManifest.xml
-	Package_name string
+	Package_name proptools.Configurable[string]
 
 	// A txt file containing list of files that are allowed to be included in this APEX.
 	Allowed_files *string `android:"path"`
