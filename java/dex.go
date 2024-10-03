@@ -223,15 +223,8 @@ func (d *dexer) dexCommonFlags(ctx android.ModuleContext,
 	var requestReleaseMode bool
 	requestReleaseMode, flags = android.RemoveFromList("--release", flags)
 
-	if ctx.Config().Getenv("NO_OPTIMIZE_DX") != "" {
+	if ctx.Config().Getenv("NO_OPTIMIZE_DX") != "" || ctx.Config().Getenv("GENERATE_DEX_DEBUG") != "" {
 		flags = append(flags, "--debug")
-		requestReleaseMode = false
-	}
-
-	if ctx.Config().Getenv("GENERATE_DEX_DEBUG") != "" {
-		flags = append(flags,
-			"--debug",
-			"--verbose")
 		requestReleaseMode = false
 	}
 
