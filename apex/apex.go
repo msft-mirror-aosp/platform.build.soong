@@ -1110,23 +1110,6 @@ func apexInfoMutator(mctx android.TopDownMutatorContext) {
 	if am, ok := mctx.Module().(android.ApexModule); ok {
 		android.ApexInfoMutator(mctx, am)
 	}
-	enforceAppUpdatability(mctx)
-}
-
-// enforceAppUpdatability propagates updatable=true to apps of updatable apexes
-func enforceAppUpdatability(mctx android.TopDownMutatorContext) {
-	if !mctx.Module().Enabled(mctx) {
-		return
-	}
-	if apex, ok := mctx.Module().(*apexBundle); ok && apex.Updatable() {
-		// checking direct deps is sufficient since apex->apk is a direct edge, even when inherited via apex_defaults
-		mctx.VisitDirectDeps(func(module android.Module) {
-			// ignore android_test_app
-			if app, ok := module.(*java.AndroidApp); ok {
-				app.SetUpdatable(true)
-			}
-		})
-	}
 }
 
 // TODO: b/215736885 Whittle the denylist
@@ -1872,6 +1855,7 @@ func (a *apexBundle) commonBuildActions(ctx android.ModuleContext) bool {
 	a.CheckMinSdkVersion(ctx)
 	a.checkStaticLinkingToStubLibraries(ctx)
 	a.checkStaticExecutables(ctx)
+	a.enforceAppUpdatability(ctx)
 	if len(a.properties.Tests) > 0 && !a.testApex {
 		ctx.PropertyErrorf("tests", "property allowed only in apex_test module type")
 		return false
@@ -2394,6 +2378,24 @@ func (a *apexBundle) setOutputFiles(ctx android.ModuleContext) {
 	// uncompressed one
 	if a.outputApexFile != nil {
 		ctx.SetOutputFiles(android.Paths{a.outputApexFile}, imageApexSuffix)
+	}
+}
+
+// enforceAppUpdatability propagates updatable=true to apps of updatable apexes
+func (a *apexBundle) enforceAppUpdatability(mctx android.ModuleContext) {
+	if !a.Enabled(mctx) {
+		return
+	}
+	if a.Updatable() {
+		// checking direct deps is sufficient since apex->apk is a direct edge, even when inherited via apex_defaults
+		mctx.VisitDirectDeps(func(module android.Module) {
+			if appInfo, ok := android.OtherModuleProvider(mctx, module, java.AppInfoProvider); ok {
+				// ignore android_test_app
+				if !appInfo.TestHelperApp && !appInfo.Updatable {
+					mctx.ModuleErrorf("app dependency %s must have updatable: true", mctx.OtherModuleName(module))
+				}
+			}
+		})
 	}
 }
 
