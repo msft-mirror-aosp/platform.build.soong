@@ -313,6 +313,7 @@ func (binary *Binary) AndroidMkEntries() []android.AndroidMkEntries {
 			ExtraEntries: []android.AndroidMkExtraEntriesFunc{
 				func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
 					entries.SetBool("LOCAL_STRIP_MODULE", false)
+					entries.AddStrings("LOCAL_REQUIRED_MODULES", binary.androidMkNamesOfJniLibs...)
 				},
 			},
 			ExtraFooters: []android.AndroidMkExtraFootersFunc{
