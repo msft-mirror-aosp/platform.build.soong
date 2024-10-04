@@ -228,9 +228,6 @@ type BaseCompilerProperties struct {
 		Static *bool `android:"arch_variant"`
 	} `android:"arch_variant"`
 
-	// Stores the original list of source files before being cleared by library reuse
-	OriginalSrcs proptools.Configurable[[]string] `blueprint:"mutated"`
-
 	// Build and link with OpenMP
 	Openmp *bool `android:"arch_variant"`
 }
@@ -363,10 +360,20 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 	tc := ctx.toolchain()
 	modulePath := ctx.ModuleDir()
 
-	srcs := compiler.Properties.Srcs.GetOrDefault(ctx, nil)
-	exclude_srcs := compiler.Properties.Exclude_srcs.GetOrDefault(ctx, nil)
-	compiler.srcsBeforeGen = android.PathsForModuleSrcExcludes(ctx, srcs, exclude_srcs)
-	compiler.srcsBeforeGen = append(compiler.srcsBeforeGen, deps.GeneratedSources...)
+	reuseObjs := false
+	if len(ctx.GetDirectDepsWithTag(reuseObjTag)) > 0 {
+		reuseObjs = true
+	}
+
+	// If a reuseObjTag dependency exists then this module is reusing the objects (generally the shared variant
+	// reusing objects from the static variant), and doesn't need to compile any sources of its own.
+	var srcs []string
+	if !reuseObjs {
+		srcs = compiler.Properties.Srcs.GetOrDefault(ctx, nil)
+		exclude_srcs := compiler.Properties.Exclude_srcs.GetOrDefault(ctx, nil)
+		compiler.srcsBeforeGen = android.PathsForModuleSrcExcludes(ctx, srcs, exclude_srcs)
+		compiler.srcsBeforeGen = append(compiler.srcsBeforeGen, deps.GeneratedSources...)
+	}
 
 	cflags := compiler.Properties.Cflags.GetOrDefault(ctx, nil)
 	cppflags := compiler.Properties.Cppflags.GetOrDefault(ctx, nil)
@@ -717,11 +724,6 @@ func (compiler *baseCompiler) hasSrcExt(ctx BaseModuleContext, ext string) bool 
 		}
 	}
 	for _, src := range compiler.Properties.Srcs.GetOrDefault(ctx, nil) {
-		if filepath.Ext(src) == ext {
-			return true
-		}
-	}
-	for _, src := range compiler.Properties.OriginalSrcs.GetOrDefault(ctx, nil) {
 		if filepath.Ext(src) == ext {
 			return true
 		}
