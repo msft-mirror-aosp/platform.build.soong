@@ -172,7 +172,7 @@ type overridableAppProperties struct {
 	RotationMinSdkVersion *string
 
 	// the package name of this app. The package name in the manifest file is used if one was not given.
-	Package_name *string
+	Package_name proptools.Configurable[string]
 
 	// the logging parent of this app.
 	Logging_parent *string
@@ -386,7 +386,8 @@ func (a *AndroidTestHelperApp) GenerateAndroidBuildActions(ctx android.ModuleCon
 	checkMinSdkVersionMts(ctx, a.MinSdkVersion(ctx))
 	applicationId := a.appTestHelperAppProperties.Manifest_values.ApplicationId
 	if applicationId != nil {
-		if a.overridableAppProperties.Package_name != nil {
+		packageName := a.overridableAppProperties.Package_name.Get(ctx)
+		if packageName.IsPresent() {
 			ctx.PropertyErrorf("manifest_values.applicationId", "property is not supported when property package_name is set.")
 		}
 		a.aapt.manifestValues.applicationId = *applicationId
@@ -586,10 +587,11 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 	}
 
 	manifestPackageName, overridden := ctx.DeviceConfig().OverrideManifestPackageNameFor(ctx.ModuleName())
-	if overridden || a.overridableAppProperties.Package_name != nil {
+	packageNameProp := a.overridableAppProperties.Package_name.Get(ctx)
+	if overridden || packageNameProp.IsPresent() {
 		// The product override variable has a priority over the package_name property.
 		if !overridden {
-			manifestPackageName = *a.overridableAppProperties.Package_name
+			manifestPackageName = packageNameProp.Get()
 		}
 		aaptLinkFlags = append(aaptLinkFlags, generateAaptRenamePackageFlags(manifestPackageName, a.renameResourcesPackage())...)
 		a.overriddenManifestPackageName = manifestPackageName
@@ -829,11 +831,12 @@ func (a *AndroidApp) createPrivappAllowlist(ctx android.ModuleContext) android.P
 		return android.PathForModuleSrc(ctx, *a.appProperties.Privapp_allowlist)
 	}
 
-	if a.overridableAppProperties.Package_name == nil {
+	packageNameProp := a.overridableAppProperties.Package_name.Get(ctx)
+	if packageNameProp.IsEmpty() {
 		ctx.PropertyErrorf("privapp_allowlist", "package_name must be set to use privapp_allowlist")
 	}
 
-	packageName := *a.overridableAppProperties.Package_name
+	packageName := packageNameProp.Get()
 	fileName := "privapp_allowlist_" + packageName + ".xml"
 	outPath := android.PathForModuleOut(ctx, fileName).OutputPath
 	ctx.Build(pctx, android.BuildParams{
@@ -1418,7 +1421,8 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	applicationId := a.appTestProperties.Manifest_values.ApplicationId
 	if applicationId != nil {
-		if a.overridableAppProperties.Package_name != nil {
+		packageNameProp := a.overridableAppProperties.Package_name.Get(ctx)
+		if packageNameProp.IsPresent() {
 			ctx.PropertyErrorf("manifest_values.applicationId", "property is not supported when property package_name is set.")
 		}
 		a.aapt.manifestValues.applicationId = *applicationId
@@ -1469,10 +1473,11 @@ func (a *AndroidTest) FixTestConfig(ctx android.ModuleContext, testConfig androi
 		command.FlagWithArg("--test-file-name ", a.installApkName+".apk")
 	}
 
-	if a.overridableAppProperties.Package_name != nil {
+	packageNameProp := a.overridableAppProperties.Package_name.Get(ctx)
+	if packageNameProp.IsPresent() {
 		fixNeeded = true
 		command.FlagWithInput("--manifest ", a.manifestPath).
-			FlagWithArg("--package-name ", *a.overridableAppProperties.Package_name)
+			FlagWithArg("--package-name ", packageNameProp.Get())
 	}
 
 	if a.appTestProperties.Mainline_package_name != nil {
