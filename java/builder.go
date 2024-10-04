@@ -703,6 +703,7 @@ func TransformJarsToJar(ctx android.ModuleContext, outputFile android.WritablePa
 	// Remove any module-info.class files that may have come from prebuilt jars, they cause problems
 	// for downstream tools like desugar.
 	jarArgs = append(jarArgs, "-stripFile module-info.class")
+	jarArgs = append(jarArgs, "-stripFile META-INF/versions/*/module-info.class")
 
 	if stripDirEntries {
 		jarArgs = append(jarArgs, "-D")
