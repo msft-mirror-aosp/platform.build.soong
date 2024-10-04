@@ -260,10 +260,10 @@ var (
 
 	ravenizer = pctx.AndroidStaticRule("ravenizer",
 		blueprint.RuleParams{
-			Command:     "rm -f $out && ${ravenizer} --in-jar $in --out-jar $out",
+			Command:     "rm -f $out && ${ravenizer} --in-jar $in --out-jar $out $ravenizerArgs",
 			CommandDeps: []string{"${ravenizer}"},
 		},
-	)
+		"ravenizerArgs")
 
 	apimapper = pctx.AndroidStaticRule("apimapper",
 		blueprint.RuleParams{
@@ -782,12 +782,15 @@ func TransformJetifier(ctx android.ModuleContext, outputFile android.WritablePat
 }
 
 func TransformRavenizer(ctx android.ModuleContext, outputFile android.WritablePath,
-	inputFile android.Path) {
+	inputFile android.Path, ravenizerArgs string) {
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        ravenizer,
 		Description: "ravenizer",
 		Output:      outputFile,
 		Input:       inputFile,
+		Args: map[string]string{
+			"ravenizerArgs": ravenizerArgs,
+		},
 	})
 }
 
