@@ -2086,6 +2086,10 @@ func (c *config) OdmPropFiles(ctx PathContext) Paths {
 	return PathsForSource(ctx, c.productVariables.OdmPropFiles)
 }
 
+func (c *config) ExtraAllowedDepsTxt() string {
+	return String(c.productVariables.ExtraAllowedDepsTxt)
+}
+
 func (c *config) EnableUffdGc() string {
 	return String(c.productVariables.EnableUffdGc)
 }
