@@ -35,7 +35,7 @@ func init() {
 }
 
 func registerBuildComponents(ctx android.RegistrationContext) {
-	ctx.RegisterModuleType("android_filesystem", FilesystemFactory)
+	ctx.RegisterModuleType("android_filesystem", filesystemFactory)
 	ctx.RegisterModuleType("android_filesystem_defaults", filesystemDefaultsFactory)
 	ctx.RegisterModuleType("android_system_image", SystemImageFactory)
 	ctx.RegisterModuleType("avb_add_hash_footer", avbAddHashFooterFactory)
@@ -144,7 +144,7 @@ type FilesystemProperties struct {
 // modules in the filesystem image are built for the target device (i.e. Android, not Linux host).
 // The modules are placed in the filesystem image just like they are installed to the ordinary
 // partitions like system.img. For example, cc_library modules are placed under ./lib[64] directory.
-func FilesystemFactory() android.Module {
+func filesystemFactory() android.Module {
 	module := &filesystem{}
 	module.filterPackagingSpec = module.filterInstallablePackagingSpec
 	initFilesystemModule(module, module)
@@ -176,13 +176,6 @@ const (
 	cpioType // uncompressed
 	unknown
 )
-
-type FilesystemInfo struct {
-	// A text file containing the list of paths installed on the partition.
-	FileListFile android.Path
-}
-
-var FilesystemProvider = blueprint.NewProvider[FilesystemInfo]()
 
 func (f *filesystem) fsType(ctx android.ModuleContext) fsType {
 	typeStr := proptools.StringDefault(f.properties.Type, "ext4")
@@ -234,10 +227,6 @@ func (f *filesystem) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	f.fileListFile = android.PathForModuleOut(ctx, "fileList").OutputPath
 	android.WriteFileRule(ctx, f.fileListFile, f.installedFilesList())
-
-	android.SetProvider(ctx, FilesystemProvider, FilesystemInfo{
-		FileListFile: f.fileListFile,
-	})
 }
 
 func (f *filesystem) appendToEntry(ctx android.ModuleContext, installedFile android.OutputPath) {

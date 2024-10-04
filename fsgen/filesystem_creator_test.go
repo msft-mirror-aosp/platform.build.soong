@@ -44,13 +44,12 @@ func TestFileSystemCreatorSystemImageProps(t *testing.T) {
 		}),
 		android.FixtureMergeMockFs(android.MockFS{
 			"external/avb/test/data/testkey_rsa4096.pem": nil,
-			"build/soong/fsgen/Android.bp": []byte(`
-			soong_filesystem_creator {
-				name: "foo",
-			}
-			`),
 		}),
-	).RunTest(t)
+	).RunTestWithBp(t, `
+	soong_filesystem_creator {
+		name: "foo",
+	}
+	`)
 
 	fooSystem := result.ModuleForTests("test_product_generated_system_image", "android_common").Module().(interface {
 		FsProps() filesystem.FilesystemProperties
