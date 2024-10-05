@@ -1062,8 +1062,9 @@ func (a *apexBundle) getOverrideManifestPackageName(ctx android.ModuleContext) s
 		}
 		return ""
 	}
-	if a.overridableProperties.Package_name != "" {
-		return a.overridableProperties.Package_name
+	packageNameFromProp := a.overridableProperties.Package_name.GetOrDefault(ctx, "")
+	if packageNameFromProp != "" {
+		return packageNameFromProp
 	}
 	manifestPackageName, overridden := ctx.DeviceConfig().OverrideManifestPackageNameFor(ctx.ModuleName())
 	if overridden {
