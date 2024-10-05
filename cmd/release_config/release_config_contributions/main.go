@@ -114,7 +114,7 @@ func main() {
 	}
 	for _, name := range releaseConfigNames {
 		dirs := contributingDirsMap[name]
-		slices.Sort(dirs)
+		sortDirectories(dirs)
 		message.ReleaseConfigContributionsArtifactList = append(
 			message.ReleaseConfigContributionsArtifactList,
 			&rc_proto.ReleaseConfigContributionsArtifact{
