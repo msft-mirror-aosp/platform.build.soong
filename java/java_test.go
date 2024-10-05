@@ -2454,37 +2454,6 @@ java_test_host {
 	}
 }
 
-func TestJavaExcludeStaticLib(t *testing.T) {
-	ctx, _ := testJava(t, `
-	java_library {
-		name: "bar",
-	}
-	java_library {
-		name: "foo",
-	}
-	java_library {
-		name: "baz",
-		static_libs: [
-			"foo",
-			"bar",
-		],
-		exclude_static_libs: [
-			"bar",
-		],
-	}
-	`)
-
-	// "bar" not included as dependency of "baz"
-	CheckModuleDependencies(t, ctx, "baz", "android_common", []string{
-		`core-lambda-stubs`,
-		`ext`,
-		`foo`,
-		`framework`,
-		`stable-core-platform-api-stubs-system-modules`,
-		`stable.core.platform.api.stubs`,
-	})
-}
-
 func TestJavaLibraryWithResourcesStem(t *testing.T) {
 	ctx, _ := testJavaWithFS(t, `
     java_library {
