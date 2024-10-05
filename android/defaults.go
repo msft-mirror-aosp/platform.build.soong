@@ -274,7 +274,7 @@ func (defaultable *DefaultableModuleBase) applyDefaultProperties(ctx BottomUpMut
 
 func RegisterDefaultsPreArchMutators(ctx RegisterMutatorsContext) {
 	ctx.BottomUp("defaults_deps", defaultsDepsMutator).Parallel()
-	ctx.BottomUp("defaults", defaultsMutator).Parallel()
+	ctx.BottomUp("defaults", defaultsMutator).Parallel().UsesCreateModule()
 }
 
 func defaultsDepsMutator(ctx BottomUpMutatorContext) {
