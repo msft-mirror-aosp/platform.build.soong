@@ -5429,11 +5429,11 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 			apex_available: ["myapex"],
 			shared_library: false,
 			permitted_packages: ["bar"],
+			prefer: true,
 		}
 
 		java_sdk_library {
 			name: "libbar",
-			enabled: false,
 			srcs: ["foo/bar/MyClass.java"],
 			unsafe_ignore_missing_latest_api: true,
 			apex_available: ["myapex"],
@@ -5450,7 +5450,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 			android.PrepareForTestWithAllowMissingDependencies,
 			android.FixtureMergeMockFs(map[string][]byte{
 				"build/soong/scripts/check_boot_jars/package_allowed_list.txt": nil,
-				"frameworks/base/config/boot-profile.txt":                      nil,
+				"frameworks/base/boot/boot-profile.txt":                      nil,
 			}),
 		)
 
@@ -6425,14 +6425,14 @@ func TestApexAvailable_ApexAvailableNameWithVersionCode(t *testing.T) {
 	`)
 
 	fooManifestRule := result.ModuleForTests("foo", "android_common_foo").Rule("apexManifestRule")
-	fooExpectedDefaultVersion := android.DefaultUpdatableModuleVersion
+	fooExpectedDefaultVersion := testDefaultUpdatableModuleVersion
 	fooActualDefaultVersion := fooManifestRule.Args["default_version"]
 	if fooActualDefaultVersion != fooExpectedDefaultVersion {
 		t.Errorf("expected to find defaultVersion %q; got %q", fooExpectedDefaultVersion, fooActualDefaultVersion)
 	}
 
 	barManifestRule := result.ModuleForTests("bar", "android_common_bar").Rule("apexManifestRule")
-	defaultVersionInt, _ := strconv.Atoi(android.DefaultUpdatableModuleVersion)
+	defaultVersionInt, _ := strconv.Atoi(testDefaultUpdatableModuleVersion)
 	barExpectedDefaultVersion := fmt.Sprint(defaultVersionInt + 3)
 	barActualDefaultVersion := barManifestRule.Args["default_version"]
 	if barActualDefaultVersion != barExpectedDefaultVersion {
@@ -9693,120 +9693,84 @@ func TestApexStrictUpdtabilityLint(t *testing.T) {
 	}
 
 	testCases := []struct {
-		testCaseName              string
-		apexUpdatable             bool
-		javaStrictUpdtabilityLint bool
-		lintFileExists            bool
-		disallowedFlagExpected    bool
+		testCaseName                    string
+		apexUpdatable                   bool
+		javaStrictUpdtabilityLint       bool
+		lintFileExists                  bool
+		disallowedFlagExpectedOnApex    bool
+		disallowedFlagExpectedOnJavalib bool
 	}{
 		{
-			testCaseName:              "lint-baseline.xml does not exist, no disallowed flag necessary in lint cmd",
-			apexUpdatable:             true,
-			javaStrictUpdtabilityLint: true,
-			lintFileExists:            false,
-			disallowedFlagExpected:    false,
+			testCaseName:                    "lint-baseline.xml does not exist, no disallowed flag necessary in lint cmd",
+			apexUpdatable:                   true,
+			javaStrictUpdtabilityLint:       true,
+			lintFileExists:                  false,
+			disallowedFlagExpectedOnApex:    false,
+			disallowedFlagExpectedOnJavalib: false,
 		},
 		{
-			testCaseName:              "non-updatable apex respects strict_updatability of javalib",
-			apexUpdatable:             false,
-			javaStrictUpdtabilityLint: false,
-			lintFileExists:            true,
-			disallowedFlagExpected:    false,
+			testCaseName:                    "non-updatable apex respects strict_updatability of javalib",
+			apexUpdatable:                   false,
+			javaStrictUpdtabilityLint:       false,
+			lintFileExists:                  true,
+			disallowedFlagExpectedOnApex:    false,
+			disallowedFlagExpectedOnJavalib: false,
 		},
 		{
-			testCaseName:              "non-updatable apex respects strict updatability of javalib",
-			apexUpdatable:             false,
-			javaStrictUpdtabilityLint: true,
-			lintFileExists:            true,
-			disallowedFlagExpected:    true,
+			testCaseName:                    "non-updatable apex respects strict updatability of javalib",
+			apexUpdatable:                   false,
+			javaStrictUpdtabilityLint:       true,
+			lintFileExists:                  true,
+			disallowedFlagExpectedOnApex:    false,
+			disallowedFlagExpectedOnJavalib: true,
 		},
 		{
-			testCaseName:              "updatable apex sets strict updatability of javalib to true",
-			apexUpdatable:             true,
-			javaStrictUpdtabilityLint: false, // will be set to true by mutator
-			lintFileExists:            true,
-			disallowedFlagExpected:    true,
+			testCaseName:                    "updatable apex checks strict updatability of javalib",
+			apexUpdatable:                   true,
+			javaStrictUpdtabilityLint:       false,
+			lintFileExists:                  true,
+			disallowedFlagExpectedOnApex:    true,
+			disallowedFlagExpectedOnJavalib: false,
 		},
 	}
 
 	for _, testCase := range testCases {
-		fixtures := []android.FixturePreparer{}
-		baselineProperty := ""
-		if testCase.lintFileExists {
-			fixtures = append(fixtures, fs.AddToFixture())
-			baselineProperty = "baseline_filename: \"lint-baseline.xml\""
-		}
-		bp := fmt.Sprintf(bpTemplate, testCase.apexUpdatable, testCase.javaStrictUpdtabilityLint, baselineProperty)
-
-		result := testApex(t, bp, fixtures...)
-		myjavalib := result.ModuleForTests("myjavalib", "android_common_apex29")
-		sboxProto := android.RuleBuilderSboxProtoForTests(t, result, myjavalib.Output("lint.sbox.textproto"))
-		disallowedFlagActual := strings.Contains(*sboxProto.Commands[0].Command, "--baseline lint-baseline.xml --disallowed_issues NewApi")
-
-		if disallowedFlagActual != testCase.disallowedFlagExpected {
-			t.Errorf("Failed testcase: %v \nActual lint cmd: %v", testCase.testCaseName, *sboxProto.Commands[0].Command)
-		}
-	}
-}
-
-func TestUpdatabilityLintSkipLibcore(t *testing.T) {
-	bp := `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			java_libs: ["myjavalib"],
-			updatable: true,
-			min_sdk_version: "29",
-		}
-		apex_key {
-			name: "myapex.key",
-		}
-		java_library {
-			name: "myjavalib",
-			srcs: ["MyClass.java"],
-			apex_available: [ "myapex" ],
-			sdk_version: "current",
-			min_sdk_version: "29",
-			lint: {
-				baseline_filename: "lint-baseline.xml",
+		t.Run(testCase.testCaseName, func(t *testing.T) {
+			fixtures := []android.FixturePreparer{}
+			baselineProperty := ""
+			if testCase.lintFileExists {
+				fixtures = append(fixtures, fs.AddToFixture())
+				baselineProperty = "baseline_filename: \"lint-baseline.xml\""
 			}
-		}
-		`
+			bp := fmt.Sprintf(bpTemplate, testCase.apexUpdatable, testCase.javaStrictUpdtabilityLint, baselineProperty)
 
-	testCases := []struct {
-		testCaseName           string
-		moduleDirectory        string
-		disallowedFlagExpected bool
-	}{
-		{
-			testCaseName:           "lintable module defined outside libcore",
-			moduleDirectory:        "",
-			disallowedFlagExpected: true,
-		},
-		{
-			testCaseName:           "lintable module defined in libcore root directory",
-			moduleDirectory:        "libcore/",
-			disallowedFlagExpected: false,
-		},
-		{
-			testCaseName:           "lintable module defined in libcore child directory",
-			moduleDirectory:        "libcore/childdir/",
-			disallowedFlagExpected: true,
-		},
-	}
+			result := testApex(t, bp, fixtures...)
 
-	for _, testCase := range testCases {
-		lintFileCreator := android.FixtureAddTextFile(testCase.moduleDirectory+"lint-baseline.xml", "")
-		bpFileCreator := android.FixtureAddTextFile(testCase.moduleDirectory+"Android.bp", bp)
-		result := testApex(t, "", lintFileCreator, bpFileCreator)
-		myjavalib := result.ModuleForTests("myjavalib", "android_common_apex29")
-		sboxProto := android.RuleBuilderSboxProtoForTests(t, result, myjavalib.Output("lint.sbox.textproto"))
-		cmdFlags := fmt.Sprintf("--baseline %vlint-baseline.xml --disallowed_issues NewApi", testCase.moduleDirectory)
-		disallowedFlagActual := strings.Contains(*sboxProto.Commands[0].Command, cmdFlags)
+			checkModule := func(m android.TestingBuildParams, name string, expectStrictUpdatability bool) {
+				if expectStrictUpdatability {
+					if m.Rule == nil {
+						t.Errorf("expected strict updatability check rule on %s", name)
+					} else {
+						android.AssertStringDoesContain(t, fmt.Sprintf("strict updatability check rule for %s", name),
+							m.RuleParams.Command, "--disallowed_issues NewApi")
+						android.AssertStringListContains(t, fmt.Sprintf("strict updatability check baselines for %s", name),
+							m.Inputs.Strings(), "lint-baseline.xml")
+					}
+				} else {
+					if m.Rule != nil {
+						t.Errorf("expected no strict updatability check rule on %s", name)
+					}
+				}
+			}
 
-		if disallowedFlagActual != testCase.disallowedFlagExpected {
-			t.Errorf("Failed testcase: %v \nActual lint cmd: %v", testCase.testCaseName, *sboxProto.Commands[0].Command)
-		}
+			myjavalib := result.ModuleForTests("myjavalib", "android_common_apex29")
+			apex := result.ModuleForTests("myapex", "android_common_myapex")
+			apexStrictUpdatabilityCheck := apex.MaybeOutput("lint_strict_updatability_check.stamp")
+			javalibStrictUpdatabilityCheck := myjavalib.MaybeOutput("lint_strict_updatability_check.stamp")
+
+			checkModule(apexStrictUpdatabilityCheck, "myapex", testCase.disallowedFlagExpectedOnApex)
+			checkModule(javalibStrictUpdatabilityCheck, "myjavalib", testCase.disallowedFlagExpectedOnJavalib)
+		})
 	}
 }
 
@@ -9848,11 +9812,12 @@ func TestApexStrictUpdtabilityLintBcpFragmentDeps(t *testing.T) {
 	}
 
 	result := testApex(t, bp, dexpreopt.FixtureSetApexBootJars("myapex:myjavalib"), fs.AddToFixture())
-	myjavalib := result.ModuleForTests("myjavalib", "android_common_apex29")
-	sboxProto := android.RuleBuilderSboxProtoForTests(t, result, myjavalib.Output("lint.sbox.textproto"))
-	if !strings.Contains(*sboxProto.Commands[0].Command, "--baseline lint-baseline.xml --disallowed_issues NewApi") {
-		t.Errorf("Strict updabality lint missing in myjavalib coming from bootclasspath_fragment mybootclasspath-fragment\nActual lint cmd: %v", *sboxProto.Commands[0].Command)
-	}
+	apex := result.ModuleForTests("myapex", "android_common_myapex")
+	apexStrictUpdatabilityCheck := apex.Output("lint_strict_updatability_check.stamp")
+	android.AssertStringDoesContain(t, "strict updatability check rule for myapex",
+		apexStrictUpdatabilityCheck.RuleParams.Command, "--disallowed_issues NewApi")
+	android.AssertStringListContains(t, "strict updatability check baselines for myapex",
+		apexStrictUpdatabilityCheck.Inputs.Strings(), "lint-baseline.xml")
 }
 
 func TestApexLintBcpFragmentSdkLibDeps(t *testing.T) {

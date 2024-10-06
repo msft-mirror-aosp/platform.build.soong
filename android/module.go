@@ -1005,6 +1005,14 @@ func addRequiredDeps(ctx BottomUpMutatorContext) {
 			return
 		}
 
+		// Do not create a dependency from common variant to arch variant for `common_first` modules
+		if multilib, _ := decodeMultilib(ctx, ctx.Module().base()); multilib == string(MultilibCommonFirst) {
+			commonVariant := ctx.Arch().ArchType.Multilib == ""
+			if bothInAndroid && commonVariant && InList(target.Arch.ArchType.Multilib, []string{"lib32", "lib64"}) {
+				return
+			}
+		}
+
 		variation := target.Variations()
 		if ctx.OtherModuleFarDependencyVariantExists(variation, depName) {
 			ctx.AddFarVariationDependencies(variation, RequiredDepTag, depName)
@@ -1861,10 +1869,8 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 
 	if m.Enabled(ctx) {
 		// ensure all direct android.Module deps are enabled
-		ctx.VisitDirectDepsBlueprint(func(bm blueprint.Module) {
-			if m, ok := bm.(Module); ok {
-				ctx.validateAndroidModule(bm, ctx.OtherModuleDependencyTag(m), ctx.baseModuleContext.strictVisitDeps, false)
-			}
+		ctx.VisitDirectDeps(func(m Module) {
+			ctx.validateAndroidModule(m, ctx.OtherModuleDependencyTag(m), ctx.baseModuleContext.strictVisitDeps)
 		})
 
 		if m.Device() {
@@ -2290,6 +2296,8 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 		}
 		variable := condition.Arg(0)
 		switch variable {
+		case "build_from_text_stub":
+			return proptools.ConfigurableValueBool(ctx.Config().BuildFromTextStub())
 		case "debuggable":
 			return proptools.ConfigurableValueBool(ctx.Config().Debuggable())
 		case "use_debug_art":

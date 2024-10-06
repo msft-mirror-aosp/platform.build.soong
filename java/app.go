@@ -83,7 +83,7 @@ type appProperties struct {
 	Package_splits []string
 
 	// list of native libraries that will be provided in or alongside the resulting jar
-	Jni_libs []string `android:"arch_variant"`
+	Jni_libs proptools.Configurable[[]string] `android:"arch_variant"`
 
 	// if true, use JNI libraries that link against platform APIs even if this module sets
 	// sdk_version.
@@ -311,7 +311,7 @@ func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 		} else {
 			tag = jniInstallTag
 		}
-		ctx.AddFarVariationDependencies(variation, tag, a.appProperties.Jni_libs...)
+		ctx.AddFarVariationDependencies(variation, tag, a.appProperties.Jni_libs.GetOrDefault(ctx, nil)...)
 	}
 	for _, aconfig_declaration := range a.aaptProperties.Flags_packages {
 		ctx.AddDependency(ctx.Module(), aconfigDeclarationTag, aconfig_declaration)
@@ -428,7 +428,7 @@ func (a *AndroidApp) checkAppSdkVersions(ctx android.ModuleContext) {
 func (a *AndroidApp) checkEmbedJnis(ctx android.BaseModuleContext) {
 	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 	apkInApex := !apexInfo.IsForPlatform()
-	hasJnis := len(a.appProperties.Jni_libs) > 0
+	hasJnis := len(a.appProperties.Jni_libs.GetOrDefault(ctx, nil)) > 0
 
 	if apkInApex && hasJnis && !Bool(a.appProperties.Use_embedded_native_libs) {
 		ctx.ModuleErrorf("APK in APEX should have use_embedded_native_libs: true")
@@ -586,7 +586,7 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 		if override := ctx.Config().Getenv("OVERRIDE_APEX_MANIFEST_DEFAULT_VERSION"); override != "" {
 			a.aapt.defaultManifestVersion = override
 		} else {
-			a.aapt.defaultManifestVersion = android.DefaultUpdatableModuleVersion
+			a.aapt.defaultManifestVersion = ctx.Config().ReleaseDefaultUpdatableModuleVersion()
 		}
 	}
 
@@ -1135,7 +1135,7 @@ func collectJniDeps(ctx android.ModuleContext,
 	return jniLibs, prebuiltJniPackages
 }
 
-func (a *AndroidApp) WalkPayloadDeps(ctx android.ModuleContext, do android.PayloadDepsCallback) {
+func (a *AndroidApp) WalkPayloadDeps(ctx android.BaseModuleContext, do android.PayloadDepsCallback) {
 	ctx.WalkDeps(func(child, parent android.Module) bool {
 		isExternal := !a.DepIsInSameApex(ctx, child)
 		if am, ok := child.(android.ApexModule); ok {
@@ -1153,7 +1153,7 @@ func (a *AndroidApp) buildAppDependencyInfo(ctx android.ModuleContext) {
 	}
 
 	depsInfo := android.DepNameToDepInfoMap{}
-	a.WalkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
+	a.WalkPayloadDeps(ctx, func(ctx android.BaseModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
 		depName := to.Name()
 
 		// Skip dependencies that are only available to APEXes; they are developed with updatability
@@ -1417,7 +1417,8 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	testConfig := tradefed.AutoGenInstrumentationTestConfig(ctx, a.testProperties.Test_config,
-		a.testProperties.Test_config_template, a.manifestPath, a.testProperties.Test_suites, a.testProperties.Auto_gen_config, configs)
+		a.testProperties.Test_config_template, a.manifestPath, a.testProperties.Test_suites,
+		a.testProperties.Auto_gen_config, configs, a.testProperties.Test_options.Test_runner_options)
 	a.testConfig = a.FixTestConfig(ctx, testConfig)
 	a.extraTestConfigs = android.PathsForModuleSrc(ctx, a.testProperties.Test_options.Extra_test_configs)
 	a.data = android.PathsForModuleSrc(ctx, a.testProperties.Data)
@@ -1781,16 +1782,15 @@ func (u *usesLibrary) classLoaderContextForUsesLibDeps(ctx android.ModuleContext
 			}
 		}
 
-		// Skip java_sdk_library dependencies that provide stubs, but not an implementation.
-		// This will be restricted to optional_uses_libs
-		if sdklib, ok := m.(SdkLibraryDependency); ok {
-			if tag == usesLibOptTag && sdklib.DexJarBuildPath(ctx).PathOrNil() == nil {
-				u.shouldDisableDexpreopt = true
-				return
-			}
-		}
-
 		if lib, ok := m.(UsesLibraryDependency); ok {
+			if _, ok := android.OtherModuleProvider(ctx, m, SdkLibraryInfoProvider); ok {
+				// Skip java_sdk_library dependencies that provide stubs, but not an implementation.
+				// This will be restricted to optional_uses_libs
+				if tag == usesLibOptTag && lib.DexJarBuildPath(ctx).PathOrNil() == nil {
+					u.shouldDisableDexpreopt = true
+					return
+				}
+			}
 			libName := dep
 			if ulib, ok := m.(ProvidesUsesLib); ok && ulib.ProvidesUsesLib() != nil {
 				libName = *ulib.ProvidesUsesLib()

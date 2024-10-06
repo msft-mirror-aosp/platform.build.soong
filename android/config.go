@@ -250,6 +250,13 @@ func (c Config) ReleaseDefaultModuleBuildFromSource() bool {
 		Bool(c.config.productVariables.ReleaseDefaultModuleBuildFromSource)
 }
 
+func (c Config) ReleaseDefaultUpdatableModuleVersion() string {
+	if val, exists := c.GetBuildFlag("RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION"); exists {
+		return val
+	}
+	panic("RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION is missing from build flags.")
+}
+
 func (c Config) ReleaseDisableVerifyOverlaps() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_DISABLE_VERIFY_OVERLAPS_CHECK")
 }
@@ -1278,12 +1285,18 @@ func (c *config) EnforceRROForModule(name string) bool {
 	}
 	return false
 }
+
 func (c *config) EnforceRROExcludedOverlay(path string) bool {
 	excluded := c.productVariables.EnforceRROExcludedOverlays
 	if len(excluded) > 0 {
 		return HasAnyPrefix(path, excluded)
 	}
 	return false
+}
+
+func (c *config) EnforceRROGlobally() bool {
+	enforceList := c.productVariables.EnforceRROTargets
+	return InList("*", enforceList)
 }
 
 func (c *config) ExportedNamespaces() []string {

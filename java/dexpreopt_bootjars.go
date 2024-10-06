@@ -1217,8 +1217,13 @@ func bootImageProfileRuleCommon(ctx android.ModuleContext, name string, dexFiles
 		return nil
 	}
 
-	defaultProfile := "frameworks/base/config/boot-image-profile.txt"
-	extraProfile := "frameworks/base/config/boot-image-profile-extra.txt"
+	defaultProfile := "frameworks/base/boot/boot-image-profile.txt"
+	// If ART is prebuilt, primarily in next release configs, this will still use
+	// the profile from source which represent the latest code, so it may not
+	// correspond to the BCP jars in the prebuilt APEX, but this is the profile we
+	// have access to.
+	artProfile := "art/build/boot/boot-image-profile.txt"
+	extraProfile := "frameworks/base/boot/boot-image-profile-extra.txt"
 
 	rule := android.NewRuleBuilder(pctx, ctx)
 
@@ -1232,6 +1237,9 @@ func bootImageProfileRuleCommon(ctx android.ModuleContext, name string, dexFiles
 		// like master-art-host that don't have frameworks/base).
 		// Return nil and continue without profile.
 		return nil
+	}
+	if path := android.ExistentPathForSource(ctx, artProfile); path.Valid() {
+		profiles = append(profiles, path.Path())
 	}
 	if path := android.ExistentPathForSource(ctx, extraProfile); path.Valid() {
 		profiles = append(profiles, path.Path())
@@ -1290,7 +1298,7 @@ func bootFrameworkProfileRule(ctx android.ModuleContext, image *bootImageConfig)
 		return nil, nil
 	}
 
-	defaultProfile := "frameworks/base/config/boot-profile.txt"
+	defaultProfile := "frameworks/base/boot/boot-profile.txt"
 	bootFrameworkProfile := android.PathForSource(ctx, defaultProfile)
 
 	profile := image.dir.Join(ctx, "boot.bprof")
@@ -1375,18 +1383,7 @@ func (d *dexpreoptBootJars) MakeVars(ctx android.MakeVarsContext) {
 	}
 
 	image := d.defaultBootImage
-	if image != nil {
-		if profileInstallInfo, ok := android.OtherModuleProvider(ctx, d, profileInstallInfoProvider); ok {
-			ctx.Strict("DEXPREOPT_IMAGE_PROFILE_BUILT_INSTALLED", profileInstallInfo.profileInstalls.String())
-			if profileInstallInfo.profileLicenseMetadataFile.Valid() {
-				ctx.Strict("DEXPREOPT_IMAGE_PROFILE_LICENSE_METADATA", profileInstallInfo.profileLicenseMetadataFile.String())
-			}
-		}
-
-		if SkipDexpreoptBootJars(ctx) {
-			return
-		}
-
+	if image != nil && !SkipDexpreoptBootJars(ctx) {
 		global := dexpreopt.GetGlobalConfig(ctx)
 		dexPaths, dexLocations := bcpForDexpreopt(ctx, global.PreoptWithUpdatableBcp)
 		ctx.Strict("DEXPREOPT_BOOTCLASSPATH_DEX_FILES", strings.Join(dexPaths.Strings(), " "))
