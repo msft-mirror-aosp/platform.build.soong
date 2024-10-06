@@ -81,6 +81,7 @@ type Module interface {
 	InstallInOdm() bool
 	InstallInProduct() bool
 	InstallInVendor() bool
+	InstallInSystemExt() bool
 	InstallForceOS() (*OsType, *ArchType)
 	PartitionTag(DeviceConfig) string
 	HideFromMake()
@@ -1512,6 +1513,10 @@ func (m *ModuleBase) InstallInProduct() bool {
 
 func (m *ModuleBase) InstallInVendor() bool {
 	return Bool(m.commonProperties.Vendor) || Bool(m.commonProperties.Soc_specific) || Bool(m.commonProperties.Proprietary)
+}
+
+func (m *ModuleBase) InstallInSystemExt() bool {
+	return Bool(m.commonProperties.System_ext_specific)
 }
 
 func (m *ModuleBase) InstallInRoot() bool {
