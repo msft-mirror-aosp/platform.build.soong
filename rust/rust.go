@@ -920,7 +920,7 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	if mod.compiler != nil {
 		flags = mod.compiler.compilerFlags(ctx, flags)
 		flags = mod.compiler.cfgFlags(ctx, flags)
-		flags = mod.compiler.featureFlags(ctx, flags)
+		flags = mod.compiler.featureFlags(ctx, mod, flags)
 	}
 	if mod.coverage != nil {
 		flags, deps = mod.coverage.flags(ctx, flags, deps)
@@ -1755,6 +1755,16 @@ func (mod *Module) HostToolPath() android.OptionalPath {
 }
 
 var _ android.ApexModule = (*Module)(nil)
+
+// If a module is marked for exclusion from apexes, don't provide apex variants.
+// TODO(b/362509506): remove this once stubs are properly supported by rust_ffi targets.
+func (m *Module) CanHaveApexVariants() bool {
+	if m.ApexExclude() {
+		return false
+	} else {
+		return m.ApexModuleBase.CanHaveApexVariants()
+	}
+}
 
 func (mod *Module) MinSdkVersion() string {
 	return String(mod.Properties.Min_sdk_version)
