@@ -526,6 +526,11 @@ type ProductVariables struct {
 	ExtraAllowedDepsTxt *string `json:",omitempty"`
 
 	AdbKeys *string `json:",omitempty"`
+
+	DeviceMatrixFile       []string `json:",omitempty"`
+	ProductManifestFiles   []string `json:",omitempty"`
+	SystemManifestFile     []string `json:",omitempty"`
+	SystemExtManifestFiles []string `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {
