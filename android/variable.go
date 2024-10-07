@@ -121,6 +121,7 @@ type variableProperties struct {
 		// are used for dogfooding and performance testing, and should be as similar to user builds
 		// as possible.
 		Debuggable struct {
+			Apk             *string
 			Cflags          []string
 			Cppflags        []string
 			Init_rc         []string
@@ -187,10 +188,13 @@ type variableProperties struct {
 		// release_aidl_use_unfrozen is "true" when a device can
 		// use the unfrozen versions of AIDL interfaces.
 		Release_aidl_use_unfrozen struct {
-			Cflags          []string
-			Cmd             *string
-			Required        []string
-			Vintf_fragments []string
+			Cflags                 []string
+			Cmd                    *string
+			Required               []string
+			Vintf_fragment_modules []string
+		}
+		SelinuxIgnoreNeverallows struct {
+			Required []string
 		}
 	} `android:"arch_variant"`
 }
@@ -211,6 +215,7 @@ type ProductVariables struct {
 	Platform_display_version_name          *string  `json:",omitempty"`
 	Platform_version_name                  *string  `json:",omitempty"`
 	Platform_sdk_version                   *int     `json:",omitempty"`
+	Platform_sdk_minor_version             *int     `json:",omitempty"`
 	Platform_sdk_codename                  *string  `json:",omitempty"`
 	Platform_sdk_version_or_codename       *string  `json:",omitempty"`
 	Platform_sdk_final                     *bool    `json:",omitempty"`
@@ -380,6 +385,7 @@ type ProductVariables struct {
 	SystemExtPrivateSepolicyDirs []string `json:",omitempty"`
 	BoardSepolicyM4Defs          []string `json:",omitempty"`
 
+	BoardPlatform           *string `json:",omitempty"`
 	BoardSepolicyVers       *string `json:",omitempty"`
 	PlatformSepolicyVersion *string `json:",omitempty"`
 
@@ -421,10 +427,10 @@ type ProductVariables struct {
 
 	TargetFSConfigGen []string `json:",omitempty"`
 
-	EnforceProductPartitionInterface *bool `json:",omitempty"`
+	UseSoongSystemImage            *bool   `json:",omitempty"`
+	ProductSoongDefinedSystemImage *string `json:",omitempty"`
 
-	EnforceInterPartitionJavaSdkLibrary *bool    `json:",omitempty"`
-	InterPartitionJavaLibraryAllowList  []string `json:",omitempty"`
+	EnforceProductPartitionInterface *bool `json:",omitempty"`
 
 	BoardUsesRecoveryAsBoot *bool `json:",omitempty"`
 
@@ -444,7 +450,6 @@ type ProductVariables struct {
 	GenruleSandboxing                   *bool    `json:",omitempty"`
 	BuildBrokenEnforceSyspropOwner      bool     `json:",omitempty"`
 	BuildBrokenTrebleSyspropNeverallow  bool     `json:",omitempty"`
-	BuildBrokenUsesSoongPython2Modules  bool     `json:",omitempty"`
 	BuildBrokenVendorPropertyNamespace  bool     `json:",omitempty"`
 	BuildBrokenIncorrectPartitionImages bool     `json:",omitempty"`
 	BuildBrokenInputDirModules          []string `json:",omitempty"`
@@ -511,6 +516,7 @@ type ProductVariables struct {
 	SystemPropFiles    []string `json:",omitempty"`
 	SystemExtPropFiles []string `json:",omitempty"`
 	ProductPropFiles   []string `json:",omitempty"`
+	OdmPropFiles       []string `json:",omitempty"`
 
 	EnableUffdGc *string `json:",omitempty"`
 
@@ -518,6 +524,10 @@ type ProductVariables struct {
 	BoardAvbSystemAddHashtreeFooterArgs    []string `json:",omitempty"`
 	DeviceFrameworkCompatibilityMatrixFile []string `json:",omitempty"`
 	DeviceProductCompatibilityMatrixFile   []string `json:",omitempty"`
+
+	PartitionVarsForSoongMigrationOnlyDoNotUse PartitionVariables
+
+	ExtraAllowedDepsTxt *string `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {
@@ -574,7 +584,8 @@ type PartitionVariables struct {
 
 	BoardAvbEnable bool `json:",omitempty"`
 
-	ProductPackages []string `json:",omitempty"`
+	ProductPackages      []string `json:",omitempty"`
+	ProductPackagesDebug []string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {

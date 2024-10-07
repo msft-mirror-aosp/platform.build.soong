@@ -198,18 +198,20 @@ func (b *bindgenDecorator) GenerateSource(ctx ModuleContext, deps PathDeps) andr
 		cflags = append(cflags, "-D__ANDROID_VNDK__")
 		if ctx.RustModule().InVendor() {
 			cflags = append(cflags, "-D__ANDROID_VENDOR__")
-
-			vendorApiLevel := ctx.Config().VendorApiLevel()
-			if vendorApiLevel == "" {
-				// TODO(b/314036847): This is a fallback for UDC targets.
-				// This must be a build failure when UDC is no longer built
-				// from this source tree.
-				vendorApiLevel = ctx.Config().PlatformSdkVersion().String()
-			}
-			cflags = append(cflags, "-D__ANDROID_VENDOR_API__="+vendorApiLevel)
 		} else if ctx.RustModule().InProduct() {
 			cflags = append(cflags, "-D__ANDROID_PRODUCT__")
 		}
+
+		// Define __ANDROID_VENDOR_API__ for both product and vendor variants
+		// because they both use the same LLNDK libraries.
+		vendorApiLevel := ctx.Config().VendorApiLevel()
+		if vendorApiLevel == "" {
+			// TODO(b/314036847): This is a fallback for UDC targets.
+			// This must be a build failure when UDC is no longer built
+			// from this source tree.
+			vendorApiLevel = ctx.Config().PlatformSdkVersion().String()
+		}
+		cflags = append(cflags, "-D__ANDROID_VENDOR_API__="+vendorApiLevel)
 	}
 
 	if ctx.RustModule().InRecovery() {
@@ -393,8 +395,8 @@ func (b *bindgenDecorator) SourceProviderDeps(ctx DepsContext, deps Deps) Deps {
 		deps.StaticLibs = append(deps.StaticLibs, String(b.Properties.Static_inline_library))
 	}
 
-	deps.SharedLibs = append(deps.SharedLibs, b.ClangProperties.Shared_libs...)
-	deps.StaticLibs = append(deps.StaticLibs, b.ClangProperties.Static_libs...)
-	deps.HeaderLibs = append(deps.HeaderLibs, b.ClangProperties.Header_libs...)
+	deps.SharedLibs = append(deps.SharedLibs, b.ClangProperties.Shared_libs.GetOrDefault(ctx, nil)...)
+	deps.StaticLibs = append(deps.StaticLibs, b.ClangProperties.Static_libs.GetOrDefault(ctx, nil)...)
+	deps.HeaderLibs = append(deps.HeaderLibs, b.ClangProperties.Header_libs.GetOrDefault(ctx, nil)...)
 	return deps
 }

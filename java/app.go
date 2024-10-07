@@ -63,6 +63,16 @@ func RegisterAppBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("override_android_test", OverrideAndroidTestModuleFactory)
 }
 
+type AppInfo struct {
+	// Updatable is set to the value of the updatable property
+	Updatable bool
+
+	// TestHelperApp is true if the module is a android_test_helper_app
+	TestHelperApp bool
+}
+
+var AppInfoProvider = blueprint.NewProvider[*AppInfo]()
+
 // AndroidManifest.xml merging
 // package splits
 
@@ -83,7 +93,7 @@ type appProperties struct {
 	Package_splits []string
 
 	// list of native libraries that will be provided in or alongside the resulting jar
-	Jni_libs []string `android:"arch_variant"`
+	Jni_libs proptools.Configurable[[]string] `android:"arch_variant"`
 
 	// if true, use JNI libraries that link against platform APIs even if this module sets
 	// sdk_version.
@@ -162,7 +172,7 @@ type overridableAppProperties struct {
 	RotationMinSdkVersion *string
 
 	// the package name of this app. The package name in the manifest file is used if one was not given.
-	Package_name *string
+	Package_name proptools.Configurable[string]
 
 	// the logging parent of this app.
 	Logging_parent *string
@@ -311,7 +321,7 @@ func (a *AndroidApp) DepsMutator(ctx android.BottomUpMutatorContext) {
 		} else {
 			tag = jniInstallTag
 		}
-		ctx.AddFarVariationDependencies(variation, tag, a.appProperties.Jni_libs...)
+		ctx.AddFarVariationDependencies(variation, tag, a.appProperties.Jni_libs.GetOrDefault(ctx, nil)...)
 	}
 	for _, aconfig_declaration := range a.aaptProperties.Flags_packages {
 		ctx.AddDependency(ctx.Module(), aconfigDeclarationTag, aconfig_declaration)
@@ -376,7 +386,8 @@ func (a *AndroidTestHelperApp) GenerateAndroidBuildActions(ctx android.ModuleCon
 	checkMinSdkVersionMts(ctx, a.MinSdkVersion(ctx))
 	applicationId := a.appTestHelperAppProperties.Manifest_values.ApplicationId
 	if applicationId != nil {
-		if a.overridableAppProperties.Package_name != nil {
+		packageName := a.overridableAppProperties.Package_name.Get(ctx)
+		if packageName.IsPresent() {
 			ctx.PropertyErrorf("manifest_values.applicationId", "property is not supported when property package_name is set.")
 		}
 		a.aapt.manifestValues.applicationId = *applicationId
@@ -385,7 +396,10 @@ func (a *AndroidTestHelperApp) GenerateAndroidBuildActions(ctx android.ModuleCon
 	android.SetProvider(ctx, android.TestOnlyProviderKey, android.TestModuleInformation{
 		TestOnly: true,
 	})
-
+	android.SetProvider(ctx, AppInfoProvider, &AppInfo{
+		Updatable:     Bool(a.appProperties.Updatable),
+		TestHelperApp: true,
+	})
 }
 
 func (a *AndroidApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -393,6 +407,10 @@ func (a *AndroidApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.checkEmbedJnis(ctx)
 	a.generateAndroidBuildActions(ctx)
 	a.generateJavaUsedByApex(ctx)
+	android.SetProvider(ctx, AppInfoProvider, &AppInfo{
+		Updatable:     Bool(a.appProperties.Updatable),
+		TestHelperApp: false,
+	})
 }
 
 func (a *AndroidApp) checkAppSdkVersions(ctx android.ModuleContext) {
@@ -428,7 +446,7 @@ func (a *AndroidApp) checkAppSdkVersions(ctx android.ModuleContext) {
 func (a *AndroidApp) checkEmbedJnis(ctx android.BaseModuleContext) {
 	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 	apkInApex := !apexInfo.IsForPlatform()
-	hasJnis := len(a.appProperties.Jni_libs) > 0
+	hasJnis := len(a.appProperties.Jni_libs.GetOrDefault(ctx, nil)) > 0
 
 	if apkInApex && hasJnis && !Bool(a.appProperties.Use_embedded_native_libs) {
 		ctx.ModuleErrorf("APK in APEX should have use_embedded_native_libs: true")
@@ -569,10 +587,11 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 	}
 
 	manifestPackageName, overridden := ctx.DeviceConfig().OverrideManifestPackageNameFor(ctx.ModuleName())
-	if overridden || a.overridableAppProperties.Package_name != nil {
+	packageNameProp := a.overridableAppProperties.Package_name.Get(ctx)
+	if overridden || packageNameProp.IsPresent() {
 		// The product override variable has a priority over the package_name property.
 		if !overridden {
-			manifestPackageName = *a.overridableAppProperties.Package_name
+			manifestPackageName = packageNameProp.Get()
 		}
 		aaptLinkFlags = append(aaptLinkFlags, generateAaptRenamePackageFlags(manifestPackageName, a.renameResourcesPackage())...)
 		a.overriddenManifestPackageName = manifestPackageName
@@ -586,7 +605,7 @@ func (a *AndroidApp) aaptBuildActions(ctx android.ModuleContext) {
 		if override := ctx.Config().Getenv("OVERRIDE_APEX_MANIFEST_DEFAULT_VERSION"); override != "" {
 			a.aapt.defaultManifestVersion = override
 		} else {
-			a.aapt.defaultManifestVersion = android.DefaultUpdatableModuleVersion
+			a.aapt.defaultManifestVersion = ctx.Config().ReleaseDefaultUpdatableModuleVersion()
 		}
 	}
 
@@ -690,7 +709,7 @@ func (a *AndroidApp) dexBuildActions(ctx android.ModuleContext) (android.Path, a
 			extraSrcJars = android.Paths{a.aapt.aaptSrcJar}
 		}
 
-		a.Module.compile(ctx, extraSrcJars, extraClasspathJars, extraCombinedJars)
+		a.Module.compile(ctx, extraSrcJars, extraClasspathJars, extraCombinedJars, nil)
 		if a.dexProperties.resourceShrinkingEnabled(ctx) {
 			binaryResources := android.PathForModuleOut(ctx, packageResources.Base()+".binary.out.apk")
 			aapt2Convert(ctx, binaryResources, a.dexer.resourcesOutput.Path(), "binary")
@@ -812,11 +831,12 @@ func (a *AndroidApp) createPrivappAllowlist(ctx android.ModuleContext) android.P
 		return android.PathForModuleSrc(ctx, *a.appProperties.Privapp_allowlist)
 	}
 
-	if a.overridableAppProperties.Package_name == nil {
+	packageNameProp := a.overridableAppProperties.Package_name.Get(ctx)
+	if packageNameProp.IsEmpty() {
 		ctx.PropertyErrorf("privapp_allowlist", "package_name must be set to use privapp_allowlist")
 	}
 
-	packageName := *a.overridableAppProperties.Package_name
+	packageName := packageNameProp.Get()
 	fileName := "privapp_allowlist_" + packageName + ".xml"
 	outPath := android.PathForModuleOut(ctx, fileName).OutputPath
 	ctx.Build(pctx, android.BuildParams{
@@ -1009,6 +1029,8 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		ctx.InstallFile(a.installDir, a.outputFile.Base(), a.outputFile, extraInstalledPaths...)
 	}
 
+	ctx.CheckbuildFile(a.outputFile)
+
 	a.buildAppDependencyInfo(ctx)
 
 	providePrebuiltInfo(ctx,
@@ -1109,7 +1131,7 @@ func collectJniDeps(ctx android.ModuleContext,
 						coverageFile:   dep.CoverageOutputFile(),
 						unstrippedFile: dep.UnstrippedOutputFile(),
 						partition:      dep.Partition(),
-						installPaths:   android.ModuleFilesToInstall(ctx, dep),
+						installPaths:   android.OtherModuleProviderOrDefault(ctx, dep, android.InstallFilesProvider).InstallFiles,
 					})
 				} else if ctx.Config().AllowMissingDependencies() {
 					ctx.AddMissingDependencies([]string{otherName})
@@ -1133,7 +1155,7 @@ func collectJniDeps(ctx android.ModuleContext,
 	return jniLibs, prebuiltJniPackages
 }
 
-func (a *AndroidApp) WalkPayloadDeps(ctx android.ModuleContext, do android.PayloadDepsCallback) {
+func (a *AndroidApp) WalkPayloadDeps(ctx android.BaseModuleContext, do android.PayloadDepsCallback) {
 	ctx.WalkDeps(func(child, parent android.Module) bool {
 		isExternal := !a.DepIsInSameApex(ctx, child)
 		if am, ok := child.(android.ApexModule); ok {
@@ -1151,7 +1173,7 @@ func (a *AndroidApp) buildAppDependencyInfo(ctx android.ModuleContext) {
 	}
 
 	depsInfo := android.DepNameToDepInfoMap{}
-	a.WalkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
+	a.WalkPayloadDeps(ctx, func(ctx android.BaseModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
 		depName := to.Name()
 
 		// Skip dependencies that are only available to APEXes; they are developed with updatability
@@ -1204,10 +1226,6 @@ func (a *AndroidApp) Updatable() bool {
 	return Bool(a.appProperties.Updatable)
 }
 
-func (a *AndroidApp) SetUpdatable(val bool) {
-	a.appProperties.Updatable = &val
-}
-
 func (a *AndroidApp) getCertString(ctx android.BaseModuleContext) string {
 	certificate, overridden := ctx.DeviceConfig().OverrideCertificateFor(ctx.ModuleName())
 	if overridden {
@@ -1243,9 +1261,9 @@ func (a *AndroidApp) EnableCoverageIfNeeded() {}
 
 var _ cc.Coverage = (*AndroidApp)(nil)
 
-func (a *AndroidApp) IDEInfo(dpInfo *android.IdeInfo) {
-	a.Library.IDEInfo(dpInfo)
-	a.aapt.IDEInfo(dpInfo)
+func (a *AndroidApp) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
+	a.Library.IDEInfo(ctx, dpInfo)
+	a.aapt.IDEInfo(ctx, dpInfo)
 }
 
 func (a *AndroidApp) productCharacteristicsRROPackageName() string {
@@ -1403,7 +1421,8 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	applicationId := a.appTestProperties.Manifest_values.ApplicationId
 	if applicationId != nil {
-		if a.overridableAppProperties.Package_name != nil {
+		packageNameProp := a.overridableAppProperties.Package_name.Get(ctx)
+		if packageNameProp.IsPresent() {
 			ctx.PropertyErrorf("manifest_values.applicationId", "property is not supported when property package_name is set.")
 		}
 		a.aapt.manifestValues.applicationId = *applicationId
@@ -1415,7 +1434,8 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	testConfig := tradefed.AutoGenInstrumentationTestConfig(ctx, a.testProperties.Test_config,
-		a.testProperties.Test_config_template, a.manifestPath, a.testProperties.Test_suites, a.testProperties.Auto_gen_config, configs)
+		a.testProperties.Test_config_template, a.manifestPath, a.testProperties.Test_suites,
+		a.testProperties.Auto_gen_config, configs, a.testProperties.Test_options.Test_runner_options)
 	a.testConfig = a.FixTestConfig(ctx, testConfig)
 	a.extraTestConfigs = android.PathsForModuleSrc(ctx, a.testProperties.Test_options.Extra_test_configs)
 	a.data = android.PathsForModuleSrc(ctx, a.testProperties.Data)
@@ -1453,10 +1473,11 @@ func (a *AndroidTest) FixTestConfig(ctx android.ModuleContext, testConfig androi
 		command.FlagWithArg("--test-file-name ", a.installApkName+".apk")
 	}
 
-	if a.overridableAppProperties.Package_name != nil {
+	packageNameProp := a.overridableAppProperties.Package_name.Get(ctx)
+	if packageNameProp.IsPresent() {
 		fixNeeded = true
 		command.FlagWithInput("--manifest ", a.manifestPath).
-			FlagWithArg("--package-name ", *a.overridableAppProperties.Package_name)
+			FlagWithArg("--package-name ", packageNameProp.Get())
 	}
 
 	if a.appTestProperties.Mainline_package_name != nil {
@@ -1471,7 +1492,23 @@ func (a *AndroidTest) FixTestConfig(ctx android.ModuleContext, testConfig androi
 	return testConfig
 }
 
+func (a *AndroidTestHelperApp) DepsMutator(ctx android.BottomUpMutatorContext) {
+	if len(a.ApexProperties.Apex_available) == 0 && ctx.Config().IsEnvTrue("EMMA_API_MAPPER") {
+		// Instrument the android_test_helper target to log potential API calls at the run time.
+		// Contact android-xts-infra team before using the environment var EMMA_API_MAPPER.
+		ctx.AddVariationDependencies(nil, staticLibTag, "apimapper-helper-device-lib")
+		a.setApiMapper(true)
+	}
+	a.AndroidApp.DepsMutator(ctx)
+}
+
 func (a *AndroidTest) DepsMutator(ctx android.BottomUpMutatorContext) {
+	if len(a.ApexProperties.Apex_available) == 0 && ctx.Config().IsEnvTrue("EMMA_API_MAPPER") {
+		// Instrument the android_test_helper target to log potential API calls at the run time.
+		// Contact android-xts-infra team before using the environment var EMMA_API_MAPPER.
+		ctx.AddVariationDependencies(nil, staticLibTag, "apimapper-helper-device-lib")
+		a.setApiMapper(true)
+	}
 	a.AndroidApp.DepsMutator(ctx)
 }
 
@@ -1763,16 +1800,15 @@ func (u *usesLibrary) classLoaderContextForUsesLibDeps(ctx android.ModuleContext
 			}
 		}
 
-		// Skip java_sdk_library dependencies that provide stubs, but not an implementation.
-		// This will be restricted to optional_uses_libs
-		if sdklib, ok := m.(SdkLibraryDependency); ok {
-			if tag == usesLibOptTag && sdklib.DexJarBuildPath(ctx).PathOrNil() == nil {
-				u.shouldDisableDexpreopt = true
-				return
-			}
-		}
-
 		if lib, ok := m.(UsesLibraryDependency); ok {
+			if _, ok := android.OtherModuleProvider(ctx, m, SdkLibraryInfoProvider); ok {
+				// Skip java_sdk_library dependencies that provide stubs, but not an implementation.
+				// This will be restricted to optional_uses_libs
+				if tag == usesLibOptTag && lib.DexJarBuildPath(ctx).PathOrNil() == nil {
+					u.shouldDisableDexpreopt = true
+					return
+				}
+			}
 			libName := dep
 			if ulib, ok := m.(ProvidesUsesLib); ok && ulib.ProvidesUsesLib() != nil {
 				libName = *ulib.ProvidesUsesLib()

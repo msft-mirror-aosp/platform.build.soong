@@ -16,7 +16,6 @@ bootstrap_go_package {
         "soong-etc",
         "soong-fuzz",
         "soong-genrule",
-        "soong-multitree",
         "soong-testing",
         "soong-tradefed",
     ],
@@ -65,7 +64,6 @@ bootstrap_go_package {
         "library.go",
         "library_headers.go",
         "library_sdk_member.go",
-        "library_stub.go",
         "native_bridge_sdk_trait.go",
         "object.go",
         "test.go",
@@ -104,6 +102,7 @@ bootstrap_go_package {
         "orderfile_test.go",
         "prebuilt_test.go",
         "proto_test.go",
+        "sabi_test.go",
         "sanitize_test.go",
         "sdk_test.go",
         "test_data_test.go",
@@ -118,4 +117,6 @@ bootstrap_go_package {
         "cmake_module_cc.txt",
     ],
     pluginFor: ["soong_build"],
+    // Used by plugins
+    visibility: ["//visibility:public"],
 }

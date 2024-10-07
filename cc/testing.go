@@ -20,7 +20,6 @@ import (
 
 	"android/soong/android"
 	"android/soong/genrule"
-	"android/soong/multitree"
 )
 
 func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
@@ -29,9 +28,6 @@ func RegisterRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 	RegisterBinaryBuildComponents(ctx)
 	RegisterLibraryBuildComponents(ctx)
 	RegisterLibraryHeadersBuildComponents(ctx)
-	RegisterLibraryStubBuildComponents(ctx)
-
-	multitree.RegisterApiImportsModule(ctx)
 
 	ctx.RegisterModuleType("prebuilt_build_tool", android.NewPrebuiltBuildTool)
 	ctx.RegisterModuleType("cc_benchmark", BenchmarkFactory)
@@ -713,7 +709,7 @@ func CreateTestContext(config android.Config) *android.TestContext {
 func checkSnapshotIncludeExclude(t *testing.T, ctx *android.TestContext, singleton android.TestingSingleton, moduleName, snapshotFilename, subDir, variant string, include bool, fake bool) {
 	t.Helper()
 	mod := ctx.ModuleForTests(moduleName, variant)
-	outputFiles := mod.OutputFiles(t, "")
+	outputFiles := mod.OutputFiles(ctx, t, "")
 	if len(outputFiles) != 1 {
 		t.Errorf("%q must have single output\n", moduleName)
 		return

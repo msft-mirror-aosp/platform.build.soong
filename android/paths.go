@@ -27,7 +27,6 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
-	"github.com/google/blueprint/bootstrap"
 	"github.com/google/blueprint/pathtools"
 )
 
@@ -92,8 +91,10 @@ func GlobFiles(ctx EarlyModulePathContext, globPattern string, excludes []string
 // the Path methods that rely on module dependencies having been resolved.
 type ModuleWithDepsPathContext interface {
 	EarlyModulePathContext
-	VisitDirectDepsBlueprint(visit func(blueprint.Module))
+	OtherModuleProviderContext
+	VisitDirectDeps(visit func(Module))
 	OtherModuleDependencyTag(m blueprint.Module) blueprint.DependencyTag
+	HasMutatorFinished(mutatorName string) bool
 }
 
 // ModuleMissingDepsPathContext is a subset of *ModuleContext methods required by
@@ -554,13 +555,6 @@ func (p OutputPaths) Strings() []string {
 	return ret
 }
 
-// PathForGoBinary returns the path to the installed location of a bootstrap_go_binary module.
-func PathForGoBinary(ctx PathContext, goBinary bootstrap.GoBinaryTool) Path {
-	goBinaryInstallDir := pathForInstall(ctx, ctx.Config().BuildOS, ctx.Config().BuildArch, "bin")
-	rel := Rel(ctx, goBinaryInstallDir.String(), goBinary.InstallPath())
-	return goBinaryInstallDir.Join(ctx, rel)
-}
-
 // Expands Paths to a SourceFileProducer or OutputFileProducer module dependency referenced via ":name" or ":name{.tag}" syntax.
 // If the dependency is not found, a missingErrorDependency is returned.
 // If the module dependency is not a SourceFileProducer or OutputFileProducer, appropriate errors will be returned.
@@ -571,10 +565,6 @@ func getPathsFromModuleDep(ctx ModuleWithDepsPathContext, path, moduleName, tag 
 	}
 	if aModule, ok := module.(Module); ok && !aModule.Enabled(ctx) {
 		return nil, missingDependencyError{[]string{moduleName}}
-	}
-	if goBinary, ok := module.(bootstrap.GoBinaryTool); ok && tag == "" {
-		goBinaryPath := PathForGoBinary(ctx, goBinary)
-		return Paths{goBinaryPath}, nil
 	}
 	outputFiles, err := outputFilesForModule(ctx, module, tag)
 	if outputFiles != nil && err == nil {
@@ -608,7 +598,7 @@ func GetModuleFromPathDep(ctx ModuleWithDepsPathContext, moduleName, tag string)
 	// create the tag here as was supplied to create the tag when the dependency was added so that
 	// this finds the matching dependency module.
 	expectedTag := sourceOrOutputDepTag(moduleName, tag)
-	ctx.VisitDirectDepsBlueprint(func(module blueprint.Module) {
+	ctx.VisitDirectDeps(func(module Module) {
 		depTag := ctx.OtherModuleDependencyTag(module)
 		if depTag == expectedTag {
 			found = module
@@ -1764,6 +1754,32 @@ type InstallPath struct {
 	makePath bool
 
 	fullPath string
+}
+
+func (p *InstallPath) GobEncode() ([]byte, error) {
+	w := new(bytes.Buffer)
+	encoder := gob.NewEncoder(w)
+	err := errors.Join(encoder.Encode(p.basePath), encoder.Encode(p.soongOutDir),
+		encoder.Encode(p.partitionDir), encoder.Encode(p.partition),
+		encoder.Encode(p.makePath), encoder.Encode(p.fullPath))
+	if err != nil {
+		return nil, err
+	}
+
+	return w.Bytes(), nil
+}
+
+func (p *InstallPath) GobDecode(data []byte) error {
+	r := bytes.NewBuffer(data)
+	decoder := gob.NewDecoder(r)
+	err := errors.Join(decoder.Decode(&p.basePath), decoder.Decode(&p.soongOutDir),
+		decoder.Decode(&p.partitionDir), decoder.Decode(&p.partition),
+		decoder.Decode(&p.makePath), decoder.Decode(&p.fullPath))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Will panic if called from outside a test environment.

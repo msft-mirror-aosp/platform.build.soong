@@ -127,16 +127,29 @@ func testDexpreoptBoot(t *testing.T, ruleFile string, expectedInputs, expectedOu
 			src: "com.android.art-arm.apex",
 			exported_bootclasspath_fragments: ["art-bootclasspath-fragment"],
 		}
+
+		apex_contributions {
+			name: "prebuilt_art_contributions",
+			contents: ["prebuilt_com.android.art"],
+			api_domain: "com.android.art",
+		}
 	`
 
-	result := android.GroupFixturePreparers(
+	fixture := android.GroupFixturePreparers(
 		java.PrepareForTestWithDexpreopt,
 		java.PrepareForTestWithJavaSdkLibraryFiles,
 		java.FixtureWithLastReleaseApis("foo"),
 		java.FixtureConfigureBootJars("com.android.art:core-oj", "platform:foo", "system_ext:bar", "platform:baz"),
 		PrepareForTestWithApexBuildComponents,
 		prepareForTestWithArtApex,
-	).RunTestWithBp(t, fmt.Sprintf(bp, preferPrebuilt))
+	)
+	if preferPrebuilt {
+		fixture = android.GroupFixturePreparers(
+			fixture,
+			android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ART", "prebuilt_art_contributions"),
+		)
+	}
+	result := fixture.RunTestWithBp(t, fmt.Sprintf(bp, preferPrebuilt))
 
 	dexBootJars := result.ModuleForTests("dex_bootjars", "android_common")
 	rule := dexBootJars.Output(ruleFile)
@@ -200,7 +213,7 @@ func TestDexpreoptBootJarsWithPrebuiltArtApex(t *testing.T) {
 		"out/soong/dexpreopt_arm64/dex_bootjars_input/foo.jar",
 		"out/soong/dexpreopt_arm64/dex_bootjars_input/bar.jar",
 		"out/soong/dexpreopt_arm64/dex_bootjars_input/baz.jar",
-		"out/soong/.intermediates/prebuilt_com.android.art.deapexer/android_common/deapexer/etc/boot-image.prof",
+		"out/soong/.intermediates/prebuilt_com.android.art/android_common_com.android.art/deapexer/etc/boot-image.prof",
 		"out/soong/.intermediates/default/java/dex_bootjars/android_common/boot/boot.prof",
 		"out/soong/dexpreopt/uffd_gc_flag.txt",
 	}
@@ -384,12 +397,12 @@ func TestDexpreoptProfileWithMultiplePrebuiltArtApexes(t *testing.T) {
 		{
 			desc:                         "Prebuilt apex prebuilt_com.android.art is selected, profile should come from .prof deapexed from the prebuilt",
 			selectedArtApexContributions: "art.prebuilt.contributions",
-			expectedProfile:              "out/soong/.intermediates/prebuilt_com.android.art.deapexer/android_common/deapexer/etc/boot-image.prof",
+			expectedProfile:              "out/soong/.intermediates/prebuilt_com.android.art/android_common_com.android.art/deapexer/etc/boot-image.prof",
 		},
 		{
 			desc:                         "Prebuilt apex prebuilt_com.android.art.v2 is selected, profile should come from .prof deapexed from the prebuilt",
 			selectedArtApexContributions: "art.prebuilt.v2.contributions",
-			expectedProfile:              "out/soong/.intermediates/prebuilt_com.android.art.v2.deapexer/android_common/deapexer/etc/boot-image.prof",
+			expectedProfile:              "out/soong/.intermediates/com.android.art.v2/android_common_com.android.art/deapexer/etc/boot-image.prof",
 		},
 	}
 	for _, tc := range testCases {
@@ -407,5 +420,108 @@ func TestDexpreoptProfileWithMultiplePrebuiltArtApexes(t *testing.T) {
 
 		inputs := rule.Implicits.Strings()
 		android.AssertStringListContains(t, tc.desc, inputs, tc.expectedProfile)
+	}
+}
+
+// Check that dexpreopt works with Google mainline prebuilts even in workspaces where source is missing
+func TestDexpreoptWithMainlinePrebuiltNoSource(t *testing.T) {
+	bp := `
+		// Platform.
+
+		platform_bootclasspath {
+			name: "platform-bootclasspath",
+			fragments: [
+				{
+					apex: "com.android.art",
+					module: "art-bootclasspath-fragment",
+				},
+			],
+		}
+
+		// Source AOSP ART apex
+		java_library {
+			name: "core-oj",
+			srcs: ["core-oj.java"],
+			installable: true,
+			apex_available: [
+				"com.android.art",
+			],
+		}
+
+		bootclasspath_fragment {
+			name: "art-bootclasspath-fragment",
+			image_name: "art",
+			contents: ["core-oj"],
+			apex_available: [
+				"com.android.art",
+			],
+			hidden_api: {
+				split_packages: ["*"],
+			},
+		}
+
+		apex_key {
+			name: "com.android.art.key",
+			public_key: "com.android.art.avbpubkey",
+			private_key: "com.android.art.pem",
+		}
+
+		apex {
+			name: "com.android.art",
+			key: "com.android.art.key",
+			bootclasspath_fragments: ["art-bootclasspath-fragment"],
+			updatable: false,
+		}
+
+
+		// Prebuilt Google ART APEX.
+
+		java_import {
+			name: "core-oj",
+			jars: ["core-oj.jar"],
+			apex_available: [
+				"com.android.art",
+			],
+		}
+
+		prebuilt_bootclasspath_fragment {
+			name: "art-bootclasspath-fragment",
+			image_name: "art",
+			contents: ["core-oj"],
+			hidden_api: {
+				annotation_flags: "my-bootclasspath-fragment/annotation-flags.csv",
+				metadata: "my-bootclasspath-fragment/metadata.csv",
+				index: "my-bootclasspath-fragment/index.csv",
+				stub_flags: "my-bootclasspath-fragment/stub-flags.csv",
+				all_flags: "my-bootclasspath-fragment/all-flags.csv",
+			},
+			apex_available: [
+				"com.android.art",
+			],
+		}
+
+		prebuilt_apex {
+			name: "com.google.android.art",
+			apex_name: "com.android.art",
+			src: "com.android.art-arm.apex",
+			exported_bootclasspath_fragments: ["art-bootclasspath-fragment"],
+		}
+
+		apex_contributions {
+			name: "art.prebuilt.contributions",
+			api_domain: "com.android.art",
+			contents: ["prebuilt_com.google.android.art"],
+		}
+	`
+	res := android.GroupFixturePreparers(
+		java.PrepareForTestWithDexpreopt,
+		java.PrepareForTestWithJavaSdkLibraryFiles,
+		java.FixtureConfigureBootJars("com.android.art:core-oj"),
+		PrepareForTestWithApexBuildComponents,
+		prepareForTestWithArtApex,
+		android.PrepareForTestWithBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ART", "art.prebuilt.contributions"),
+	).RunTestWithBp(t, bp)
+	if !java.CheckModuleHasDependency(t, res.TestContext, "dex_bootjars", "android_common", "prebuilt_com.google.android.art") {
+		t.Errorf("Expected dexpreopt to use prebuilt apex")
 	}
 }

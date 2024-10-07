@@ -173,6 +173,13 @@ func (c Config) DisableVerifyOverlaps() bool {
 	return c.IsEnvTrue("DISABLE_VERIFY_OVERLAPS") || c.ReleaseDisableVerifyOverlaps() || !c.ReleaseDefaultModuleBuildFromSource()
 }
 
+func (c Config) CoverageSuffix() string {
+	if v := c.IsEnvTrue("EMMA_INSTRUMENT"); v {
+		return "coverage."
+	}
+	return ""
+}
+
 // MaxPageSizeSupported returns the max page size supported by the device. This
 // value will define the ELF segment alignment for binaries (executables and
 // shared libraries).
@@ -231,11 +238,23 @@ func (c Config) ReleaseAconfigFlagDefaultPermission() string {
 	return c.config.productVariables.ReleaseAconfigFlagDefaultPermission
 }
 
+// Enable object size sanitizer
+func (c Config) ReleaseBuildObjectSizeSanitizer() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_BUILD_OBJECT_SIZE_SANITIZER")
+}
+
 // The flag indicating behavior for the tree wrt building modules or using prebuilts
 // derived from RELEASE_DEFAULT_MODULE_BUILD_FROM_SOURCE
 func (c Config) ReleaseDefaultModuleBuildFromSource() bool {
 	return c.config.productVariables.ReleaseDefaultModuleBuildFromSource == nil ||
 		Bool(c.config.productVariables.ReleaseDefaultModuleBuildFromSource)
+}
+
+func (c Config) ReleaseDefaultUpdatableModuleVersion() string {
+	if val, exists := c.GetBuildFlag("RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION"); exists {
+		return val
+	}
+	panic("RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION is missing from build flags.")
 }
 
 func (c Config) ReleaseDisableVerifyOverlaps() bool {
@@ -1240,7 +1259,7 @@ func (c *config) TidyChecks() string {
 }
 
 func (c *config) LibartImgHostBaseAddress() string {
-	return "0x60000000"
+	return "0x70000000"
 }
 
 func (c *config) LibartImgDeviceBaseAddress() string {
@@ -1266,12 +1285,18 @@ func (c *config) EnforceRROForModule(name string) bool {
 	}
 	return false
 }
+
 func (c *config) EnforceRROExcludedOverlay(path string) bool {
 	excluded := c.productVariables.EnforceRROExcludedOverlays
 	if len(excluded) > 0 {
 		return HasAnyPrefix(path, excluded)
 	}
 	return false
+}
+
+func (c *config) EnforceRROGlobally() bool {
+	enforceList := c.productVariables.EnforceRROTargets
+	return InList("*", enforceList)
 }
 
 func (c *config) ExportedNamespaces() []string {
@@ -1488,11 +1513,6 @@ func (c *deviceConfig) NativeCoverageEnabledForPath(path string) bool {
 		}
 	}
 	if coverage && len(c.config.productVariables.NativeCoverageExcludePaths) > 0 {
-		// Workaround coverage boot failure.
-		// http://b/269981180
-		if strings.HasPrefix(path, "external/protobuf") {
-			coverage = false
-		}
 		if HasAnyPrefix(path, c.config.productVariables.NativeCoverageExcludePaths) {
 			coverage = false
 		}
@@ -1661,6 +1681,17 @@ func (c *config) ApexTrimEnabled() bool {
 	return Bool(c.productVariables.TrimmedApex)
 }
 
+func (c *config) UseSoongSystemImage() bool {
+	return Bool(c.productVariables.UseSoongSystemImage)
+}
+
+func (c *config) SoongDefinedSystemImage() string {
+	if c.UseSoongSystemImage() {
+		return String(c.productVariables.ProductSoongDefinedSystemImage)
+	}
+	return ""
+}
+
 func (c *config) EnforceSystemCertificate() bool {
 	return Bool(c.productVariables.EnforceSystemCertificate)
 }
@@ -1671,14 +1702,6 @@ func (c *config) EnforceSystemCertificateAllowList() []string {
 
 func (c *config) EnforceProductPartitionInterface() bool {
 	return Bool(c.productVariables.EnforceProductPartitionInterface)
-}
-
-func (c *config) EnforceInterPartitionJavaSdkLibrary() bool {
-	return Bool(c.productVariables.EnforceInterPartitionJavaSdkLibrary)
-}
-
-func (c *config) InterPartitionJavaLibraryAllowList() []string {
-	return c.productVariables.InterPartitionJavaLibraryAllowList
 }
 
 func (c *config) ProductHiddenAPIStubs() []string {
@@ -1826,10 +1849,6 @@ func (c *deviceConfig) BuildBrokenTrebleSyspropNeverallow() bool {
 	return c.config.productVariables.BuildBrokenTrebleSyspropNeverallow
 }
 
-func (c *deviceConfig) BuildBrokenUsesSoongPython2Modules() bool {
-	return c.config.productVariables.BuildBrokenUsesSoongPython2Modules
-}
-
 func (c *deviceConfig) BuildDebugfsRestrictionsEnabled() bool {
 	return c.config.productVariables.BuildDebugfsRestrictionsEnabled
 }
@@ -1956,8 +1975,16 @@ func (c *config) GetBuildFlag(name string) (string, bool) {
 	return val, ok
 }
 
+func (c *config) UseOptimizedResourceShrinkingByDefault() bool {
+	return c.productVariables.GetBuildFlagBool("RELEASE_USE_OPTIMIZED_RESOURCE_SHRINKING_BY_DEFAULT")
+}
+
 func (c *config) UseResourceProcessorByDefault() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_USE_RESOURCE_PROCESSOR_BY_DEFAULT")
+}
+
+func (c *config) UseTransitiveJarsInClasspath() bool {
+	return c.productVariables.GetBuildFlagBool("RELEASE_USE_TRANSITIVE_JARS_IN_CLASSPATH")
 }
 
 var (
@@ -2055,6 +2082,14 @@ func (c *config) ProductPropFiles(ctx PathContext) Paths {
 	return PathsForSource(ctx, c.productVariables.ProductPropFiles)
 }
 
+func (c *config) OdmPropFiles(ctx PathContext) Paths {
+	return PathsForSource(ctx, c.productVariables.OdmPropFiles)
+}
+
+func (c *config) ExtraAllowedDepsTxt() string {
+	return String(c.productVariables.ExtraAllowedDepsTxt)
+}
+
 func (c *config) EnableUffdGc() string {
 	return String(c.productVariables.EnableUffdGc)
 }
@@ -2073,4 +2108,11 @@ func (c *config) BoardAvbEnable() bool {
 
 func (c *config) BoardAvbSystemAddHashtreeFooterArgs() []string {
 	return c.productVariables.BoardAvbSystemAddHashtreeFooterArgs
+}
+
+// Returns true if RELEASE_INSTALL_APEX_SYSTEMSERVER_DEXPREOPT_SAME_PARTITION is set to true.
+// If true, dexpreopt files of apex system server jars will be installed in the same partition as the parent apex.
+// If false, all these files will be installed in /system partition.
+func (c Config) InstallApexSystemServerDexpreoptSamePartition() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_INSTALL_APEX_SYSTEMSERVER_DEXPREOPT_SAME_PARTITION")
 }

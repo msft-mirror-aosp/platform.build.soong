@@ -1360,10 +1360,9 @@ java_sdk_library_import {
 }
 `),
 		snapshotTestChecker(checkSnapshotWithSourcePreferred, func(t *testing.T, result *android.TestResult) {
-			ctx := android.ModuleInstallPathContextForTesting(result.Config)
 			dexJarBuildPath := func(name string, kind android.SdkKind) string {
-				dep := result.Module(name, "android_common").(java.SdkLibraryDependency)
-				path := dep.SdkApiExportableStubDexJar(ctx, kind).Path()
+				sdkLibInfo, _ := android.OtherModuleProvider(result.TestContext.OtherModuleProviderAdaptor(), result.Module(name, "android_common"), java.SdkLibraryInfoProvider)
+				path := sdkLibInfo.ExportableStubDexJarPaths[kind].Path()
 				return path.RelativeToTop().String()
 			}
 
@@ -1699,61 +1698,6 @@ java_sdk_library_import {
 		checkMergeZips(
 			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
 			".intermediates/mysdk/common_os/tmp/sdk_library/system-server/myjavalib_stub_sources.zip",
-		),
-	)
-}
-
-func TestSnapshotWithJavaSdkLibrary_NamingScheme(t *testing.T) {
-	result := android.GroupFixturePreparers(prepareForSdkTestWithJavaSdkLibrary).RunTestWithBp(t, `
-		sdk {
-			name: "mysdk",
-			java_sdk_libs: ["myjavalib"],
-		}
-
-		java_sdk_library {
-			name: "myjavalib",
-			apex_available: ["//apex_available:anyapex"],
-			srcs: ["Test.java"],
-			sdk_version: "current",
-			naming_scheme: "default",
-			public: {
-				enabled: true,
-			},
-		}
-	`)
-
-	CheckSnapshot(t, result, "mysdk", "",
-		checkAndroidBpContents(`
-// This is auto-generated. DO NOT EDIT.
-
-apex_contributions_defaults {
-    name: "mysdk.contributions",
-    contents: ["prebuilt_myjavalib"],
-}
-
-java_sdk_library_import {
-    name: "myjavalib",
-    prefer: false,
-    visibility: ["//visibility:public"],
-    apex_available: ["//apex_available:anyapex"],
-    naming_scheme: "default",
-    shared_library: true,
-    public: {
-        jars: ["sdk_library/public/myjavalib-stubs.jar"],
-        stub_srcs: ["sdk_library/public/myjavalib_stub_sources"],
-        current_api: "sdk_library/public/myjavalib.txt",
-        removed_api: "sdk_library/public/myjavalib-removed.txt",
-        sdk_version: "current",
-    },
-}
-`),
-		checkAllCopyRules(`
-.intermediates/myjavalib.stubs.exportable/android_common/combined/myjavalib.stubs.exportable.jar -> sdk_library/public/myjavalib-stubs.jar
-.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_api.txt -> sdk_library/public/myjavalib.txt
-.intermediates/myjavalib.stubs.source/android_common/exportable/myjavalib.stubs.source_removed.txt -> sdk_library/public/myjavalib-removed.txt
-`),
-		checkMergeZips(
-			".intermediates/mysdk/common_os/tmp/sdk_library/public/myjavalib_stub_sources.zip",
 		),
 	)
 }

@@ -16,6 +16,7 @@ package android
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -87,6 +88,9 @@ type ApexInfo struct {
 
 	// Returns the name of the overridden apex (com.android.foo)
 	BaseApexName string
+
+	// Returns the value of `apex_available_name`
+	ApexAvailableName string
 }
 
 // AllApexInfo holds the ApexInfo of all apexes that include this module.
@@ -143,6 +147,17 @@ func (i ApexInfo) InApexModule(apexModuleName string) bool {
 		}
 	}
 	return false
+}
+
+// To satisfy the comparable interface
+func (i ApexInfo) Equal(other any) bool {
+	otherApexInfo, ok := other.(ApexInfo)
+	return ok && i.ApexVariationName == otherApexInfo.ApexVariationName &&
+		i.MinSdkVersion == otherApexInfo.MinSdkVersion &&
+		i.Updatable == otherApexInfo.Updatable &&
+		i.UsePlatformApis == otherApexInfo.UsePlatformApis &&
+		reflect.DeepEqual(i.InApexVariants, otherApexInfo.InApexVariants) &&
+		reflect.DeepEqual(i.InApexModules, otherApexInfo.InApexModules)
 }
 
 // ApexTestForInfo stores the contents of APEXes for which this module is a test - although this
@@ -280,7 +295,7 @@ type ApexProperties struct {
 	//
 	// "//apex_available:anyapex" is a pseudo APEX name that matches to any APEX.
 	// "//apex_available:platform" refers to non-APEX partitions like "system.img".
-	// "com.android.gki.*" matches any APEX module name with the prefix "com.android.gki.".
+	// Prefix pattern (com.foo.*) can be used to match with any APEX name with the prefix(com.foo.).
 	// Default is ["//apex_available:platform"].
 	Apex_available []string
 
@@ -473,15 +488,6 @@ func (m *ApexModuleBase) DepIsInSameApex(ctx BaseModuleContext, dep Module) bool
 const (
 	AvailableToPlatform = "//apex_available:platform"
 	AvailableToAnyApex  = "//apex_available:anyapex"
-	AvailableToGkiApex  = "com.android.gki.*"
-)
-
-var (
-	AvailableToRecognziedWildcards = []string{
-		AvailableToPlatform,
-		AvailableToAnyApex,
-		AvailableToGkiApex,
-	}
 )
 
 // CheckAvailableForApex provides the default algorithm for checking the apex availability. When the
@@ -494,11 +500,27 @@ func CheckAvailableForApex(what string, apex_available []string) bool {
 	if len(apex_available) == 0 {
 		return what == AvailableToPlatform
 	}
-	return InList(what, apex_available) ||
-		(what != AvailableToPlatform && InList(AvailableToAnyApex, apex_available)) ||
-		(strings.HasPrefix(what, "com.android.gki.") && InList(AvailableToGkiApex, apex_available)) ||
-		(what == "com.google.mainline.primary.libs") || // TODO b/248601389
-		(what == "com.google.mainline.go.primary.libs") // TODO b/248601389
+
+	// TODO b/248601389
+	if what == "com.google.mainline.primary.libs" || what == "com.google.mainline.go.primary.libs" {
+		return true
+	}
+
+	for _, apex_name := range apex_available {
+		// exact match.
+		if apex_name == what {
+			return true
+		}
+		// //apex_available:anyapex matches with any apex name, but not //apex_available:platform
+		if apex_name == AvailableToAnyApex && what != AvailableToPlatform {
+			return true
+		}
+		// prefix match.
+		if strings.HasSuffix(apex_name, ".*") && strings.HasPrefix(what, strings.TrimSuffix(apex_name, "*")) {
+			return true
+		}
+	}
+	return false
 }
 
 // Implements ApexModule
@@ -524,7 +546,20 @@ func (m *ApexModuleBase) SetNotAvailableForPlatform() {
 // This function makes sure that the apex_available property is valid
 func (m *ApexModuleBase) checkApexAvailableProperty(mctx BaseModuleContext) {
 	for _, n := range m.ApexProperties.Apex_available {
-		if n == AvailableToPlatform || n == AvailableToAnyApex || n == AvailableToGkiApex {
+		if n == AvailableToPlatform || n == AvailableToAnyApex {
+			continue
+		}
+		// Prefix pattern should end with .* and has at least two components.
+		if strings.Contains(n, "*") {
+			if !strings.HasSuffix(n, ".*") {
+				mctx.PropertyErrorf("apex_available", "Wildcard should end with .* like com.foo.*")
+			}
+			if strings.Count(n, ".") < 2 {
+				mctx.PropertyErrorf("apex_available", "Wildcard requires two or more components like com.foo.*")
+			}
+			if strings.Count(n, "*") != 1 {
+				mctx.PropertyErrorf("apex_available", "Wildcard is not allowed in the middle.")
+			}
 			continue
 		}
 		if !mctx.OtherModuleExists(n) && !mctx.Config().AllowMissingDependencies() {
@@ -680,7 +715,7 @@ func MutateApexTransition(ctx BaseModuleContext, variation string) {
 	base.ApexProperties.InAnyApex = true
 	base.ApexProperties.DirectlyInAnyApex = inApex == directlyInApex
 
-	if platformVariation && !ctx.Host() && !module.AvailableFor(AvailableToPlatform) {
+	if platformVariation && !ctx.Host() && !module.AvailableFor(AvailableToPlatform) && module.NotAvailableForPlatform() {
 		// Do not install the module for platform, but still allow it to output
 		// uninstallable AndroidMk entries in certain cases when they have side
 		// effects.  TODO(jiyong): move this routine to somewhere else
@@ -954,8 +989,8 @@ func (d *ApexBundleDepsInfo) BuildDepsInfoLists(ctx ModuleContext, minSdkVersion
 // Function called while walking an APEX's payload dependencies.
 //
 // Return true if the `to` module should be visited, false otherwise.
-type PayloadDepsCallback func(ctx ModuleContext, from blueprint.Module, to ApexModule, externalDep bool) bool
-type WalkPayloadDepsFunc func(ctx ModuleContext, do PayloadDepsCallback)
+type PayloadDepsCallback func(ctx BaseModuleContext, from blueprint.Module, to ApexModule, externalDep bool) bool
+type WalkPayloadDepsFunc func(ctx BaseModuleContext, do PayloadDepsCallback)
 
 // ModuleWithMinSdkVersionCheck represents a module that implements min_sdk_version checks
 type ModuleWithMinSdkVersionCheck interface {
@@ -982,7 +1017,7 @@ func CheckMinSdkVersion(ctx ModuleContext, minSdkVersion ApiLevel, walk WalkPayl
 		return
 	}
 
-	walk(ctx, func(ctx ModuleContext, from blueprint.Module, to ApexModule, externalDep bool) bool {
+	walk(ctx, func(ctx BaseModuleContext, from blueprint.Module, to ApexModule, externalDep bool) bool {
 		if externalDep {
 			// external deps are outside the payload boundary, which is "stable"
 			// interface. We don't have to check min_sdk_version for external

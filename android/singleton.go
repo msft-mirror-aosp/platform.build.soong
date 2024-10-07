@@ -90,6 +90,10 @@ type SingletonContext interface {
 
 	// OtherModulePropertyErrorf reports an error on the line number of the given property of the given module
 	OtherModulePropertyErrorf(module Module, property string, format string, args ...interface{})
+
+	// HasMutatorFinished returns true if the given mutator has finished running.
+	// It will panic if given an invalid mutator name.
+	HasMutatorFinished(mutatorName string) bool
 }
 
 type singletonAdaptor struct {
@@ -177,7 +181,7 @@ func (s *singletonContextAdaptor) Build(pctx PackageContext, params BuildParams)
 }
 
 func (s *singletonContextAdaptor) Phony(name string, deps ...Path) {
-	addPhony(s.Config(), name, deps...)
+	addSingletonPhony(s.Config(), name, deps...)
 }
 
 func (s *singletonContextAdaptor) SetOutDir(pctx PackageContext, value string) {
@@ -285,4 +289,8 @@ func (s *singletonContextAdaptor) otherModuleProvider(module blueprint.Module, p
 
 func (s *singletonContextAdaptor) OtherModulePropertyErrorf(module Module, property string, format string, args ...interface{}) {
 	s.blueprintSingletonContext().OtherModulePropertyErrorf(module, property, format, args...)
+}
+
+func (s *singletonContextAdaptor) HasMutatorFinished(mutatorName string) bool {
+	return s.blueprintSingletonContext().HasMutatorFinished(mutatorName)
 }

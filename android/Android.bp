@@ -41,6 +41,7 @@ bootstrap_go_package {
         "build_prop.go",
         "compliance_metadata.go",
         "config.go",
+        "container_violations.go",
         "container.go",
         "test_config.go",
         "configurable_properties.go",
@@ -58,6 +59,7 @@ bootstrap_go_package {
         "gen_notice.go",
         "hooks.go",
         "image.go",
+        "init.go",
         "license.go",
         "license_kind.go",
         "license_metadata.go",
@@ -86,6 +88,7 @@ bootstrap_go_package {
         "prebuilt.go",
         "prebuilt_build_tool.go",
         "product_config.go",
+        "product_config_to_bp.go",
         "proto.go",
         "provider.go",
         "raw_files.go",
@@ -103,7 +106,6 @@ bootstrap_go_package {
         "test_asserts.go",
         "test_suites.go",
         "testing.go",
-        "updatable_modules.go",
         "util.go",
         "variable.go",
         "vintf_fragment.go",
@@ -152,4 +154,6 @@ bootstrap_go_package {
         "vintf_fragment_test.go",
         "visibility_test.go",
     ],
+    // Used by plugins
+    visibility: ["//visibility:public"],
 }

@@ -34,7 +34,6 @@ import (
 	"android/soong/cc/config"
 	"android/soong/fuzz"
 	"android/soong/genrule"
-	"android/soong/multitree"
 )
 
 func init() {
@@ -60,10 +59,10 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 			san.registerMutators(ctx)
 		}
 
-		ctx.TopDown("sanitize_runtime_deps", sanitizerRuntimeDepsMutator).Parallel()
+		ctx.BottomUp("sanitize_runtime_deps", sanitizerRuntimeDepsMutator).Parallel()
 		ctx.BottomUp("sanitize_runtime", sanitizerRuntimeMutator).Parallel()
 
-		ctx.TopDown("fuzz_deps", fuzzMutatorDeps)
+		ctx.BottomUp("fuzz_deps", fuzzMutatorDeps)
 
 		ctx.Transition("coverage", &coverageTransitionMutator{})
 
@@ -74,12 +73,12 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 		ctx.Transition("lto", &ltoTransitionMutator{})
 
 		ctx.BottomUp("check_linktype", checkLinkTypeMutator).Parallel()
-		ctx.TopDown("double_loadable", checkDoubleLoadableLibraries).Parallel()
+		ctx.BottomUp("double_loadable", checkDoubleLoadableLibraries).Parallel()
 	})
 
-	ctx.FinalDepsMutators(func(ctx android.RegisterMutatorsContext) {
+	ctx.PostApexMutators(func(ctx android.RegisterMutatorsContext) {
 		// sabi mutator needs to be run after apex mutator finishes.
-		ctx.TopDown("sabi_deps", sabiDepsMutator)
+		ctx.Transition("sabi", &sabiTransitionMutator{})
 	})
 
 	ctx.RegisterParallelSingletonType("kythe_extract_all", kytheExtractAllFactory)
@@ -138,7 +137,7 @@ type Deps struct {
 
 	// LLNDK headers for the ABI checker to check LLNDK implementation library.
 	// An LLNDK implementation is the core variant. LLNDK header libs are reexported by the vendor variant.
-	// The core variant cannot depend on the vendor variant because of the order of CreateVariations.
+	// The core variant cannot depend on the vendor variant because of the order of imageTransitionMutator.Split().
 	// Instead, the LLNDK implementation depends on the LLNDK header libs.
 	LlndkHeaderLibs []string
 }
@@ -613,7 +612,7 @@ type linker interface {
 	coverageOutputFilePath() android.OptionalPath
 
 	// Get the deps that have been explicitly specified in the properties.
-	linkerSpecifiedDeps(specifiedDeps specifiedDeps) specifiedDeps
+	linkerSpecifiedDeps(ctx android.ConfigurableEvaluatorContext, module *Module, specifiedDeps specifiedDeps) specifiedDeps
 
 	moduleInfoJSON(ctx ModuleContext, moduleInfoJSON *android.ModuleInfoJSON)
 }
@@ -970,7 +969,7 @@ func (c *Module) HiddenFromMake() bool {
 	return c.Properties.HideFromMake
 }
 
-func (c *Module) RequiredModuleNames(ctx android.ConfigAndErrorContext) []string {
+func (c *Module) RequiredModuleNames(ctx android.ConfigurableEvaluatorContext) []string {
 	required := android.CopyOf(c.ModuleBase.RequiredModuleNames(ctx))
 	if c.ImageVariation().Variation == android.CoreVariation {
 		required = append(required, c.Properties.Target.Platform.Required...)
@@ -2361,24 +2360,6 @@ func AddSharedLibDependenciesWithVersions(ctx android.BottomUpMutatorContext, mo
 	}
 }
 
-func GetApiImports(c LinkableInterface, actx android.BottomUpMutatorContext) multitree.ApiImportInfo {
-	apiImportInfo := multitree.ApiImportInfo{}
-
-	if c.Device() {
-		var apiImportModule []blueprint.Module
-		if actx.OtherModuleExists("api_imports") {
-			apiImportModule = actx.AddDependency(c, nil, "api_imports")
-			if len(apiImportModule) > 0 && apiImportModule[0] != nil {
-				apiInfo, _ := android.OtherModuleProvider(actx, apiImportModule[0], multitree.ApiImportsProvider)
-				apiImportInfo = apiInfo
-				android.SetProvider(actx, multitree.ApiImportsProvider, apiInfo)
-			}
-		}
-	}
-
-	return apiImportInfo
-}
-
 func GetReplaceModuleName(lib string, replaceMap map[string]string) string {
 	if snapshot, ok := replaceMap[lib]; ok {
 		return snapshot
@@ -2448,11 +2429,6 @@ func (c *Module) shouldUseApiSurface() bool {
 			// NDK Variant
 			return true
 		}
-
-		if c.isImportedApiLibrary() {
-			// API Library should depend on API headers
-			return true
-		}
 	}
 
 	return false
@@ -2472,18 +2448,9 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	ctx.ctx = ctx
 
 	deps := c.deps(ctx)
-	apiImportInfo := GetApiImports(c, actx)
 
 	apiNdkLibs := []string{}
 	apiLateNdkLibs := []string{}
-
-	if c.shouldUseApiSurface() {
-		deps.SharedLibs, apiNdkLibs = rewriteLibsForApiImports(c, deps.SharedLibs, apiImportInfo.SharedLibs, ctx.Config())
-		deps.LateSharedLibs, apiLateNdkLibs = rewriteLibsForApiImports(c, deps.LateSharedLibs, apiImportInfo.SharedLibs, ctx.Config())
-		deps.SystemSharedLibs, _ = rewriteLibsForApiImports(c, deps.SystemSharedLibs, apiImportInfo.SharedLibs, ctx.Config())
-		deps.ReexportHeaderLibHeaders, _ = rewriteLibsForApiImports(c, deps.ReexportHeaderLibHeaders, apiImportInfo.SharedLibs, ctx.Config())
-		deps.ReexportSharedLibHeaders, _ = rewriteLibsForApiImports(c, deps.ReexportSharedLibHeaders, apiImportInfo.SharedLibs, ctx.Config())
-	}
 
 	c.Properties.AndroidMkSystemSharedLibs = deps.SystemSharedLibs
 
@@ -2501,15 +2468,16 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 			depTag.reexportFlags = true
 		}
 
-		// Check header lib replacement from API surface first, and then check again with VSDK
-		if c.shouldUseApiSurface() {
-			lib = GetReplaceModuleName(lib, apiImportInfo.HeaderLibs)
-		}
-
 		if c.isNDKStubLibrary() {
-			// ndk_headers do not have any variations
-			actx.AddFarVariationDependencies([]blueprint.Variation{}, depTag, lib)
-		} else if c.IsStubs() && !c.isImportedApiLibrary() {
+			variationExists := actx.OtherModuleDependencyVariantExists(nil, lib)
+			if variationExists {
+				actx.AddVariationDependencies(nil, depTag, lib)
+			} else {
+				// dependencies to ndk_headers fall here as ndk_headers do not have
+				// any variants.
+				actx.AddFarVariationDependencies([]blueprint.Variation{}, depTag, lib)
+			}
+		} else if c.IsStubs() {
 			actx.AddFarVariationDependencies(append(ctx.Target().Variations(), c.ImageVariation()),
 				depTag, lib)
 		} else {
@@ -2585,22 +2553,12 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		}
 
 		name, version := StubsLibNameAndVersion(lib)
-		if apiLibraryName, ok := apiImportInfo.SharedLibs[name]; ok && !ctx.OtherModuleExists(name) {
-			name = apiLibraryName
-		}
 		sharedLibNames = append(sharedLibNames, name)
 
 		variations := []blueprint.Variation{
 			{Mutator: "link", Variation: "shared"},
 		}
-
-		if _, ok := apiImportInfo.ApexSharedLibs[name]; !ok || ctx.OtherModuleExists(name) {
-			AddSharedLibDependenciesWithVersions(ctx, c, variations, depTag, name, version, false)
-		}
-
-		if apiLibraryName, ok := apiImportInfo.ApexSharedLibs[name]; ok {
-			AddSharedLibDependenciesWithVersions(ctx, c, variations, depTag, apiLibraryName, version, false)
-		}
+		AddSharedLibDependenciesWithVersions(ctx, c, variations, depTag, name, version, false)
 	}
 
 	for _, lib := range deps.LateStaticLibs {
@@ -2695,7 +2653,6 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		)
 	}
 
-	updateImportedLibraryDependency(ctx)
 }
 
 func BeginMutator(ctx android.BottomUpMutatorContext) {
@@ -2724,10 +2681,6 @@ func checkLinkType(ctx android.BaseModuleContext, from LinkableInterface, to Lin
 		return
 	}
 
-	// TODO(b/244244438) : Remove this once all variants are implemented
-	if ccFrom, ok := from.(*Module); ok && ccFrom.isImportedApiLibrary() {
-		return
-	}
 	if from.SdkVersion() == "" {
 		// Platform code can link to anything
 		return
@@ -2748,10 +2701,6 @@ func checkLinkType(ctx android.BaseModuleContext, from LinkableInterface, to Lin
 		if c.StubDecorator() {
 			// These aren't real libraries, but are the stub shared libraries that are included in
 			// the NDK.
-			return
-		}
-		if c.isImportedApiLibrary() {
-			// Imported library from the API surface is a stub library built against interface definition.
 			return
 		}
 	}
@@ -2834,7 +2783,7 @@ func checkLinkTypeMutator(ctx android.BottomUpMutatorContext) {
 // If a library has a vendor variant and is a (transitive) dependency of an LLNDK library,
 // it is subject to be double loaded. Such lib should be explicitly marked as double_loadable: true
 // or as vndk-sp (vndk: { enabled: true, support_system_process: true}).
-func checkDoubleLoadableLibraries(ctx android.TopDownMutatorContext) {
+func checkDoubleLoadableLibraries(ctx android.BottomUpMutatorContext) {
 	check := func(child, parent android.Module) bool {
 		to, ok := child.(*Module)
 		if !ok {
@@ -2929,47 +2878,6 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 	skipModuleList := map[string]bool{}
 
-	var apiImportInfo multitree.ApiImportInfo
-	hasApiImportInfo := false
-
-	ctx.VisitDirectDeps(func(dep android.Module) {
-		if dep.Name() == "api_imports" {
-			apiImportInfo, _ = android.OtherModuleProvider(ctx, dep, multitree.ApiImportsProvider)
-			hasApiImportInfo = true
-		}
-	})
-
-	if hasApiImportInfo {
-		targetStubModuleList := map[string]string{}
-		targetOrigModuleList := map[string]string{}
-
-		// Search for dependency which both original module and API imported library with APEX stub exists
-		ctx.VisitDirectDeps(func(dep android.Module) {
-			depName := ctx.OtherModuleName(dep)
-			if apiLibrary, ok := apiImportInfo.ApexSharedLibs[depName]; ok {
-				targetStubModuleList[apiLibrary] = depName
-			}
-		})
-		ctx.VisitDirectDeps(func(dep android.Module) {
-			depName := ctx.OtherModuleName(dep)
-			if origLibrary, ok := targetStubModuleList[depName]; ok {
-				targetOrigModuleList[origLibrary] = depName
-			}
-		})
-
-		// Decide which library should be used between original and API imported library
-		ctx.VisitDirectDeps(func(dep android.Module) {
-			depName := ctx.OtherModuleName(dep)
-			if apiLibrary, ok := targetOrigModuleList[depName]; ok {
-				if ShouldUseStubForApex(ctx, dep) {
-					skipModuleList[depName] = true
-				} else {
-					skipModuleList[apiLibrary] = true
-				}
-			}
-		})
-	}
-
 	ctx.VisitDirectDeps(func(dep android.Module) {
 		depName := ctx.OtherModuleName(dep)
 		depTag := ctx.OtherModuleDependencyTag(dep)
@@ -3042,7 +2950,7 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		}
 
 		if dep.Target().Os != ctx.Os() {
-			ctx.ModuleErrorf("OS mismatch between %q and %q", ctx.ModuleName(), depName)
+			ctx.ModuleErrorf("OS mismatch between %q (%s) and %q (%s)", ctx.ModuleName(), ctx.Os().Name, depName, dep.Target().Os.Name)
 			return
 		}
 		if dep.Target().Arch.ArchType != ctx.Arch().ArchType {
@@ -3398,17 +3306,7 @@ func ShouldUseStubForApex(ctx android.ModuleContext, dep android.Module) bool {
 		// bootstrap modules, always link to non-stub variant
 		isNotInPlatform := dep.(android.ApexModule).NotInPlatform()
 
-		isApexImportedApiLibrary := false
-
-		if cc, ok := dep.(*Module); ok {
-			if apiLibrary, ok := cc.linker.(*apiLibraryDecorator); ok {
-				if apiLibrary.hasApexStubs() {
-					isApexImportedApiLibrary = true
-				}
-			}
-		}
-
-		useStubs = (isNotInPlatform || isApexImportedApiLibrary) && !bootstrap
+		useStubs = isNotInPlatform && !bootstrap
 
 		if useStubs {
 			// Another exception: if this module is a test for an APEX, then
@@ -3433,7 +3331,7 @@ func ShouldUseStubForApex(ctx android.ModuleContext, dep android.Module) bool {
 			// only partially overlapping apex_available. For that test_for
 			// modules would need to be split into APEX variants and resolved
 			// separately for each APEX they have access to.
-			if !isApexImportedApiLibrary && android.AvailableToSameApexes(thisModule, dep.(android.ApexModule)) {
+			if android.AvailableToSameApexes(thisModule, dep.(android.ApexModule)) {
 				useStubs = false
 			}
 		}
@@ -4015,11 +3913,6 @@ func DefaultsFactory(props ...interface{}) android.Module {
 
 func (c *Module) IsSdkVariant() bool {
 	return c.Properties.IsSdkVariant
-}
-
-func (c *Module) isImportedApiLibrary() bool {
-	_, ok := c.linker.(*apiLibraryDecorator)
-	return ok
 }
 
 func kytheExtractAllFactory() android.Singleton {
