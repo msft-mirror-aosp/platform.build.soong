@@ -193,9 +193,6 @@ type variableProperties struct {
 			Required               []string
 			Vintf_fragment_modules []string
 		}
-		SelinuxIgnoreNeverallows struct {
-			Required []string
-		}
 	} `android:"arch_variant"`
 }
 
