@@ -677,7 +677,7 @@ type createdByJavaSdkLibraryName interface {
 //
 // Even though this is a cc_prebuilt_library_shared, we create both the variants today
 // https://source.corp.google.com/h/googleplex-android/platform/build/soong/+/e08e32b45a18a77bc3c3e751f730539b1b374f1b:cc/library.go;l=2113-2116;drc=2c4a9779cd1921d0397a12b3d3521f4c9b30d747;bpv=1;bpt=0
-func (p *Prebuilt) variantIsDisabled(ctx BaseMutatorContext, prebuilt Module) bool {
+func (p *Prebuilt) variantIsDisabled(ctx BaseModuleContext, prebuilt Module) bool {
 	return p.srcsSupplier != nil && len(p.srcsSupplier(ctx, prebuilt)) == 0
 }
 
@@ -687,7 +687,7 @@ type apexVariationName interface {
 
 // usePrebuilt returns true if a prebuilt should be used instead of the source module.  The prebuilt
 // will be used if it is marked "prefer" or if the source module is disabled.
-func (p *Prebuilt) usePrebuilt(ctx BaseMutatorContext, source Module, prebuilt Module) bool {
+func (p *Prebuilt) usePrebuilt(ctx BaseModuleContext, source Module, prebuilt Module) bool {
 	isMainlinePrebuilt := func(prebuilt Module) bool {
 		apex, ok := prebuilt.(apexVariationName)
 		if !ok {
