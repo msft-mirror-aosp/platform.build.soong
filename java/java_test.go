@@ -3102,7 +3102,7 @@ func assertTestOnlyAndTopLevel(t *testing.T, ctx *android.TestResult, expectedTe
 	}
 }
 
-// Test that a dependency edge is created to the "first" variant of a native library listed in `required` of java_binary
+// Test that a dependency edge is created to the matching variant of a native library listed in `jni_libs` of java_binary
 func TestNativeRequiredDepOfJavaBinary(t *testing.T) {
 	findDepsOfModule := func(ctx *android.TestContext, module android.Module, depName string) []blueprint.Module {
 		var ret []blueprint.Module
@@ -3118,7 +3118,7 @@ func TestNativeRequiredDepOfJavaBinary(t *testing.T) {
 java_binary {
 	name: "myjavabin",
 	main_class: "com.android.MyJava",
-	required: ["mynativelib"],
+	jni_libs: ["mynativelib"],
 }
 cc_library_shared {
 	name: "mynativelib",
