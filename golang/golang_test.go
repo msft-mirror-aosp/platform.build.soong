@@ -39,7 +39,7 @@ func TestGolang(t *testing.T) {
 		android.FixtureRegisterWithContext(func(ctx android.RegistrationContext) {
 			RegisterGoModuleTypes(ctx)
 			ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
-				ctx.BottomUpBlueprint("bootstrap_deps", bootstrap.BootstrapDeps)
+				ctx.BottomUpBlueprint("bootstrap_deps", bootstrap.BootstrapDeps).UsesReverseDependencies()
 			})
 		}),
 	).RunTestWithBp(t, bp)
