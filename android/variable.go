@@ -522,6 +522,10 @@ type ProductVariables struct {
 	DeviceProductCompatibilityMatrixFile   []string `json:",omitempty"`
 
 	PartitionVarsForSoongMigrationOnlyDoNotUse PartitionVariables
+
+	ExtraAllowedDepsTxt *string `json:",omitempty"`
+
+	AdbKeys *string `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {

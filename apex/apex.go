@@ -29,6 +29,7 @@ import (
 	"android/soong/android"
 	"android/soong/bpf"
 	"android/soong/cc"
+	"android/soong/dexpreopt"
 	prebuilt_etc "android/soong/etc"
 	"android/soong/filesystem"
 	"android/soong/java"
@@ -54,7 +55,7 @@ func registerApexBuildComponents(ctx android.RegistrationContext) {
 }
 
 func RegisterPreDepsMutators(ctx android.RegisterMutatorsContext) {
-	ctx.BottomUp("apex_vndk_deps", apexVndkDepsMutator).Parallel()
+	ctx.BottomUp("apex_vndk_deps", apexVndkDepsMutator).Parallel().UsesReverseDependencies()
 }
 
 func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
@@ -66,7 +67,7 @@ func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
 	// it should create a platform variant.
 	ctx.BottomUp("mark_platform_availability", markPlatformAvailability).Parallel()
 	ctx.Transition("apex", &apexTransitionMutator{})
-	ctx.BottomUp("apex_directly_in_any", apexDirectlyInAnyMutator).Parallel()
+	ctx.BottomUp("apex_directly_in_any", apexDirectlyInAnyMutator).Parallel().MutatesDependencies()
 	ctx.BottomUp("apex_dcla_deps", apexDCLADepsMutator).Parallel()
 }
 
@@ -291,7 +292,7 @@ type ResolvedApexNativeDependencies struct {
 }
 
 // Merge combines another ApexNativeDependencies into this one
-func (a *ResolvedApexNativeDependencies) Merge(ctx android.BaseMutatorContext, b ApexNativeDependencies) {
+func (a *ResolvedApexNativeDependencies) Merge(ctx android.BaseModuleContext, b ApexNativeDependencies) {
 	a.Native_shared_libs = append(a.Native_shared_libs, b.Native_shared_libs.GetOrDefault(ctx, nil)...)
 	a.Jni_libs = append(a.Jni_libs, b.Jni_libs.GetOrDefault(ctx, nil)...)
 	a.Rust_dyn_libs = append(a.Rust_dyn_libs, b.Rust_dyn_libs...)
@@ -395,7 +396,7 @@ type overridableProperties struct {
 
 	// Apex Container package name. Override value for attribute package:name in
 	// AndroidManifest.xml
-	Package_name string
+	Package_name proptools.Configurable[string]
 
 	// A txt file containing list of files that are allowed to be included in this APEX.
 	Allowed_files *string `android:"path"`
@@ -1109,23 +1110,6 @@ func apexInfoMutator(mctx android.TopDownMutatorContext) {
 
 	if am, ok := mctx.Module().(android.ApexModule); ok {
 		android.ApexInfoMutator(mctx, am)
-	}
-	enforceAppUpdatability(mctx)
-}
-
-// enforceAppUpdatability propagates updatable=true to apps of updatable apexes
-func enforceAppUpdatability(mctx android.TopDownMutatorContext) {
-	if !mctx.Module().Enabled(mctx) {
-		return
-	}
-	if apex, ok := mctx.Module().(*apexBundle); ok && apex.Updatable() {
-		// checking direct deps is sufficient since apex->apk is a direct edge, even when inherited via apex_defaults
-		mctx.VisitDirectDeps(func(module android.Module) {
-			// ignore android_test_app
-			if app, ok := module.(*java.AndroidApp); ok {
-				app.SetUpdatable(true)
-			}
-		})
 	}
 }
 
@@ -1872,6 +1856,7 @@ func (a *apexBundle) commonBuildActions(ctx android.ModuleContext) bool {
 	a.CheckMinSdkVersion(ctx)
 	a.checkStaticLinkingToStubLibraries(ctx)
 	a.checkStaticExecutables(ctx)
+	a.enforceAppUpdatability(ctx)
 	if len(a.properties.Tests) > 0 && !a.testApex {
 		ctx.PropertyErrorf("tests", "property allowed only in apex_test module type")
 		return false
@@ -1932,6 +1917,32 @@ func (vctx *visitorContext) normalizeFileInfo(mctx android.ModuleContext) {
 		// Sort by destination path so as to ensure consistent ordering even if the source of the files
 		// changes.
 		return vctx.filesInfo[i].path() < vctx.filesInfo[j].path()
+	})
+}
+
+// enforcePartitionTagOnApexSystemServerJar checks that the partition tags of an apex system server jar  matches
+// the partition tags of the top-level apex.
+// e.g. if the top-level apex sets system_ext_specific to true, the javalib must set this property to true as well.
+// This check ensures that the dexpreopt artifacts of the apex system server jar is installed in the same partition
+// as the apex.
+func (a *apexBundle) enforcePartitionTagOnApexSystemServerJar(ctx android.ModuleContext) {
+	global := dexpreopt.GetGlobalConfig(ctx)
+	ctx.VisitDirectDepsWithTag(sscpfTag, func(child android.Module) {
+		info, ok := android.OtherModuleProvider(ctx, child, java.LibraryNameToPartitionInfoProvider)
+		if !ok {
+			ctx.ModuleErrorf("Could not find partition info of apex system server jars.")
+		}
+		apexPartition := ctx.Module().PartitionTag(ctx.DeviceConfig())
+		for javalib, javalibPartition := range info.LibraryNameToPartition {
+			if !global.AllApexSystemServerJars(ctx).ContainsJar(javalib) {
+				continue // not an apex system server jar
+			}
+			if apexPartition != javalibPartition {
+				ctx.ModuleErrorf(`
+%s is an apex systemserver jar, but its partition does not match the partition of its containing apex. Expected %s, Got %s`,
+					javalib, apexPartition, javalibPartition)
+			}
+		}
 	})
 }
 
@@ -2357,6 +2368,7 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.required = append(a.required, a.VintfFragmentModuleNames(ctx)...)
 
 	a.setOutputFiles(ctx)
+	a.enforcePartitionTagOnApexSystemServerJar(ctx)
 }
 
 // Set prebuiltInfoProvider. This will be used by `apex_prebuiltinfo_singleton` to print out a metadata file
@@ -2394,6 +2406,24 @@ func (a *apexBundle) setOutputFiles(ctx android.ModuleContext) {
 	// uncompressed one
 	if a.outputApexFile != nil {
 		ctx.SetOutputFiles(android.Paths{a.outputApexFile}, imageApexSuffix)
+	}
+}
+
+// enforceAppUpdatability propagates updatable=true to apps of updatable apexes
+func (a *apexBundle) enforceAppUpdatability(mctx android.ModuleContext) {
+	if !a.Enabled(mctx) {
+		return
+	}
+	if a.Updatable() {
+		// checking direct deps is sufficient since apex->apk is a direct edge, even when inherited via apex_defaults
+		mctx.VisitDirectDeps(func(module android.Module) {
+			if appInfo, ok := android.OtherModuleProvider(mctx, module, java.AppInfoProvider); ok {
+				// ignore android_test_app
+				if !appInfo.TestHelperApp && !appInfo.Updatable {
+					mctx.ModuleErrorf("app dependency %s must have updatable: true", mctx.OtherModuleName(module))
+				}
+			}
+		})
 	}
 }
 

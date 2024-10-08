@@ -218,11 +218,15 @@ type CommonProperties struct {
 	// the stubs via static libs.
 	Is_stubs_module *bool
 
-	// If true, enable the "Ravenizer" tool on the output jar.
-	// "Ravenizer" is a tool for Ravenwood tests, but it can also be enabled on other kinds
-	// of java targets.
 	Ravenizer struct {
+		// If true, enable the "Ravenizer" tool on the output jar.
+		// "Ravenizer" is a tool for Ravenwood tests, but it can also be enabled on other kinds
+		// of java targets.
 		Enabled *bool
+
+		// If true, the "Ravenizer" tool will remove all Mockito and DexMaker
+		// classes from the output jar.
+		Strip_mockito *bool
 	}
 
 	// Contributing api surface of the stub module. Is not visible to bp modules, and should
@@ -1134,8 +1138,9 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	j.exportAidlIncludeDirs = android.PathsForModuleSrc(ctx, j.deviceProperties.Aidl.Export_include_dirs)
 
-	if re := proptools.Bool(j.properties.Ravenizer.Enabled); re {
-		j.ravenizer.enabled = re
+	// Only override the original value if explicitly set
+	if j.properties.Ravenizer.Enabled != nil {
+		j.ravenizer.enabled = *j.properties.Ravenizer.Enabled
 	}
 
 	deps := j.collectDeps(ctx)
@@ -1623,16 +1628,23 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	if j.ravenizer.enabled {
 		ravenizerInput := outputFile
-		ravenizerOutput := android.PathForModuleOut(ctx, "ravenizer", jarName)
-		ctx.Build(pctx, android.BuildParams{
-			Rule:        ravenizer,
-			Description: "ravenizer",
-			Input:       ravenizerInput,
-			Output:      ravenizerOutput,
-		})
+		ravenizerOutput := android.PathForModuleOut(ctx, "ravenizer", "", jarName)
+		ravenizerArgs := ""
+		if proptools.Bool(j.properties.Ravenizer.Strip_mockito) {
+			ravenizerArgs = "--strip-mockito"
+		}
+		TransformRavenizer(ctx, ravenizerOutput, ravenizerInput, ravenizerArgs)
 		outputFile = ravenizerOutput
 		localImplementationJars = android.Paths{ravenizerOutput}
 		completeStaticLibsImplementationJars = android.NewDepSet(android.PREORDER, localImplementationJars, nil)
+		if combinedResourceJar != nil {
+			ravenizerInput = combinedResourceJar
+			ravenizerOutput = android.PathForModuleOut(ctx, "ravenizer", "resources", jarName)
+			TransformRavenizer(ctx, ravenizerOutput, ravenizerInput, ravenizerArgs)
+			combinedResourceJar = ravenizerOutput
+			localResourceJars = android.Paths{ravenizerOutput}
+			completeStaticLibsResourceJars = android.NewDepSet(android.PREORDER, localResourceJars, nil)
+		}
 	}
 
 	if j.shouldApiMapper() {

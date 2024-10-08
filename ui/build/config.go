@@ -1754,12 +1754,10 @@ func (c *configImpl) SisoBin() string {
 }
 
 func (c *configImpl) PrebuiltBuildTool(name string) string {
-	if v, ok := c.environ.Get("SANITIZE_HOST"); ok {
-		if sanitize := strings.Fields(v); inList("address", sanitize) {
-			asan := filepath.Join("prebuilts/build-tools", c.HostPrebuiltTag(), "asan/bin", name)
-			if _, err := os.Stat(asan); err == nil {
-				return asan
-			}
+	if c.environ.IsEnvTrue("SANITIZE_BUILD_TOOL_PREBUILTS") {
+		asan := filepath.Join("prebuilts/build-tools", c.HostPrebuiltTag(), "asan/bin", name)
+		if _, err := os.Stat(asan); err == nil {
+			return asan
 		}
 	}
 	return filepath.Join("prebuilts/build-tools", c.HostPrebuiltTag(), "bin", name)
