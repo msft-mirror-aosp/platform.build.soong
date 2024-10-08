@@ -192,25 +192,10 @@ func FinalDepsMutators(f RegisterMutatorFunc) {
 	finalDeps = append(finalDeps, f)
 }
 
-type BaseMutatorContext interface {
-	BaseModuleContext
-
-	// MutatorName returns the name that this mutator was registered with.
-	MutatorName() string
-
-	// Rename all variants of a module.  The new name is not visible to calls to ModuleName,
-	// AddDependency or OtherModuleName until after this mutator pass is complete.
-	Rename(name string)
-
-	// CreateModule creates a new module by calling the factory method for the specified moduleType, and applies
-	// the specified property structs to it as if the properties were set in a blueprint file.
-	CreateModule(ModuleFactory, ...interface{}) Module
-}
-
 type TopDownMutator func(TopDownMutatorContext)
 
 type TopDownMutatorContext interface {
-	BaseMutatorContext
+	BaseModuleContext
 }
 
 type topDownMutatorContext struct {
@@ -221,7 +206,7 @@ type topDownMutatorContext struct {
 type BottomUpMutator func(BottomUpMutatorContext)
 
 type BottomUpMutatorContext interface {
-	BaseMutatorContext
+	BaseModuleContext
 
 	// AddDependency adds a dependency to the given module.  It returns a slice of modules for each
 	// dependency (some entries may be nil).
@@ -285,6 +270,14 @@ type BottomUpMutatorContext interface {
 	// as long as the supplied predicate returns true.
 	// Replacements don't take effect until after the mutator pass is finished.
 	ReplaceDependenciesIf(string, blueprint.ReplaceDependencyPredicate)
+
+	// Rename all variants of a module.  The new name is not visible to calls to ModuleName,
+	// AddDependency or OtherModuleName until after this mutator pass is complete.
+	Rename(name string)
+
+	// CreateModule creates a new module by calling the factory method for the specified moduleType, and applies
+	// the specified property structs to it as if the properties were set in a blueprint file.
+	CreateModule(ModuleFactory, ...interface{}) Module
 }
 
 // An outgoingTransitionContextImpl and incomingTransitionContextImpl is created for every dependency of every module
@@ -668,32 +661,6 @@ func registerDepsMutator(ctx RegisterMutatorsContext) {
 // ambiguous method errors, or it has to store a blueprint.TopDownMutatorContext non-embedded, in which case every
 // non-overridden method has to be forwarded.  There are fewer non-overridden methods, so use the latter.  The following
 // methods forward to the identical blueprint versions for topDownMutatorContext and bottomUpMutatorContext.
-
-func (t *topDownMutatorContext) MutatorName() string {
-	return t.bp.MutatorName()
-}
-
-func (t *topDownMutatorContext) Rename(name string) {
-	t.bp.Rename(name)
-	t.Module().base().commonProperties.DebugName = name
-}
-
-func (t *topDownMutatorContext) createModule(factory blueprint.ModuleFactory, name string, props ...interface{}) blueprint.Module {
-	return t.bp.CreateModule(factory, name, props...)
-}
-
-func (t *topDownMutatorContext) CreateModule(factory ModuleFactory, props ...interface{}) Module {
-	return createModule(t, factory, "_topDownMutatorModule", props...)
-}
-
-func (t *topDownMutatorContext) createModuleWithoutInheritance(factory ModuleFactory, props ...interface{}) Module {
-	module := t.bp.CreateModule(ModuleFactoryAdaptor(factory), "", props...).(Module)
-	return module
-}
-
-func (b *bottomUpMutatorContext) MutatorName() string {
-	return b.bp.MutatorName()
-}
 
 func (b *bottomUpMutatorContext) Rename(name string) {
 	b.bp.Rename(name)
