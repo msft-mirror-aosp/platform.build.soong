@@ -33,6 +33,8 @@ type BaseModuleContext interface {
 
 	blueprintBaseModuleContext() blueprint.BaseModuleContext
 
+	EqualModules(m1, m2 Module) bool
+
 	// OtherModuleName returns the name of another Module.  See BaseModuleContext.ModuleName for more information.
 	// It is intended for use inside the visit functions of Visit* and WalkDeps.
 	OtherModuleName(m blueprint.Module) string
@@ -130,6 +132,14 @@ type BaseModuleContext interface {
 	// function, it may be invalidated by future mutators.
 	VisitDirectDepsAllowDisabled(visit func(Module))
 
+	// VisitDirectDepsProxyAllowDisabled calls visit for each direct dependency.  If there are
+	// multiple direct dependencies on the same module visit will be called multiple times on
+	// that module and OtherModuleDependencyTag will return a different tag for each.
+	//
+	// The Module passed to the visit function should not be retained outside of the visit function, it may be
+	// invalidated by future mutators.
+	VisitDirectDepsProxyAllowDisabled(visit func(proxy Module))
+
 	VisitDirectDepsWithTag(tag blueprint.DependencyTag, visit func(Module))
 
 	// VisitDirectDepsIf calls pred for each direct dependency, and if pred returns true calls visit.  If there are
@@ -154,6 +164,16 @@ type BaseModuleContext interface {
 	// The Modules passed to the visit function should not be retained outside of the visit function, they may be
 	// invalidated by future mutators.
 	WalkDeps(visit func(child, parent Module) bool)
+
+	// WalkDeps calls visit for each transitive dependency, traversing the dependency tree in top down order.  visit may
+	// be called multiple times for the same (child, parent) pair if there are multiple direct dependencies between the
+	// child and parent with different tags.  OtherModuleDependencyTag will return the tag for the currently visited
+	// (child, parent) pair.  If visit returns false WalkDeps will not continue recursing down to child.  It skips
+	// any dependencies that are not an android.Module.
+	//
+	// The Modules passed to the visit function should not be retained outside of the visit function, they may be
+	// invalidated by future mutators.
+	WalkDepsProxy(visit func(child, parent Module) bool)
 
 	// GetWalkPath is supposed to be called in visit function passed in WalkDeps()
 	// and returns a top-down dependency path from a start module to current child module.
@@ -214,15 +234,26 @@ type baseModuleContext struct {
 
 }
 
+func getWrappedModule(module blueprint.Module) blueprint.Module {
+	if mp, isProxy := module.(ModuleProxy); isProxy {
+		return mp.module
+	}
+	return module
+}
+
+func (b *baseModuleContext) EqualModules(m1, m2 Module) bool {
+	return b.bp.EqualModules(getWrappedModule(m1), getWrappedModule(m2))
+}
+
 func (b *baseModuleContext) OtherModuleName(m blueprint.Module) string {
-	return b.bp.OtherModuleName(m)
+	return b.bp.OtherModuleName(getWrappedModule(m))
 }
 func (b *baseModuleContext) OtherModuleDir(m blueprint.Module) string { return b.bp.OtherModuleDir(m) }
 func (b *baseModuleContext) OtherModuleErrorf(m blueprint.Module, fmt string, args ...interface{}) {
 	b.bp.OtherModuleErrorf(m, fmt, args...)
 }
 func (b *baseModuleContext) OtherModuleDependencyTag(m blueprint.Module) blueprint.DependencyTag {
-	return b.bp.OtherModuleDependencyTag(m)
+	return b.bp.OtherModuleDependencyTag(getWrappedModule(m))
 }
 func (b *baseModuleContext) OtherModuleExists(name string) bool { return b.bp.OtherModuleExists(name) }
 func (b *baseModuleContext) OtherModuleDependencyVariantExists(variations []blueprint.Variation, name string) bool {
@@ -395,6 +426,14 @@ func (b *baseModuleContext) VisitDirectDepsAllowDisabled(visit func(Module)) {
 	})
 }
 
+func (b *baseModuleContext) VisitDirectDepsProxyAllowDisabled(visit func(proxy Module)) {
+	b.bp.VisitDirectDepsProxy(func(module blueprint.ModuleProxy) {
+		visit(ModuleProxy{
+			module: module,
+		})
+	})
+}
+
 func (b *baseModuleContext) VisitDirectDepsWithTag(tag blueprint.DependencyTag, visit func(Module)) {
 	b.bp.VisitDirectDeps(func(module blueprint.Module) {
 		if b.bp.OtherModuleDependencyTag(module) == tag {
@@ -463,6 +502,23 @@ func (b *baseModuleContext) WalkDeps(visit func(Module, Module) bool) {
 		} else {
 			return false
 		}
+	})
+}
+
+func (b *baseModuleContext) WalkDepsProxy(visit func(Module, Module) bool) {
+	b.walkPath = []Module{ModuleProxy{blueprint.CreateModuleProxy(b.Module())}}
+	b.tagPath = []blueprint.DependencyTag{}
+	b.bp.WalkDepsProxy(func(child, parent blueprint.ModuleProxy) bool {
+		childAndroidModule := ModuleProxy{child}
+		parentAndroidModule := ModuleProxy{parent}
+		// record walkPath before visit
+		for b.walkPath[len(b.walkPath)-1] != parentAndroidModule {
+			b.walkPath = b.walkPath[0 : len(b.walkPath)-1]
+			b.tagPath = b.tagPath[0 : len(b.tagPath)-1]
+		}
+		b.walkPath = append(b.walkPath, childAndroidModule)
+		b.tagPath = append(b.tagPath, b.OtherModuleDependencyTag(childAndroidModule))
+		return visit(childAndroidModule, parentAndroidModule)
 	})
 }
 
