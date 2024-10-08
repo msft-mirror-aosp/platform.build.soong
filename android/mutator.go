@@ -221,7 +221,8 @@ type BottomUpMutatorContext interface {
 	// Does not affect the ordering of the current mutator pass, but will be ordered
 	// correctly for all future mutator passes.  All reverse dependencies for a destination module are
 	// collected until the end of the mutator pass, sorted by name, and then appended to the destination
-	// module's dependency list.
+	// module's dependency list.  May only  be called by mutators that were marked with
+	// UsesReverseDependencies during registration.
 	AddReverseDependency(module blueprint.Module, tag blueprint.DependencyTag, name string)
 
 	// AddVariationDependencies adds deps as dependencies of the current module, but uses the variations
@@ -235,14 +236,15 @@ type BottomUpMutatorContext interface {
 	// be ordered correctly for all future mutator passes.
 	AddVariationDependencies(variations []blueprint.Variation, tag blueprint.DependencyTag, names ...string) []blueprint.Module
 
-	// AddReverseVariationDependencies adds a dependency from the named module to the current
+	// AddReverseVariationDependency adds a dependency from the named module to the current
 	// module. The given variations will be added to the current module's varations, and then the
 	// result will be used to find the correct variation of the depending module, which must exist.
 	//
 	// Does not affect the ordering of the current mutator pass, but will be ordered
 	// correctly for all future mutator passes.  All reverse dependencies for a destination module are
 	// collected until the end of the mutator pass, sorted by name, and then appended to the destination
-	// module's dependency list.
+	// module's dependency list.  May only  be called by mutators that were marked with
+	// UsesReverseDependencies during registration.
 	AddReverseVariationDependency([]blueprint.Variation, blueprint.DependencyTag, string)
 
 	// AddFarVariationDependencies adds deps as dependencies of the current module, but uses the
@@ -262,21 +264,25 @@ type BottomUpMutatorContext interface {
 
 	// ReplaceDependencies finds all the variants of the module with the specified name, then
 	// replaces all dependencies onto those variants with the current variant of this module.
-	// Replacements don't take effect until after the mutator pass is finished.
+	// Replacements don't take effect until after the mutator pass is finished.  May only
+	// be called by mutators that were marked with UsesReplaceDependencies during registration.
 	ReplaceDependencies(string)
 
 	// ReplaceDependenciesIf finds all the variants of the module with the specified name, then
 	// replaces all dependencies onto those variants with the current variant of this module
 	// as long as the supplied predicate returns true.
-	// Replacements don't take effect until after the mutator pass is finished.
+	// Replacements don't take effect until after the mutator pass is finished.  May only
+	// be called by mutators that were marked with UsesReplaceDependencies during registration.
 	ReplaceDependenciesIf(string, blueprint.ReplaceDependencyPredicate)
 
 	// Rename all variants of a module.  The new name is not visible to calls to ModuleName,
-	// AddDependency or OtherModuleName until after this mutator pass is complete.
+	// AddDependency or OtherModuleName until after this mutator pass is complete.  May only be called
+	// by mutators that were marked with UsesRename during registration.
 	Rename(name string)
 
 	// CreateModule creates a new module by calling the factory method for the specified moduleType, and applies
-	// the specified property structs to it as if the properties were set in a blueprint file.
+	// the specified property structs to it as if the properties were set in a blueprint file.  May only
+	// be called by mutators that were marked with UsesCreateModule during registration.
 	CreateModule(ModuleFactory, ...interface{}) Module
 }
 
@@ -620,17 +626,94 @@ func (mutator *mutator) register(ctx *Context) {
 	} else if mutator.transitionMutator != nil {
 		blueprintCtx.RegisterTransitionMutator(mutator.name, mutator.transitionMutator)
 	}
+
+	// Forward booleans set on the MutatorHandle to the blueprint.MutatorHandle.
 	if mutator.parallel {
 		handle.Parallel()
+	}
+	if mutator.usesRename {
+		handle.UsesRename()
+	}
+	if mutator.usesReverseDependencies {
+		handle.UsesReverseDependencies()
+	}
+	if mutator.usesReplaceDependencies {
+		handle.UsesReplaceDependencies()
+	}
+	if mutator.usesCreateModule {
+		handle.UsesCreateModule()
+	}
+	if mutator.mutatesDependencies {
+		handle.MutatesDependencies()
+	}
+	if mutator.mutatesGlobalState {
+		handle.MutatesGlobalState()
 	}
 }
 
 type MutatorHandle interface {
+	// Parallel sets the mutator to visit modules in parallel while maintaining ordering.  Calling any
+	// method on the mutator context is thread-safe, but the mutator must handle synchronization
+	// for any modifications to global state or any modules outside the one it was invoked on.
 	Parallel() MutatorHandle
+
+	// UsesRename marks the mutator as using the BottomUpMutatorContext.Rename method, which prevents
+	// coalescing adjacent mutators into a single mutator pass.
+	UsesRename() MutatorHandle
+
+	// UsesReverseDependencies marks the mutator as using the BottomUpMutatorContext.AddReverseDependency
+	// method, which prevents coalescing adjacent mutators into a single mutator pass.
+	UsesReverseDependencies() MutatorHandle
+
+	// UsesReplaceDependencies marks the mutator as using the BottomUpMutatorContext.ReplaceDependencies
+	// method, which prevents coalescing adjacent mutators into a single mutator pass.
+	UsesReplaceDependencies() MutatorHandle
+
+	// UsesCreateModule marks the mutator as using the BottomUpMutatorContext.CreateModule method,
+	// which prevents coalescing adjacent mutators into a single mutator pass.
+	UsesCreateModule() MutatorHandle
+
+	// MutatesDependencies marks the mutator as modifying properties in dependencies, which prevents
+	// coalescing adjacent mutators into a single mutator pass.
+	MutatesDependencies() MutatorHandle
+
+	// MutatesGlobalState marks the mutator as modifying global state, which prevents coalescing
+	// adjacent mutators into a single mutator pass.
+	MutatesGlobalState() MutatorHandle
 }
 
 func (mutator *mutator) Parallel() MutatorHandle {
 	mutator.parallel = true
+	return mutator
+}
+
+func (mutator *mutator) UsesRename() MutatorHandle {
+	mutator.usesRename = true
+	return mutator
+}
+
+func (mutator *mutator) UsesReverseDependencies() MutatorHandle {
+	mutator.usesReverseDependencies = true
+	return mutator
+}
+
+func (mutator *mutator) UsesReplaceDependencies() MutatorHandle {
+	mutator.usesReplaceDependencies = true
+	return mutator
+}
+
+func (mutator *mutator) UsesCreateModule() MutatorHandle {
+	mutator.usesCreateModule = true
+	return mutator
+}
+
+func (mutator *mutator) MutatesDependencies() MutatorHandle {
+	mutator.mutatesDependencies = true
+	return mutator
+}
+
+func (mutator *mutator) MutatesGlobalState() MutatorHandle {
+	mutator.mutatesGlobalState = true
 	return mutator
 }
 
@@ -653,7 +736,7 @@ func depsMutator(ctx BottomUpMutatorContext) {
 }
 
 func registerDepsMutator(ctx RegisterMutatorsContext) {
-	ctx.BottomUp("deps", depsMutator).Parallel()
+	ctx.BottomUp("deps", depsMutator).Parallel().UsesReverseDependencies()
 }
 
 // android.topDownMutatorContext either has to embed blueprint.TopDownMutatorContext, in which case every method that
