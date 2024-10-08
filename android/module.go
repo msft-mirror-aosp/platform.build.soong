@@ -1003,14 +1003,6 @@ func addRequiredDeps(ctx BottomUpMutatorContext) {
 			return
 		}
 
-		// Do not create a dependency from common variant to arch variant for `common_first` modules
-		if multilib, _ := decodeMultilib(ctx, ctx.Module().base()); multilib == string(MultilibCommonFirst) {
-			commonVariant := ctx.Arch().ArchType.Multilib == ""
-			if bothInAndroid && commonVariant && InList(target.Arch.ArchType.Multilib, []string{"lib32", "lib64"}) {
-				return
-			}
-		}
-
 		variation := target.Variations()
 		if ctx.OtherModuleFarDependencyVariantExists(variation, depName) {
 			ctx.AddFarVariationDependencies(variation, RequiredDepTag, depName)
