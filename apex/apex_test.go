@@ -11814,3 +11814,48 @@ func TestSdkLibraryTransitiveClassLoaderContext(t *testing.T) {
 		}
        `)
 }
+
+// If an apex sets system_ext_specific: true, its systemserverclasspath libraries must set this property as well.
+func TestApexSSCPJarMustBeInSamePartitionAsApex(t *testing.T) {
+	testApexError(t, `foo is an apex systemserver jar, but its partition does not match the partition of its containing apex`, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			systemserverclasspath_fragments: [
+				"mysystemserverclasspathfragment",
+			],
+			min_sdk_version: "29",
+			updatable: true,
+			system_ext_specific: true,
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		java_library {
+			name: "foo",
+			srcs: ["b.java"],
+			min_sdk_version: "29",
+			installable: true,
+			apex_available: [
+				"myapex",
+			],
+			sdk_version: "current",
+		}
+
+		systemserverclasspath_fragment {
+			name: "mysystemserverclasspathfragment",
+			contents: [
+				"foo",
+			],
+			apex_available: [
+				"myapex",
+			],
+		}
+	`,
+		dexpreopt.FixtureSetApexSystemServerJars("myapex:foo"),
+	)
+}

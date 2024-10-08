@@ -1628,7 +1628,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	if j.ravenizer.enabled {
 		ravenizerInput := outputFile
-		ravenizerOutput := android.PathForModuleOut(ctx, "ravenizer", jarName)
+		ravenizerOutput := android.PathForModuleOut(ctx, "ravenizer", "", jarName)
 		ravenizerArgs := ""
 		if proptools.Bool(j.properties.Ravenizer.Strip_mockito) {
 			ravenizerArgs = "--strip-mockito"
@@ -1637,6 +1637,14 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		outputFile = ravenizerOutput
 		localImplementationJars = android.Paths{ravenizerOutput}
 		completeStaticLibsImplementationJars = android.NewDepSet(android.PREORDER, localImplementationJars, nil)
+		if combinedResourceJar != nil {
+			ravenizerInput = combinedResourceJar
+			ravenizerOutput = android.PathForModuleOut(ctx, "ravenizer", "resources", jarName)
+			TransformRavenizer(ctx, ravenizerOutput, ravenizerInput, ravenizerArgs)
+			combinedResourceJar = ravenizerOutput
+			localResourceJars = android.Paths{ravenizerOutput}
+			completeStaticLibsResourceJars = android.NewDepSet(android.PREORDER, localResourceJars, nil)
+		}
 	}
 
 	if j.shouldApiMapper() {
