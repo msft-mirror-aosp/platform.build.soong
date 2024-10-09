@@ -238,7 +238,7 @@ func TestFinalDepsPhase(t *testing.T) {
 					if !strings.HasPrefix(ctx.ModuleName(), "common_dep") {
 						ctx.AddFarVariationDependencies([]blueprint.Variation{}, dep1Tag, "common_dep_1")
 					}
-				}).Parallel()
+				})
 				ctx.Transition("variant", &testTransitionMutator{
 					split: func(ctx BaseModuleContext) []string {
 						return []string{"a", "b"}
@@ -251,7 +251,7 @@ func TestFinalDepsPhase(t *testing.T) {
 					if !strings.HasPrefix(ctx.ModuleName(), "common_dep") {
 						ctx.AddFarVariationDependencies([]blueprint.Variation{}, dep2Tag, "common_dep_2")
 					}
-				}).Parallel()
+				})
 				ctx.BottomUp("final", func(ctx BottomUpMutatorContext) {
 					counter, _ := finalGot.LoadOrStore(ctx.Module().String(), &atomic.Int64{})
 					counter.(*atomic.Int64).Add(1)
@@ -259,7 +259,7 @@ func TestFinalDepsPhase(t *testing.T) {
 						counter, _ := finalGot.LoadOrStore(fmt.Sprintf("%s -> %s", ctx.Module().String(), mod), &atomic.Int64{})
 						counter.(*atomic.Int64).Add(1)
 					})
-				}).Parallel()
+				})
 			})
 
 			ctx.RegisterModuleType("test", mutatorTestModuleFactory)

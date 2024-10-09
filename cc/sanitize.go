@@ -176,7 +176,7 @@ func (t SanitizerType) registerMutators(ctx android.RegisterMutatorsContext) {
 	switch t {
 	case cfi, Hwasan, Asan, tsan, Fuzzer, scs, Memtag_stack:
 		sanitizer := &sanitizerSplitMutator{t}
-		ctx.BottomUp(t.variationName()+"_markapexes", sanitizer.markSanitizableApexesMutator).Parallel()
+		ctx.BottomUp(t.variationName()+"_markapexes", sanitizer.markSanitizableApexesMutator)
 		ctx.Transition(t.variationName(), sanitizer)
 	case Memtag_heap, Memtag_globals, intOverflow:
 		// do nothing
