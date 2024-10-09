@@ -109,6 +109,7 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 	// BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE
 	fsProps.Type = proptools.StringPtr(specificPartitionVars.BoardFileSystemType)
 	if *fsProps.Type != "ext4" {
+		// TODO(b/372522486): Support other FS types.
 		// Currently the android_filesystem module type only supports ext4:
 		// https://cs.android.com/android/platform/superproject/main/+/main:build/soong/filesystem/filesystem.go;l=416;drc=98047cfd07944b297a12d173453bc984806760d2
 		return false
