@@ -134,10 +134,6 @@ func TestModuleString(t *testing.T) {
 						return []string{"a", "b"}
 					},
 				})
-				ctx.TopDown("rename_top_down", func(ctx TopDownMutatorContext) {
-					moduleStrings = append(moduleStrings, ctx.Module().String())
-					ctx.Rename(ctx.Module().base().Name() + "_renamed1")
-				})
 			})
 
 			ctx.PreDepsMutators(func(ctx RegisterMutatorsContext) {
@@ -161,8 +157,8 @@ func TestModuleString(t *testing.T) {
 				})
 				ctx.BottomUp("rename_bottom_up", func(ctx BottomUpMutatorContext) {
 					moduleStrings = append(moduleStrings, ctx.Module().String())
-					ctx.Rename(ctx.Module().base().Name() + "_renamed2")
-				})
+					ctx.Rename(ctx.Module().base().Name() + "_renamed1")
+				}).UsesRename()
 				ctx.BottomUp("final", func(ctx BottomUpMutatorContext) {
 					moduleStrings = append(moduleStrings, ctx.Module().String())
 				})
@@ -181,17 +177,23 @@ func TestModuleString(t *testing.T) {
 		"foo{pre_arch:b}",
 		"foo{pre_arch:a}",
 
-		// After rename_top_down (reversed because pre_deps TransitionMutator.Split is TopDown).
-		"foo_renamed1{pre_arch:b}",
-		"foo_renamed1{pre_arch:a}",
-
 		// After pre_deps (reversed because post_deps TransitionMutator.Split is TopDown).
-		"foo_renamed1{pre_arch:b,pre_deps:d}",
-		"foo_renamed1{pre_arch:b,pre_deps:c}",
-		"foo_renamed1{pre_arch:a,pre_deps:d}",
-		"foo_renamed1{pre_arch:a,pre_deps:c}",
+		"foo{pre_arch:b,pre_deps:d}",
+		"foo{pre_arch:b,pre_deps:c}",
+		"foo{pre_arch:a,pre_deps:d}",
+		"foo{pre_arch:a,pre_deps:c}",
 
 		// After post_deps.
+		"foo{pre_arch:a,pre_deps:c,post_deps:e}",
+		"foo{pre_arch:a,pre_deps:c,post_deps:f}",
+		"foo{pre_arch:a,pre_deps:d,post_deps:e}",
+		"foo{pre_arch:a,pre_deps:d,post_deps:f}",
+		"foo{pre_arch:b,pre_deps:c,post_deps:e}",
+		"foo{pre_arch:b,pre_deps:c,post_deps:f}",
+		"foo{pre_arch:b,pre_deps:d,post_deps:e}",
+		"foo{pre_arch:b,pre_deps:d,post_deps:f}",
+
+		// After rename_bottom_up.
 		"foo_renamed1{pre_arch:a,pre_deps:c,post_deps:e}",
 		"foo_renamed1{pre_arch:a,pre_deps:c,post_deps:f}",
 		"foo_renamed1{pre_arch:a,pre_deps:d,post_deps:e}",
@@ -200,16 +202,6 @@ func TestModuleString(t *testing.T) {
 		"foo_renamed1{pre_arch:b,pre_deps:c,post_deps:f}",
 		"foo_renamed1{pre_arch:b,pre_deps:d,post_deps:e}",
 		"foo_renamed1{pre_arch:b,pre_deps:d,post_deps:f}",
-
-		// After rename_bottom_up.
-		"foo_renamed2{pre_arch:a,pre_deps:c,post_deps:e}",
-		"foo_renamed2{pre_arch:a,pre_deps:c,post_deps:f}",
-		"foo_renamed2{pre_arch:a,pre_deps:d,post_deps:e}",
-		"foo_renamed2{pre_arch:a,pre_deps:d,post_deps:f}",
-		"foo_renamed2{pre_arch:b,pre_deps:c,post_deps:e}",
-		"foo_renamed2{pre_arch:b,pre_deps:c,post_deps:f}",
-		"foo_renamed2{pre_arch:b,pre_deps:d,post_deps:e}",
-		"foo_renamed2{pre_arch:b,pre_deps:d,post_deps:f}",
 	}
 
 	AssertDeepEquals(t, "module String() values", want, moduleStrings)
