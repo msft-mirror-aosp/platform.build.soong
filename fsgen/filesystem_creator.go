@@ -420,6 +420,7 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 		"framework/*/*",     // framework/{arch}
 		"framework/oat/*/*", // framework/oat/{arch}
 	}
+	fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
 
 	// system_image properties that are not set:
 	// - filesystemProperties.Avb_hash_algorithm
@@ -431,7 +432,6 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	// - filesystemProperties.Mount_point
 	// - filesystemProperties.Include_make_built_files
 	// - filesystemProperties.Build_logtags
-	// - filesystemProperties.Fsverity.Libs
 	// - systemImageProperties.Linker_config_src
 
 	return fsProps, true
