@@ -1369,7 +1369,7 @@ func GetCompoundTargetField(os OsType, arch ArchType) string {
 
 // Returns the structs corresponding to the properties specific to the given
 // architecture and OS in archProperties.
-func getArchProperties(ctx BaseMutatorContext, archProperties interface{}, arch Arch, os OsType, nativeBridgeEnabled bool) []reflect.Value {
+func getArchProperties(ctx BaseModuleContext, archProperties interface{}, arch Arch, os OsType, nativeBridgeEnabled bool) []reflect.Value {
 	result := make([]reflect.Value, 0)
 	archPropValues := reflect.ValueOf(archProperties).Elem()
 

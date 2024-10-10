@@ -287,6 +287,10 @@ func (c Config) ReleaseReadFromNewStorage() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_READ_FROM_NEW_STORAGE")
 }
 
+func (c Config) ReleaseCreateAconfigStorageFile() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_CREATE_ACONFIG_STORAGE_FILE")
+}
+
 // A DeviceConfig object represents the configuration for a particular device
 // being built. For now there will only be one of these, but in the future there
 // may be multiple devices being built.
@@ -2108,4 +2112,11 @@ func (c *config) BoardAvbEnable() bool {
 
 func (c *config) BoardAvbSystemAddHashtreeFooterArgs() []string {
 	return c.productVariables.BoardAvbSystemAddHashtreeFooterArgs
+}
+
+// Returns true if RELEASE_INSTALL_APEX_SYSTEMSERVER_DEXPREOPT_SAME_PARTITION is set to true.
+// If true, dexpreopt files of apex system server jars will be installed in the same partition as the parent apex.
+// If false, all these files will be installed in /system partition.
+func (c Config) InstallApexSystemServerDexpreoptSamePartition() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_INSTALL_APEX_SYSTEMSERVER_DEXPREOPT_SAME_PARTITION")
 }

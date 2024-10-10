@@ -137,6 +137,12 @@ type FilesystemProperties struct {
 	Gen_aconfig_flags_pb *bool
 
 	Fsverity fsverityProperties
+
+	// If this property is set to true, the filesystem will call ctx.UncheckedModule(), causing
+	// it to not be built on checkbuilds. Used for the automatic migration from make to soong
+	// build modules, where we want to emit some not-yet-working filesystems and we don't want them
+	// to be built.
+	Unchecked_module *bool `blueprint:"mutated"`
 }
 
 // android_filesystem packages a set of modules and their transitive dependencies into a filesystem
@@ -238,6 +244,10 @@ func (f *filesystem) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	android.SetProvider(ctx, FilesystemProvider, FilesystemInfo{
 		FileListFile: f.fileListFile,
 	})
+
+	if proptools.Bool(f.properties.Unchecked_module) {
+		ctx.UncheckedModule()
+	}
 }
 
 func (f *filesystem) appendToEntry(ctx android.ModuleContext, installedFile android.OutputPath) {
