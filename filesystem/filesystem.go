@@ -198,6 +198,10 @@ const (
 	unknown
 )
 
+func (fs fsType) IsUnknown() bool {
+	return fs == unknown
+}
+
 type FilesystemInfo struct {
 	// A text file containing the list of paths installed on the partition.
 	FileListFile android.Path
@@ -205,8 +209,7 @@ type FilesystemInfo struct {
 
 var FilesystemProvider = blueprint.NewProvider[FilesystemInfo]()
 
-func (f *filesystem) fsType(ctx android.ModuleContext) fsType {
-	typeStr := proptools.StringDefault(f.properties.Type, "ext4")
+func GetFsTypeFromString(ctx android.EarlyModuleContext, typeStr string) fsType {
 	switch typeStr {
 	case "ext4":
 		return ext4Type
@@ -220,6 +223,11 @@ func (f *filesystem) fsType(ctx android.ModuleContext) fsType {
 		ctx.PropertyErrorf("type", "%q not supported", typeStr)
 		return unknown
 	}
+
+}
+
+func (f *filesystem) fsType(ctx android.ModuleContext) fsType {
+	return GetFsTypeFromString(ctx, proptools.StringDefault(f.properties.Type, "ext4"))
 }
 
 func (f *filesystem) installFileName() string {

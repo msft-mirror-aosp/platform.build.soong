@@ -59,7 +59,7 @@ func filesystemCreatorFactory() android.Module {
 }
 
 func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
-	for _, partitionType := range []string{"system"} {
+	for _, partitionType := range []string{"system", "system_ext"} {
 		if f.createPartition(ctx, partitionType) {
 			f.properties.Generated_partition_types = append(f.properties.Generated_partition_types, partitionType)
 		} else {
@@ -88,10 +88,13 @@ func (f *filesystemCreator) createDeviceModule(ctx android.LoadHookContext) {
 		Name: proptools.StringPtr(f.generatedModuleName(ctx.Config(), "device")),
 	}
 
-	// Currently, only the system partition module is created.
+	// Currently, only the system and system_ext partition module is created.
 	partitionProps := &filesystem.PartitionNameProperties{}
 	if android.InList("system", f.properties.Generated_partition_types) {
 		partitionProps.System_partition_name = proptools.StringPtr(f.generatedModuleNameForPartition(ctx.Config(), "system"))
+	}
+	if android.InList("system_ext", f.properties.Generated_partition_types) {
+		partitionProps.System_ext_partition_name = proptools.StringPtr(f.generatedModuleNameForPartition(ctx.Config(), "system_ext"))
 	}
 
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
@@ -128,11 +131,13 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 
 	fsProps.Partition_name = proptools.StringPtr(partitionType)
 	// BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE
-	fsProps.Type = proptools.StringPtr(specificPartitionVars.BoardFileSystemType)
-	if *fsProps.Type != "ext4" {
-		// TODO(b/372522486): Support other FS types.
-		// Currently the android_filesystem module type only supports ext4:
-		// https://cs.android.com/android/platform/superproject/main/+/main:build/soong/filesystem/filesystem.go;l=416;drc=98047cfd07944b297a12d173453bc984806760d2
+	fsType := specificPartitionVars.BoardFileSystemType
+	if fsType == "" {
+		fsType = "ext4" //default
+	}
+	fsProps.Type = proptools.StringPtr(fsType)
+	if filesystem.GetFsTypeFromString(ctx, *fsProps.Type).IsUnknown() {
+		// Currently the android_filesystem module type only supports a handful of FS types like ext4, erofs
 		return false
 	}
 
