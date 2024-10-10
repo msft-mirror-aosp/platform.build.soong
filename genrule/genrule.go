@@ -139,8 +139,7 @@ type generatorProperties struct {
 	Export_include_dirs []string
 
 	// list of input files
-	Srcs         proptools.Configurable[[]string] `android:"path,arch_variant"`
-	ResolvedSrcs []string                         `blueprint:"mutated"`
+	Srcs proptools.Configurable[[]string] `android:"path,arch_variant"`
 
 	// input files to exclude
 	Exclude_srcs []string `android:"path,arch_variant"`
@@ -426,8 +425,8 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 		}
 		return srcFiles
 	}
-	g.properties.ResolvedSrcs = g.properties.Srcs.GetOrDefault(ctx, nil)
-	srcFiles := addLabelsForInputs("srcs", g.properties.ResolvedSrcs, g.properties.Exclude_srcs)
+	srcs := g.properties.Srcs.GetOrDefault(ctx, nil)
+	srcFiles := addLabelsForInputs("srcs", srcs, g.properties.Exclude_srcs)
 	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: srcFiles.Strings()})
 
 	var copyFrom android.Paths
@@ -659,7 +658,7 @@ func (g *Module) setOutputFiles(ctx android.ModuleContext) {
 // Collect information for opening IDE project files in java/jdeps.go.
 func (g *Module) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
 	dpInfo.Srcs = append(dpInfo.Srcs, g.Srcs().Strings()...)
-	for _, src := range g.properties.ResolvedSrcs {
+	for _, src := range g.properties.Srcs.GetOrDefault(ctx, nil) {
 		if strings.HasPrefix(src, ":") {
 			src = strings.Trim(src, ":")
 			dpInfo.Deps = append(dpInfo.Deps, src)
