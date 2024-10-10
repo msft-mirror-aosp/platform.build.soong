@@ -362,10 +362,10 @@ func GetEmbeddedPrebuilt(module Module) *Prebuilt {
 // the right module. This function is only safe to call after all TransitionMutators
 // have run, e.g. in GenerateAndroidBuildActions.
 func PrebuiltGetPreferred(ctx BaseModuleContext, module Module) Module {
-	if !module.IsReplacedByPrebuilt() {
+	if !OtherModuleProviderOrDefault(ctx, module, CommonPropertiesProviderKey).ReplacedByPrebuilt {
 		return module
 	}
-	if IsModulePrebuilt(module) {
+	if _, ok := OtherModuleProvider(ctx, module, PrebuiltModuleProviderKey); ok {
 		// If we're given a prebuilt then assume there's no source module around.
 		return module
 	}
@@ -373,11 +373,11 @@ func PrebuiltGetPreferred(ctx BaseModuleContext, module Module) Module {
 	sourceModDepFound := false
 	var prebuiltMod Module
 
-	ctx.WalkDeps(func(child, parent Module) bool {
+	ctx.WalkDepsProxy(func(child, parent ModuleProxy) bool {
 		if prebuiltMod != nil {
 			return false
 		}
-		if parent == ctx.Module() {
+		if ctx.EqualModules(parent, ctx.Module()) {
 			// First level: Only recurse if the module is found as a direct dependency.
 			sourceModDepFound = child == module
 			return sourceModDepFound
