@@ -465,7 +465,7 @@ func RegisterDexpreoptBootJarsComponents(ctx android.RegistrationContext) {
 	ctx.RegisterParallelSingletonModuleType("dex_bootjars", dexpreoptBootJarsFactory)
 	ctx.RegisterModuleType("art_boot_images", artBootImagesFactory)
 	ctx.FinalDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("dex_bootjars_deps", DexpreoptBootJarsMutator).Parallel()
+		ctx.BottomUp("dex_bootjars_deps", DexpreoptBootJarsMutator)
 	})
 }
 

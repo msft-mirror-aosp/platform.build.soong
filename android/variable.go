@@ -29,7 +29,7 @@ func init() {
 
 func registerVariableBuildComponents(ctx RegistrationContext) {
 	ctx.PreDepsMutators(func(ctx RegisterMutatorsContext) {
-		ctx.BottomUp("variable", VariableMutator).Parallel()
+		ctx.BottomUp("variable", VariableMutator)
 	})
 }
 

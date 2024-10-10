@@ -92,7 +92,6 @@ type mutator struct {
 	topDownMutator    blueprint.TopDownMutator
 	transitionMutator blueprint.TransitionMutator
 
-	parallel                bool
 	usesRename              bool
 	usesReverseDependencies bool
 	usesReplaceDependencies bool

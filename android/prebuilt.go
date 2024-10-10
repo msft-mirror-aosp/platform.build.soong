@@ -400,13 +400,13 @@ func PrebuiltGetPreferred(ctx BaseModuleContext, module Module) Module {
 }
 
 func RegisterPrebuiltsPreArchMutators(ctx RegisterMutatorsContext) {
-	ctx.BottomUp("prebuilt_rename", PrebuiltRenameMutator).Parallel().UsesRename()
+	ctx.BottomUp("prebuilt_rename", PrebuiltRenameMutator).UsesRename()
 }
 
 func RegisterPrebuiltsPostDepsMutators(ctx RegisterMutatorsContext) {
-	ctx.BottomUp("prebuilt_source", PrebuiltSourceDepsMutator).Parallel().UsesReverseDependencies()
-	ctx.BottomUp("prebuilt_select", PrebuiltSelectModuleMutator).Parallel()
-	ctx.BottomUp("prebuilt_postdeps", PrebuiltPostDepsMutator).Parallel().UsesReplaceDependencies()
+	ctx.BottomUp("prebuilt_source", PrebuiltSourceDepsMutator).UsesReverseDependencies()
+	ctx.BottomUp("prebuilt_select", PrebuiltSelectModuleMutator)
+	ctx.BottomUp("prebuilt_postdeps", PrebuiltPostDepsMutator).UsesReplaceDependencies()
 }
 
 // Returns the name of the source module corresponding to a prebuilt module
