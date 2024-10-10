@@ -49,7 +49,7 @@ type filesystemCreator struct {
 func filesystemCreatorFactory() android.Module {
 	module := &filesystemCreator{}
 
-	android.InitAndroidModule(module)
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	module.AddProperties(&module.properties)
 	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
 		module.createInternalModules(ctx)

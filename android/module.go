@@ -1066,6 +1066,11 @@ func addVintfFragmentDeps(ctx BottomUpMutatorContext) {
 
 	modPartition := mod.PartitionTag(deviceConfig)
 	for _, vintf := range vintfModules {
+		if vintf == nil {
+			// TODO(b/372091092): Remove this. Having it gives us missing dependency errors instead
+			// of nil pointer dereference errors, but we should resolve the missing dependencies.
+			continue
+		}
 		if vintfModule, ok := vintf.(*vintfFragmentModule); ok {
 			vintfPartition := vintfModule.PartitionTag(deviceConfig)
 			if modPartition != vintfPartition {
