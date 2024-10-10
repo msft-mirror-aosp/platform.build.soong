@@ -566,10 +566,16 @@ func (library *libraryDecorator) getHeaderAbiCheckerProperties(m *Module) header
 
 func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) Objects {
 	if ctx.IsLlndk() {
-		futureVendorApiLevel := android.ApiLevelOrPanic(ctx, "999999")
+		// Get the matching SDK version for the vendor API level.
+		version, err := android.GetSdkVersionForVendorApiLevel(ctx.Config().VendorApiLevel())
+		if err != nil {
+			panic(err)
+		}
+
+		// This is the vendor variant of an LLNDK library, build the LLNDK stubs.
 		nativeAbiResult := parseNativeAbiDefinition(ctx,
 			String(library.Properties.Llndk.Symbol_file),
-			futureVendorApiLevel, "--llndk")
+			nativeClampedApiLevel(ctx, version), "--llndk")
 		objs := compileStubLibrary(ctx, flags, nativeAbiResult.stubSrc)
 		if !Bool(library.Properties.Llndk.Unversioned) {
 			library.versionScriptPath = android.OptionalPathForPath(
