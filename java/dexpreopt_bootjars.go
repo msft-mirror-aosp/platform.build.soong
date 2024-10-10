@@ -1442,7 +1442,7 @@ func artBootImagesFactory() android.Module {
 
 func (dbj *artBootImages) DepsMutator(ctx android.BottomUpMutatorContext) {
 	// Create a dependency on `dex_bootjars` to access the intermediate locations of host art boot image.
-	ctx.AddDependency(ctx.Module(), dexpreoptBootJarDepTag, "dex_bootjars")
+	ctx.AddVariationDependencies(ctx.Config().AndroidCommonTarget.Variations(), dexpreoptBootJarDepTag, "dex_bootjars")
 }
 
 func (d *artBootImages) GenerateAndroidBuildActions(ctx android.ModuleContext) {
