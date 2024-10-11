@@ -17,6 +17,7 @@ package android
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/google/blueprint"
@@ -562,7 +563,7 @@ func (b *baseModuleContext) WalkDepsProxy(visit func(ModuleProxy, ModuleProxy) b
 }
 
 func (b *baseModuleContext) GetWalkPath() []Module {
-	return b.walkPath
+	return slices.Clone(b.walkPath)
 }
 
 func (b *baseModuleContext) GetTagPath() []blueprint.DependencyTag {

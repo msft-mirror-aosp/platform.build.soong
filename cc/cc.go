@@ -213,6 +213,9 @@ type PathDeps struct {
 	// LLNDK headers for the ABI checker to check LLNDK implementation library.
 	LlndkIncludeDirs       android.Paths
 	LlndkSystemIncludeDirs android.Paths
+
+	directImplementationDeps     android.Paths
+	transitiveImplementationDeps []depset.DepSet[android.Path]
 }
 
 // LocalOrGlobalFlags contains flags that need to have values set globally by the build system or locally by the module
@@ -2036,6 +2039,10 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		c.outputFile = android.OptionalPathForPath(outputFile)
 
 		c.maybeUnhideFromMake()
+
+		android.SetProvider(ctx, ImplementationDepInfoProvider, &ImplementationDepInfo{
+			ImplementationDeps: depset.New(depset.PREORDER, deps.directImplementationDeps, deps.transitiveImplementationDeps),
+		})
 	}
 
 	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: deps.GeneratedSources.Strings()})
@@ -2342,6 +2349,9 @@ func AddSharedLibDependenciesWithVersions(ctx android.BottomUpMutatorContext, mo
 
 	if version != "" && canBeOrLinkAgainstVersionVariants(mod) {
 		// Version is explicitly specified. i.e. libFoo#30
+		if version == "impl" {
+			version = ""
+		}
 		variations = append(variations, blueprint.Variation{Mutator: "version", Variation: version})
 		if tag, ok := depTag.(libraryDependencyTag); ok {
 			tag.explicitlyVersioned = true
@@ -3039,6 +3049,13 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 				linkFile = android.OptionalPathForPath(sharedLibraryInfo.SharedLibrary)
 				depFile = sharedLibraryInfo.TableOfContents
+
+				if !sharedLibraryInfo.IsStubs {
+					depPaths.directImplementationDeps = append(depPaths.directImplementationDeps, android.OutputFileForModule(ctx, dep, ""))
+					if info, ok := android.OtherModuleProvider(ctx, dep, ImplementationDepInfoProvider); ok {
+						depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
+					}
+				}
 
 				ptr = &depPaths.SharedLibs
 				switch libDepTag.Order {
