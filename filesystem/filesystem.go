@@ -434,7 +434,7 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (propFile android.
 	// Type string that build_image.py accepts.
 	fsTypeStr := func(t fsType) string {
 		switch t {
-		// TODO(jiyong): add more types like f2fs, erofs, etc.
+		// TODO(372522486): add more types like f2fs, erofs, etc.
 		case ext4Type:
 			return "ext4"
 		}

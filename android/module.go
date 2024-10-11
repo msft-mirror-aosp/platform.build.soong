@@ -605,10 +605,9 @@ type hostCrossProperties struct {
 type Multilib string
 
 const (
-	MultilibBoth        Multilib = "both"
-	MultilibFirst       Multilib = "first"
-	MultilibCommon      Multilib = "common"
-	MultilibCommonFirst Multilib = "common_first"
+	MultilibBoth   Multilib = "both"
+	MultilibFirst  Multilib = "first"
+	MultilibCommon Multilib = "common"
 )
 
 type HostOrDeviceSupported int
@@ -2348,6 +2347,8 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 		case "use_debug_art":
 			// TODO(b/234351700): Remove once ART does not have separated debug APEX
 			return proptools.ConfigurableValueBool(ctx.Config().UseDebugArt())
+		case "selinux_ignore_neverallows":
+			return proptools.ConfigurableValueBool(ctx.Config().SelinuxIgnoreNeverallows())
 		default:
 			// TODO(b/323382414): Might add these on a case-by-case basis
 			ctx.OtherModulePropertyErrorf(m, property, fmt.Sprintf("TODO(b/323382414): Product variable %q is not yet supported in selects", variable))
