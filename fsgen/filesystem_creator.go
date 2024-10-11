@@ -45,6 +45,7 @@ func RegisterCollectFileSystemDepsMutators(ctx android.RegisterMutatorsContext) 
 	ctx.BottomUp("fs_collect_deps", collectDepsMutator).MutatesGlobalState()
 }
 
+var fsDepsMutex = sync.Mutex{}
 var collectFsDepsOnceKey = android.NewOnceKey("CollectFsDeps")
 var depCandidatesOnceKey = android.NewOnceKey("DepCandidates")
 
@@ -80,12 +81,11 @@ func collectDepsMutator(mctx android.BottomUpMutatorContext) {
 	}).(*[]string)
 
 	m := mctx.Module()
-	mutex := &sync.Mutex{}
 	if slices.Contains(*depCandidates, m.Name()) {
 		if installInSystem(mctx, m) {
-			mutex.Lock()
+			fsDepsMutex.Lock()
 			*fsDeps = append(*fsDeps, m.Name())
-			mutex.Unlock()
+			fsDepsMutex.Unlock()
 		}
 	}
 }
