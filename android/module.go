@@ -1066,6 +1066,11 @@ func addVintfFragmentDeps(ctx BottomUpMutatorContext) {
 
 	modPartition := mod.PartitionTag(deviceConfig)
 	for _, vintf := range vintfModules {
+		if vintf == nil {
+			// TODO(b/372091092): Remove this. Having it gives us missing dependency errors instead
+			// of nil pointer dereference errors, but we should resolve the missing dependencies.
+			continue
+		}
 		if vintfModule, ok := vintf.(*vintfFragmentModule); ok {
 			vintfPartition := vintfModule.PartitionTag(deviceConfig)
 			if modPartition != vintfPartition {
@@ -2347,6 +2352,8 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 		case "use_debug_art":
 			// TODO(b/234351700): Remove once ART does not have separated debug APEX
 			return proptools.ConfigurableValueBool(ctx.Config().UseDebugArt())
+		case "selinux_ignore_neverallows":
+			return proptools.ConfigurableValueBool(ctx.Config().SelinuxIgnoreNeverallows())
 		default:
 			// TODO(b/323382414): Might add these on a case-by-case basis
 			ctx.OtherModulePropertyErrorf(m, property, fmt.Sprintf("TODO(b/323382414): Product variable %q is not yet supported in selects", variable))
