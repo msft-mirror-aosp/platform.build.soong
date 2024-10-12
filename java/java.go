@@ -70,9 +70,9 @@ func registerJavaBuildComponents(ctx android.RegistrationContext) {
 	// established, to not get the dependencies split into the wrong variants and
 	// to support the checks in dexpreoptDisabled().
 	ctx.FinalDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("dexpreopt_tool_deps", dexpreoptToolDepsMutator).Parallel()
+		ctx.BottomUp("dexpreopt_tool_deps", dexpreoptToolDepsMutator)
 		// needs access to ApexInfoProvider which is available after variant creation
-		ctx.BottomUp("jacoco_deps", jacocoDepsMutator).Parallel()
+		ctx.BottomUp("jacoco_deps", jacocoDepsMutator)
 	})
 
 	ctx.RegisterParallelSingletonType("kythe_java_extract", kytheExtractJavaFactory)
