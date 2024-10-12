@@ -645,6 +645,12 @@ func (g *Module) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	g.setOutputFiles(ctx)
+
+	if ctx.Os() == android.Windows {
+		// Make doesn't support windows:
+		// https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/module_arch_supported.mk;l=66;drc=f264690860bb6ee7762784d6b7201aae057ba6f2
+		g.HideFromMake()
+	}
 }
 
 func (g *Module) setOutputFiles(ctx android.ModuleContext) {
