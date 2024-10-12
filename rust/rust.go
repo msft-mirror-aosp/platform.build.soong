@@ -47,11 +47,11 @@ func init() {
 func registerPreDepsMutators(ctx android.RegisterMutatorsContext) {
 	ctx.Transition("rust_libraries", &libraryTransitionMutator{})
 	ctx.Transition("rust_stdlinkage", &libstdTransitionMutator{})
-	ctx.BottomUp("rust_begin", BeginMutator).Parallel()
+	ctx.BottomUp("rust_begin", BeginMutator)
 }
 
 func registerPostDepsMutators(ctx android.RegisterMutatorsContext) {
-	ctx.BottomUp("rust_sanitizers", rustSanitizerRuntimeMutator).Parallel()
+	ctx.BottomUp("rust_sanitizers", rustSanitizerRuntimeMutator)
 }
 
 type Flags struct {

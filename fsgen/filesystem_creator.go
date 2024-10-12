@@ -15,13 +15,18 @@
 package fsgen
 
 import (
-	"android/soong/android"
-	"android/soong/filesystem"
 	"crypto/sha256"
 	"fmt"
+	"slices"
 	"strconv"
+	"strings"
+	"sync"
+
+	"android/soong/android"
+	"android/soong/filesystem"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/parser"
 	"github.com/google/blueprint/proptools"
 )
 
@@ -33,6 +38,56 @@ func init() {
 
 func registerBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("soong_filesystem_creator", filesystemCreatorFactory)
+	ctx.PreDepsMutators(RegisterCollectFileSystemDepsMutators)
+}
+
+func RegisterCollectFileSystemDepsMutators(ctx android.RegisterMutatorsContext) {
+	ctx.BottomUp("fs_collect_deps", collectDepsMutator).MutatesGlobalState()
+}
+
+var fsDepsMutex = sync.Mutex{}
+var collectFsDepsOnceKey = android.NewOnceKey("CollectFsDeps")
+var depCandidatesOnceKey = android.NewOnceKey("DepCandidates")
+
+func collectDepsMutator(mctx android.BottomUpMutatorContext) {
+	// These additional deps are added according to the cuttlefish system image bp.
+	fsDeps := mctx.Config().Once(collectFsDepsOnceKey, func() interface{} {
+		deps := []string{
+			"android_vintf_manifest",
+			"com.android.apex.cts.shim.v1_prebuilt",
+			"dex_bootjars",
+			"framework_compatibility_matrix.device.xml",
+			"idc_data",
+			"init.environ.rc-soong",
+			"keychars_data",
+			"keylayout_data",
+			"libclang_rt.asan",
+			"libcompiler_rt",
+			"libdmabufheap",
+			"libgsi",
+			"llndk.libraries.txt",
+			"logpersist.start",
+			"preloaded-classes",
+			"public.libraries.android.txt",
+			"update_engine_sideload",
+		}
+		return &deps
+	}).(*[]string)
+
+	depCandidates := mctx.Config().Once(depCandidatesOnceKey, func() interface{} {
+		partitionVars := mctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
+		candidates := slices.Concat(partitionVars.ProductPackages, partitionVars.ProductPackagesDebug)
+		return &candidates
+	}).(*[]string)
+
+	m := mctx.Module()
+	if slices.Contains(*depCandidates, m.Name()) {
+		if installInSystem(mctx, m) {
+			fsDepsMutex.Lock()
+			*fsDeps = append(*fsDeps, m.Name())
+			fsDepsMutex.Unlock()
+		}
+	}
 }
 
 type filesystemCreatorProps struct {
@@ -49,7 +104,7 @@ type filesystemCreator struct {
 func filesystemCreatorFactory() android.Module {
 	module := &filesystemCreator{}
 
-	android.InitAndroidModule(module)
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	module.AddProperties(&module.properties)
 	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
 		module.createInternalModules(ctx)
@@ -228,6 +283,11 @@ func (f *filesystemCreator) GenerateAndroidBuildActions(ctx android.ModuleContex
 	}
 	f.HideFromMake()
 
+	content := generateBpContent(ctx, "system")
+	generatedBp := android.PathForOutput(ctx, "soong_generated_product_config.bp")
+	android.WriteFileRule(ctx, generatedBp, content)
+	ctx.Phony("product_config_to_bp", generatedBp)
+
 	var diffTestFiles []android.Path
 	for _, partitionType := range f.properties.Generated_partition_types {
 		diffTestFiles = append(diffTestFiles, f.createDiffTest(ctx, partitionType))
@@ -236,4 +296,43 @@ func (f *filesystemCreator) GenerateAndroidBuildActions(ctx android.ModuleContex
 		diffTestFiles = append(diffTestFiles, createFailingCommand(ctx, fmt.Sprintf("Couldn't build %s partition", partitionType)))
 	}
 	ctx.Phony("soong_generated_filesystem_tests", diffTestFiles...)
+}
+
+func installInSystem(ctx android.BottomUpMutatorContext, m android.Module) bool {
+	return m.PartitionTag(ctx.DeviceConfig()) == "system" && !m.InstallInData() &&
+		!m.InstallInTestcases() && !m.InstallInSanitizerDir() && !m.InstallInVendorRamdisk() &&
+		!m.InstallInDebugRamdisk() && !m.InstallInRecovery() && !m.InstallInOdm() &&
+		!m.InstallInVendor()
+}
+
+// TODO: assemble baseProps and fsProps here
+func generateBpContent(ctx android.EarlyModuleContext, partitionType string) string {
+	// Currently only system partition is supported
+	if partitionType != "system" {
+		return ""
+	}
+
+	deps := ctx.Config().Get(collectFsDepsOnceKey).(*[]string)
+	depProps := &android.PackagingProperties{
+		Deps: android.NewSimpleConfigurable(android.SortedUniqueStrings(*deps)),
+	}
+
+	result, err := proptools.RepackProperties([]interface{}{depProps})
+	if err != nil {
+		ctx.ModuleErrorf(err.Error())
+	}
+
+	file := &parser.File{
+		Defs: []parser.Definition{
+			&parser.Module{
+				Type: "module",
+				Map:  *result,
+			},
+		},
+	}
+	bytes, err := parser.Print(file)
+	if err != nil {
+		ctx.ModuleErrorf(err.Error())
+	}
+	return strings.TrimSpace(string(bytes))
 }

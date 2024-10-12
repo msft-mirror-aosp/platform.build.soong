@@ -82,14 +82,6 @@ func withFiles(files android.MockFS) android.FixturePreparer {
 	return files.AddToFixture()
 }
 
-func withTargets(targets map[android.OsType][]android.Target) android.FixturePreparer {
-	return android.FixtureModifyConfig(func(config android.Config) {
-		for k, v := range targets {
-			config.Targets[k] = v
-		}
-	})
-}
-
 // withNativeBridgeTargets sets configuration with targets including:
 // - X86_64 (primary)
 // - X86 (secondary)
@@ -4051,11 +4043,20 @@ func TestVndkApexWithBinder32(t *testing.T) {
 			"libvndk27binder32.so": nil,
 		}),
 		withBinder32bit,
-		withTargets(map[android.OsType][]android.Target{
-			android.Android: {
-				{Os: android.Android, Arch: android.Arch{ArchType: android.Arm, ArchVariant: "armv7-a-neon", Abi: []string{"armeabi-v7a"}},
-					NativeBridge: android.NativeBridgeDisabled, NativeBridgeHostArchName: "", NativeBridgeRelativePath: ""},
-			},
+		android.FixtureModifyConfig(func(config android.Config) {
+			target := android.Target{
+				Os: android.Android,
+				Arch: android.Arch{
+					ArchType:    android.Arm,
+					ArchVariant: "armv7-a-neon",
+					Abi:         []string{"armeabi-v7a"},
+				},
+				NativeBridge:             android.NativeBridgeDisabled,
+				NativeBridgeHostArchName: "",
+				NativeBridgeRelativePath: "",
+			}
+			config.Targets[android.Android] = []android.Target{target}
+			config.AndroidFirstDeviceTarget = target
 		}),
 	)
 
