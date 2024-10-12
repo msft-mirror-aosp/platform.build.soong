@@ -2098,9 +2098,8 @@ func (p *mockLibraryModule) GenerateAndroidBuildActions(ModuleContext) {
 }
 
 type mockFilesystemModuleProperties struct {
-	Partition_type    *string
-	Deps              []string
-	Is_auto_generated *bool
+	Partition_type *string
+	Deps           []string
 }
 
 type mockFilesystemModule struct {
