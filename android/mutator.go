@@ -211,10 +211,7 @@ type BottomUpMutatorContext interface {
 	// AddDependency adds a dependency to the given module.  It returns a slice of modules for each
 	// dependency (some entries may be nil).
 	//
-	// If the mutator is parallel (see MutatorHandle.Parallel), this method will pause until the
-	// new dependencies have had the current mutator called on them.  If the mutator is not
-	// parallel this method does not affect the ordering of the current mutator pass, but will
-	// be ordered correctly for all future mutator passes.
+	// This method will pause until the new dependencies have had the current mutator called on them.
 	AddDependency(module blueprint.Module, tag blueprint.DependencyTag, name ...string) []blueprint.Module
 
 	// AddReverseDependency adds a dependency from the destination to the given module.
@@ -230,10 +227,7 @@ type BottomUpMutatorContext interface {
 	// each dependency (some entries may be nil).  A variant of the dependency must exist that matches
 	// all the non-local variations of the current module, plus the variations argument.
 	//
-	// If the mutator is parallel (see MutatorHandle.Parallel), this method will pause until the
-	// new dependencies have had the current mutator called on them.  If the mutator is not
-	// parallel this method does not affect the ordering of the current mutator pass, but will
-	// be ordered correctly for all future mutator passes.
+	// This method will pause until the new dependencies have had the current mutator called on them.
 	AddVariationDependencies(variations []blueprint.Variation, tag blueprint.DependencyTag, names ...string) []blueprint.Module
 
 	// AddReverseVariationDependency adds a dependency from the named module to the current
@@ -256,10 +250,7 @@ type BottomUpMutatorContext interface {
 	// Unlike AddVariationDependencies, the variations of the current module are ignored - the
 	// dependency only needs to match the supplied variations.
 	//
-	// If the mutator is parallel (see MutatorHandle.Parallel), this method will pause until the
-	// new dependencies have had the current mutator called on them.  If the mutator is not
-	// parallel this method does not affect the ordering of the current mutator pass, but will
-	// be ordered correctly for all future mutator passes.
+	// This method will pause until the new dependencies have had the current mutator called on them.
 	AddFarVariationDependencies([]blueprint.Variation, blueprint.DependencyTag, ...string) []blueprint.Module
 
 	// ReplaceDependencies finds all the variants of the module with the specified name, then
@@ -628,9 +619,6 @@ func (mutator *mutator) register(ctx *Context) {
 	}
 
 	// Forward booleans set on the MutatorHandle to the blueprint.MutatorHandle.
-	if mutator.parallel {
-		handle.Parallel()
-	}
 	if mutator.usesRename {
 		handle.UsesRename()
 	}
@@ -655,6 +643,7 @@ type MutatorHandle interface {
 	// Parallel sets the mutator to visit modules in parallel while maintaining ordering.  Calling any
 	// method on the mutator context is thread-safe, but the mutator must handle synchronization
 	// for any modifications to global state or any modules outside the one it was invoked on.
+	// Deprecated: all Mutators are parallel by default.
 	Parallel() MutatorHandle
 
 	// UsesRename marks the mutator as using the BottomUpMutatorContext.Rename method, which prevents
@@ -683,7 +672,6 @@ type MutatorHandle interface {
 }
 
 func (mutator *mutator) Parallel() MutatorHandle {
-	mutator.parallel = true
 	return mutator
 }
 
@@ -718,7 +706,7 @@ func (mutator *mutator) MutatesGlobalState() MutatorHandle {
 }
 
 func RegisterComponentsMutator(ctx RegisterMutatorsContext) {
-	ctx.BottomUp("component-deps", componentDepsMutator).Parallel()
+	ctx.BottomUp("component-deps", componentDepsMutator)
 }
 
 // A special mutator that runs just prior to the deps mutator to allow the dependencies
@@ -736,7 +724,7 @@ func depsMutator(ctx BottomUpMutatorContext) {
 }
 
 func registerDepsMutator(ctx RegisterMutatorsContext) {
-	ctx.BottomUp("deps", depsMutator).Parallel().UsesReverseDependencies()
+	ctx.BottomUp("deps", depsMutator).UsesReverseDependencies()
 }
 
 // android.topDownMutatorContext either has to embed blueprint.TopDownMutatorContext, in which case every method that
