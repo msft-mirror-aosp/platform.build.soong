@@ -234,18 +234,18 @@ func (b *OverridableModuleBase) OverridablePropertiesDepsMutator(ctx BottomUpMut
 // Mutators for override/overridable modules. All the fun happens in these functions. It is critical
 // to keep them in this order and not put any order mutators between them.
 func RegisterOverridePostDepsMutators(ctx RegisterMutatorsContext) {
-	ctx.BottomUp("override_deps", overrideModuleDepsMutator).Parallel().MutatesDependencies() // modifies deps via addOverride
+	ctx.BottomUp("override_deps", overrideModuleDepsMutator).MutatesDependencies() // modifies deps via addOverride
 	ctx.Transition("override", &overrideTransitionMutator{})
-	ctx.BottomUp("override_apply", overrideApplyMutator).Parallel().MutatesDependencies()
+	ctx.BottomUp("override_apply", overrideApplyMutator).MutatesDependencies()
 	// overridableModuleDepsMutator calls OverridablePropertiesDepsMutator so that overridable modules can
 	// add deps from overridable properties.
-	ctx.BottomUp("overridable_deps", overridableModuleDepsMutator).Parallel()
+	ctx.BottomUp("overridable_deps", overridableModuleDepsMutator)
 	// Because overridableModuleDepsMutator is run after PrebuiltPostDepsMutator,
 	// prebuilt's ReplaceDependencies doesn't affect to those deps added by overridable properties.
 	// By running PrebuiltPostDepsMutator again after overridableModuleDepsMutator, deps via overridable properties
 	// can be replaced with prebuilts.
-	ctx.BottomUp("replace_deps_on_prebuilts_for_overridable_deps_again", PrebuiltPostDepsMutator).Parallel().UsesReplaceDependencies()
-	ctx.BottomUp("replace_deps_on_override", replaceDepsOnOverridingModuleMutator).Parallel().UsesReplaceDependencies()
+	ctx.BottomUp("replace_deps_on_prebuilts_for_overridable_deps_again", PrebuiltPostDepsMutator).UsesReplaceDependencies()
+	ctx.BottomUp("replace_deps_on_override", replaceDepsOnOverridingModuleMutator).UsesReplaceDependencies()
 }
 
 type overrideBaseDependencyTag struct {
