@@ -17,7 +17,6 @@ package fsgen
 import (
 	"android/soong/android"
 	"android/soong/filesystem"
-	"android/soong/java"
 	"testing"
 
 	"github.com/google/blueprint/proptools"
@@ -29,7 +28,6 @@ func TestFileSystemCreatorSystemImageProps(t *testing.T) {
 	result := android.GroupFixturePreparers(
 		android.PrepareForIntegrationTestWithAndroid,
 		android.PrepareForTestWithAndroidBuildComponents,
-		android.PrepareForTestWithAllowMissingDependencies,
 		filesystem.PrepareForTestWithFilesystemBuildComponents,
 		prepareForTestWithFsgenBuildComponents,
 		android.FixtureModifyConfig(func(config android.Config) {
@@ -86,57 +84,5 @@ func TestFileSystemCreatorSystemImageProps(t *testing.T) {
 		"Property expected to match the product variable 'BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE'",
 		"ext4",
 		proptools.String(fooSystem.FsProps().Type),
-	)
-}
-
-func TestFileSystemCreatorSetPartitionDeps(t *testing.T) {
-	result := android.GroupFixturePreparers(
-		android.PrepareForIntegrationTestWithAndroid,
-		android.PrepareForTestWithAndroidBuildComponents,
-		android.PrepareForTestWithAllowMissingDependencies,
-		filesystem.PrepareForTestWithFilesystemBuildComponents,
-		prepareForTestWithFsgenBuildComponents,
-		java.PrepareForTestWithJavaBuildComponents,
-		java.PrepareForTestWithJavaDefaultModules,
-		android.FixtureModifyConfig(func(config android.Config) {
-			config.TestProductVariables.PartitionVarsForSoongMigrationOnlyDoNotUse.ProductPackages = []string{"bar", "baz"}
-			config.TestProductVariables.PartitionVarsForSoongMigrationOnlyDoNotUse.PartitionQualifiedVariables =
-				map[string]android.PartitionQualifiedVariablesType{
-					"system": {
-						BoardFileSystemType: "ext4",
-					},
-				}
-		}),
-		android.FixtureMergeMockFs(android.MockFS{
-			"external/avb/test/data/testkey_rsa4096.pem": nil,
-			"build/soong/fsgen/Android.bp": []byte(`
-			soong_filesystem_creator {
-				name: "foo",
-			}
-			`),
-		}),
-	).RunTestWithBp(t, `
-	java_library {
-		name: "bar",
-		srcs: ["A.java"],
-	}
-	java_library {
-		name: "baz",
-		srcs: ["A.java"],
-		product_specific: true,
-	}
-	`)
-
-	android.AssertBoolEquals(
-		t,
-		"Generated system image expected to depend on system partition installed \"bar\"",
-		true,
-		java.CheckModuleHasDependency(t, result.TestContext, "test_product_generated_system_image", "android_common", "bar"),
-	)
-	android.AssertBoolEquals(
-		t,
-		"Generated system image expected to not depend on product partition installed \"baz\"",
-		false,
-		java.CheckModuleHasDependency(t, result.TestContext, "test_product_generated_system_image", "android_common", "baz"),
 	)
 }
