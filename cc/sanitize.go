@@ -79,7 +79,7 @@ var (
 
 	minimalRuntimeFlags = []string{"-fsanitize-minimal-runtime", "-fno-sanitize-trap=integer,undefined",
 		"-fno-sanitize-recover=integer,undefined"}
-	memtagStackCommonFlags = []string{"-Xclang -target-feature -Xclang +mte"}
+	memtagStackCommonFlags = []string{"-march=armv8-a+memtag"}
 	memtagStackLlvmFlags   = []string{"-dom-tree-reachability-max-bbs-to-explore=128"}
 
 	hostOnlySanitizeFlags   = []string{"-fno-sanitize-recover=all"}
@@ -176,7 +176,7 @@ func (t SanitizerType) registerMutators(ctx android.RegisterMutatorsContext) {
 	switch t {
 	case cfi, Hwasan, Asan, tsan, Fuzzer, scs, Memtag_stack:
 		sanitizer := &sanitizerSplitMutator{t}
-		ctx.BottomUp(t.variationName()+"_markapexes", sanitizer.markSanitizableApexesMutator)
+		ctx.BottomUp(t.variationName()+"_markapexes", sanitizer.markSanitizableApexesMutator).Parallel()
 		ctx.Transition(t.variationName(), sanitizer)
 	case Memtag_heap, Memtag_globals, intOverflow:
 		// do nothing

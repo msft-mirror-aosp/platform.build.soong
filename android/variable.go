@@ -475,6 +475,8 @@ type ProductVariables struct {
 
 	ProductManufacturer string `json:",omitempty"`
 	ProductBrand        string `json:",omitempty"`
+	ProductDevice       string `json:",omitempty"`
+	ProductModel        string `json:",omitempty"`
 
 	ReleaseVersion          string   `json:",omitempty"`
 	ReleaseAconfigValueSets []string `json:",omitempty"`
@@ -522,6 +524,10 @@ type ProductVariables struct {
 	DeviceProductCompatibilityMatrixFile   []string `json:",omitempty"`
 
 	PartitionVarsForSoongMigrationOnlyDoNotUse PartitionVariables
+
+	ExtraAllowedDepsTxt *string `json:",omitempty"`
+
+	AdbKeys *string `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {

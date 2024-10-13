@@ -71,6 +71,7 @@ bootstrap_go_package {
         "module.go",
         "module_context.go",
         "module_info_json.go",
+        "module_proxy.go",
         "mutator.go",
         "namespace.go",
         "neverallow.go",
