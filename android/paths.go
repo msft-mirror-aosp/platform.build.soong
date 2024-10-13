@@ -1363,21 +1363,21 @@ type OutputPath struct {
 }
 
 type outputPathGob struct {
-	basePath
+	BasePath basePath
 	OutDir   string
 	FullPath string
 }
 
 func (p *OutputPath) ToGob() *outputPathGob {
 	return &outputPathGob{
-		basePath: p.basePath,
+		BasePath: p.basePath,
 		OutDir:   p.outDir,
 		FullPath: p.fullPath,
 	}
 }
 
 func (p *OutputPath) FromGob(data *outputPathGob) {
-	p.basePath = data.basePath
+	p.basePath = data.BasePath
 	p.outDir = data.OutDir
 	p.fullPath = data.FullPath
 }
@@ -1788,7 +1788,7 @@ type InstallPath struct {
 }
 
 type installPathGob struct {
-	basePath
+	BasePath     basePath
 	SoongOutDir  string
 	PartitionDir string
 	Partition    string
@@ -1798,7 +1798,7 @@ type installPathGob struct {
 
 func (p *InstallPath) ToGob() *installPathGob {
 	return &installPathGob{
-		basePath:     p.basePath,
+		BasePath:     p.basePath,
 		SoongOutDir:  p.soongOutDir,
 		PartitionDir: p.partitionDir,
 		Partition:    p.partition,
@@ -1808,7 +1808,7 @@ func (p *InstallPath) ToGob() *installPathGob {
 }
 
 func (p *InstallPath) FromGob(data *installPathGob) {
-	p.basePath = data.basePath
+	p.basePath = data.BasePath
 	p.soongOutDir = data.SoongOutDir
 	p.partitionDir = data.PartitionDir
 	p.partition = data.Partition

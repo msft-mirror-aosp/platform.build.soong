@@ -55,20 +55,20 @@ func registerApexBuildComponents(ctx android.RegistrationContext) {
 }
 
 func RegisterPreDepsMutators(ctx android.RegisterMutatorsContext) {
-	ctx.BottomUp("apex_vndk_deps", apexVndkDepsMutator).Parallel()
+	ctx.BottomUp("apex_vndk_deps", apexVndkDepsMutator).UsesReverseDependencies()
 }
 
 func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
-	ctx.TopDown("apex_info", apexInfoMutator).Parallel()
-	ctx.BottomUp("apex_unique", apexUniqueVariationsMutator).Parallel()
-	ctx.BottomUp("apex_test_for_deps", apexTestForDepsMutator).Parallel()
-	ctx.BottomUp("apex_test_for", apexTestForMutator).Parallel()
+	ctx.TopDown("apex_info", apexInfoMutator)
+	ctx.BottomUp("apex_unique", apexUniqueVariationsMutator)
+	ctx.BottomUp("apex_test_for_deps", apexTestForDepsMutator)
+	ctx.BottomUp("apex_test_for", apexTestForMutator)
 	// Run mark_platform_availability before the apexMutator as the apexMutator needs to know whether
 	// it should create a platform variant.
-	ctx.BottomUp("mark_platform_availability", markPlatformAvailability).Parallel()
+	ctx.BottomUp("mark_platform_availability", markPlatformAvailability)
 	ctx.Transition("apex", &apexTransitionMutator{})
-	ctx.BottomUp("apex_directly_in_any", apexDirectlyInAnyMutator).Parallel()
-	ctx.BottomUp("apex_dcla_deps", apexDCLADepsMutator).Parallel()
+	ctx.BottomUp("apex_directly_in_any", apexDirectlyInAnyMutator).MutatesDependencies()
+	ctx.BottomUp("apex_dcla_deps", apexDCLADepsMutator)
 }
 
 type apexBundleProperties struct {
@@ -285,7 +285,7 @@ type ResolvedApexNativeDependencies struct {
 }
 
 // Merge combines another ApexNativeDependencies into this one
-func (a *ResolvedApexNativeDependencies) Merge(ctx android.BaseMutatorContext, b ApexNativeDependencies) {
+func (a *ResolvedApexNativeDependencies) Merge(ctx android.BaseModuleContext, b ApexNativeDependencies) {
 	a.Native_shared_libs = append(a.Native_shared_libs, b.Native_shared_libs.GetOrDefault(ctx, nil)...)
 	a.Jni_libs = append(a.Jni_libs, b.Jni_libs.GetOrDefault(ctx, nil)...)
 	a.Rust_dyn_libs = append(a.Rust_dyn_libs, b.Rust_dyn_libs...)
