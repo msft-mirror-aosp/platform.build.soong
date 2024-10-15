@@ -37,7 +37,6 @@ func AdbKeysModuleFactory() android.Module {
 func (m *AdbKeysModule) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	productVariables := ctx.Config().ProductVariables()
 	if !(android.Bool(productVariables.Debuggable) && len(android.String(productVariables.AdbKeys)) > 0) {
-		m.Disable()
 		m.SkipInstall()
 		return
 	}

@@ -29,7 +29,7 @@ func init() {
 
 func registerVariableBuildComponents(ctx RegistrationContext) {
 	ctx.PreDepsMutators(func(ctx RegisterMutatorsContext) {
-		ctx.BottomUp("variable", VariableMutator).Parallel()
+		ctx.BottomUp("variable", VariableMutator)
 	})
 }
 
@@ -192,6 +192,9 @@ type variableProperties struct {
 			Cmd                    *string
 			Required               []string
 			Vintf_fragment_modules []string
+		}
+		SelinuxIgnoreNeverallows struct {
+			Required []string
 		}
 	} `android:"arch_variant"`
 }
