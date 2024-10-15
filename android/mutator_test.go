@@ -17,6 +17,8 @@ package android
 import (
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/blueprint"
@@ -220,7 +222,7 @@ func TestFinalDepsPhase(t *testing.T) {
 		}
 	`
 
-	finalGot := map[string]int{}
+	finalGot := sync.Map{}
 
 	GroupFixturePreparers(
 		FixtureRegisterWithContext(func(ctx RegistrationContext) {
@@ -251,9 +253,11 @@ func TestFinalDepsPhase(t *testing.T) {
 					}
 				})
 				ctx.BottomUp("final", func(ctx BottomUpMutatorContext) {
-					finalGot[ctx.Module().String()] += 1
+					counter, _ := finalGot.LoadOrStore(ctx.Module().String(), &atomic.Int64{})
+					counter.(*atomic.Int64).Add(1)
 					ctx.VisitDirectDeps(func(mod Module) {
-						finalGot[fmt.Sprintf("%s -> %s", ctx.Module().String(), mod)] += 1
+						counter, _ := finalGot.LoadOrStore(fmt.Sprintf("%s -> %s", ctx.Module().String(), mod), &atomic.Int64{})
+						counter.(*atomic.Int64).Add(1)
 					})
 				})
 			})
@@ -276,7 +280,13 @@ func TestFinalDepsPhase(t *testing.T) {
 		"foo{variant:b} -> common_dep_2{variant:a}": 1,
 	}
 
-	AssertDeepEquals(t, "final", finalWant, finalGot)
+	finalGotMap := make(map[string]int)
+	finalGot.Range(func(k, v any) bool {
+		finalGotMap[k.(string)] = int(v.(*atomic.Int64).Load())
+		return true
+	})
+
+	AssertDeepEquals(t, "final", finalWant, finalGotMap)
 }
 
 func TestTransitionMutatorInFinalDeps(t *testing.T) {

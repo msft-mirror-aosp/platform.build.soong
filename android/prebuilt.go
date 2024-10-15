@@ -272,6 +272,25 @@ func InitConfigurablePrebuiltModule(module PrebuiltInterface, srcs *proptools.Co
 	InitPrebuiltModuleWithSrcSupplier(module, srcsSupplier, "srcs")
 }
 
+// InitConfigurablePrebuiltModuleString is the same as InitPrebuiltModule, but uses a
+// Configurable string property instead of a regular list of strings. It only produces a single
+// source file.
+func InitConfigurablePrebuiltModuleString(module PrebuiltInterface, srcs *proptools.Configurable[string], propertyName string) {
+	if srcs == nil {
+		panic(fmt.Errorf("%s must not be nil", propertyName))
+	}
+
+	srcsSupplier := func(ctx BaseModuleContext, _ Module) []string {
+		src := srcs.GetOrDefault(ctx, "")
+		if src == "" {
+			return nil
+		}
+		return []string{src}
+	}
+
+	InitPrebuiltModuleWithSrcSupplier(module, srcsSupplier, propertyName)
+}
+
 func InitSingleSourcePrebuiltModule(module PrebuiltInterface, srcProps interface{}, srcField string) {
 	srcPropsValue := reflect.ValueOf(srcProps).Elem()
 	srcStructField, _ := srcPropsValue.Type().FieldByName(srcField)
@@ -362,10 +381,10 @@ func GetEmbeddedPrebuilt(module Module) *Prebuilt {
 // the right module. This function is only safe to call after all TransitionMutators
 // have run, e.g. in GenerateAndroidBuildActions.
 func PrebuiltGetPreferred(ctx BaseModuleContext, module Module) Module {
-	if !module.IsReplacedByPrebuilt() {
+	if !OtherModuleProviderOrDefault(ctx, module, CommonPropertiesProviderKey).ReplacedByPrebuilt {
 		return module
 	}
-	if IsModulePrebuilt(module) {
+	if _, ok := OtherModuleProvider(ctx, module, PrebuiltModuleProviderKey); ok {
 		// If we're given a prebuilt then assume there's no source module around.
 		return module
 	}
@@ -373,11 +392,11 @@ func PrebuiltGetPreferred(ctx BaseModuleContext, module Module) Module {
 	sourceModDepFound := false
 	var prebuiltMod Module
 
-	ctx.WalkDeps(func(child, parent Module) bool {
+	ctx.WalkDepsProxy(func(child, parent ModuleProxy) bool {
 		if prebuiltMod != nil {
 			return false
 		}
-		if parent == ctx.Module() {
+		if ctx.EqualModules(parent, ctx.Module()) {
 			// First level: Only recurse if the module is found as a direct dependency.
 			sourceModDepFound = child == module
 			return sourceModDepFound
@@ -400,13 +419,13 @@ func PrebuiltGetPreferred(ctx BaseModuleContext, module Module) Module {
 }
 
 func RegisterPrebuiltsPreArchMutators(ctx RegisterMutatorsContext) {
-	ctx.BottomUp("prebuilt_rename", PrebuiltRenameMutator).Parallel().UsesRename()
+	ctx.BottomUp("prebuilt_rename", PrebuiltRenameMutator).UsesRename()
 }
 
 func RegisterPrebuiltsPostDepsMutators(ctx RegisterMutatorsContext) {
-	ctx.BottomUp("prebuilt_source", PrebuiltSourceDepsMutator).Parallel().UsesReverseDependencies()
-	ctx.BottomUp("prebuilt_select", PrebuiltSelectModuleMutator).Parallel()
-	ctx.BottomUp("prebuilt_postdeps", PrebuiltPostDepsMutator).Parallel().UsesReplaceDependencies()
+	ctx.BottomUp("prebuilt_source", PrebuiltSourceDepsMutator).UsesReverseDependencies()
+	ctx.BottomUp("prebuilt_select", PrebuiltSelectModuleMutator)
+	ctx.BottomUp("prebuilt_postdeps", PrebuiltPostDepsMutator).UsesReplaceDependencies()
 }
 
 // Returns the name of the source module corresponding to a prebuilt module
