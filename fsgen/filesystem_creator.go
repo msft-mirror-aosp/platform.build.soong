@@ -114,7 +114,11 @@ func filesystemCreatorFactory() android.Module {
 }
 
 func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
-	for _, partitionType := range []string{"system"} {
+	partitionTypes := []string{"system"}
+	if ctx.DeviceConfig().SystemExtPath() == "system_ext" { // system_ext exists
+		partitionTypes = append(partitionTypes, "system_ext")
+	}
+	for _, partitionType := range partitionTypes {
 		if f.createPartition(ctx, partitionType) {
 			f.properties.Generated_partition_types = append(f.properties.Generated_partition_types, partitionType)
 		} else {
@@ -143,14 +147,22 @@ func (f *filesystemCreator) createDeviceModule(ctx android.LoadHookContext) {
 		Name: proptools.StringPtr(f.generatedModuleName(ctx.Config(), "device")),
 	}
 
-	// Currently, only the system partition module is created.
+	// Currently, only the system and system_ext partition module is created.
 	partitionProps := &filesystem.PartitionNameProperties{}
 	if android.InList("system", f.properties.Generated_partition_types) {
 		partitionProps.System_partition_name = proptools.StringPtr(f.generatedModuleNameForPartition(ctx.Config(), "system"))
 	}
+	if android.InList("system_ext", f.properties.Generated_partition_types) {
+		partitionProps.System_ext_partition_name = proptools.StringPtr(f.generatedModuleNameForPartition(ctx.Config(), "system_ext"))
+	}
 
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
 }
+
+var (
+	// https://source.corp.google.com/h/googleplex-android/platform/build/+/639d79f5012a6542ab1f733b0697db45761ab0f3:core/packaging/flags.mk;l=21;drc=5ba8a8b77507f93aa48cc61c5ba3f31a4d0cbf37;bpv=1;bpt=0
+	partitionsWithAconfig = []string{"system", "product", "vendor"}
+)
 
 // Creates a soong module to build the given partition. Returns false if we can't support building
 // it.
@@ -183,17 +195,19 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 
 	fsProps.Partition_name = proptools.StringPtr(partitionType)
 	// BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE
-	fsProps.Type = proptools.StringPtr(specificPartitionVars.BoardFileSystemType)
-	if *fsProps.Type != "ext4" {
-		// TODO(b/372522486): Support other FS types.
-		// Currently the android_filesystem module type only supports ext4:
-		// https://cs.android.com/android/platform/superproject/main/+/main:build/soong/filesystem/filesystem.go;l=416;drc=98047cfd07944b297a12d173453bc984806760d2
+	fsType := specificPartitionVars.BoardFileSystemType
+	if fsType == "" {
+		fsType = "ext4" //default
+	}
+	fsProps.Type = proptools.StringPtr(fsType)
+	if filesystem.GetFsTypeFromString(ctx, *fsProps.Type).IsUnknown() {
+		// Currently the android_filesystem module type only supports a handful of FS types like ext4, erofs
 		return false
 	}
 
 	fsProps.Base_dir = proptools.StringPtr(partitionType)
 
-	fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
+	fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(android.InList(partitionType, partitionsWithAconfig))
 
 	// Identical to that of the generic_system_image
 	fsProps.Fsverity.Inputs = []string{
@@ -222,6 +236,8 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 	if partitionType == "system" {
 		module = ctx.CreateModule(filesystem.SystemImageFactory, baseProps, fsProps)
 	} else {
+		// Explicitly set the partition.
+		fsProps.Partition_type = proptools.StringPtr(partitionType)
 		module = ctx.CreateModule(filesystem.FilesystemFactory, baseProps, fsProps)
 	}
 	module.HideFromMake()
