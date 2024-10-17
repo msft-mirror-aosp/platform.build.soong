@@ -364,13 +364,13 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 	a.dexpreopter.isPresignedPrebuilt = Bool(a.properties.Presigned)
 	a.dexpreopter.uncompressedDex = a.shouldUncompressDex(ctx)
 
-	a.dexpreopter.enforceUsesLibs = a.usesLibrary.enforceUsesLibraries()
+	a.dexpreopter.enforceUsesLibs = a.usesLibrary.enforceUsesLibraries(ctx)
 	a.dexpreopter.classLoaderContexts = a.usesLibrary.classLoaderContextForUsesLibDeps(ctx)
 	if a.usesLibrary.shouldDisableDexpreopt {
 		a.dexpreopter.disableDexpreopt()
 	}
 
-	if a.usesLibrary.enforceUsesLibraries() {
+	if a.usesLibrary.enforceUsesLibraries(ctx) {
 		a.usesLibrary.verifyUsesLibrariesAPK(ctx, srcApk, &a.dexpreopter.classLoaderContexts)
 	}
 

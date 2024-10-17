@@ -3343,7 +3343,7 @@ func addCLCFromDep(ctx android.ModuleContext, depModule android.Module,
 	if sdkLib != nil {
 		optional := false
 		if module, ok := ctx.Module().(ModuleWithUsesLibrary); ok {
-			if android.InList(*sdkLib, module.UsesLibrary().usesLibraryProperties.Optional_uses_libs) {
+			if android.InList(*sdkLib, module.UsesLibrary().usesLibraryProperties.Optional_uses_libs.GetOrDefault(ctx, nil)) {
 				optional = true
 			}
 		}
