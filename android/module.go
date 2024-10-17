@@ -543,13 +543,6 @@ func (t *CommonTestOptions) SetAndroidMkEntries(entries *AndroidMkEntries) {
 	}
 }
 
-func (t *CommonTestOptions) SetAndroidMkInfoEntries(entries *AndroidMkInfo) {
-	entries.SetBoolIfTrue("LOCAL_IS_UNIT_TEST", Bool(t.Unit_test))
-	if len(t.Tags) > 0 {
-		entries.AddStrings("LOCAL_TEST_OPTIONS_TAGS", t.Tags...)
-	}
-}
-
 // The key to use in TaggedDistFiles when a Dist structure does not specify a
 // tag property. This intentionally does not use "" as the default because that
 // would mean that an empty tag would have a different meaning when used in a dist
@@ -2091,10 +2084,6 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	if h, ok := m.module.(HostToolProvider); ok {
 		SetProvider(ctx, HostToolProviderKey, HostToolProviderData{
 			HostToolPath: h.HostToolPath()})
-	}
-
-	if p, ok := m.module.(AndroidMkProviderInfoProducer); ok && !shouldSkipAndroidMkProcessing(ctx, m) {
-		SetProvider(ctx, AndroidMkInfoProvider, p.PrepareAndroidMKProviderInfo(ctx.Config()))
 	}
 }
 

@@ -381,7 +381,7 @@ func TestDataLibsRelativeInstallPath(t *testing.T) {
 	if !strings.HasSuffix(outputPath, "/main_test") {
 		t.Errorf("expected test output file to be 'main_test', but was '%s'", outputPath)
 	}
-	entries := android.AndroidMkInfoForTest(t, ctx, module).PrimaryInfo
+	entries := android.AndroidMkEntriesForTest(t, ctx, module)[0]
 	if !strings.HasSuffix(entries.EntryMap["LOCAL_TEST_DATA"][0], ":test_lib.so:foo/bar/baz") {
 		t.Errorf("expected LOCAL_TEST_DATA to end with `:test_lib.so:foo/bar/baz`,"+
 			" but was '%s'", entries.EntryMap["LOCAL_TEST_DATA"][0])
@@ -409,7 +409,7 @@ func TestTestBinaryTestSuites(t *testing.T) {
 	ctx := prepareForCcTest.RunTestWithBp(t, bp).TestContext
 	module := ctx.ModuleForTests("main_test", "android_arm_armv7-a-neon").Module()
 
-	entries := android.AndroidMkInfoForTest(t, ctx, module).PrimaryInfo
+	entries := android.AndroidMkEntriesForTest(t, ctx, module)[0]
 	compatEntries := entries.EntryMap["LOCAL_COMPATIBILITY_SUITE"]
 	if len(compatEntries) != 2 {
 		t.Errorf("expected two elements in LOCAL_COMPATIBILITY_SUITE. got %d", len(compatEntries))
@@ -441,7 +441,7 @@ func TestTestLibraryTestSuites(t *testing.T) {
 	ctx := prepareForCcTest.RunTestWithBp(t, bp).TestContext
 	module := ctx.ModuleForTests("main_test_lib", "android_arm_armv7-a-neon_shared").Module()
 
-	entries := android.AndroidMkInfoForTest(t, ctx, module).PrimaryInfo
+	entries := android.AndroidMkEntriesForTest(t, ctx, module)[0]
 	compatEntries := entries.EntryMap["LOCAL_COMPATIBILITY_SUITE"]
 	if len(compatEntries) != 2 {
 		t.Errorf("expected two elements in LOCAL_COMPATIBILITY_SUITE. got %d", len(compatEntries))
@@ -1430,7 +1430,7 @@ func TestDataLibsPrebuiltSharedTestLibrary(t *testing.T) {
 	if !strings.HasSuffix(outputPath, "/main_test") {
 		t.Errorf("expected test output file to be 'main_test', but was '%s'", outputPath)
 	}
-	entries := android.AndroidMkInfoForTest(t, ctx, module).PrimaryInfo
+	entries := android.AndroidMkEntriesForTest(t, ctx, module)[0]
 	if !strings.HasSuffix(entries.EntryMap["LOCAL_TEST_DATA"][0], ":test_lib.so:foo/bar/baz") {
 		t.Errorf("expected LOCAL_TEST_DATA to end with `:test_lib.so:foo/bar/baz`,"+
 			" but was '%s'", entries.EntryMap["LOCAL_TEST_DATA"][0])
