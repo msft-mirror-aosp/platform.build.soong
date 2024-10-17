@@ -20,21 +20,24 @@ import (
 )
 
 func TestCcPreprocessNoConfiguration(t *testing.T) {
+	bp := `
+	cc_preprocess_no_configuration {
+		name: "foo",
+		srcs: ["main.cc"],
+		cflags: ["-E", "-DANDROID"],
+	}
+	`
+
 	fixture := android.GroupFixturePreparers(
 		android.PrepareForIntegrationTestWithAndroid,
 		android.FixtureRegisterWithContext(RegisterCCPreprocessNoConfiguration),
+		android.FixtureAddTextFile("foo/bar/Android.bp", bp),
 	)
 
-	result := fixture.RunTestWithBp(t, `
-cc_preprocess_no_configuration {
-	name: "foo",
-	srcs: ["main.cc"],
-	cflags: ["-E", "-DANDROID"],
-}
-`)
+	result := fixture.RunTest(t)
 
 	foo := result.ModuleForTests("foo", "")
 	actual := foo.Rule("cc").Args["cFlags"]
-	expected := "-E -DANDROID"
+	expected := "-E -DANDROID -Ifoo/bar"
 	android.AssertStringEquals(t, "cflags should be correct", expected, actual)
 }
