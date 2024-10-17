@@ -621,7 +621,8 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 				}
 			} else {
 				if installSymbolFiles {
-					installedPath = ctx.InstallFile(apexDir.Join(ctx, fi.installDir), fi.stem(), fi.builtFile)
+					// store installedPath. symlinks might be created if required.
+					installedPath = apexDir.Join(ctx, fi.installDir, fi.stem())
 				}
 			}
 
