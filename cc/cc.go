@@ -878,7 +878,7 @@ type Module struct {
 
 	cachedToolchain config.Toolchain
 
-	subAndroidMkOnce map[subAndroidMkProviderInfoProducer]bool
+	subAndroidMkOnce map[subAndroidMkProvider]bool
 
 	// Flags used to compile this module
 	flags Flags
