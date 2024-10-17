@@ -339,22 +339,57 @@ var (
 // Creates a soong module to build the given partition. Returns false if we can't support building
 // it.
 func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partitionType string) bool {
-	baseProps := &struct {
-		Name             *string
-		Compile_multilib *string
-	}{
-		Name:             proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), partitionType)),
-		Compile_multilib: proptools.StringPtr("both"),
+	baseProps := generateBaseProps(proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), partitionType)))
+
+	fsProps, supported := generateFsProps(ctx, partitionType)
+	if !supported {
+		return false
 	}
 
+	var module android.Module
+	if partitionType == "system" {
+		module = ctx.CreateModule(filesystem.SystemImageFactory, baseProps, fsProps)
+	} else {
+		// Explicitly set the partition.
+		fsProps.Partition_type = proptools.StringPtr(partitionType)
+		module = ctx.CreateModule(filesystem.FilesystemFactory, baseProps, fsProps)
+	}
+	module.HideFromMake()
+	return true
+}
+
+type filesystemBaseProperty struct {
+	Name             *string
+	Compile_multilib *string
+}
+
+func generateBaseProps(namePtr *string) *filesystemBaseProperty {
+	return &filesystemBaseProperty{
+		Name:             namePtr,
+		Compile_multilib: proptools.StringPtr("both"),
+	}
+}
+
+func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*filesystem.FilesystemProperties, bool) {
 	fsProps := &filesystem.FilesystemProperties{}
+
+	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
+	specificPartitionVars := partitionVars.PartitionQualifiedVariables[partitionType]
+
+	// BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE
+	fsType := specificPartitionVars.BoardFileSystemType
+	if fsType == "" {
+		fsType = "ext4" //default
+	}
+	fsProps.Type = proptools.StringPtr(fsType)
+	if filesystem.GetFsTypeFromString(ctx, *fsProps.Type).IsUnknown() {
+		// Currently the android_filesystem module type only supports a handful of FS types like ext4, erofs
+		return nil, false
+	}
 
 	// Don't build this module on checkbuilds, the soong-built partitions are still in-progress
 	// and sometimes don't build.
 	fsProps.Unchecked_module = proptools.BoolPtr(true)
-
-	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
-	specificPartitionVars := partitionVars.PartitionQualifiedVariables[partitionType]
 
 	// BOARD_AVB_ENABLE
 	fsProps.Use_avb = proptools.BoolPtr(partitionVars.BoardAvbEnable)
@@ -368,16 +403,6 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 	}
 
 	fsProps.Partition_name = proptools.StringPtr(partitionType)
-	// BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE
-	fsType := specificPartitionVars.BoardFileSystemType
-	if fsType == "" {
-		fsType = "ext4" //default
-	}
-	fsProps.Type = proptools.StringPtr(fsType)
-	if filesystem.GetFsTypeFromString(ctx, *fsProps.Type).IsUnknown() {
-		// Currently the android_filesystem module type only supports a handful of FS types like ext4, erofs
-		return false
-	}
 
 	fsProps.Base_dir = proptools.StringPtr(partitionType)
 
@@ -408,16 +433,8 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 	// - filesystemProperties.Build_logtags
 	// - filesystemProperties.Fsverity.Libs
 	// - systemImageProperties.Linker_config_src
-	var module android.Module
-	if partitionType == "system" {
-		module = ctx.CreateModule(filesystem.SystemImageFactory, baseProps, fsProps)
-	} else {
-		// Explicitly set the partition.
-		fsProps.Partition_type = proptools.StringPtr(partitionType)
-		module = ctx.CreateModule(filesystem.FilesystemFactory, baseProps, fsProps)
-	}
-	module.HideFromMake()
-	return true
+
+	return fsProps, true
 }
 
 func (f *filesystemCreator) createDiffTest(ctx android.ModuleContext, partitionType string) android.Path {
@@ -494,19 +511,23 @@ func (f *filesystemCreator) GenerateAndroidBuildActions(ctx android.ModuleContex
 	ctx.Phony("soong_generated_filesystem_tests", diffTestFiles...)
 }
 
-// TODO: assemble baseProps and fsProps here
 func generateBpContent(ctx android.EarlyModuleContext, partitionType string) string {
 	// Currently only system partition is supported
 	if partitionType != "system" {
 		return ""
 	}
+	fsProps, fsTypeSupported := generateFsProps(ctx, partitionType)
+	if !fsTypeSupported {
+		return ""
+	}
 
+	baseProps := generateBaseProps(proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), partitionType)))
 	deps := ctx.Config().Get(fsGenStateOnceKey).(*FsGenState).fsDeps
 	depProps := &android.PackagingProperties{
 		Deps: android.NewSimpleConfigurable(fullyQualifiedModuleNames(deps[partitionType])),
 	}
 
-	result, err := proptools.RepackProperties([]interface{}{depProps})
+	result, err := proptools.RepackProperties([]interface{}{baseProps, fsProps, depProps})
 	if err != nil {
 		ctx.ModuleErrorf(err.Error())
 	}
