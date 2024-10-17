@@ -331,10 +331,18 @@ func (f *filesystemCreator) createDeviceModule(ctx android.LoadHookContext) {
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
 }
 
-var (
-	// https://source.corp.google.com/h/googleplex-android/platform/build/+/639d79f5012a6542ab1f733b0697db45761ab0f3:core/packaging/flags.mk;l=21;drc=5ba8a8b77507f93aa48cc61c5ba3f31a4d0cbf37;bpv=1;bpt=0
-	partitionsWithAconfig = []string{"system", "product", "vendor"}
-)
+func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitionType string) {
+	switch partitionType {
+	case "system":
+		fsProps.Build_logtags = proptools.BoolPtr(true)
+		// https://source.corp.google.com/h/googleplex-android/platform/build//639d79f5012a6542ab1f733b0697db45761ab0f3:core/packaging/flags.mk;l=21;drc=5ba8a8b77507f93aa48cc61c5ba3f31a4d0cbf37;bpv=1;bpt=0
+		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
+	case "product":
+		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
+	case "vendor":
+		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
+	}
+}
 
 // Creates a soong module to build the given partition. Returns false if we can't support building
 // it.
@@ -381,8 +389,6 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 
 	fsProps.Base_dir = proptools.StringPtr(partitionType)
 
-	fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(android.InList(partitionType, partitionsWithAconfig))
-
 	fsProps.Is_auto_generated = proptools.BoolPtr(true)
 
 	// Identical to that of the generic_system_image
@@ -395,6 +401,8 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 		"framework/*/*",     // framework/{arch}
 		"framework/oat/*/*", // framework/oat/{arch}
 	}
+
+	partitionSpecificFsProps(fsProps, partitionType)
 
 	// system_image properties that are not set:
 	// - filesystemProperties.Avb_hash_algorithm
