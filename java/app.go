@@ -30,7 +30,6 @@ import (
 	"android/soong/android"
 	"android/soong/cc"
 	"android/soong/dexpreopt"
-	"android/soong/genrule"
 	"android/soong/tradefed"
 )
 
@@ -1333,7 +1332,7 @@ func AndroidAppFactory() android.Module {
 			Srcs:  []string{":" + a.Name() + "{.apk}"},
 			Cmd:   proptools.StringPtr("$(location characteristics_rro_generator) $$($(location aapt2) dump packagename $(in)) $(out)"),
 		}
-		ctx.CreateModule(genrule.GenRuleFactory, &rroManifestProperties)
+		ctx.CreateModule(GenRuleFactory, &rroManifestProperties)
 
 		rroProperties := struct {
 			Name           *string
