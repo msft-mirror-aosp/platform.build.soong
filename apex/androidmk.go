@@ -297,7 +297,7 @@ func (a *apexBundle) androidMkForType() android.AndroidMkData {
 				fmt.Fprintf(w, "$(call declare-0p-target,%s)\n", a.installedFilesFile.String())
 			}
 			for _, dist := range data.Entries.GetDistForGoals(a) {
-				fmt.Fprintln(w, dist)
+				fmt.Fprintf(w, dist)
 			}
 
 			distCoverageFiles(w, "ndk_apis_usedby_apex", a.nativeApisUsedByModuleFile.String())
