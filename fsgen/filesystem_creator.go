@@ -499,10 +499,14 @@ func (f *filesystemCreator) GenerateAndroidBuildActions(ctx android.ModuleContex
 
 	var diffTestFiles []android.Path
 	for _, partitionType := range f.properties.Generated_partition_types {
-		diffTestFiles = append(diffTestFiles, f.createDiffTest(ctx, partitionType))
+		diffTestFile := f.createDiffTest(ctx, partitionType)
+		diffTestFiles = append(diffTestFiles, diffTestFile)
+		ctx.Phony(fmt.Sprintf("soong_generated_%s_filesystem_test", partitionType), diffTestFile)
 	}
 	for _, partitionType := range f.properties.Unsupported_partition_types {
-		diffTestFiles = append(diffTestFiles, createFailingCommand(ctx, fmt.Sprintf("Couldn't build %s partition", partitionType)))
+		diffTestFile := createFailingCommand(ctx, fmt.Sprintf("Couldn't build %s partition", partitionType))
+		diffTestFiles = append(diffTestFiles, diffTestFile)
+		ctx.Phony(fmt.Sprintf("soong_generated_%s_filesystem_test", partitionType), diffTestFile)
 	}
 	ctx.Phony("soong_generated_filesystem_tests", diffTestFiles...)
 }
