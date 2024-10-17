@@ -145,10 +145,6 @@ type FilesystemProperties struct {
 	Unchecked_module *bool `blueprint:"mutated"`
 
 	Erofs ErofsProperties
-
-	// Determines if the module is auto-generated from Soong or not. If the module is
-	// auto-generated, its deps are exempted from visibility enforcement.
-	Is_auto_generated *bool
 }
 
 // Additional properties required to generate erofs FS partitions.
@@ -183,29 +179,13 @@ func initFilesystemModule(module android.DefaultableModule, filesystemModule *fi
 	android.InitDefaultableModule(module)
 }
 
-type depTag struct {
+var dependencyTag = struct {
 	blueprint.BaseDependencyTag
 	android.PackagingItemAlwaysDepTag
-}
-
-var dependencyTag = depTag{}
-
-type depTagWithVisibilityEnforcementBypass struct {
-	depTag
-}
-
-var _ android.ExcludeFromVisibilityEnforcementTag = (*depTagWithVisibilityEnforcementBypass)(nil)
-
-func (t depTagWithVisibilityEnforcementBypass) ExcludeFromVisibilityEnforcement() {}
-
-var dependencyTagWithVisibilityEnforcementBypass = depTagWithVisibilityEnforcementBypass{}
+}{}
 
 func (f *filesystem) DepsMutator(ctx android.BottomUpMutatorContext) {
-	if proptools.Bool(f.properties.Is_auto_generated) {
-		f.AddDeps(ctx, dependencyTagWithVisibilityEnforcementBypass)
-	} else {
-		f.AddDeps(ctx, dependencyTag)
-	}
+	f.AddDeps(ctx, dependencyTag)
 }
 
 type fsType int
