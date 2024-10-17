@@ -395,6 +395,7 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 		"framework/*/*",     // framework/{arch}
 		"framework/oat/*/*", // framework/oat/{arch}
 	}
+	fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
 
 	// system_image properties that are not set:
 	// - filesystemProperties.Avb_hash_algorithm
@@ -406,7 +407,6 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 	// - filesystemProperties.Mount_point
 	// - filesystemProperties.Include_make_built_files
 	// - filesystemProperties.Build_logtags
-	// - filesystemProperties.Fsverity.Libs
 	// - systemImageProperties.Linker_config_src
 	var module android.Module
 	if partitionType == "system" {
