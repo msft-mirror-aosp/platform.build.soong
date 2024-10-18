@@ -235,41 +235,46 @@ func setDepsMutator(mctx android.BottomUpMutatorContext) {
 	soongGeneratedPartitionMap := getAllSoongGeneratedPartitionNames(mctx.Config(), fsGenState.soongGeneratedPartitions)
 	m := mctx.Module()
 	if partition, ok := soongGeneratedPartitionMap[m.Name()]; ok {
-		depsStruct := packagingPropsStruct{}
-		for depName, depProps := range *fsDeps[partition] {
-			bitness := getBitness(depProps.Arch)
-			fullyQualifiedDepName := fullyQualifiedModuleName(depName, depProps.Namespace)
-			if android.InList("32", bitness) && android.InList("64", bitness) {
-				// If both 32 and 64 bit variants are enabled for this module
-				switch depProps.Multilib {
-				case string(android.MultilibBoth):
-					depsStruct.Multilib.Both.Deps = append(depsStruct.Multilib.Both.Deps, fullyQualifiedDepName)
-				case string(android.MultilibCommon), string(android.MultilibFirst):
-					depsStruct.Deps = append(depsStruct.Deps, fullyQualifiedDepName)
-				case "32":
-					depsStruct.Multilib.Lib32.Deps = append(depsStruct.Multilib.Lib32.Deps, fullyQualifiedDepName)
-				case "64", "darwin_universal":
-					depsStruct.Multilib.Lib64.Deps = append(depsStruct.Multilib.Lib64.Deps, fullyQualifiedDepName)
-				case "prefer32", "first_prefer32":
-					depsStruct.Multilib.Prefer32.Deps = append(depsStruct.Multilib.Prefer32.Deps, fullyQualifiedDepName)
-				default:
-					depsStruct.Multilib.Both.Deps = append(depsStruct.Multilib.Both.Deps, fullyQualifiedDepName)
-				}
-			} else if android.InList("64", bitness) {
-				// If only 64 bit variant is enabled
-				depsStruct.Multilib.Lib64.Deps = append(depsStruct.Multilib.Lib64.Deps, fullyQualifiedDepName)
-			} else if android.InList("32", bitness) {
-				// If only 32 bit variant is enabled
-				depsStruct.Multilib.Lib32.Deps = append(depsStruct.Multilib.Lib32.Deps, fullyQualifiedDepName)
-			} else {
-				// If only common variant is enabled
-				depsStruct.Multilib.Common.Deps = append(depsStruct.Multilib.Common.Deps, fullyQualifiedDepName)
-			}
-		}
-		if err := proptools.AppendMatchingProperties(m.GetProperties(), &depsStruct, nil); err != nil {
+		depsStruct := generateDepStruct(*fsDeps[partition])
+		if err := proptools.AppendMatchingProperties(m.GetProperties(), depsStruct, nil); err != nil {
 			mctx.ModuleErrorf(err.Error())
 		}
 	}
+}
+
+func generateDepStruct(deps map[string]*depCandidateProps) *packagingPropsStruct {
+	depsStruct := packagingPropsStruct{}
+	for depName, depProps := range deps {
+		bitness := getBitness(depProps.Arch)
+		fullyQualifiedDepName := fullyQualifiedModuleName(depName, depProps.Namespace)
+		if android.InList("32", bitness) && android.InList("64", bitness) {
+			// If both 32 and 64 bit variants are enabled for this module
+			switch depProps.Multilib {
+			case string(android.MultilibBoth):
+				depsStruct.Multilib.Both.Deps = append(depsStruct.Multilib.Both.Deps, fullyQualifiedDepName)
+			case string(android.MultilibCommon), string(android.MultilibFirst):
+				depsStruct.Deps = append(depsStruct.Deps, fullyQualifiedDepName)
+			case "32":
+				depsStruct.Multilib.Lib32.Deps = append(depsStruct.Multilib.Lib32.Deps, fullyQualifiedDepName)
+			case "64", "darwin_universal":
+				depsStruct.Multilib.Lib64.Deps = append(depsStruct.Multilib.Lib64.Deps, fullyQualifiedDepName)
+			case "prefer32", "first_prefer32":
+				depsStruct.Multilib.Prefer32.Deps = append(depsStruct.Multilib.Prefer32.Deps, fullyQualifiedDepName)
+			default:
+				depsStruct.Multilib.Both.Deps = append(depsStruct.Multilib.Both.Deps, fullyQualifiedDepName)
+			}
+		} else if android.InList("64", bitness) {
+			// If only 64 bit variant is enabled
+			depsStruct.Multilib.Lib64.Deps = append(depsStruct.Multilib.Lib64.Deps, fullyQualifiedDepName)
+		} else if android.InList("32", bitness) {
+			// If only 32 bit variant is enabled
+			depsStruct.Multilib.Lib32.Deps = append(depsStruct.Multilib.Lib32.Deps, fullyQualifiedDepName)
+		} else {
+			// If only common variant is enabled
+			depsStruct.Multilib.Common.Deps = append(depsStruct.Multilib.Common.Deps, fullyQualifiedDepName)
+		}
+	}
+	return &depsStruct
 }
 
 type filesystemCreatorProps struct {
@@ -356,22 +361,57 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 // Creates a soong module to build the given partition. Returns false if we can't support building
 // it.
 func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partitionType string) bool {
-	baseProps := &struct {
-		Name             *string
-		Compile_multilib *string
-	}{
-		Name:             proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), partitionType)),
-		Compile_multilib: proptools.StringPtr("both"),
+	baseProps := generateBaseProps(proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), partitionType)))
+
+	fsProps, supported := generateFsProps(ctx, partitionType)
+	if !supported {
+		return false
 	}
 
+	var module android.Module
+	if partitionType == "system" {
+		module = ctx.CreateModule(filesystem.SystemImageFactory, baseProps, fsProps)
+	} else {
+		// Explicitly set the partition.
+		fsProps.Partition_type = proptools.StringPtr(partitionType)
+		module = ctx.CreateModule(filesystem.FilesystemFactory, baseProps, fsProps)
+	}
+	module.HideFromMake()
+	return true
+}
+
+type filesystemBaseProperty struct {
+	Name             *string
+	Compile_multilib *string
+}
+
+func generateBaseProps(namePtr *string) *filesystemBaseProperty {
+	return &filesystemBaseProperty{
+		Name:             namePtr,
+		Compile_multilib: proptools.StringPtr("both"),
+	}
+}
+
+func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*filesystem.FilesystemProperties, bool) {
 	fsProps := &filesystem.FilesystemProperties{}
+
+	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
+	specificPartitionVars := partitionVars.PartitionQualifiedVariables[partitionType]
+
+	// BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE
+	fsType := specificPartitionVars.BoardFileSystemType
+	if fsType == "" {
+		fsType = "ext4" //default
+	}
+	fsProps.Type = proptools.StringPtr(fsType)
+	if filesystem.GetFsTypeFromString(ctx, *fsProps.Type).IsUnknown() {
+		// Currently the android_filesystem module type only supports a handful of FS types like ext4, erofs
+		return nil, false
+	}
 
 	// Don't build this module on checkbuilds, the soong-built partitions are still in-progress
 	// and sometimes don't build.
 	fsProps.Unchecked_module = proptools.BoolPtr(true)
-
-	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
-	specificPartitionVars := partitionVars.PartitionQualifiedVariables[partitionType]
 
 	// BOARD_AVB_ENABLE
 	fsProps.Use_avb = proptools.BoolPtr(partitionVars.BoardAvbEnable)
@@ -385,16 +425,6 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 	}
 
 	fsProps.Partition_name = proptools.StringPtr(partitionType)
-	// BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE
-	fsType := specificPartitionVars.BoardFileSystemType
-	if fsType == "" {
-		fsType = "ext4" //default
-	}
-	fsProps.Type = proptools.StringPtr(fsType)
-	if filesystem.GetFsTypeFromString(ctx, *fsProps.Type).IsUnknown() {
-		// Currently the android_filesystem module type only supports a handful of FS types like ext4, erofs
-		return false
-	}
 
 	fsProps.Base_dir = proptools.StringPtr(partitionType)
 
@@ -425,16 +455,8 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 	// - filesystemProperties.Include_make_built_files
 	// - filesystemProperties.Build_logtags
 	// - systemImageProperties.Linker_config_src
-	var module android.Module
-	if partitionType == "system" {
-		module = ctx.CreateModule(filesystem.SystemImageFactory, baseProps, fsProps)
-	} else {
-		// Explicitly set the partition.
-		fsProps.Partition_type = proptools.StringPtr(partitionType)
-		module = ctx.CreateModule(filesystem.FilesystemFactory, baseProps, fsProps)
-	}
-	module.HideFromMake()
-	return true
+
+	return fsProps, true
 }
 
 func (f *filesystemCreator) createDiffTest(ctx android.ModuleContext, partitionType string) android.Path {
@@ -511,19 +533,21 @@ func (f *filesystemCreator) GenerateAndroidBuildActions(ctx android.ModuleContex
 	ctx.Phony("soong_generated_filesystem_tests", diffTestFiles...)
 }
 
-// TODO: assemble baseProps and fsProps here
 func generateBpContent(ctx android.EarlyModuleContext, partitionType string) string {
 	// Currently only system partition is supported
 	if partitionType != "system" {
 		return ""
 	}
-
-	deps := ctx.Config().Get(fsGenStateOnceKey).(*FsGenState).fsDeps
-	depProps := &android.PackagingProperties{
-		Deps: android.NewSimpleConfigurable(fullyQualifiedModuleNames(deps[partitionType])),
+	fsProps, fsTypeSupported := generateFsProps(ctx, partitionType)
+	if !fsTypeSupported {
+		return ""
 	}
 
-	result, err := proptools.RepackProperties([]interface{}{depProps})
+	baseProps := generateBaseProps(proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), partitionType)))
+	deps := ctx.Config().Get(fsGenStateOnceKey).(*FsGenState).fsDeps[partitionType]
+	depProps := generateDepStruct(*deps)
+
+	result, err := proptools.RepackProperties([]interface{}{baseProps, fsProps, depProps})
 	if err != nil {
 		ctx.ModuleErrorf(err.Error())
 	}
