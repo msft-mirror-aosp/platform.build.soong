@@ -124,10 +124,19 @@ func createFsGenState(ctx android.LoadHookContext) *FsGenState {
 					"public.libraries.android.txt": defaultDepCandidateProps(ctx.Config()),
 					"update_engine_sideload":       defaultDepCandidateProps(ctx.Config()),
 				},
-				"vendor":     newMultilibDeps(),
-				"odm":        newMultilibDeps(),
-				"product":    newMultilibDeps(),
-				"system_ext": newMultilibDeps(),
+				"vendor":  newMultilibDeps(),
+				"odm":     newMultilibDeps(),
+				"product": newMultilibDeps(),
+				"system_ext": &map[string]*depCandidateProps{
+					// VNDK apexes are automatically included.
+					// This hardcoded list will need to be updated if `PRODUCT_EXTRA_VNDK_VERSIONS` is updated.
+					// https://cs.android.com/android/_/android/platform/build/+/adba533072b00c53ac0f198c550a3cbd7a00e4cd:core/main.mk;l=984;bpv=1;bpt=0;drc=174db7b179592cf07cbfd2adb0119486fda911e7
+					"com.android.vndk.v30": defaultDepCandidateProps(ctx.Config()),
+					"com.android.vndk.v31": defaultDepCandidateProps(ctx.Config()),
+					"com.android.vndk.v32": defaultDepCandidateProps(ctx.Config()),
+					"com.android.vndk.v33": defaultDepCandidateProps(ctx.Config()),
+					"com.android.vndk.v34": defaultDepCandidateProps(ctx.Config()),
+				},
 			},
 			soongGeneratedPartitions: generatedPartitions,
 			fsDepsMutex:              sync.Mutex{},
@@ -136,15 +145,19 @@ func createFsGenState(ctx android.LoadHookContext) *FsGenState {
 }
 
 func checkDepModuleInMultipleNamespaces(mctx android.BottomUpMutatorContext, foundDeps map[string]*depCandidateProps, module string, partitionName string) {
-	if val, found := foundDeps[module]; found && !android.InList(val.Namespace, []string{".", mctx.Namespace().Path}) {
-		mctx.ModuleErrorf("found in multiple namespaces(%s and %s) when including in %s partition", val.Namespace, mctx.Namespace().Path, partitionName)
+	otherNamespace := mctx.Namespace().Path
+	if val, found := foundDeps[module]; found && otherNamespace != "." && !android.InList(val.Namespace, []string{".", otherNamespace}) {
+		mctx.ModuleErrorf("found in multiple namespaces(%s and %s) when including in %s partition", val.Namespace, otherNamespace, partitionName)
 	}
 }
 
 func appendDepIfAppropriate(mctx android.BottomUpMutatorContext, deps *map[string]*depCandidateProps, installPartition string) {
 	checkDepModuleInMultipleNamespaces(mctx, *deps, mctx.Module().Name(), installPartition)
 	if _, ok := (*deps)[mctx.Module().Name()]; ok {
-		(*deps)[mctx.Module().Name()].Namespace = mctx.Namespace().Path
+		// Prefer the namespace-specific module over the platform module
+		if mctx.Namespace().Path != "." {
+			(*deps)[mctx.Module().Name()].Namespace = mctx.Namespace().Path
+		}
 		(*deps)[mctx.Module().Name()].Arch = append((*deps)[mctx.Module().Name()].Arch, mctx.Module().Target().Arch.ArchType)
 	} else {
 		multilib, _ := mctx.Module().DecodeMultilib(mctx)
@@ -327,10 +340,18 @@ func (f *filesystemCreator) createDeviceModule(ctx android.LoadHookContext) {
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
 }
 
-var (
-	// https://source.corp.google.com/h/googleplex-android/platform/build/+/639d79f5012a6542ab1f733b0697db45761ab0f3:core/packaging/flags.mk;l=21;drc=5ba8a8b77507f93aa48cc61c5ba3f31a4d0cbf37;bpv=1;bpt=0
-	partitionsWithAconfig = []string{"system", "product", "vendor"}
-)
+func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitionType string) {
+	switch partitionType {
+	case "system":
+		fsProps.Build_logtags = proptools.BoolPtr(true)
+		// https://source.corp.google.com/h/googleplex-android/platform/build//639d79f5012a6542ab1f733b0697db45761ab0f3:core/packaging/flags.mk;l=21;drc=5ba8a8b77507f93aa48cc61c5ba3f31a4d0cbf37;bpv=1;bpt=0
+		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
+	case "product":
+		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
+	case "vendor":
+		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
+	}
+}
 
 // Creates a soong module to build the given partition. Returns false if we can't support building
 // it.
@@ -377,8 +398,6 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 
 	fsProps.Base_dir = proptools.StringPtr(partitionType)
 
-	fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(android.InList(partitionType, partitionsWithAconfig))
-
 	fsProps.Is_auto_generated = proptools.BoolPtr(true)
 
 	// Identical to that of the generic_system_image
@@ -391,6 +410,9 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 		"framework/*/*",     // framework/{arch}
 		"framework/oat/*/*", // framework/oat/{arch}
 	}
+	fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
+
+	partitionSpecificFsProps(fsProps, partitionType)
 
 	// system_image properties that are not set:
 	// - filesystemProperties.Avb_hash_algorithm
@@ -402,7 +424,6 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 	// - filesystemProperties.Mount_point
 	// - filesystemProperties.Include_make_built_files
 	// - filesystemProperties.Build_logtags
-	// - filesystemProperties.Fsverity.Libs
 	// - systemImageProperties.Linker_config_src
 	var module android.Module
 	if partitionType == "system" {
@@ -478,10 +499,14 @@ func (f *filesystemCreator) GenerateAndroidBuildActions(ctx android.ModuleContex
 
 	var diffTestFiles []android.Path
 	for _, partitionType := range f.properties.Generated_partition_types {
-		diffTestFiles = append(diffTestFiles, f.createDiffTest(ctx, partitionType))
+		diffTestFile := f.createDiffTest(ctx, partitionType)
+		diffTestFiles = append(diffTestFiles, diffTestFile)
+		ctx.Phony(fmt.Sprintf("soong_generated_%s_filesystem_test", partitionType), diffTestFile)
 	}
 	for _, partitionType := range f.properties.Unsupported_partition_types {
-		diffTestFiles = append(diffTestFiles, createFailingCommand(ctx, fmt.Sprintf("Couldn't build %s partition", partitionType)))
+		diffTestFile := createFailingCommand(ctx, fmt.Sprintf("Couldn't build %s partition", partitionType))
+		diffTestFiles = append(diffTestFiles, diffTestFile)
+		ctx.Phony(fmt.Sprintf("soong_generated_%s_filesystem_test", partitionType), diffTestFile)
 	}
 	ctx.Phony("soong_generated_filesystem_tests", diffTestFiles...)
 }
