@@ -862,7 +862,7 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 					// explicitly listed in the optional_uses_libs property.
 					tag := usesLibReqTag
 					if android.InList(*lib, dexpreopt.OptionalCompatUsesLibs) ||
-						android.InList(*lib, j.usesLibrary.usesLibraryProperties.Optional_uses_libs) {
+						android.InList(*lib, j.usesLibrary.usesLibraryProperties.Optional_uses_libs.GetOrDefault(ctx, nil)) {
 						tag = usesLibOptTag
 					}
 					ctx.AddVariationDependencies(nil, tag, *lib)

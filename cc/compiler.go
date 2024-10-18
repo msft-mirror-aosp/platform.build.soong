@@ -695,7 +695,9 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 
 	if ctx.optimizeForSize() {
 		flags.Local.CFlags = append(flags.Local.CFlags, "-Oz")
-		flags.Local.LdFlags = append(flags.Local.LdFlags, "-Wl,-mllvm,-enable-ml-inliner=release")
+		if !ctx.Config().IsEnvFalse("THINLTO_USE_MLGO") {
+			flags.Local.LdFlags = append(flags.Local.LdFlags, "-Wl,-mllvm,-enable-ml-inliner=release")
+		}
 	}
 
 	// Exclude directories from manual binder interface allowed list.
