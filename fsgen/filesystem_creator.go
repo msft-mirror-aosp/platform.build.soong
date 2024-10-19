@@ -210,14 +210,6 @@ func fullyQualifiedModuleName(moduleName, namespace string) string {
 	return fmt.Sprintf("//%s:%s", namespace, moduleName)
 }
 
-// Returns the sorted unique list of module names with namespace, if the module specifies one.
-func fullyQualifiedModuleNames(modules multilibDeps) (ret []string) {
-	for moduleName, moduleProp := range *modules {
-		ret = append(ret, fullyQualifiedModuleName(moduleName, moduleProp.Namespace))
-	}
-	return android.SortedUniqueStrings(ret)
-}
-
 func getBitness(archTypes []android.ArchType) (ret []string) {
 	for _, archType := range archTypes {
 		if archType.Multilib == "" {
@@ -274,6 +266,13 @@ func generateDepStruct(deps map[string]*depCandidateProps) *packagingPropsStruct
 			depsStruct.Multilib.Common.Deps = append(depsStruct.Multilib.Common.Deps, fullyQualifiedDepName)
 		}
 	}
+	depsStruct.Deps = android.SortedUniqueStrings(depsStruct.Deps)
+	depsStruct.Multilib.Lib32.Deps = android.SortedUniqueStrings(depsStruct.Multilib.Lib32.Deps)
+	depsStruct.Multilib.Lib64.Deps = android.SortedUniqueStrings(depsStruct.Multilib.Lib64.Deps)
+	depsStruct.Multilib.Prefer32.Deps = android.SortedUniqueStrings(depsStruct.Multilib.Prefer32.Deps)
+	depsStruct.Multilib.Both.Deps = android.SortedUniqueStrings(depsStruct.Multilib.Both.Deps)
+	depsStruct.Multilib.Common.Deps = android.SortedUniqueStrings(depsStruct.Multilib.Common.Deps)
+
 	return &depsStruct
 }
 
@@ -514,9 +513,14 @@ func (f *filesystemCreator) GenerateAndroidBuildActions(ctx android.ModuleContex
 	}
 	f.HideFromMake()
 
-	content := generateBpContent(ctx, "system")
-	generatedBp := android.PathForOutput(ctx, "soong_generated_product_config.bp")
-	android.WriteFileRule(ctx, generatedBp, content)
+	var content strings.Builder
+	generatedBp := android.PathForModuleOut(ctx, "soong_generated_product_config.bp")
+	for _, partition := range ctx.Config().Get(fsGenStateOnceKey).(*FsGenState).soongGeneratedPartitions {
+		content.WriteString(generateBpContent(ctx, partition))
+		content.WriteString("\n")
+	}
+	android.WriteFileRule(ctx, generatedBp, content.String())
+
 	ctx.Phony("product_config_to_bp", generatedBp)
 
 	var diffTestFiles []android.Path
@@ -534,10 +538,6 @@ func (f *filesystemCreator) GenerateAndroidBuildActions(ctx android.ModuleContex
 }
 
 func generateBpContent(ctx android.EarlyModuleContext, partitionType string) string {
-	// Currently only system partition is supported
-	if partitionType != "system" {
-		return ""
-	}
 	fsProps, fsTypeSupported := generateFsProps(ctx, partitionType)
 	if !fsTypeSupported {
 		return ""
@@ -552,10 +552,15 @@ func generateBpContent(ctx android.EarlyModuleContext, partitionType string) str
 		ctx.ModuleErrorf(err.Error())
 	}
 
+	moduleType := "android_filesystem"
+	if partitionType == "system" {
+		moduleType = "android_system_image"
+	}
+
 	file := &parser.File{
 		Defs: []parser.Definition{
 			&parser.Module{
-				Type: "module",
+				Type: moduleType,
 				Map:  *result,
 			},
 		},
