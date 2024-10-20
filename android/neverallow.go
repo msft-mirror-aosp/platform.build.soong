@@ -44,7 +44,7 @@ import (
 // - it has none of the "Without" properties matched (same rules as above)
 
 func registerNeverallowMutator(ctx RegisterMutatorsContext) {
-	ctx.BottomUp("neverallow", neverallowMutator).Parallel()
+	ctx.BottomUp("neverallow", neverallowMutator)
 }
 
 var neverallows = []Rule{}
@@ -60,6 +60,7 @@ func init() {
 	AddNeverAllowRules(createCcStubsRule())
 	AddNeverAllowRules(createProhibitHeaderOnlyRule())
 	AddNeverAllowRules(createLimitNdkExportRule()...)
+	AddNeverAllowRules(createLimitDirgroupRule()...)
 }
 
 // Add a NeverAllow rule to the set of rules to apply.
@@ -272,6 +273,23 @@ func createLimitNdkExportRule() []Rule {
 		NeverAllow().ModuleType("ndk_library").WithMatcher("export_include_dirs", isSetMatcherInstance).Because(reason),
 		NeverAllow().ModuleType("ndk_library").WithMatcher("export_shared_lib_headers", isSetMatcherInstance).Because(reason),
 		NeverAllow().ModuleType("ndk_library").WithMatcher("export_static_lib_headers", isSetMatcherInstance).Because(reason),
+	}
+}
+
+func createLimitDirgroupRule() []Rule {
+	reason := "dirgroup module and dir_srcs property of genrule is allowed only to Trusty build rule."
+	return []Rule{
+		NeverAllow().
+			ModuleType("dirgroup").
+			WithMatcher("visibility", NotInList([]string{"//trusty/vendor/google/aosp/scripts"})).Because(reason),
+		NeverAllow().
+			ModuleType("dirgroup").
+			Without("visibility", "//trusty/vendor/google/aosp/scripts").Because(reason),
+		NeverAllow().
+			ModuleType("genrule").
+			Without("name", "lk.elf.arm64").
+			Without("name", "lk.elf.x86_64").
+			WithMatcher("dir_srcs", isSetMatcherInstance).Because(reason),
 	}
 }
 
