@@ -413,18 +413,21 @@ type jsonConfigurable interface {
 // To add a new feature to the list, add the field in the struct
 // `partialCompileFlags` above, and then add the name of the field in the
 // switch statement below.
-func (c *config) parsePartialCompileFlags() (partialCompileFlags, error) {
-	defaultFlags := partialCompileFlags{
-		// Set any opt-out flags here.  Opt-in flags are off by default.
-		enabled: false,
-	}
+var defaultPartialCompileFlags = partialCompileFlags{
+	// Set any opt-out flags here.  Opt-in flags are off by default.
+	enabled: false,
+}
+
+func (c *config) parsePartialCompileFlags(isEngBuild bool) (partialCompileFlags, error) {
 	value := c.Getenv("SOONG_PARTIAL_COMPILE")
-
+	if !isEngBuild {
+		return partialCompileFlags{}, nil
+	}
 	if value == "" {
-		return defaultFlags, nil
+		return defaultPartialCompileFlags, nil
 	}
 
-	ret := defaultFlags
+	ret := defaultPartialCompileFlags
 	tokens := strings.Split(strings.ToLower(value), ",")
 	makeVal := func(state string, defaultValue bool) bool {
 		switch state {
@@ -455,17 +458,17 @@ func (c *config) parsePartialCompileFlags() (partialCompileFlags, error) {
 		}
 		switch tok {
 		case "true":
-			ret = defaultFlags
+			ret = defaultPartialCompileFlags
 			ret.enabled = true
 		case "false":
 			// Set everything to false.
 			ret = partialCompileFlags{}
 		case "enabled":
-			ret.enabled = makeVal(state, defaultFlags.enabled)
+			ret.enabled = makeVal(state, defaultPartialCompileFlags.enabled)
 		case "use_d8":
-			ret.use_d8 = makeVal(state, defaultFlags.use_d8)
+			ret.use_d8 = makeVal(state, defaultPartialCompileFlags.use_d8)
 		default:
-			return partialCompileFlags{}, fmt.Errorf("Unknown SOONG_PARTIAL_COMPILE value: %v", value)
+			return partialCompileFlags{}, fmt.Errorf("Unknown SOONG_PARTIAL_COMPILE value: %v", tok)
 		}
 	}
 	return ret, nil
@@ -616,6 +619,14 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 
 		buildFromSourceStub: cmdArgs.BuildFromSourceStub,
 	}
+	variant, ok := os.LookupEnv("TARGET_BUILD_VARIANT")
+	isEngBuild := !ok || variant == "eng"
+
+	if isEngBuild {
+		// Partial Compile is only supported on eng builds.
+		config.env["SOONG_PARTIAL_COMPILE"] = "false"
+		config.env["SOONG_USE_PARTIAL_COMPILE"] = ""
+	}
 
 	config.deviceConfig = &deviceConfig{
 		config: config,
@@ -657,7 +668,7 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		return Config{}, err
 	}
 
-	config.partialCompileFlags, err = config.parsePartialCompileFlags()
+	config.partialCompileFlags, err = config.parsePartialCompileFlags(isEngBuild)
 	if err != nil {
 		return Config{}, err
 	}
