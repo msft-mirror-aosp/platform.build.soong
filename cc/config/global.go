@@ -172,6 +172,7 @@ var (
 		"-Werror=address",
 		"-Werror=sequence-point",
 		"-Werror=format-security",
+		"-nostdlibinc",
 	}
 
 	commonGlobalLldflags = []string{
