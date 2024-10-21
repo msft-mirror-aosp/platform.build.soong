@@ -430,14 +430,14 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 	}
 
 	if ctx.useSdk() {
+		// TODO: Switch to --sysroot.
 		// The NDK headers are installed to a common sysroot. While a more
 		// typical Soong approach would be to only make the headers for the
 		// library you're using available, we're trying to emulate the NDK
 		// behavior here, and the NDK always has all the NDK headers available.
 		flags.SystemIncludeFlags = append(flags.SystemIncludeFlags,
-			"--sysroot "+getNdkSysrootBase(ctx).String())
-	} else if ctx.Device() {
-		flags.Global.CommonFlags = append(flags.Global.CFlags, "-nostdlibinc")
+			"-isystem "+getCurrentIncludePath(ctx).String(),
+			"-isystem "+getCurrentIncludePath(ctx).Join(ctx, config.NDKTriple(tc)).String())
 	}
 
 	if ctx.InVendorOrProduct() {
