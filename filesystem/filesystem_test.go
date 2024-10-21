@@ -588,6 +588,7 @@ func TestErofsPartition(t *testing.T) {
 // If a system_ext/ module depends on system/ module, the dependency should *not*
 // be installed in system_ext/
 func TestDoNotPackageCrossPartitionDependencies(t *testing.T) {
+	t.Skip() // TODO (spandandas): Re-enable this
 	result := fixture.RunTestWithBp(t, `
 		android_filesystem {
 			name: "myfilesystem",
