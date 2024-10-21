@@ -101,6 +101,9 @@ func createFsGenState(ctx android.LoadHookContext) *FsGenState {
 		if ctx.DeviceConfig().SystemExtPath() == "system_ext" {
 			generatedPartitions = append(generatedPartitions, "system_ext")
 		}
+		if ctx.DeviceConfig().VendorPath() == "vendor" {
+			generatedPartitions = append(generatedPartitions, "vendor")
+		}
 
 		return &FsGenState{
 			depCandidates: candidates,
@@ -332,13 +335,16 @@ func (f *filesystemCreator) createDeviceModule(ctx android.LoadHookContext) {
 		Name: proptools.StringPtr(generatedModuleName(ctx.Config(), "device")),
 	}
 
-	// Currently, only the system and system_ext partition module is created.
+	// Currently, only a select set of partitions like system, system_ext is created.
 	partitionProps := &filesystem.PartitionNameProperties{}
 	if android.InList("system", f.properties.Generated_partition_types) {
 		partitionProps.System_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system"))
 	}
 	if android.InList("system_ext", f.properties.Generated_partition_types) {
 		partitionProps.System_ext_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system_ext"))
+	}
+	if android.InList("vendor", f.properties.Generated_partition_types) {
+		partitionProps.Vendor_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "vendor"))
 	}
 
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
