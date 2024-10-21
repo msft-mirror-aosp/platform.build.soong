@@ -84,7 +84,6 @@ type CmdArgs struct {
 	SoongOutDir    string
 	SoongVariables string
 
-	BazelQueryViewDir string
 	ModuleGraphFile   string
 	ModuleActionsFile string
 	DocFile           string
@@ -98,11 +97,6 @@ type CmdArgs struct {
 const (
 	// Don't use bazel at all during module analysis.
 	AnalysisNoBazel SoongBuildMode = iota
-
-	// Generate BUILD files which faithfully represent the dependency graph of
-	// blueprint modules. Individual BUILD targets will not, however, faitfhully
-	// express build semantics.
-	GenerateQueryView
 
 	// Create a JSON representation of the module graph and exit.
 	GenerateModuleGraph
@@ -616,7 +610,6 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 			config.BuildMode = mode
 		}
 	}
-	setBuildMode(cmdArgs.BazelQueryViewDir, GenerateQueryView)
 	setBuildMode(cmdArgs.ModuleGraphFile, GenerateModuleGraph)
 	setBuildMode(cmdArgs.DocFile, GenerateDocFile)
 
