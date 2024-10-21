@@ -264,7 +264,7 @@ func (f *filesystem) partitionName() string {
 func (f *filesystem) filterInstallablePackagingSpec(ps android.PackagingSpec) bool {
 	// Filesystem module respects the installation semantic. A PackagingSpec from a module with
 	// IsSkipInstall() is skipped.
-	return !ps.SkipInstall() && (ps.Partition() == f.PartitionType())
+	return !ps.SkipInstall()
 }
 
 var pctx = android.NewPackageContext("android/soong/filesystem")
