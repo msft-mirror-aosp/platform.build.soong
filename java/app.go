@@ -1340,12 +1340,14 @@ func AndroidAppFactory() android.Module {
 			Aaptflags      []string
 			Manifest       *string
 			Resource_dirs  []string
+			Flags_packages []string
 		}{
 			Name:           proptools.StringPtr(rroPackageName),
 			Filter_product: proptools.StringPtr(characteristics),
 			Aaptflags:      []string{"--auto-add-overlay"},
 			Manifest:       proptools.StringPtr(":" + rroManifestName),
 			Resource_dirs:  a.aaptProperties.Resource_dirs,
+			Flags_packages: a.aaptProperties.Flags_packages,
 		}
 		if !Bool(a.aaptProperties.Aapt_include_all_resources) {
 			for _, aaptConfig := range ctx.Config().ProductAAPTConfig() {

@@ -723,16 +723,22 @@ func generatorFactory(taskGenerator taskFunc, props ...interface{}) *Module {
 
 type noopImageInterface struct{}
 
-func (x noopImageInterface) ImageMutatorBegin(android.BaseModuleContext)                 {}
-func (x noopImageInterface) VendorVariantNeeded(android.BaseModuleContext) bool          { return false }
-func (x noopImageInterface) ProductVariantNeeded(android.BaseModuleContext) bool         { return false }
-func (x noopImageInterface) CoreVariantNeeded(android.BaseModuleContext) bool            { return false }
-func (x noopImageInterface) RamdiskVariantNeeded(android.BaseModuleContext) bool         { return false }
-func (x noopImageInterface) VendorRamdiskVariantNeeded(android.BaseModuleContext) bool   { return false }
-func (x noopImageInterface) DebugRamdiskVariantNeeded(android.BaseModuleContext) bool    { return false }
-func (x noopImageInterface) RecoveryVariantNeeded(android.BaseModuleContext) bool        { return false }
-func (x noopImageInterface) ExtraImageVariations(ctx android.BaseModuleContext) []string { return nil }
-func (x noopImageInterface) SetImageVariation(ctx android.BaseModuleContext, variation string) {
+func (x noopImageInterface) ImageMutatorBegin(android.ImageInterfaceContext)         {}
+func (x noopImageInterface) VendorVariantNeeded(android.ImageInterfaceContext) bool  { return false }
+func (x noopImageInterface) ProductVariantNeeded(android.ImageInterfaceContext) bool { return false }
+func (x noopImageInterface) CoreVariantNeeded(android.ImageInterfaceContext) bool    { return false }
+func (x noopImageInterface) RamdiskVariantNeeded(android.ImageInterfaceContext) bool { return false }
+func (x noopImageInterface) VendorRamdiskVariantNeeded(android.ImageInterfaceContext) bool {
+	return false
+}
+func (x noopImageInterface) DebugRamdiskVariantNeeded(android.ImageInterfaceContext) bool {
+	return false
+}
+func (x noopImageInterface) RecoveryVariantNeeded(android.ImageInterfaceContext) bool { return false }
+func (x noopImageInterface) ExtraImageVariations(ctx android.ImageInterfaceContext) []string {
+	return nil
+}
+func (x noopImageInterface) SetImageVariation(ctx android.ImageInterfaceContext, variation string) {
 }
 
 func NewGenSrcs() *Module {
