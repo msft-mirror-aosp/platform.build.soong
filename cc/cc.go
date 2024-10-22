@@ -2349,6 +2349,10 @@ func AddSharedLibDependenciesWithVersions(ctx android.BottomUpMutatorContext, mo
 		variations = append(variations, blueprint.Variation{Mutator: "version", Variation: version})
 		if tag, ok := depTag.(libraryDependencyTag); ok {
 			tag.explicitlyVersioned = true
+			// depTag is an interface that contains a concrete non-pointer struct.  That makes the local
+			// tag variable a copy of the contents of depTag, and updating it doesn't change depTag.  Reassign
+			// the modified copy to depTag.
+			depTag = tag
 		} else {
 			panic(fmt.Errorf("Unexpected dependency tag: %T", depTag))
 		}
