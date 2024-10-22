@@ -1291,6 +1291,16 @@ type testProperties struct {
 	// the test
 	Data []string `android:"path"`
 
+	// Same as data, but will add dependencies on modules using the device's os variation and
+	// the common arch variation. Useful for a host test that wants to embed a module built for
+	// device.
+	Device_common_data []string `android:"path_device_common"`
+
+	// same as data, but adds dependencies using the device's os variation and the device's first
+	// architecture's variation. Can be used to add a module built for device to the data of a
+	// host test.
+	Device_first_data []string `android:"path_device_first"`
+
 	// Flag to indicate whether or not to create test config automatically. If AndroidTest.xml
 	// doesn't exist next to the Android.bp, this attribute doesn't need to be set to true
 	// explicitly.
@@ -1581,6 +1591,8 @@ func (j *Test) generateAndroidBuildActionsWithConfig(ctx android.ModuleContext, 
 	})
 
 	j.data = android.PathsForModuleSrc(ctx, j.testProperties.Data)
+	j.data = append(j.data, android.PathsForModuleSrc(ctx, j.testProperties.Device_common_data)...)
+	j.data = append(j.data, android.PathsForModuleSrc(ctx, j.testProperties.Device_first_data)...)
 
 	j.extraTestConfigs = android.PathsForModuleSrc(ctx, j.testProperties.Test_options.Extra_test_configs)
 
@@ -2454,7 +2466,7 @@ func (al *ApiLibrary) ideDeps(ctx android.BaseModuleContext) []string {
 	ret := []string{}
 	ret = append(ret, al.properties.Libs.GetOrDefault(ctx, nil)...)
 	ret = append(ret, al.properties.Static_libs.GetOrDefault(ctx, nil)...)
-	if al.properties.System_modules != nil {
+	if proptools.StringDefault(al.properties.System_modules, "none") != "none" {
 		ret = append(ret, proptools.String(al.properties.System_modules))
 	}
 	// Other non java_library dependencies like java_api_contribution are ignored for now.
@@ -3343,7 +3355,7 @@ func addCLCFromDep(ctx android.ModuleContext, depModule android.Module,
 	if sdkLib != nil {
 		optional := false
 		if module, ok := ctx.Module().(ModuleWithUsesLibrary); ok {
-			if android.InList(*sdkLib, module.UsesLibrary().usesLibraryProperties.Optional_uses_libs) {
+			if android.InList(*sdkLib, module.UsesLibrary().usesLibraryProperties.Optional_uses_libs.GetOrDefault(ctx, nil)) {
 				optional = true
 			}
 		}
