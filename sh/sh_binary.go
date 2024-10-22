@@ -210,41 +210,41 @@ func (s *ShBinary) Symlinks() []string {
 
 var _ android.ImageInterface = (*ShBinary)(nil)
 
-func (s *ShBinary) ImageMutatorBegin(ctx android.BaseModuleContext) {}
+func (s *ShBinary) ImageMutatorBegin(ctx android.ImageInterfaceContext) {}
 
-func (s *ShBinary) VendorVariantNeeded(ctx android.BaseModuleContext) bool {
+func (s *ShBinary) VendorVariantNeeded(ctx android.ImageInterfaceContext) bool {
 	return s.InstallInVendor()
 }
 
-func (s *ShBinary) ProductVariantNeeded(ctx android.BaseModuleContext) bool {
+func (s *ShBinary) ProductVariantNeeded(ctx android.ImageInterfaceContext) bool {
 	return s.InstallInProduct()
 }
 
-func (s *ShBinary) CoreVariantNeeded(ctx android.BaseModuleContext) bool {
+func (s *ShBinary) CoreVariantNeeded(ctx android.ImageInterfaceContext) bool {
 	return !s.InstallInRecovery() && !s.InstallInRamdisk() && !s.InstallInVendorRamdisk() && !s.ModuleBase.InstallInVendor()
 }
 
-func (s *ShBinary) RamdiskVariantNeeded(ctx android.BaseModuleContext) bool {
+func (s *ShBinary) RamdiskVariantNeeded(ctx android.ImageInterfaceContext) bool {
 	return proptools.Bool(s.properties.Ramdisk_available) || s.InstallInRamdisk()
 }
 
-func (s *ShBinary) VendorRamdiskVariantNeeded(ctx android.BaseModuleContext) bool {
+func (s *ShBinary) VendorRamdiskVariantNeeded(ctx android.ImageInterfaceContext) bool {
 	return proptools.Bool(s.properties.Vendor_ramdisk_available) || s.InstallInVendorRamdisk()
 }
 
-func (s *ShBinary) DebugRamdiskVariantNeeded(ctx android.BaseModuleContext) bool {
+func (s *ShBinary) DebugRamdiskVariantNeeded(ctx android.ImageInterfaceContext) bool {
 	return false
 }
 
-func (s *ShBinary) RecoveryVariantNeeded(ctx android.BaseModuleContext) bool {
+func (s *ShBinary) RecoveryVariantNeeded(ctx android.ImageInterfaceContext) bool {
 	return proptools.Bool(s.properties.Recovery_available) || s.InstallInRecovery()
 }
 
-func (s *ShBinary) ExtraImageVariations(ctx android.BaseModuleContext) []string {
+func (s *ShBinary) ExtraImageVariations(ctx android.ImageInterfaceContext) []string {
 	return nil
 }
 
-func (s *ShBinary) SetImageVariation(ctx android.BaseModuleContext, variation string) {
+func (s *ShBinary) SetImageVariation(ctx android.ImageInterfaceContext, variation string) {
 	s.properties.ImageVariation = variation
 }
 
