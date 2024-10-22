@@ -337,10 +337,11 @@ type ProductVariables struct {
 	HWASanIncludePaths []string `json:",omitempty"`
 	HWASanExcludePaths []string `json:",omitempty"`
 
-	VendorPath    *string `json:",omitempty"`
-	OdmPath       *string `json:",omitempty"`
-	ProductPath   *string `json:",omitempty"`
-	SystemExtPath *string `json:",omitempty"`
+	VendorPath          *string `json:",omitempty"`
+	BuildingVendorImage *bool   `json:",omitempty"`
+	OdmPath             *string `json:",omitempty"`
+	ProductPath         *string `json:",omitempty"`
+	SystemExtPath       *string `json:",omitempty"`
 
 	ClangTidy  *bool   `json:",omitempty"`
 	TidyChecks *string `json:",omitempty"`
