@@ -1558,6 +1558,10 @@ func (c *deviceConfig) ProductPath() string {
 	return "product"
 }
 
+func (c *deviceConfig) BuildingProductImage() bool {
+	return proptools.Bool(c.config.productVariables.BuildingProductImage)
+}
+
 func (c *deviceConfig) SystemExtPath() string {
 	if c.config.productVariables.SystemExtPath != nil {
 		return *c.config.productVariables.SystemExtPath
