@@ -119,9 +119,10 @@ type Deps struct {
 
 	ObjFiles []string
 
-	GeneratedSources []string
-	GeneratedHeaders []string
-	GeneratedDeps    []string
+	GeneratedSources            []string
+	GeneratedHeaders            []string
+	DeviceFirstGeneratedHeaders []string
+	GeneratedDeps               []string
 
 	ReexportGeneratedHeaders []string
 
@@ -2607,6 +2608,11 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 			depTag = genHeaderExportDepTag
 		}
 		actx.AddDependency(c, depTag, gen)
+	}
+
+	for _, gen := range deps.DeviceFirstGeneratedHeaders {
+		depTag := genHeaderDepTag
+		actx.AddVariationDependencies(ctx.Config().AndroidFirstDeviceTarget.Variations(), depTag, gen)
 	}
 
 	crtVariations := GetCrtVariations(ctx, c)
