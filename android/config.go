@@ -1524,6 +1524,10 @@ func (c *deviceConfig) VendorPath() string {
 	return "vendor"
 }
 
+func (c *deviceConfig) BuildingVendorImage() bool {
+	return proptools.Bool(c.config.productVariables.BuildingVendorImage)
+}
+
 func (c *deviceConfig) CurrentApiLevelForVendorModules() string {
 	return StringDefault(c.config.productVariables.DeviceCurrentApiLevelForVendorModules, "current")
 }
