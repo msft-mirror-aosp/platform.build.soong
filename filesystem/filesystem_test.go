@@ -610,3 +610,22 @@ func TestDoNotPackageCrossPartitionDependencies(t *testing.T) {
 	fileList := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("fileList"))
 	android.AssertDeepEquals(t, "filesystem with dependencies on different partition", "bin/binfoo\n", fileList)
 }
+
+// If a cc_library is listed in `deps`, and it has a shared and static variant, then the shared variant
+// should be installed.
+func TestUseSharedVariationOfNativeLib(t *testing.T) {
+	result := fixture.RunTestWithBp(t, `
+		android_filesystem {
+			name: "myfilesystem",
+			deps: ["libfoo"],
+		}
+		// cc_library will create a static and shared variant.
+		cc_library {
+			name: "libfoo",
+		}
+	`)
+
+	partition := result.ModuleForTests("myfilesystem", "android_common")
+	fileList := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("fileList"))
+	android.AssertDeepEquals(t, "cc_library listed in deps", "lib64/libc++.so\nlib64/libc.so\nlib64/libdl.so\nlib64/libfoo.so\nlib64/libm.so\n", fileList)
+}
