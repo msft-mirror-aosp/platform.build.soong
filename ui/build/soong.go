@@ -52,7 +52,6 @@ const (
 
 	soongBuildTag      = "build"
 	jsonModuleGraphTag = "modulegraph"
-	queryviewTag       = "queryview"
 	soongDocsTag       = "soong_docs"
 
 	// bootstrapEpoch is used to determine if an incremental build is incompatible with the current
@@ -307,8 +306,6 @@ func bootstrapBlueprint(ctx Context, config Config) {
 		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--incremental-build-actions")
 	}
 
-	queryviewDir := filepath.Join(config.SoongOutDir(), "queryview")
-
 	pbfs := []PrimaryBuilderFactory{
 		{
 			name:         soongBuildTag,
@@ -325,15 +322,6 @@ func bootstrapBlueprint(ctx Context, config Config) {
 			specificArgs: append(baseArgs,
 				"--module_graph_file", config.ModuleGraphFile(),
 				"--module_actions_file", config.ModuleActionsFile(),
-			),
-		},
-		{
-			name:        queryviewTag,
-			description: fmt.Sprintf("generating the Soong module graph as a Bazel workspace at %s", queryviewDir),
-			config:      config,
-			output:      config.QueryviewMarkerFile(),
-			specificArgs: append(baseArgs,
-				"--bazel_queryview_dir", queryviewDir,
 			),
 		},
 		{
@@ -572,10 +560,6 @@ func runSoong(ctx Context, config Config) {
 			checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(jsonModuleGraphTag))
 		}
 
-		if config.Queryview() {
-			checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(queryviewTag))
-		}
-
 		if config.SoongDocs() {
 			checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(soongDocsTag))
 		}
@@ -668,10 +652,6 @@ func runSoong(ctx Context, config Config) {
 
 	if config.JsonModuleGraph() {
 		targets = append(targets, config.ModuleGraphFile())
-	}
-
-	if config.Queryview() {
-		targets = append(targets, config.QueryviewMarkerFile())
 	}
 
 	if config.SoongDocs() {
