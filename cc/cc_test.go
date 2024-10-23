@@ -2734,6 +2734,11 @@ func TestIncludeDirsExporting(t *testing.T) {
 
 func TestIncludeDirectoryOrdering(t *testing.T) {
 	t.Parallel()
+
+	expectedPlatformFlags := []string{
+		"-nostdlibinc",
+	}
+
 	baseExpectedFlags := []string{
 		"${config.ArmThumbCflags}",
 		"${config.ArmCflags}",
@@ -2795,9 +2800,9 @@ func TestIncludeDirectoryOrdering(t *testing.T) {
 	cstd := []string{"-std=gnu17", "-std=conly"}
 	cppstd := []string{"-std=gnu++20", "-std=cpp", "-fno-rtti"}
 
-	lastNDKIncludes := []string{
-		"out/soong/ndk/sysroot/usr/include",
-		"out/soong/ndk/sysroot/usr/include/arm-linux-androideabi",
+	lastNDKFlags := []string{
+		"--sysroot",
+		"out/soong/ndk/sysroot",
 	}
 
 	lastPlatformIncludes := []string{
@@ -2821,10 +2826,11 @@ func TestIncludeDirectoryOrdering(t *testing.T) {
 				expectedNDKSTLIncludes,
 				cflags,
 				cstd,
-				lastNDKIncludes,
+				lastNDKFlags,
 				[]string{"${config.NoOverrideGlobalCflags}", "${config.NoOverrideExternalGlobalCflags}"},
 			),
 			expectedPlatform: slices.Concat(
+				expectedPlatformFlags,
 				baseExpectedFlags,
 				expectedTargetPlatformFlags,
 				conly,
@@ -2846,10 +2852,11 @@ func TestIncludeDirectoryOrdering(t *testing.T) {
 				expectedNDKSTLIncludes,
 				cflags,
 				cppstd,
-				lastNDKIncludes,
+				lastNDKFlags,
 				[]string{"${config.NoOverrideGlobalCflags}", "${config.NoOverrideExternalGlobalCflags}"},
 			),
 			expectedPlatform: slices.Concat(
+				expectedPlatformFlags,
 				baseExpectedFlags,
 				expectedTargetPlatformFlags,
 				cppOnly,
@@ -2869,9 +2876,10 @@ func TestIncludeDirectoryOrdering(t *testing.T) {
 				[]string{"${config.CommonGlobalAsflags}"},
 				expectedIncludes,
 				expectedNDKSTLIncludes,
-				lastNDKIncludes,
+				lastNDKFlags,
 			),
 			expectedPlatform: slices.Concat(
+				expectedPlatformFlags,
 				baseExpectedFlags,
 				expectedTargetPlatformFlags,
 				[]string{"${config.CommonGlobalAsflags}"},
