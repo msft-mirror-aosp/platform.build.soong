@@ -104,6 +104,9 @@ func createFsGenState(ctx android.LoadHookContext) *FsGenState {
 		if ctx.DeviceConfig().BuildingVendorImage() && ctx.DeviceConfig().VendorPath() == "vendor" {
 			generatedPartitions = append(generatedPartitions, "vendor")
 		}
+		if ctx.DeviceConfig().BuildingProductImage() && ctx.DeviceConfig().ProductPath() == "product" {
+			generatedPartitions = append(generatedPartitions, "product")
+		}
 
 		return &FsGenState{
 			depCandidates: candidates,
@@ -345,6 +348,9 @@ func (f *filesystemCreator) createDeviceModule(ctx android.LoadHookContext) {
 	}
 	if android.InList("vendor", f.properties.Generated_partition_types) {
 		partitionProps.Vendor_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "vendor"))
+	}
+	if android.InList("product", f.properties.Generated_partition_types) {
+		partitionProps.Product_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "product"))
 	}
 
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
