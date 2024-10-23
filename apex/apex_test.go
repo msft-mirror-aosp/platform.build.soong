@@ -393,7 +393,7 @@ func TestBasicApex(t *testing.T) {
 			name: "foo.rust",
 			srcs: ["foo.rs"],
 			rlibs: ["libfoo.rlib.rust"],
-			rustlibs: ["libfoo.dylib.rust"],
+			rustlibs: ["libfoo.transitive.dylib.rust"],
 			apex_available: ["myapex"],
 		}
 
@@ -415,6 +415,13 @@ func TestBasicApex(t *testing.T) {
 
 		rust_library_dylib {
 			name: "libfoo.dylib.rust",
+			srcs: ["foo.rs"],
+			crate_name: "foo",
+			apex_available: ["myapex"],
+		}
+
+		rust_library_dylib {
+			name: "libfoo.transitive.dylib.rust",
 			srcs: ["foo.rs"],
 			crate_name: "foo",
 			apex_available: ["myapex"],
@@ -455,7 +462,7 @@ func TestBasicApex(t *testing.T) {
 				"//apex_available:platform",
 				"myapex",
 			],
-    }
+		}
 
 		cc_library_static {
 			name: "libstatic",
@@ -547,6 +554,7 @@ func TestBasicApex(t *testing.T) {
 	ensureListContains(t, ctx.ModuleVariantsForTests("myotherjar"), "android_common_apex10000")
 	ensureListContains(t, ctx.ModuleVariantsForTests("libfoo.rlib.rust"), "android_arm64_armv8-a_rlib_dylib-std_apex10000")
 	ensureListContains(t, ctx.ModuleVariantsForTests("libfoo.dylib.rust"), "android_arm64_armv8-a_dylib_apex10000")
+	ensureListContains(t, ctx.ModuleVariantsForTests("libfoo.transitive.dylib.rust"), "android_arm64_armv8-a_dylib_apex10000")
 	ensureListContains(t, ctx.ModuleVariantsForTests("libbar.ffi"), "android_arm64_armv8-a_shared_apex10000")
 	ensureListContains(t, ctx.ModuleVariantsForTests("libfoo.shared_from_rust"), "android_arm64_armv8-a_shared_apex10000")
 
@@ -556,6 +564,7 @@ func TestBasicApex(t *testing.T) {
 	ensureContains(t, copyCmds, "image.apex/javalib/myjar_stem.jar")
 	ensureContains(t, copyCmds, "image.apex/javalib/myjar_dex.jar")
 	ensureContains(t, copyCmds, "image.apex/lib64/libfoo.dylib.rust.dylib.so")
+	ensureContains(t, copyCmds, "image.apex/lib64/libfoo.transitive.dylib.rust.dylib.so")
 	ensureContains(t, copyCmds, "image.apex/lib64/libfoo.ffi.so")
 	ensureContains(t, copyCmds, "image.apex/lib64/libbar.ffi.so")
 	ensureContains(t, copyCmds, "image.apex/lib64/libfoo.shared_from_rust.so")
