@@ -404,6 +404,10 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams) 
 		r8Flags = append(r8Flags, "--resource-output", d.resourcesOutput.Path().String())
 		if d.dexProperties.optimizedResourceShrinkingEnabled(ctx) {
 			r8Flags = append(r8Flags, "--optimized-resource-shrinking")
+			if Bool(d.dexProperties.Optimize.Optimized_shrink_resources) {
+				// Explicitly opted into optimized shrinking, no need for keeping R$id entries
+				r8Flags = append(r8Flags, "--force-optimized-resource-shrinking")
+			}
 		}
 	}
 
