@@ -1340,12 +1340,14 @@ func AndroidAppFactory() android.Module {
 			Aaptflags      []string
 			Manifest       *string
 			Resource_dirs  []string
+			Flags_packages []string
 		}{
 			Name:           proptools.StringPtr(rroPackageName),
 			Filter_product: proptools.StringPtr(characteristics),
 			Aaptflags:      []string{"--auto-add-overlay"},
 			Manifest:       proptools.StringPtr(":" + rroManifestName),
 			Resource_dirs:  a.aaptProperties.Resource_dirs,
+			Flags_packages: a.aaptProperties.Flags_packages,
 		}
 		if !Bool(a.aaptProperties.Aapt_include_all_resources) {
 			for _, aaptConfig := range ctx.Config().ProductAAPTConfig() {
@@ -1438,6 +1440,8 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.testConfig = a.FixTestConfig(ctx, testConfig)
 	a.extraTestConfigs = android.PathsForModuleSrc(ctx, a.testProperties.Test_options.Extra_test_configs)
 	a.data = android.PathsForModuleSrc(ctx, a.testProperties.Data)
+	a.data = append(a.data, android.PathsForModuleSrc(ctx, a.testProperties.Device_common_data)...)
+	a.data = append(a.data, android.PathsForModuleSrc(ctx, a.testProperties.Device_first_data)...)
 	android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 	android.SetProvider(ctx, tradefed.BaseTestProviderKey, tradefed.BaseTestProviderData{
 		InstalledFiles:          a.data,
