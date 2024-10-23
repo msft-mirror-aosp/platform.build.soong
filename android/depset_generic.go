@@ -16,6 +16,8 @@ package android
 
 import (
 	"fmt"
+	"iter"
+	"slices"
 
 	"github.com/google/blueprint"
 )
@@ -60,11 +62,24 @@ type depSettableType comparable
 // A DepSet is created by NewDepSet or NewDepSetBuilder.Build from the slice for direct contents
 // and the *DepSets of dependencies. A DepSet is immutable once created.
 type DepSet[T depSettableType] struct {
+	handle *depSet[T]
+}
+
+type depSet[T depSettableType] struct {
 	preorder   bool
 	reverse    bool
 	order      DepSetOrder
 	direct     []T
-	transitive []*DepSet[T]
+	transitive []DepSet[T]
+}
+
+func (d DepSet[T]) impl() *depSet[T] {
+	return d.handle
+}
+
+func (d DepSet[T]) order() DepSetOrder {
+	impl := d.impl()
+	return impl.order
 }
 
 type depSetGob[T depSettableType] struct {
@@ -72,25 +87,28 @@ type depSetGob[T depSettableType] struct {
 	Reverse    bool
 	Order      DepSetOrder
 	Direct     []T
-	Transitive []*DepSet[T]
+	Transitive []DepSet[T]
 }
 
 func (d *DepSet[T]) ToGob() *depSetGob[T] {
+	impl := d.impl()
 	return &depSetGob[T]{
-		Preorder:   d.preorder,
-		Reverse:    d.reverse,
-		Order:      d.order,
-		Direct:     d.direct,
-		Transitive: d.transitive,
+		Preorder:   impl.preorder,
+		Reverse:    impl.reverse,
+		Order:      impl.order,
+		Direct:     impl.direct,
+		Transitive: impl.transitive,
 	}
 }
 
 func (d *DepSet[T]) FromGob(data *depSetGob[T]) {
-	d.preorder = data.Preorder
-	d.reverse = data.Reverse
-	d.order = data.Order
-	d.direct = data.Direct
-	d.transitive = data.Transitive
+	d.handle = &depSet[T]{
+		preorder:   data.Preorder,
+		reverse:    data.Reverse,
+		order:      data.Order,
+		direct:     data.Direct,
+		transitive: data.Transitive,
+	}
 }
 
 func (d *DepSet[T]) GobEncode() ([]byte, error) {
@@ -102,40 +120,59 @@ func (d *DepSet[T]) GobDecode(data []byte) error {
 }
 
 // NewDepSet returns an immutable DepSet with the given order, direct and transitive contents.
-func NewDepSet[T depSettableType](order DepSetOrder, direct []T, transitive []*DepSet[T]) *DepSet[T] {
+func NewDepSet[T depSettableType](order DepSetOrder, direct []T, transitive []DepSet[T]) DepSet[T] {
 	var directCopy []T
-	var transitiveCopy []*DepSet[T]
+	var transitiveCopy []DepSet[T]
+	nonEmptyTransitiveCount := 0
 	for _, t := range transitive {
-		if t.order != order {
-			panic(fmt.Errorf("incompatible order, new DepSet is %s but transitive DepSet is %s",
-				order, t.order))
+		if t.handle != nil {
+			if t.order() != order {
+				panic(fmt.Errorf("incompatible order, new DepSet is %s but transitive DepSet is %s",
+					order, t.order()))
+			}
+			nonEmptyTransitiveCount++
 		}
 	}
 
+	if nonEmptyTransitiveCount > 0 {
+		transitiveCopy = make([]DepSet[T], 0, nonEmptyTransitiveCount)
+	}
+	var transitiveIter iter.Seq2[int, DepSet[T]]
 	if order == TOPOLOGICAL {
 		// TOPOLOGICAL is implemented as a postorder traversal followed by reversing the output.
 		// Pre-reverse the inputs here so their order is maintained in the output.
 		directCopy = ReverseSlice(direct)
-		transitiveCopy = ReverseSlice(transitive)
+		transitiveIter = slices.Backward(transitive)
 	} else {
-		directCopy = append([]T(nil), direct...)
-		transitiveCopy = append([]*DepSet[T](nil), transitive...)
+		directCopy = slices.Clone(direct)
+		transitiveIter = slices.All(transitive)
+	}
+	for _, t := range transitiveIter {
+		if t.handle != nil {
+			transitiveCopy = append(transitiveCopy, t)
+		}
 	}
 
-	return &DepSet[T]{
+	if len(directCopy) == 0 && len(transitive) == 0 {
+		return DepSet[T]{nil}
+	}
+
+	depSet := &depSet[T]{
 		preorder:   order == PREORDER,
 		reverse:    order == TOPOLOGICAL,
 		order:      order,
 		direct:     directCopy,
 		transitive: transitiveCopy,
 	}
+
+	return DepSet[T]{depSet}
 }
 
 // DepSetBuilder is used to create an immutable DepSet.
 type DepSetBuilder[T depSettableType] struct {
 	order      DepSetOrder
 	direct     []T
-	transitive []*DepSet[T]
+	transitive []DepSet[T]
 }
 
 // NewDepSetBuilder returns a DepSetBuilder to create an immutable DepSet with the given order and
@@ -162,11 +199,11 @@ func (b *DepSetBuilder[T]) Direct(direct ...T) *DepSetBuilder[T] {
 
 // Transitive adds transitive contents to the DepSet being built by a DepSetBuilder. Newly added
 // transitive contents are to the right of any existing transitive contents.
-func (b *DepSetBuilder[T]) Transitive(transitive ...*DepSet[T]) *DepSetBuilder[T] {
+func (b *DepSetBuilder[T]) Transitive(transitive ...DepSet[T]) *DepSetBuilder[T] {
 	for _, t := range transitive {
-		if t.order != b.order {
+		if t.handle != nil && t.order() != b.order {
 			panic(fmt.Errorf("incompatible order, new DepSet is %s but transitive DepSet is %s",
-				b.order, t.order))
+				b.order, t.order()))
 		}
 	}
 	b.transitive = append(b.transitive, transitive...)
@@ -175,29 +212,30 @@ func (b *DepSetBuilder[T]) Transitive(transitive ...*DepSet[T]) *DepSetBuilder[T
 
 // Returns the DepSet being built by this DepSetBuilder.  The DepSetBuilder retains its contents
 // for creating more depSets.
-func (b *DepSetBuilder[T]) Build() *DepSet[T] {
+func (b *DepSetBuilder[T]) Build() DepSet[T] {
 	return NewDepSet(b.order, b.direct, b.transitive)
 }
 
 // walk calls the visit method in depth-first order on a DepSet, preordered if d.preorder is set,
 // otherwise postordered.
-func (d *DepSet[T]) walk(visit func([]T)) {
-	visited := make(map[*DepSet[T]]bool)
+func (d DepSet[T]) walk(visit func([]T)) {
+	visited := make(map[DepSet[T]]bool)
 
-	var dfs func(d *DepSet[T])
-	dfs = func(d *DepSet[T]) {
+	var dfs func(d DepSet[T])
+	dfs = func(d DepSet[T]) {
+		impl := d.impl()
 		visited[d] = true
-		if d.preorder {
-			visit(d.direct)
+		if impl.preorder {
+			visit(impl.direct)
 		}
-		for _, dep := range d.transitive {
+		for _, dep := range impl.transitive {
 			if !visited[dep] {
 				dfs(dep)
 			}
 		}
 
-		if !d.preorder {
-			visit(d.direct)
+		if !impl.preorder {
+			visit(impl.direct)
 		}
 	}
 
@@ -210,16 +248,17 @@ func (d *DepSet[T]) walk(visit func([]T)) {
 // after all of their parents (unless there are duplicate direct elements in the DepSet or any of
 // its transitive dependencies, in which case the ordering of the duplicated element is not
 // guaranteed).
-func (d *DepSet[T]) ToList() []T {
-	if d == nil {
+func (d DepSet[T]) ToList() []T {
+	if d.handle == nil {
 		return nil
 	}
+	impl := d.impl()
 	var list []T
 	d.walk(func(paths []T) {
 		list = append(list, paths...)
 	})
 	list = firstUniqueInPlace(list)
-	if d.reverse {
+	if impl.reverse {
 		ReverseSliceInPlace(list)
 	}
 	return list

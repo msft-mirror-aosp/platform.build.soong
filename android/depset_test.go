@@ -63,12 +63,12 @@ func TestDepSet(t *testing.T) {
 
 	tests := []struct {
 		name                             string
-		depSet                           func(t *testing.T, order DepSetOrder) *DepSet[Path]
+		depSet                           func(t *testing.T, order DepSetOrder) DepSet[Path]
 		postorder, preorder, topological []string
 	}{
 		{
 			name: "simple",
-			depSet: func(t *testing.T, order DepSetOrder) *DepSet[Path] {
+			depSet: func(t *testing.T, order DepSetOrder) DepSet[Path] {
 				return NewDepSet[Path](order, Paths{c, a, b}, nil)
 			},
 			postorder:   []string{"c", "a", "b"},
@@ -77,7 +77,7 @@ func TestDepSet(t *testing.T) {
 		},
 		{
 			name: "simpleNoDuplicates",
-			depSet: func(t *testing.T, order DepSetOrder) *DepSet[Path] {
+			depSet: func(t *testing.T, order DepSetOrder) DepSet[Path] {
 				return NewDepSet[Path](order, Paths{c, a, a, a, b}, nil)
 			},
 			postorder:   []string{"c", "a", "b"},
@@ -86,9 +86,9 @@ func TestDepSet(t *testing.T) {
 		},
 		{
 			name: "nesting",
-			depSet: func(t *testing.T, order DepSetOrder) *DepSet[Path] {
+			depSet: func(t *testing.T, order DepSetOrder) DepSet[Path] {
 				subset := NewDepSet[Path](order, Paths{c, a, e}, nil)
-				return NewDepSet[Path](order, Paths{b, d}, []*DepSet[Path]{subset})
+				return NewDepSet[Path](order, Paths{b, d}, []DepSet[Path]{subset})
 			},
 			postorder:   []string{"c", "a", "e", "b", "d"},
 			preorder:    []string{"b", "d", "c", "a", "e"},
@@ -96,7 +96,7 @@ func TestDepSet(t *testing.T) {
 		},
 		{
 			name: "builderReuse",
-			depSet: func(t *testing.T, order DepSetOrder) *DepSet[Path] {
+			depSet: func(t *testing.T, order DepSetOrder) DepSet[Path] {
 				assertEquals := func(t *testing.T, w, g Paths) {
 					t.Helper()
 					if !reflect.DeepEqual(w, g) {
@@ -122,7 +122,7 @@ func TestDepSet(t *testing.T) {
 		},
 		{
 			name: "builderChaining",
-			depSet: func(t *testing.T, order DepSetOrder) *DepSet[Path] {
+			depSet: func(t *testing.T, order DepSetOrder) DepSet[Path] {
 				return NewDepSetBuilder[Path](order).Direct(b).Direct(d).
 					Transitive(NewDepSetBuilder[Path](order).Direct(c, a, e).Build()).Build()
 			},
@@ -132,7 +132,7 @@ func TestDepSet(t *testing.T) {
 		},
 		{
 			name: "transitiveDepsHandledSeparately",
-			depSet: func(t *testing.T, order DepSetOrder) *DepSet[Path] {
+			depSet: func(t *testing.T, order DepSetOrder) DepSet[Path] {
 				subset := NewDepSetBuilder[Path](order).Direct(c, a, e).Build()
 				builder := NewDepSetBuilder[Path](order)
 				// The fact that we add the transitive subset between the Direct(b) and Direct(d)
@@ -148,7 +148,7 @@ func TestDepSet(t *testing.T) {
 		},
 		{
 			name: "nestingNoDuplicates",
-			depSet: func(t *testing.T, order DepSetOrder) *DepSet[Path] {
+			depSet: func(t *testing.T, order DepSetOrder) DepSet[Path] {
 				subset := NewDepSetBuilder[Path](order).Direct(c, a, e).Build()
 				return NewDepSetBuilder[Path](order).Direct(b, d, e).Transitive(subset).Build()
 			},
@@ -158,7 +158,7 @@ func TestDepSet(t *testing.T) {
 		},
 		{
 			name: "chain",
-			depSet: func(t *testing.T, order DepSetOrder) *DepSet[Path] {
+			depSet: func(t *testing.T, order DepSetOrder) DepSet[Path] {
 				c := NewDepSetBuilder[Path](order).Direct(c).Build()
 				b := NewDepSetBuilder[Path](order).Direct(b).Transitive(c).Build()
 				a := NewDepSetBuilder[Path](order).Direct(a).Transitive(b).Build()
@@ -171,7 +171,7 @@ func TestDepSet(t *testing.T) {
 		},
 		{
 			name: "diamond",
-			depSet: func(t *testing.T, order DepSetOrder) *DepSet[Path] {
+			depSet: func(t *testing.T, order DepSetOrder) DepSet[Path] {
 				d := NewDepSetBuilder[Path](order).Direct(d).Build()
 				c := NewDepSetBuilder[Path](order).Direct(c).Transitive(d).Build()
 				b := NewDepSetBuilder[Path](order).Direct(b).Transitive(d).Build()
@@ -185,7 +185,7 @@ func TestDepSet(t *testing.T) {
 		},
 		{
 			name: "extendedDiamond",
-			depSet: func(t *testing.T, order DepSetOrder) *DepSet[Path] {
+			depSet: func(t *testing.T, order DepSetOrder) DepSet[Path] {
 				d := NewDepSetBuilder[Path](order).Direct(d).Build()
 				e := NewDepSetBuilder[Path](order).Direct(e).Build()
 				b := NewDepSetBuilder[Path](order).Direct(b).Transitive(d).Transitive(e).Build()
@@ -199,7 +199,7 @@ func TestDepSet(t *testing.T) {
 		},
 		{
 			name: "extendedDiamondRightArm",
-			depSet: func(t *testing.T, order DepSetOrder) *DepSet[Path] {
+			depSet: func(t *testing.T, order DepSetOrder) DepSet[Path] {
 				d := NewDepSetBuilder[Path](order).Direct(d).Build()
 				e := NewDepSetBuilder[Path](order).Direct(e).Build()
 				b := NewDepSetBuilder[Path](order).Direct(b).Transitive(d).Transitive(e).Build()
@@ -214,7 +214,7 @@ func TestDepSet(t *testing.T) {
 		},
 		{
 			name: "orderConflict",
-			depSet: func(t *testing.T, order DepSetOrder) *DepSet[Path] {
+			depSet: func(t *testing.T, order DepSetOrder) DepSet[Path] {
 				child1 := NewDepSetBuilder[Path](order).Direct(a, b).Build()
 				child2 := NewDepSetBuilder[Path](order).Direct(b, a).Build()
 				parent := NewDepSetBuilder[Path](order).Transitive(child1).Transitive(child2).Build()
@@ -226,7 +226,7 @@ func TestDepSet(t *testing.T) {
 		},
 		{
 			name: "orderConflictNested",
-			depSet: func(t *testing.T, order DepSetOrder) *DepSet[Path] {
+			depSet: func(t *testing.T, order DepSetOrder) DepSet[Path] {
 				a := NewDepSetBuilder[Path](order).Direct(a).Build()
 				b := NewDepSetBuilder[Path](order).Direct(b).Build()
 				child1 := NewDepSetBuilder[Path](order).Transitive(a).Transitive(b).Build()
@@ -237,6 +237,18 @@ func TestDepSet(t *testing.T) {
 			postorder:   []string{"a", "b"},
 			preorder:    []string{"a", "b"},
 			topological: []string{"b", "a"},
+		},
+		{
+			name: "zeroDepSet",
+			depSet: func(t *testing.T, order DepSetOrder) DepSet[Path] {
+				a := NewDepSetBuilder[Path](order).Build()
+				var b DepSet[Path]
+				c := NewDepSetBuilder[Path](order).Direct(c).Transitive(a, b).Build()
+				return c
+			},
+			postorder:   []string{"c"},
+			preorder:    []string{"c"},
+			topological: []string{"c"},
 		},
 	}
 
@@ -277,7 +289,7 @@ func TestDepSetInvalidOrder(t *testing.T) {
 				}
 			}
 		}()
-		NewDepSet(order1, nil, []*DepSet[Path]{NewDepSet[Path](order2, nil, nil)})
+		NewDepSet(order1, nil, []DepSet[Path]{NewDepSet[Path](order2, Paths{PathForTesting("a")}, nil)})
 		t.Fatal("expected panic")
 	}
 
