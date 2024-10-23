@@ -351,6 +351,7 @@ func (fuzzBin *fuzzBinary) install(ctx ModuleContext, file android.Path) {
 
 func PackageFuzzModule(ctx android.ModuleContext, fuzzPackagedModule fuzz.FuzzPackagedModule, pctx android.PackageContext) fuzz.FuzzPackagedModule {
 	fuzzPackagedModule.Corpus = android.PathsForModuleSrc(ctx, fuzzPackagedModule.FuzzProperties.Corpus)
+	fuzzPackagedModule.Corpus = append(fuzzPackagedModule.Corpus, android.PathsForModuleSrc(ctx, fuzzPackagedModule.FuzzProperties.Device_common_corpus)...)
 
 	fuzzPackagedModule.Data = android.PathsForModuleSrc(ctx, fuzzPackagedModule.FuzzProperties.Data)
 
