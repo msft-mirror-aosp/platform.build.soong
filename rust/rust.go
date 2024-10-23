@@ -23,6 +23,7 @@ import (
 	"android/soong/testing"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
@@ -179,7 +180,7 @@ type Module struct {
 	// For apex variants, this is set as apex.min_sdk_version
 	apexSdkVersion android.ApiLevel
 
-	transitiveAndroidMkSharedLibs *android.DepSet[string]
+	transitiveAndroidMkSharedLibs depset.DepSet[string]
 }
 
 func (mod *Module) Header() bool {
@@ -1217,7 +1218,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 	skipModuleList := map[string]bool{}
 
-	var transitiveAndroidMkSharedLibs []*android.DepSet[string]
+	var transitiveAndroidMkSharedLibs []depset.DepSet[string]
 	var directAndroidMkSharedLibs []string
 
 	ctx.VisitDirectDeps(func(dep android.Module) {
@@ -1453,7 +1454,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		}
 	})
 
-	mod.transitiveAndroidMkSharedLibs = android.NewDepSet[string](android.PREORDER, directAndroidMkSharedLibs, transitiveAndroidMkSharedLibs)
+	mod.transitiveAndroidMkSharedLibs = depset.New[string](depset.PREORDER, directAndroidMkSharedLibs, transitiveAndroidMkSharedLibs)
 
 	var rlibDepFiles RustLibraries
 	aliases := mod.compiler.Aliases()

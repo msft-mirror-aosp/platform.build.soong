@@ -27,6 +27,7 @@ import (
 	"android/soong/android"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
 	"github.com/google/blueprint/pathtools"
 	"github.com/google/blueprint/proptools"
 )
@@ -1017,7 +1018,7 @@ func (library *libraryDecorator) linkStatic(ctx ModuleContext,
 			Objects:                      library.objects,
 			WholeStaticLibsFromPrebuilts: library.wholeStaticLibsFromPrebuilts,
 
-			TransitiveStaticLibrariesForOrdering: android.NewDepSetBuilder[android.Path](android.TOPOLOGICAL).
+			TransitiveStaticLibrariesForOrdering: depset.NewBuilder[android.Path](depset.TOPOLOGICAL).
 				Direct(outputFile).
 				Transitive(deps.TranstiveStaticLibrariesForOrdering).
 				Build(),
@@ -1182,7 +1183,7 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 	library.coverageOutputFile = transformCoverageFilesToZip(ctx, objs, library.getLibName(ctx))
 	library.linkSAbiDumpFiles(ctx, deps, objs, fileName, unstrippedOutputFile)
 
-	var transitiveStaticLibrariesForOrdering *android.DepSet[android.Path]
+	var transitiveStaticLibrariesForOrdering depset.DepSet[android.Path]
 	if static := ctx.GetDirectDepsWithTag(staticVariantTag); len(static) > 0 {
 		s, _ := android.OtherModuleProvider(ctx, static[0], StaticLibraryInfoProvider)
 		transitiveStaticLibrariesForOrdering = s.TransitiveStaticLibrariesForOrdering
