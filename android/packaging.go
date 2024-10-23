@@ -377,7 +377,17 @@ func (p *PackagingBase) AddDeps(ctx BottomUpMutatorContext, depTag blueprint.Dep
 			if p.IgnoreMissingDependencies && !ctx.OtherModuleExists(dep) {
 				continue
 			}
-			ctx.AddFarVariationDependencies(t.Variations(), depTag, dep)
+			targetVariation := t.Variations()
+			sharedVariation := blueprint.Variation{
+				Mutator:   "link",
+				Variation: "shared",
+			}
+			// If a shared variation exists, use that. Static variants do not provide any standalone files
+			// for packaging.
+			if ctx.OtherModuleFarDependencyVariantExists([]blueprint.Variation{sharedVariation}, dep) {
+				targetVariation = append(targetVariation, sharedVariation)
+			}
+			ctx.AddFarVariationDependencies(targetVariation, depTag, dep)
 		}
 	}
 }

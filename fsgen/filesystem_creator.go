@@ -101,6 +101,12 @@ func createFsGenState(ctx android.LoadHookContext) *FsGenState {
 		if ctx.DeviceConfig().SystemExtPath() == "system_ext" {
 			generatedPartitions = append(generatedPartitions, "system_ext")
 		}
+		if ctx.DeviceConfig().BuildingVendorImage() && ctx.DeviceConfig().VendorPath() == "vendor" {
+			generatedPartitions = append(generatedPartitions, "vendor")
+		}
+		if ctx.DeviceConfig().BuildingProductImage() && ctx.DeviceConfig().ProductPath() == "product" {
+			generatedPartitions = append(generatedPartitions, "product")
+		}
 
 		return &FsGenState{
 			depCandidates: candidates,
@@ -173,7 +179,7 @@ func collectDepsMutator(mctx android.BottomUpMutatorContext) {
 	fsGenState := mctx.Config().Get(fsGenStateOnceKey).(*FsGenState)
 
 	m := mctx.Module()
-	if slices.Contains(fsGenState.depCandidates, m.Name()) {
+	if m.Target().Os.Class == android.Device && slices.Contains(fsGenState.depCandidates, m.Name()) {
 		installPartition := m.PartitionTag(mctx.DeviceConfig())
 		fsGenState.fsDepsMutex.Lock()
 		// Only add the module as dependency when:
@@ -339,6 +345,12 @@ func (f *filesystemCreator) createDeviceModule(ctx android.LoadHookContext) {
 	}
 	if android.InList("system_ext", f.properties.Generated_partition_types) {
 		partitionProps.System_ext_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system_ext"))
+	}
+	if android.InList("vendor", f.properties.Generated_partition_types) {
+		partitionProps.Vendor_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "vendor"))
+	}
+	if android.InList("product", f.properties.Generated_partition_types) {
+		partitionProps.Product_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "product"))
 	}
 
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
