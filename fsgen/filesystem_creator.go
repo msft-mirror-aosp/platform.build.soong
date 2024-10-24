@@ -130,7 +130,10 @@ func createFsGenState(ctx android.LoadHookContext) *FsGenState {
 					"public.libraries.android.txt": defaultDepCandidateProps(ctx.Config()),
 					"update_engine_sideload":       defaultDepCandidateProps(ctx.Config()),
 				},
-				"vendor":  newMultilibDeps(),
+				"vendor": &map[string]*depCandidateProps{
+					"fs_config_files_vendor": defaultDepCandidateProps(ctx.Config()),
+					"fs_config_dirs_vendor":  defaultDepCandidateProps(ctx.Config()),
+				},
 				"odm":     newMultilibDeps(),
 				"product": newMultilibDeps(),
 				"system_ext": &map[string]*depCandidateProps{
@@ -362,6 +365,24 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 		fsProps.Build_logtags = proptools.BoolPtr(true)
 		// https://source.corp.google.com/h/googleplex-android/platform/build//639d79f5012a6542ab1f733b0697db45761ab0f3:core/packaging/flags.mk;l=21;drc=5ba8a8b77507f93aa48cc61c5ba3f31a4d0cbf37;bpv=1;bpt=0
 		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
+		// Identical to that of the generic_system_image
+		fsProps.Fsverity.Inputs = []string{
+			"etc/boot-image.prof",
+			"etc/dirty-image-objects",
+			"etc/preloaded-classes",
+			"etc/classpaths/*.pb",
+			"framework/*",
+			"framework/*/*",     // framework/{arch}
+			"framework/oat/*/*", // framework/oat/{arch}
+		}
+		fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
+	case "system_ext":
+		fsProps.Fsverity.Inputs = []string{
+			"framework/*",
+			"framework/*/*",     // framework/{arch}
+			"framework/oat/*/*", // framework/oat/{arch}
+		}
+		fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
 	case "product":
 		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
 	case "vendor":
@@ -440,18 +461,6 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	fsProps.Base_dir = proptools.StringPtr(partitionType)
 
 	fsProps.Is_auto_generated = proptools.BoolPtr(true)
-
-	// Identical to that of the generic_system_image
-	fsProps.Fsverity.Inputs = []string{
-		"etc/boot-image.prof",
-		"etc/dirty-image-objects",
-		"etc/preloaded-classes",
-		"etc/classpaths/*.pb",
-		"framework/*",
-		"framework/*/*",     // framework/{arch}
-		"framework/oat/*/*", // framework/oat/{arch}
-	}
-	fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
 
 	partitionSpecificFsProps(fsProps, partitionType)
 

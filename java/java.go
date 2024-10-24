@@ -26,7 +26,6 @@ import (
 	"strings"
 
 	"android/soong/remoteexec"
-	"android/soong/testing"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -1301,6 +1300,12 @@ type testProperties struct {
 	// host test.
 	Device_first_data []string `android:"path_device_first"`
 
+	// same as data, but adds dependencies using the device's os variation and the device's first
+	// 32-bit architecture's variation. If a 32-bit arch doesn't exist for this device, it will use
+	// a 64 bit arch instead. Can be used to add a module built for device to the data of a
+	// host test.
+	Device_first_prefer32_data []string `android:"path_device_first_prefer32"`
+
 	// Flag to indicate whether or not to create test config automatically. If AndroidTest.xml
 	// doesn't exist next to the Android.bp, this attribute doesn't need to be set to true
 	// explicitly.
@@ -1551,7 +1556,6 @@ func (j *TestHost) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	j.Test.generateAndroidBuildActionsWithConfig(ctx, configs)
-	android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 	android.SetProvider(ctx, tradefed.BaseTestProviderKey, tradefed.BaseTestProviderData{
 		InstalledFiles:      j.data,
 		OutputFile:          j.outputFile,
@@ -1567,7 +1571,6 @@ func (j *TestHost) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 func (j *Test) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	checkMinSdkVersionMts(ctx, j.MinSdkVersion(ctx))
 	j.generateAndroidBuildActionsWithConfig(ctx, nil)
-	android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 }
 
 func (j *Test) generateAndroidBuildActionsWithConfig(ctx android.ModuleContext, configs []tradefed.Config) {
@@ -1593,6 +1596,7 @@ func (j *Test) generateAndroidBuildActionsWithConfig(ctx android.ModuleContext, 
 	j.data = android.PathsForModuleSrc(ctx, j.testProperties.Data)
 	j.data = append(j.data, android.PathsForModuleSrc(ctx, j.testProperties.Device_common_data)...)
 	j.data = append(j.data, android.PathsForModuleSrc(ctx, j.testProperties.Device_first_data)...)
+	j.data = append(j.data, android.PathsForModuleSrc(ctx, j.testProperties.Device_first_prefer32_data)...)
 
 	j.extraTestConfigs = android.PathsForModuleSrc(ctx, j.testProperties.Test_options.Extra_test_configs)
 
