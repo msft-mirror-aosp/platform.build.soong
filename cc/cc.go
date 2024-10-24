@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/aidl_library"
@@ -168,7 +169,7 @@ type PathDeps struct {
 	RustRlibDeps []RustRlibDep
 
 	// Transitive static library dependencies of static libraries for use in ordering.
-	TranstiveStaticLibrariesForOrdering *android.DepSet[android.Path]
+	TranstiveStaticLibrariesForOrdering depset.DepSet[android.Path]
 
 	// Paths to .o files
 	Objs Objects
@@ -3377,19 +3378,17 @@ func ChooseStubOrImpl(ctx android.ModuleContext, dep android.Module) (SharedLibr
 
 // orderStaticModuleDeps rearranges the order of the static library dependencies of the module
 // to match the topological order of the dependency tree, including any static analogues of
-// direct shared libraries.  It returns the ordered static dependencies, and an android.DepSet
+// direct shared libraries.  It returns the ordered static dependencies, and a depset.DepSet
 // of the transitive dependencies.
-func orderStaticModuleDeps(staticDeps []StaticLibraryInfo, sharedDeps []SharedLibraryInfo) (ordered android.Paths, transitive *android.DepSet[android.Path]) {
-	transitiveStaticLibsBuilder := android.NewDepSetBuilder[android.Path](android.TOPOLOGICAL)
+func orderStaticModuleDeps(staticDeps []StaticLibraryInfo, sharedDeps []SharedLibraryInfo) (ordered android.Paths, transitive depset.DepSet[android.Path]) {
+	transitiveStaticLibsBuilder := depset.NewBuilder[android.Path](depset.TOPOLOGICAL)
 	var staticPaths android.Paths
 	for _, staticDep := range staticDeps {
 		staticPaths = append(staticPaths, staticDep.StaticLibrary)
 		transitiveStaticLibsBuilder.Transitive(staticDep.TransitiveStaticLibrariesForOrdering)
 	}
 	for _, sharedDep := range sharedDeps {
-		if sharedDep.TransitiveStaticLibrariesForOrdering != nil {
-			transitiveStaticLibsBuilder.Transitive(sharedDep.TransitiveStaticLibrariesForOrdering)
-		}
+		transitiveStaticLibsBuilder.Transitive(sharedDep.TransitiveStaticLibrariesForOrdering)
 	}
 	transitiveStaticLibs := transitiveStaticLibsBuilder.Build()
 
