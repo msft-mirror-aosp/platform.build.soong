@@ -16,7 +16,6 @@ bootstrap_go_package {
         "soong-etc",
         "soong-fuzz",
         "soong-genrule",
-        "soong-testing",
         "soong-tradefed",
     ],
     srcs: [
