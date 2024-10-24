@@ -71,6 +71,15 @@ type CommonProperties struct {
 	// list of files that should be excluded from java_resources and java_resource_dirs
 	Exclude_java_resources []string `android:"path,arch_variant"`
 
+	// Same as java_resources, but modules added here will use the device variant. Can be useful
+	// for making a host test that tests the contents of a device built app.
+	Device_common_java_resources []string `android:"path_device_common"`
+
+	// Same as java_resources, but modules added here will use the device's os variant and the
+	// device's first architecture variant. Can be useful for making a host test that tests the
+	// contents of a native device built app.
+	Device_first_java_resources []string `android:"path_device_first"`
+
 	// list of module-specific flags that will be used for javac compiles
 	Javacflags []string `android:"arch_variant"`
 
@@ -112,6 +121,9 @@ type CommonProperties struct {
 
 	// List of modules to use as annotation processors
 	Plugins []string
+
+	// List of modules to use as kotlin plugin
+	Kotlin_plugins []string
 
 	// List of modules to export to libraries that directly depend on this library as annotation
 	// processors.  Note that if the plugins set generates_api: true this will disable the turbine
@@ -862,7 +874,7 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 					// explicitly listed in the optional_uses_libs property.
 					tag := usesLibReqTag
 					if android.InList(*lib, dexpreopt.OptionalCompatUsesLibs) ||
-						android.InList(*lib, j.usesLibrary.usesLibraryProperties.Optional_uses_libs) {
+						android.InList(*lib, j.usesLibrary.usesLibraryProperties.Optional_uses_libs.GetOrDefault(ctx, nil)) {
 						tag = usesLibOptTag
 					}
 					ctx.AddVariationDependencies(nil, tag, *lib)
@@ -872,6 +884,7 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 	}
 
 	ctx.AddFarVariationDependencies(ctx.Config().BuildOSCommonTarget.Variations(), pluginTag, j.properties.Plugins...)
+	ctx.AddFarVariationDependencies(ctx.Config().BuildOSCommonTarget.Variations(), kotlinPluginTag, j.properties.Kotlin_plugins...)
 	ctx.AddFarVariationDependencies(ctx.Config().BuildOSCommonTarget.Variations(), errorpronePluginTag, j.properties.Errorprone.Extra_check_modules...)
 	ctx.AddFarVariationDependencies(ctx.Config().BuildOSCommonTarget.Variations(), exportedPluginTag, j.properties.Exported_plugins...)
 
@@ -904,7 +917,7 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 
 	if j.useCompose(ctx) {
 		ctx.AddVariationDependencies(ctx.Config().BuildOSCommonTarget.Variations(), kotlinPluginTag,
-			"androidx.compose.compiler_compiler-hosted")
+			"androidx.compose.compiler_compiler-hosted-plugin")
 	}
 }
 
@@ -1482,6 +1495,10 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	dirArgs, dirDeps := ResourceDirsToJarArgs(ctx, j.properties.Java_resource_dirs,
 		j.properties.Exclude_java_resource_dirs, j.properties.Exclude_java_resources)
 	fileArgs, fileDeps := ResourceFilesToJarArgs(ctx, j.properties.Java_resources, j.properties.Exclude_java_resources)
+	fileArgs2, fileDeps2 := ResourceFilesToJarArgs(ctx, j.properties.Device_common_java_resources, nil)
+	fileArgs3, fileDeps3 := ResourceFilesToJarArgs(ctx, j.properties.Device_first_java_resources, nil)
+	fileArgs = slices.Concat(fileArgs, fileArgs2, fileArgs3)
+	fileDeps = slices.Concat(fileDeps, fileDeps2, fileDeps3)
 	extraArgs, extraDeps := resourcePathsToJarArgs(j.extraResources), j.extraResources
 
 	var resArgs []string
@@ -2499,7 +2516,11 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 					ctx.PropertyErrorf("exported_plugins", "%q is not a java_plugin module", otherName)
 				}
 			case kotlinPluginTag:
-				deps.kotlinPlugins = append(deps.kotlinPlugins, dep.ImplementationAndResourcesJars...)
+				if _, ok := module.(*KotlinPlugin); ok {
+					deps.kotlinPlugins = append(deps.kotlinPlugins, dep.ImplementationAndResourcesJars...)
+				} else {
+					ctx.PropertyErrorf("kotlin_plugins", "%q is not a kotlin_plugin module", otherName)
+				}
 			case syspropPublicStubDepTag:
 				// This is a sysprop implementation library, forward the JavaInfoProvider from
 				// the corresponding sysprop public stub library as SyspropPublicStubInfoProvider.
