@@ -65,6 +65,11 @@ type TestProperties struct {
 	// the test
 	Data []string `android:"path,arch_variant"`
 
+	// Same as data, but will add dependencies on modules using the device's os variation and
+	// the common arch variation. Useful for a host test that wants to embed a module built for
+	// device.
+	Device_common_data []string `android:"path_device_common"`
+
 	// list of java modules that provide data that should be installed alongside the test.
 	Java_data []string
 
@@ -181,6 +186,9 @@ func (p *PythonTestModule) GenerateAndroidBuildActions(ctx android.ModuleContext
 	})
 
 	for _, dataSrcPath := range android.PathsForModuleSrc(ctx, p.testProperties.Data) {
+		p.data = append(p.data, android.DataPath{SrcPath: dataSrcPath})
+	}
+	for _, dataSrcPath := range android.PathsForModuleSrc(ctx, p.testProperties.Device_common_data) {
 		p.data = append(p.data, android.DataPath{SrcPath: dataSrcPath})
 	}
 
