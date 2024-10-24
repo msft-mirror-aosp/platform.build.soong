@@ -108,7 +108,7 @@ type dexer struct {
 	resourcesInput          android.OptionalPath
 	resourcesOutput         android.OptionalPath
 
-	providesTransitiveHeaderJars
+	providesTransitiveHeaderJarsForR8
 }
 
 func (d *dexer) effectiveOptimizeEnabled() bool {
@@ -120,7 +120,7 @@ func (d *DexProperties) resourceShrinkingEnabled(ctx android.ModuleContext) bool
 }
 
 func (d *DexProperties) optimizedResourceShrinkingEnabled(ctx android.ModuleContext) bool {
-	return d.resourceShrinkingEnabled(ctx) && Bool(d.Optimize.Optimized_shrink_resources)
+	return d.resourceShrinkingEnabled(ctx) && BoolDefault(d.Optimize.Optimized_shrink_resources, ctx.Config().UseOptimizedResourceShrinkingByDefault())
 }
 
 func (d *dexer) optimizeOrObfuscateEnabled() bool {
@@ -133,7 +133,7 @@ var d8, d8RE = pctx.MultiCommandRemoteStaticRules("d8",
 			`$d8Template${config.D8Cmd} ${config.D8Flags} $d8Flags --output $outDir --no-dex-input-jar $in && ` +
 			`$zipTemplate${config.SoongZipCmd} $zipFlags -o $outDir/classes.dex.jar -C $outDir -f "$outDir/classes*.dex" && ` +
 			`${config.MergeZipsCmd} -D -stripFile "**/*.class" $mergeZipsFlags $out $outDir/classes.dex.jar $in && ` +
-			`rm -f "$outDir/classes*.dex" "$outDir/classes.dex.jar"`,
+			`rm -f "$outDir"/classes*.dex "$outDir/classes.dex.jar"`,
 		CommandDeps: []string{
 			"${config.D8Cmd}",
 			"${config.SoongZipCmd}",
@@ -172,7 +172,7 @@ var r8, r8RE = pctx.MultiCommandRemoteStaticRules("r8",
 			`rm -rf ${outUsageDir} && ` +
 			`$zipTemplate${config.SoongZipCmd} $zipFlags -o $outDir/classes.dex.jar -C $outDir -f "$outDir/classes*.dex" && ` +
 			`${config.MergeZipsCmd} -D -stripFile "**/*.class" $mergeZipsFlags $out $outDir/classes.dex.jar $in && ` +
-			`rm -f "$outDir/classes*.dex" "$outDir/classes.dex.jar"`,
+			`rm -f "$outDir"/classes*.dex "$outDir/classes.dex.jar"`,
 		Depfile: "${out}.d",
 		Deps:    blueprint.DepsGCC,
 		CommandDeps: []string{
@@ -220,14 +220,21 @@ func (d *dexer) dexCommonFlags(ctx android.ModuleContext,
 		deps = append(deps, f)
 	}
 
-	if ctx.Config().Getenv("NO_OPTIMIZE_DX") != "" {
+	var requestReleaseMode bool
+	requestReleaseMode, flags = android.RemoveFromList("--release", flags)
+
+	if ctx.Config().Getenv("NO_OPTIMIZE_DX") != "" || ctx.Config().Getenv("GENERATE_DEX_DEBUG") != "" {
 		flags = append(flags, "--debug")
+		requestReleaseMode = false
 	}
 
-	if ctx.Config().Getenv("GENERATE_DEX_DEBUG") != "" {
-		flags = append(flags,
-			"--debug",
-			"--verbose")
+	// Don't strip out debug information for eng builds, unless the target
+	// explicitly provided the `--release` build flag. This allows certain
+	// test targets to remain optimized as part of eng test_suites builds.
+	if requestReleaseMode {
+		flags = append(flags, "--release")
+	} else if ctx.Config().Eng() {
+		flags = append(flags, "--debug")
 	}
 
 	// Supplying the platform build flag disables various features like API modeling and desugaring.
@@ -244,6 +251,16 @@ func (d *dexer) dexCommonFlags(ctx android.ModuleContext,
 	effectiveVersion, err := dexParams.minSdkVersion.EffectiveVersion(ctx)
 	if err != nil {
 		ctx.PropertyErrorf("min_sdk_version", "%s", err)
+	}
+	if !Bool(d.dexProperties.No_dex_container) && effectiveVersion.FinalOrFutureInt() >= 36 {
+		// W is 36, but we have not bumped the SDK version yet, so check for both.
+		if ctx.Config().PlatformSdkVersion().FinalInt() >= 36 ||
+			ctx.Config().PlatformSdkCodename() == "Wear" {
+			// TODO(b/329465418): Skip this module since it causes issue with app DRM
+			if ctx.ModuleName() != "framework-minus-apex" {
+				flags = append([]string{"-JDcom.android.tools.r8.dexContainerExperiment"}, flags...)
+			}
+		}
 	}
 
 	// If the specified SDK level is 10000, then configure the compiler to use the
@@ -307,14 +324,14 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams) 
 	r8Deps = append(r8Deps, flags.dexClasspath...)
 
 	transitiveStaticLibsLookupMap := map[android.Path]bool{}
-	if d.transitiveStaticLibsHeaderJars != nil {
-		for _, jar := range d.transitiveStaticLibsHeaderJars.ToList() {
+	if d.transitiveStaticLibsHeaderJarsForR8 != nil {
+		for _, jar := range d.transitiveStaticLibsHeaderJarsForR8.ToList() {
 			transitiveStaticLibsLookupMap[jar] = true
 		}
 	}
 	transitiveHeaderJars := android.Paths{}
-	if d.transitiveLibsHeaderJars != nil {
-		for _, jar := range d.transitiveLibsHeaderJars.ToList() {
+	if d.transitiveLibsHeaderJarsForR8 != nil {
+		for _, jar := range d.transitiveLibsHeaderJarsForR8.ToList() {
 			if _, ok := transitiveStaticLibsLookupMap[jar]; ok {
 				// don't include a lib if it is already packaged in the current JAR as a static lib
 				continue
@@ -374,11 +391,6 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams) 
 	// TODO(ccross): if this is an instrumentation test of an obfuscated app, use the
 	// dictionary of the app and move the app from libraryjars to injars.
 
-	// Don't strip out debug information for eng builds.
-	if ctx.Config().Eng() {
-		r8Flags = append(r8Flags, "--debug")
-	}
-
 	// TODO(b/180878971): missing classes should be added to the relevant builds.
 	// TODO(b/229727645): do not use true as default for Android platform builds.
 	if proptools.BoolDefault(opt.Ignore_warnings, true) {
@@ -390,8 +402,12 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams) 
 		r8Flags = append(r8Flags, "--resource-input", d.resourcesInput.Path().String())
 		r8Deps = append(r8Deps, d.resourcesInput.Path())
 		r8Flags = append(r8Flags, "--resource-output", d.resourcesOutput.Path().String())
-		if Bool(opt.Optimized_shrink_resources) {
+		if d.dexProperties.optimizedResourceShrinkingEnabled(ctx) {
 			r8Flags = append(r8Flags, "--optimized-resource-shrinking")
+			if Bool(d.dexProperties.Optimize.Optimized_shrink_resources) {
+				// Explicitly opted into optimized shrinking, no need for keeping R$id entries
+				r8Flags = append(r8Flags, "--force-optimized-resource-shrinking")
+			}
 		}
 	}
 

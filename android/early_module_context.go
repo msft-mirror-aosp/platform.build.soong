@@ -29,7 +29,7 @@ type EarlyModuleContext interface {
 	Module() Module
 
 	// ModuleName returns the name of the module.  This is generally the value that was returned by Module.Name() when
-	// the module was created, but may have been modified by calls to BaseMutatorContext.Rename.
+	// the module was created, but may have been modified by calls to BottomUpMutatorContext.Rename.
 	ModuleName() string
 
 	// ModuleDir returns the path to the directory that contains the definition of the module.
@@ -93,6 +93,10 @@ type EarlyModuleContext interface {
 	// Namespace returns the Namespace object provided by the NameInterface set by Context.SetNameInterface, or the
 	// default SimpleNameInterface if Context.SetNameInterface was not called.
 	Namespace() *Namespace
+
+	// HasMutatorFinished returns true if the given mutator has finished running.
+	// It will panic if given an invalid mutator name.
+	HasMutatorFinished(mutatorName string) bool
 }
 
 // Deprecated: use EarlyModuleContext instead
@@ -174,4 +178,8 @@ func (e *earlyModuleContext) Namespace() *Namespace {
 
 func (e *earlyModuleContext) OtherModulePropertyErrorf(module Module, property string, fmt string, args ...interface{}) {
 	e.EarlyModuleContext.OtherModulePropertyErrorf(module, property, fmt, args...)
+}
+
+func (e *earlyModuleContext) HasMutatorFinished(mutatorName string) bool {
+	return e.EarlyModuleContext.HasMutatorFinished(mutatorName)
 }

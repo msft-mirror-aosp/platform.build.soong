@@ -53,9 +53,6 @@ func TestSnapshotVisibility(t *testing.T) {
 				// generated sdk_snapshot.
 				":__subpackages__",
 			],
-			prebuilt_visibility: [
-				"//prebuilts/mysdk",
-			],
 			java_header_libs: [
 				"myjavalib",
 				"mypublicjavalib",
@@ -131,11 +128,7 @@ apex_contributions_defaults {
 java_import {
     name: "myjavalib",
     prefer: false,
-    visibility: [
-        "//other/foo",
-        "//package",
-        "//prebuilts/mysdk",
-    ],
+    visibility: ["//visibility:public"],
     apex_available: ["//apex_available:platform"],
     jars: ["java/myjavalib.jar"],
 }
@@ -151,11 +144,7 @@ java_import {
 java_import {
     name: "mydefaultedjavalib",
     prefer: false,
-    visibility: [
-        "//other/bar",
-        "//package",
-        "//prebuilts/mysdk",
-    ],
+    visibility: ["//visibility:public"],
     apex_available: ["//apex_available:platform"],
     jars: ["java/mydefaultedjavalib.jar"],
 }
@@ -163,48 +152,11 @@ java_import {
 java_import {
     name: "myprivatejavalib",
     prefer: false,
-    visibility: [
-        "//package",
-        "//prebuilts/mysdk",
-    ],
+    visibility: ["//visibility:public"],
     apex_available: ["//apex_available:platform"],
     jars: ["java/myprivatejavalib.jar"],
 }
 `))
-}
-
-func TestPrebuiltVisibilityProperty_IsValidated(t *testing.T) {
-	testSdkError(t, `prebuilt_visibility: cannot mix "//visibility:private" with any other visibility rules`, `
-		sdk {
-			name: "mysdk",
-			prebuilt_visibility: [
-				"//foo",
-				"//visibility:private",
-			],
-		}
-`)
-}
-
-func TestPrebuiltVisibilityProperty_AddPrivate(t *testing.T) {
-	testSdkError(t, `prebuilt_visibility: "//visibility:private" does not widen the visibility`, `
-		sdk {
-			name: "mysdk",
-			prebuilt_visibility: [
-				"//visibility:private",
-			],
-			java_header_libs: [
-				"myjavalib",
-			],
-		}
-
-		java_library {
-			name: "myjavalib",
-			// Uses package default visibility
-			srcs: ["Test.java"],
-			system_modules: "none",
-			sdk_version: "none",
-		}
-`)
 }
 
 func TestSdkInstall(t *testing.T) {

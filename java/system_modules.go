@@ -127,6 +127,9 @@ type SystemModulesProviderInfo struct {
 
 	OutputDir     android.Path
 	OutputDirDeps android.Paths
+
+	// depset of header jars for this module and all transitive static dependencies
+	TransitiveStaticLibsHeaderJars *android.DepSet[android.Path]
 }
 
 var SystemModulesProvider = blueprint.NewProvider[*SystemModulesProviderInfo]()
@@ -149,18 +152,23 @@ type SystemModulesProperties struct {
 func (system *SystemModules) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	var jars android.Paths
 
+	var transitiveStaticLibsHeaderJars []*android.DepSet[android.Path]
 	ctx.VisitDirectDepsWithTag(systemModulesLibsTag, func(module android.Module) {
 		if dep, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
 			jars = append(jars, dep.HeaderJars...)
+			if dep.TransitiveStaticLibsHeaderJars != nil {
+				transitiveStaticLibsHeaderJars = append(transitiveStaticLibsHeaderJars, dep.TransitiveStaticLibsHeaderJars)
+			}
 		}
 	})
 
 	system.outputDir, system.outputDeps = TransformJarsToSystemModules(ctx, jars)
 
 	android.SetProvider(ctx, SystemModulesProvider, &SystemModulesProviderInfo{
-		HeaderJars:    jars,
-		OutputDir:     system.outputDir,
-		OutputDirDeps: system.outputDeps,
+		HeaderJars:                     jars,
+		OutputDir:                      system.outputDir,
+		OutputDirDeps:                  system.outputDeps,
+		TransitiveStaticLibsHeaderJars: android.NewDepSet(android.PREORDER, nil, transitiveStaticLibsHeaderJars),
 	})
 }
 

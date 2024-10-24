@@ -16,6 +16,8 @@ package android
 
 import (
 	"fmt"
+
+	"github.com/google/blueprint"
 )
 
 // DepSet is designed to be conceptually compatible with Bazel's depsets:
@@ -63,6 +65,40 @@ type DepSet[T depSettableType] struct {
 	order      DepSetOrder
 	direct     []T
 	transitive []*DepSet[T]
+}
+
+type depSetGob[T depSettableType] struct {
+	Preorder   bool
+	Reverse    bool
+	Order      DepSetOrder
+	Direct     []T
+	Transitive []*DepSet[T]
+}
+
+func (d *DepSet[T]) ToGob() *depSetGob[T] {
+	return &depSetGob[T]{
+		Preorder:   d.preorder,
+		Reverse:    d.reverse,
+		Order:      d.order,
+		Direct:     d.direct,
+		Transitive: d.transitive,
+	}
+}
+
+func (d *DepSet[T]) FromGob(data *depSetGob[T]) {
+	d.preorder = data.Preorder
+	d.reverse = data.Reverse
+	d.order = data.Order
+	d.direct = data.Direct
+	d.transitive = data.Transitive
+}
+
+func (d *DepSet[T]) GobEncode() ([]byte, error) {
+	return blueprint.CustomGobEncode[depSetGob[T]](d)
+}
+
+func (d *DepSet[T]) GobDecode(data []byte) error {
+	return blueprint.CustomGobDecode[depSetGob[T]](data, d)
 }
 
 // NewDepSet returns an immutable DepSet with the given order, direct and transitive contents.
