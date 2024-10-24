@@ -17,8 +17,6 @@ package python
 import (
 	"fmt"
 
-	"android/soong/testing"
-
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
@@ -208,8 +206,6 @@ func (p *PythonTestModule) GenerateAndroidBuildActions(ctx android.ModuleContext
 	installDir := installDir(ctx, "nativetest", "nativetest64", ctx.ModuleName())
 	installedData := ctx.InstallTestData(installDir, p.data)
 	p.installedDest = ctx.InstallFile(installDir, p.installSource.Base(), p.installSource, installedData...)
-
-	android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 }
 
 func (p *PythonTestModule) AndroidMkEntries() []android.AndroidMkEntries {

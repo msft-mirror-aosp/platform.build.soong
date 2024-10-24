@@ -20,7 +20,6 @@ import (
 	"strings"
 
 	"android/soong/bloaty"
-	"android/soong/testing"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -991,9 +990,6 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		}
 
 		ctx.Phony("rust", ctx.RustModule().OutputFile().Path())
-	}
-	if mod.testModule {
-		android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 	}
 
 	mod.setOutputFiles(ctx)

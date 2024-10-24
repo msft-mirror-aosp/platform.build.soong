@@ -18,8 +18,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"android/soong/testing"
-
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
@@ -510,8 +508,6 @@ func (s *ShTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	installedData := ctx.InstallTestData(s.installDir, s.data)
 	s.installedFile = ctx.InstallExecutable(s.installDir, s.outputFilePath.Base(), s.outputFilePath, installedData...)
-
-	android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 }
 
 func (s *ShTest) InstallInData() bool {

@@ -24,8 +24,6 @@ import (
 	"strconv"
 	"strings"
 
-	"android/soong/testing"
-
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
@@ -2037,9 +2035,6 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		c.outputFile = android.OptionalPathForPath(outputFile)
 
 		c.maybeUnhideFromMake()
-	}
-	if c.testModule {
-		android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 	}
 
 	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: deps.GeneratedSources.Strings()})
