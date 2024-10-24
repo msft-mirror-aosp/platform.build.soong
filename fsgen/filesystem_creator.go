@@ -104,6 +104,9 @@ func createFsGenState(ctx android.LoadHookContext) *FsGenState {
 		if ctx.DeviceConfig().BuildingVendorImage() && ctx.DeviceConfig().VendorPath() == "vendor" {
 			generatedPartitions = append(generatedPartitions, "vendor")
 		}
+		if ctx.DeviceConfig().BuildingProductImage() && ctx.DeviceConfig().ProductPath() == "product" {
+			generatedPartitions = append(generatedPartitions, "product")
+		}
 
 		return &FsGenState{
 			depCandidates: candidates,
@@ -346,6 +349,9 @@ func (f *filesystemCreator) createDeviceModule(ctx android.LoadHookContext) {
 	if android.InList("vendor", f.properties.Generated_partition_types) {
 		partitionProps.Vendor_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "vendor"))
 	}
+	if android.InList("product", f.properties.Generated_partition_types) {
+		partitionProps.Product_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "product"))
+	}
 
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
 }
@@ -356,6 +362,24 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 		fsProps.Build_logtags = proptools.BoolPtr(true)
 		// https://source.corp.google.com/h/googleplex-android/platform/build//639d79f5012a6542ab1f733b0697db45761ab0f3:core/packaging/flags.mk;l=21;drc=5ba8a8b77507f93aa48cc61c5ba3f31a4d0cbf37;bpv=1;bpt=0
 		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
+		// Identical to that of the generic_system_image
+		fsProps.Fsverity.Inputs = []string{
+			"etc/boot-image.prof",
+			"etc/dirty-image-objects",
+			"etc/preloaded-classes",
+			"etc/classpaths/*.pb",
+			"framework/*",
+			"framework/*/*",     // framework/{arch}
+			"framework/oat/*/*", // framework/oat/{arch}
+		}
+		fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
+	case "system_ext":
+		fsProps.Fsverity.Inputs = []string{
+			"framework/*",
+			"framework/*/*",     // framework/{arch}
+			"framework/oat/*/*", // framework/oat/{arch}
+		}
+		fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
 	case "product":
 		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
 	case "vendor":
@@ -434,18 +458,6 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	fsProps.Base_dir = proptools.StringPtr(partitionType)
 
 	fsProps.Is_auto_generated = proptools.BoolPtr(true)
-
-	// Identical to that of the generic_system_image
-	fsProps.Fsverity.Inputs = []string{
-		"etc/boot-image.prof",
-		"etc/dirty-image-objects",
-		"etc/preloaded-classes",
-		"etc/classpaths/*.pb",
-		"framework/*",
-		"framework/*/*",     // framework/{arch}
-		"framework/oat/*/*", // framework/oat/{arch}
-	}
-	fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
 
 	partitionSpecificFsProps(fsProps, partitionType)
 
