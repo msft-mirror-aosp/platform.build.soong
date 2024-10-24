@@ -118,6 +118,10 @@ type Module interface {
 	// The usage of this method is experimental and should not be used outside of fsgen package.
 	// This will be removed once product packaging migration to Soong is complete.
 	DecodeMultilib(ctx ConfigContext) (string, string)
+
+	// WARNING: This should not be used outside build/soong/fsgen
+	// Overrides returns the list of modules which should not be installed if this module is installed.
+	Overrides() []string
 }
 
 // Qualified id for a module
@@ -2289,6 +2293,10 @@ func (m *ModuleBase) IsNativeBridgeSupported() bool {
 
 func (m *ModuleBase) DecodeMultilib(ctx ConfigContext) (string, string) {
 	return decodeMultilib(ctx, m)
+}
+
+func (m *ModuleBase) Overrides() []string {
+	return m.commonProperties.Overrides
 }
 
 type ConfigContext interface {
