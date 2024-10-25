@@ -387,6 +387,17 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
 	case "vendor":
 		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
+		fsProps.Symlinks = []filesystem.SymlinkDefinition{
+			filesystem.SymlinkDefinition{
+				Target: proptools.StringPtr("/odm"),
+				Name:   proptools.StringPtr("vendor/odm"),
+			},
+			filesystem.SymlinkDefinition{
+				Target: proptools.StringPtr("/vendor_dlkm/lib/modules"),
+				Name:   proptools.StringPtr("vendor/lib/modules"),
+			},
+		}
+		fsProps.Base_dir = proptools.StringPtr("vendor")
 	}
 }
 
@@ -562,6 +573,9 @@ func generateBpContent(ctx android.EarlyModuleContext, partitionType string) str
 	fsProps, fsTypeSupported := generateFsProps(ctx, partitionType)
 	if !fsTypeSupported {
 		return ""
+	}
+	if partitionType == "vendor" {
+		return "" // TODO: Handle struct props
 	}
 
 	baseProps := generateBaseProps(proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), partitionType)))
