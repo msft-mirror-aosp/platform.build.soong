@@ -792,8 +792,10 @@ func checkGlobs(ctx Context, finalOutFile string) error {
 						changedGlobNameMutex.Lock()
 						defer changedGlobNameMutex.Unlock()
 						changedGlobName = result.Pattern
-						if len(result.Excludes) > 0 {
-							changedGlobName += " (excluding " + strings.Join(result.Excludes, ", ") + ")"
+						if len(result.Excludes) > 2 {
+							changedGlobName += fmt.Sprintf(" (excluding %d other patterns)", len(result.Excludes))
+						} else if len(result.Excludes) > 0 {
+							changedGlobName += " (excluding " + strings.Join(result.Excludes, " and ") + ")"
 						}
 					}
 				}
