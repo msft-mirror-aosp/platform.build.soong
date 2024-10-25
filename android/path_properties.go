@@ -92,13 +92,18 @@ func addPathDepsForProps(ctx BottomUpMutatorContext, props []interface{}) {
 	// properties tagged path_device_first_prefer32 get the first 32 bit target if one is available,
 	// otherwise they use the first 64 bit target
 	if len(pathDeviceFirstPrefer32Properties) > 0 {
-		firstPrefer32Target := FirstTarget(ctx.Config().Targets[Android], "lib32", "lib64")
-		if len(firstPrefer32Target) == 0 {
+		var targets []Target
+		if ctx.Config().IgnorePrefer32OnDevice() {
+			targets, _ = decodeMultilibTargets("first", ctx.Config().Targets[Android], false)
+		} else {
+			targets, _ = decodeMultilibTargets("first_prefer32", ctx.Config().Targets[Android], false)
+		}
+		if len(targets) == 0 {
 			ctx.ModuleErrorf("Could not find a first_prefer32 target")
 		} else {
 			for _, s := range pathDeviceFirstPrefer32Properties {
 				if m, t := SrcIsModuleWithTag(s); m != "" {
-					ctx.AddVariationDependencies(firstPrefer32Target[0].Variations(), sourceOrOutputDepTag(m, t), m)
+					ctx.AddVariationDependencies(targets[0].Variations(), sourceOrOutputDepTag(m, t), m)
 				}
 			}
 		}
