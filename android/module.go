@@ -16,6 +16,7 @@ package android
 
 import (
 	"fmt"
+	"github.com/google/blueprint/depset"
 	"net/url"
 	"path/filepath"
 	"reflect"
@@ -1437,9 +1438,9 @@ func (m *ModuleBase) EffectiveLicenseFiles() Paths {
 
 // computeInstallDeps finds the installed paths of all dependencies that have a dependency
 // tag that is annotated as needing installation via the isInstallDepNeeded method.
-func (m *ModuleBase) computeInstallDeps(ctx ModuleContext) ([]*DepSet[InstallPath], []*DepSet[PackagingSpec]) {
-	var installDeps []*DepSet[InstallPath]
-	var packagingSpecs []*DepSet[PackagingSpec]
+func (m *ModuleBase) computeInstallDeps(ctx ModuleContext) ([]depset.DepSet[InstallPath], []depset.DepSet[PackagingSpec]) {
+	var installDeps []depset.DepSet[InstallPath]
+	var packagingSpecs []depset.DepSet[PackagingSpec]
 	ctx.VisitDirectDeps(func(dep Module) {
 		if isInstallDepNeeded(dep, ctx.OtherModuleDependencyTag(dep)) {
 			// Installation is still handled by Make, so anything hidden from Make is not
@@ -1772,12 +1773,12 @@ type InstallFilesInfo struct {
 	KatiInstalls             katiInstalls
 	KatiSymlinks             katiInstalls
 	TestData                 []DataPath
-	TransitivePackagingSpecs *DepSet[PackagingSpec]
+	TransitivePackagingSpecs depset.DepSet[PackagingSpec]
 	LicenseMetadataFile      WritablePath
 
 	// The following fields are private before, make it private again once we have
 	// better solution.
-	TransitiveInstallFiles *DepSet[InstallPath]
+	TransitiveInstallFiles depset.DepSet[InstallPath]
 	// katiInitRcInstalls and katiVintfInstalls track the install rules created by Soong that are
 	// allowed to have duplicates across modules and variants.
 	KatiInitRcInstalls           katiInstalls
@@ -1843,7 +1844,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	// set the TransitiveInstallFiles to only the transitive dependencies to be used as the dependencies
 	// of installed files of this module.  It will be replaced by a depset including the installed
 	// files of this module at the end for use by modules that depend on this one.
-	ctx.TransitiveInstallFiles = NewDepSet[InstallPath](TOPOLOGICAL, nil, dependencyInstallFiles)
+	ctx.TransitiveInstallFiles = depset.New[InstallPath](depset.TOPOLOGICAL, nil, dependencyInstallFiles)
 
 	// Temporarily continue to call blueprintCtx.GetMissingDependencies() to maintain the previous behavior of never
 	// reporting missing dependency errors in Blueprint when AllowMissingDependencies == true.
@@ -2002,9 +2003,9 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		}
 	}
 
-	ctx.TransitiveInstallFiles = NewDepSet[InstallPath](TOPOLOGICAL, ctx.installFiles, dependencyInstallFiles)
+	ctx.TransitiveInstallFiles = depset.New[InstallPath](depset.TOPOLOGICAL, ctx.installFiles, dependencyInstallFiles)
 	installFiles.TransitiveInstallFiles = ctx.TransitiveInstallFiles
-	installFiles.TransitivePackagingSpecs = NewDepSet[PackagingSpec](TOPOLOGICAL, ctx.packagingSpecs, dependencyPackagingSpecs)
+	installFiles.TransitivePackagingSpecs = depset.New[PackagingSpec](depset.TOPOLOGICAL, ctx.packagingSpecs, dependencyPackagingSpecs)
 
 	SetProvider(ctx, InstallFilesProvider, installFiles)
 	buildLicenseMetadata(ctx, ctx.licenseMetadataFile)
