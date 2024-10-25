@@ -592,6 +592,8 @@ type PartitionVariables struct {
 
 	ProductPackages      []string `json:",omitempty"`
 	ProductPackagesDebug []string `json:",omitempty"`
+
+	ProductCopyFiles map[string]string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
