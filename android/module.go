@@ -16,7 +16,6 @@ package android
 
 import (
 	"fmt"
-	"github.com/google/blueprint/depset"
 	"net/url"
 	"path/filepath"
 	"reflect"
@@ -25,6 +24,8 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
+	"github.com/google/blueprint/gobtools"
 	"github.com/google/blueprint/proptools"
 )
 
@@ -118,6 +119,10 @@ type Module interface {
 	// The usage of this method is experimental and should not be used outside of fsgen package.
 	// This will be removed once product packaging migration to Soong is complete.
 	DecodeMultilib(ctx ConfigContext) (string, string)
+
+	// WARNING: This should not be used outside build/soong/fsgen
+	// Overrides returns the list of modules which should not be installed if this module is installed.
+	Overrides() []string
 }
 
 // Qualified id for a module
@@ -2201,11 +2206,11 @@ func (k *katiInstall) FromGob(data *katiInstallGob) {
 }
 
 func (k *katiInstall) GobEncode() ([]byte, error) {
-	return blueprint.CustomGobEncode[katiInstallGob](k)
+	return gobtools.CustomGobEncode[katiInstallGob](k)
 }
 
 func (k *katiInstall) GobDecode(data []byte) error {
-	return blueprint.CustomGobDecode[katiInstallGob](data, k)
+	return gobtools.CustomGobDecode[katiInstallGob](data, k)
 }
 
 type extraFilesZip struct {
@@ -2231,11 +2236,11 @@ func (e *extraFilesZip) FromGob(data *extraFilesZipGob) {
 }
 
 func (e *extraFilesZip) GobEncode() ([]byte, error) {
-	return blueprint.CustomGobEncode[extraFilesZipGob](e)
+	return gobtools.CustomGobEncode[extraFilesZipGob](e)
 }
 
 func (e *extraFilesZip) GobDecode(data []byte) error {
-	return blueprint.CustomGobDecode[extraFilesZipGob](data, e)
+	return gobtools.CustomGobDecode[extraFilesZipGob](data, e)
 }
 
 type katiInstalls []katiInstall
@@ -2289,6 +2294,10 @@ func (m *ModuleBase) IsNativeBridgeSupported() bool {
 
 func (m *ModuleBase) DecodeMultilib(ctx ConfigContext) (string, string) {
 	return decodeMultilib(ctx, m)
+}
+
+func (m *ModuleBase) Overrides() []string {
+	return m.commonProperties.Overrides
 }
 
 type ConfigContext interface {

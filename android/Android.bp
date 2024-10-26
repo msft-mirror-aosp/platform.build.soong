@@ -9,6 +9,7 @@ bootstrap_go_package {
         "blueprint",
         "blueprint-bootstrap",
         "blueprint-depset",
+        "blueprint-gobtools",
         "blueprint-metrics",
         "sbox_proto",
         "soong",
