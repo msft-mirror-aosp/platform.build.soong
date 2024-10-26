@@ -1301,6 +1301,16 @@ type testProperties struct {
 	// host test.
 	Device_first_data []string `android:"path_device_first"`
 
+	// same as data, but adds dependencies using the device's os variation, the device's first
+	// architecture's variation, and the vendor image variation. Can be used to add a module built
+	// for device to the data of a host test.
+	Device_first_vendor_data []string `android:"path_device_first_vendor"`
+
+	// same as data, but adds dependencies using the device's os variation, the device's first
+	// architecture's variation, the vendor image variation, and the shared linkage variation. Can
+	// be used to add a module built for device to the data of a host test.
+	Device_first_vendor_shared_data []string `android:"path_device_first_vendor_shared"`
+
 	// same as data, but adds dependencies using the device's os variation and the device's first
 	// 32-bit architecture's variation. If a 32-bit arch doesn't exist for this device, it will use
 	// a 64 bit arch instead. Can be used to add a module built for device to the data of a
@@ -1598,6 +1608,8 @@ func (j *Test) generateAndroidBuildActionsWithConfig(ctx android.ModuleContext, 
 	j.data = append(j.data, android.PathsForModuleSrc(ctx, j.testProperties.Device_common_data)...)
 	j.data = append(j.data, android.PathsForModuleSrc(ctx, j.testProperties.Device_first_data)...)
 	j.data = append(j.data, android.PathsForModuleSrc(ctx, j.testProperties.Device_first_prefer32_data)...)
+	j.data = append(j.data, android.PathsForModuleSrc(ctx, j.testProperties.Device_first_vendor_data)...)
+	j.data = append(j.data, android.PathsForModuleSrc(ctx, j.testProperties.Device_first_vendor_shared_data)...)
 
 	j.extraTestConfigs = android.PathsForModuleSrc(ctx, j.testProperties.Test_options.Extra_test_configs)
 
