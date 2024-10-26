@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/gobtools"
 	"github.com/google/blueprint/proptools"
 )
 
@@ -109,11 +110,11 @@ func (p *PackagingSpec) FromGob(data *packagingSpecGob) {
 }
 
 func (p *PackagingSpec) GobEncode() ([]byte, error) {
-	return blueprint.CustomGobEncode[packagingSpecGob](p)
+	return gobtools.CustomGobEncode[packagingSpecGob](p)
 }
 
 func (p *PackagingSpec) GobDecode(data []byte) error {
-	return blueprint.CustomGobDecode[packagingSpecGob](data, p)
+	return gobtools.CustomGobDecode[packagingSpecGob](data, p)
 }
 
 func (p *PackagingSpec) Equals(other *PackagingSpec) bool {
