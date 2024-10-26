@@ -66,7 +66,7 @@ type filesystem struct {
 	entries []string
 }
 
-type symlinkDefinition struct {
+type SymlinkDefinition struct {
 	Target *string
 	Name   *string
 }
@@ -111,7 +111,7 @@ type FilesystemProperties struct {
 	Dirs proptools.Configurable[[]string]
 
 	// Symbolic links to be created under root with "ln -sf <target> <name>".
-	Symlinks []symlinkDefinition
+	Symlinks []SymlinkDefinition
 
 	// Seconds since unix epoch to override timestamps of file entries
 	Fake_timestamp *string

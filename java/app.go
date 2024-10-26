@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
@@ -225,7 +226,7 @@ func (a *AndroidApp) IsInstallable() bool {
 	return Bool(a.properties.Installable)
 }
 
-func (a *AndroidApp) ResourcesNodeDepSet() *android.DepSet[*resourcesNode] {
+func (a *AndroidApp) ResourcesNodeDepSet() depset.DepSet[*resourcesNode] {
 	return a.aapt.resourcesNodesDepSet
 }
 
@@ -1441,6 +1442,8 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.data = append(a.data, android.PathsForModuleSrc(ctx, a.testProperties.Device_common_data)...)
 	a.data = append(a.data, android.PathsForModuleSrc(ctx, a.testProperties.Device_first_data)...)
 	a.data = append(a.data, android.PathsForModuleSrc(ctx, a.testProperties.Device_first_prefer32_data)...)
+	a.data = append(a.data, android.PathsForModuleSrc(ctx, a.testProperties.Device_first_vendor_data)...)
+	a.data = append(a.data, android.PathsForModuleSrc(ctx, a.testProperties.Device_first_vendor_shared_data)...)
 	android.SetProvider(ctx, tradefed.BaseTestProviderKey, tradefed.BaseTestProviderData{
 		InstalledFiles:          a.data,
 		OutputFile:              a.OutputFile(),
