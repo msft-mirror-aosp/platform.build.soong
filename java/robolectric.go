@@ -149,6 +149,9 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		HostTemplate:           "${RobolectricTestConfigTemplate}",
 	})
 	r.data = android.PathsForModuleSrc(ctx, r.testProperties.Data)
+	r.data = append(r.data, android.PathsForModuleSrc(ctx, r.testProperties.Device_common_data)...)
+	r.data = append(r.data, android.PathsForModuleSrc(ctx, r.testProperties.Device_first_data)...)
+	r.data = append(r.data, android.PathsForModuleSrc(ctx, r.testProperties.Device_first_prefer32_data)...)
 
 	var ok bool
 	var instrumentedApp *AndroidApp
@@ -208,6 +211,11 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 	installPath := android.PathForModuleInstall(ctx, r.BaseModuleName())
 	var installDeps android.InstallPaths
 
+	for _, data := range r.data {
+		installedData := ctx.InstallFile(installPath, data.Rel(), data)
+		installDeps = append(installDeps, installedData)
+	}
+
 	if manifest != nil {
 		r.data = append(r.data, manifest)
 		installedManifest := ctx.InstallFile(installPath, ctx.ModuleName()+"-AndroidManifest.xml", manifest)
@@ -227,11 +235,6 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 
 	installedConfig := ctx.InstallFile(installPath, ctx.ModuleName()+".config", r.testConfig)
 	installDeps = append(installDeps, installedConfig)
-
-	for _, data := range android.PathsForModuleSrc(ctx, r.testProperties.Data) {
-		installedData := ctx.InstallFile(installPath, data.Rel(), data)
-		installDeps = append(installDeps, installedData)
-	}
 
 	soInstallPath := installPath.Join(ctx, getLibPath(r.forceArchType))
 	for _, jniLib := range collectTransitiveJniDeps(ctx) {

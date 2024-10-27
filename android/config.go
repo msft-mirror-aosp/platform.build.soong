@@ -84,7 +84,6 @@ type CmdArgs struct {
 	SoongOutDir    string
 	SoongVariables string
 
-	BazelQueryViewDir string
 	ModuleGraphFile   string
 	ModuleActionsFile string
 	DocFile           string
@@ -98,11 +97,6 @@ type CmdArgs struct {
 const (
 	// Don't use bazel at all during module analysis.
 	AnalysisNoBazel SoongBuildMode = iota
-
-	// Generate BUILD files which faithfully represent the dependency graph of
-	// blueprint modules. Individual BUILD targets will not, however, faitfhully
-	// express build semantics.
-	GenerateQueryView
 
 	// Create a JSON representation of the module graph and exit.
 	GenerateModuleGraph
@@ -324,6 +318,9 @@ type config struct {
 	AndroidCommonTarget      Target // the Target for common modules for the Android device
 	AndroidFirstDeviceTarget Target // the first Target for modules for the Android device
 
+	// Flags for Partial Compile, derived from SOONG_PARTIAL_COMPILE.
+	partialCompileFlags partialCompileFlags
+
 	// multilibConflicts for an ArchType is true if there is earlier configured
 	// device architecture with the same multilib value.
 	multilibConflicts map[ArchType]bool
@@ -373,6 +370,16 @@ type config struct {
 	ensureAllowlistIntegrity bool
 }
 
+type partialCompileFlags struct {
+	// Is partial compilation enabled at all?
+	enabled bool
+
+	// Whether to use d8 instead of r8
+	use_d8 bool
+
+	// Add others as needed.
+}
+
 type deviceConfig struct {
 	config *config
 	OncePer
@@ -380,6 +387,88 @@ type deviceConfig struct {
 
 type jsonConfigurable interface {
 	SetDefaultConfig()
+}
+
+// Parse SOONG_PARTIAL_COMPILE.
+//
+// SOONG_PARTIAL_COMPILE determines which features are enabled or disabled in
+// rule generation.  Changing this environment variable causes reanalysis.
+//
+// SOONG_USE_PARTIAL_COMPILE determines whether or not we **use** PARTIAL_COMPILE.
+// Rule generation must support both cases, since changing it does not cause
+// reanalysis.
+//
+// The user-facing documentation shows:
+//
+// - empty or not set: "The current default state"
+// - "true" or "on": enable all stable partial compile features.
+// - "false" or "off": disable partial compile completely.
+//
+// What we actually allow is a comma separated list of tokens, whose first
+// character may be "+" (enable) or "-" (disable).  If neither is present, "+"
+// is assumed.  For example, "on,+use_d8" will enable partial compilation, and
+// additionally set the use_d8 flag (regardless of whether it is opt-in or
+// opt-out).
+//
+// To add a new feature to the list, add the field in the struct
+// `partialCompileFlags` above, and then add the name of the field in the
+// switch statement below.
+func (c *config) parsePartialCompileFlags() (partialCompileFlags, error) {
+	defaultFlags := partialCompileFlags{
+		// Set any opt-out flags here.  Opt-in flags are off by default.
+		enabled: false,
+	}
+	value := c.Getenv("SOONG_PARTIAL_COMPILE")
+
+	if value == "" {
+		return defaultFlags, nil
+	}
+
+	ret := defaultFlags
+	tokens := strings.Split(strings.ToLower(value), ",")
+	makeVal := func(state string, defaultValue bool) bool {
+		switch state {
+		case "":
+			return defaultValue
+		case "-":
+			return false
+		case "+":
+			return true
+		}
+		return false
+	}
+	for _, tok := range tokens {
+		var state string
+		if len(tok) == 0 {
+			continue
+		}
+		switch tok[0:1] {
+		case "":
+			// Ignore empty tokens.
+			continue
+		case "-", "+":
+			state = tok[0:1]
+			tok = tok[1:]
+		default:
+			// Treat `feature` as `+feature`.
+			state = "+"
+		}
+		switch tok {
+		case "true":
+			ret = defaultFlags
+			ret.enabled = true
+		case "false":
+			// Set everything to false.
+			ret = partialCompileFlags{}
+		case "enabled":
+			ret.enabled = makeVal(state, defaultFlags.enabled)
+		case "use_d8":
+			ret.use_d8 = makeVal(state, defaultFlags.use_d8)
+		default:
+			return partialCompileFlags{}, fmt.Errorf("Unknown SOONG_PARTIAL_COMPILE value: %v", value)
+		}
+	}
+	return ret, nil
 }
 
 func loadConfig(config *config) error {
@@ -568,6 +657,11 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		return Config{}, err
 	}
 
+	config.partialCompileFlags, err = config.parsePartialCompileFlags()
+	if err != nil {
+		return Config{}, err
+	}
+
 	// Make the CommonOS OsType available for all products.
 	targets[CommonOS] = []Target{commonTargetMap[CommonOS.Name]}
 
@@ -616,7 +710,6 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 			config.BuildMode = mode
 		}
 	}
-	setBuildMode(cmdArgs.BazelQueryViewDir, GenerateQueryView)
 	setBuildMode(cmdArgs.ModuleGraphFile, GenerateModuleGraph)
 	setBuildMode(cmdArgs.DocFile, GenerateDocFile)
 
@@ -997,6 +1090,10 @@ func (c *config) DefaultAppTargetSdk(ctx EarlyModuleContext) ApiLevel {
 		panic("Platform_sdk_codename should not be REL when Platform_sdk_final is true")
 	}
 	return ApiLevelOrPanic(ctx, codename)
+}
+
+func (c *config) PartialCompileFlags() partialCompileFlags {
+	return c.partialCompileFlags
 }
 
 func (c *config) AppsDefaultVersionName() string {
@@ -1420,6 +1517,10 @@ func (c *deviceConfig) VendorPath() string {
 	return "vendor"
 }
 
+func (c *deviceConfig) BuildingVendorImage() bool {
+	return proptools.Bool(c.config.productVariables.BuildingVendorImage)
+}
+
 func (c *deviceConfig) CurrentApiLevelForVendorModules() string {
 	return StringDefault(c.config.productVariables.DeviceCurrentApiLevelForVendorModules, "current")
 }
@@ -1448,6 +1549,10 @@ func (c *deviceConfig) ProductPath() string {
 		return *c.config.productVariables.ProductPath
 	}
 	return "product"
+}
+
+func (c *deviceConfig) BuildingProductImage() bool {
+	return proptools.Bool(c.config.productVariables.BuildingProductImage)
 }
 
 func (c *deviceConfig) SystemExtPath() string {
