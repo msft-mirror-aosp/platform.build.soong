@@ -401,7 +401,6 @@ type ProductVariables struct {
 
 	Ndk_abis *bool `json:",omitempty"`
 
-	TrimmedApex                  *bool `json:",omitempty"`
 	ForceApexSymlinkOptimization *bool `json:",omitempty"`
 	CompressedApex               *bool `json:",omitempty"`
 	Aml_abis                     *bool `json:",omitempty"`
@@ -645,7 +644,6 @@ func (v *ProductVariables) SetDefaultConfig() {
 		Malloc_zero_contents:         boolPtr(true),
 		Malloc_pattern_fill_contents: boolPtr(false),
 		Safestack:                    boolPtr(false),
-		TrimmedApex:                  boolPtr(false),
 		Build_from_text_stub:         boolPtr(false),
 
 		BootJars:     ConfiguredJarList{apexes: []string{}, jars: []string{}},
