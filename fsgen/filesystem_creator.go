@@ -139,8 +139,9 @@ func createFsGenState(ctx android.LoadHookContext) *FsGenState {
 					"update_engine_sideload":       defaultDepCandidateProps(ctx.Config()),
 				},
 				"vendor": &map[string]*depCandidateProps{
-					"fs_config_files_vendor": defaultDepCandidateProps(ctx.Config()),
-					"fs_config_dirs_vendor":  defaultDepCandidateProps(ctx.Config()),
+					"fs_config_files_vendor":                               defaultDepCandidateProps(ctx.Config()),
+					"fs_config_dirs_vendor":                                defaultDepCandidateProps(ctx.Config()),
+					generatedModuleName(ctx.Config(), "vendor-build.prop"): defaultDepCandidateProps(ctx.Config()),
 				},
 				"odm":     newMultilibDeps(),
 				"product": newMultilibDeps(),
@@ -481,6 +482,25 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 		module = ctx.CreateModule(filesystem.FilesystemFactory, baseProps, fsProps)
 	}
 	module.HideFromMake()
+	if partitionType == "vendor" {
+		// Create a build prop for vendor
+		vendorBuildProps := &struct {
+			Name           *string
+			Vendor         *bool
+			Stem           *string
+			Product_config *string
+		}{
+			Name:           proptools.StringPtr(generatedModuleName(ctx.Config(), "vendor-build.prop")),
+			Vendor:         proptools.BoolPtr(true),
+			Stem:           proptools.StringPtr("build.prop"),
+			Product_config: proptools.StringPtr(":product_config"),
+		}
+		vendorBuildProp := ctx.CreateModule(
+			android.BuildPropFactory,
+			vendorBuildProps,
+		)
+		vendorBuildProp.HideFromMake()
+	}
 	return true
 }
 

@@ -20,7 +20,7 @@ import (
 
 func init() {
 	ctx := InitRegistrationContext
-	ctx.RegisterModuleType("build_prop", buildPropFactory)
+	ctx.RegisterModuleType("build_prop", BuildPropFactory)
 }
 
 type buildPropProperties struct {
@@ -191,7 +191,7 @@ func (p *buildPropModule) AndroidMkEntries() []AndroidMkEntries {
 // build_prop module generates {partition}/build.prop file. At first common build properties are
 // printed based on Soong config variables. And then prop_files are printed as-is. Finally,
 // post_process_props tool is run to check if the result build.prop is valid or not.
-func buildPropFactory() Module {
+func BuildPropFactory() Module {
 	module := &buildPropModule{}
 	module.AddProperties(&module.properties)
 	InitAndroidArchModule(module, DeviceSupported, MultilibCommon)
