@@ -3321,3 +3321,20 @@ func TestClangVerify(t *testing.T) {
 		t.Errorf("expected %q in cflags, got %q", "-Xclang -verify", cFlags_cv)
 	}
 }
+
+func TestCheckConflictingExplicitVersions(t *testing.T) {
+	PrepareForIntegrationTestWithCc.
+		ExtendWithErrorHandler(android.FixtureExpectsOneErrorPattern(
+			`shared_libs: duplicate shared libraries with different explicit versions: "libbar" and "libbar#impl"`,
+		)).
+		RunTestWithBp(t, `
+			cc_library {
+				name: "libfoo",
+				shared_libs: ["libbar", "libbar#impl"],
+			}
+
+			cc_library {
+				name: "libbar",
+			}
+		`)
+}
