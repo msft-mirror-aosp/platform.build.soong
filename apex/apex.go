@@ -63,8 +63,6 @@ func RegisterPreDepsMutators(ctx android.RegisterMutatorsContext) {
 func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
 	ctx.TopDown("apex_info", apexInfoMutator)
 	ctx.BottomUp("apex_unique", apexUniqueVariationsMutator)
-	ctx.BottomUp("apex_test_for_deps", apexTestForDepsMutator)
-	ctx.BottomUp("apex_test_for", apexTestForMutator)
 	// Run mark_platform_availability before the apexMutator as the apexMutator needs to know whether
 	// it should create a platform variant.
 	ctx.BottomUp("mark_platform_availability", markPlatformAvailability)
@@ -747,7 +745,6 @@ var (
 	prebuiltTag     = &dependencyTag{name: "prebuilt", payload: true}
 	rroTag          = &dependencyTag{name: "rro", payload: true}
 	sharedLibTag    = &dependencyTag{name: "sharedLib", payload: true}
-	testForTag      = &dependencyTag{name: "test for"}
 	testTag         = &dependencyTag{name: "test", payload: true}
 	shBinaryTag     = &dependencyTag{name: "shBinary", payload: true}
 )
@@ -1182,40 +1179,6 @@ func apexUniqueVariationsMutator(mctx android.BottomUpMutatorContext) {
 	}
 	if am, ok := mctx.Module().(android.ApexModule); ok {
 		android.UpdateUniqueApexVariationsForDeps(mctx, am)
-	}
-}
-
-// apexTestForDepsMutator checks if this module is a test for an apex. If so, add a dependency on
-// the apex in order to retrieve its contents later.
-// TODO(jiyong): move this to android/apex.go?
-func apexTestForDepsMutator(mctx android.BottomUpMutatorContext) {
-	if !mctx.Module().Enabled(mctx) {
-		return
-	}
-	if am, ok := mctx.Module().(android.ApexModule); ok {
-		if testFor := am.TestFor(); len(testFor) > 0 {
-			mctx.AddFarVariationDependencies([]blueprint.Variation{
-				{Mutator: "os", Variation: am.Target().OsVariation()},
-				{"arch", "common"},
-			}, testForTag, testFor...)
-		}
-	}
-}
-
-// TODO(jiyong): move this to android/apex.go?
-func apexTestForMutator(mctx android.BottomUpMutatorContext) {
-	if !mctx.Module().Enabled(mctx) {
-		return
-	}
-	if _, ok := mctx.Module().(android.ApexModule); ok {
-		var contents []*android.ApexContents
-		for _, testFor := range mctx.GetDirectDepsWithTag(testForTag) {
-			abInfo, _ := android.OtherModuleProvider(mctx, testFor, android.ApexBundleInfoProvider)
-			contents = append(contents, abInfo.Contents)
-		}
-		android.SetProvider(mctx, android.ApexTestForInfoProvider, android.ApexTestForInfo{
-			ApexContents: contents,
-		})
 	}
 }
 
@@ -2939,10 +2902,6 @@ func rBcpPackages() map[string][]string {
 			"android.net",
 		},
 	}
-}
-
-func (a *apexBundle) IsTestApex() bool {
-	return a.testApex
 }
 
 // verifyNativeImplementationLibs compares the list of transitive implementation libraries used to link native
