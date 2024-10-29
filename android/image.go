@@ -125,6 +125,12 @@ func (e *imageInterfaceContextAdapter) SystemExtSpecific() bool {
 	return e.kind == systemExtSpecificModule
 }
 
+// imageMutatorBeginMutator calls ImageMutatorBegin on all modules that may have image variants.
+// This happens right before the imageTransitionMutator runs. It's needed to initialize these
+// modules so that they return the correct results for all the other ImageInterface methods,
+// which the imageTransitionMutator will call. Transition mutators should also not mutate modules
+// (except in their Mutate() function), which this method does, so we run it in a separate mutator
+// first.
 func imageMutatorBeginMutator(ctx BottomUpMutatorContext) {
 	if m, ok := ctx.Module().(ImageInterface); ok && ctx.Os() == Android {
 		m.ImageMutatorBegin(ctx)
