@@ -287,6 +287,15 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	ctx.BeginTrace(metrics.RunSoong, "blueprint bootstrap")
 	defer ctx.EndTrace()
 
+	st := ctx.Status.StartTool()
+	defer st.Finish()
+	st.SetTotalActions(1)
+	action := &status.Action{
+		Description: "bootstrap blueprint",
+		Outputs:     []string{"bootstrap blueprint"},
+	}
+	st.StartAction(action)
+
 	// Clean up some files for incremental builds across incompatible changes.
 	bootstrapEpochCleanup(ctx, config)
 
@@ -395,8 +404,17 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	// since `bootstrap.ninja` is regenerated unconditionally, we ignore the deps, i.e. little
 	// reason to write a `bootstrap.ninja.d` file
 	_, err := bootstrap.RunBlueprint(blueprintArgs, bootstrap.DoEverything, blueprintCtx, blueprintConfig)
+
+	result := status.ActionResult{
+		Action: action,
+	}
 	if err != nil {
-		ctx.Fatal(err)
+		result.Error = err
+		result.Output = err.Error()
+	}
+	st.FinishAction(result)
+	if err != nil {
+		ctx.Fatalf("bootstrap failed")
 	}
 }
 
@@ -792,8 +810,10 @@ func checkGlobs(ctx Context, finalOutFile string) error {
 						changedGlobNameMutex.Lock()
 						defer changedGlobNameMutex.Unlock()
 						changedGlobName = result.Pattern
-						if len(result.Excludes) > 0 {
-							changedGlobName += " (excluding " + strings.Join(result.Excludes, ", ") + ")"
+						if len(result.Excludes) > 2 {
+							changedGlobName += fmt.Sprintf(" (excluding %d other patterns)", len(result.Excludes))
+						} else if len(result.Excludes) > 0 {
+							changedGlobName += " (excluding " + strings.Join(result.Excludes, " and ") + ")"
 						}
 					}
 				}
