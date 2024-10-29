@@ -151,6 +151,7 @@ var preArch = []RegisterMutatorFunc{
 
 func registerArchMutator(ctx RegisterMutatorsContext) {
 	ctx.Transition("os", &osTransitionMutator{})
+	ctx.BottomUp("image_begin", imageMutatorBeginMutator)
 	ctx.Transition("image", &imageTransitionMutator{})
 	ctx.Transition("arch", &archTransitionMutator{})
 }
