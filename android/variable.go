@@ -241,7 +241,8 @@ type ProductVariables struct {
 	DeviceMaxPageSizeSupported            *string  `json:",omitempty"`
 	DeviceNoBionicPageSizeMacro           *bool    `json:",omitempty"`
 
-	VendorApiLevel *string `json:",omitempty"`
+	VendorApiLevel             *string `json:",omitempty"`
+	VendorApiLevelPropOverride *string `json:",omitempty"`
 
 	DeviceSecondaryArch        *string  `json:",omitempty"`
 	DeviceSecondaryArchVariant *string  `json:",omitempty"`
@@ -520,6 +521,7 @@ type ProductVariables struct {
 	SystemExtPropFiles []string `json:",omitempty"`
 	ProductPropFiles   []string `json:",omitempty"`
 	OdmPropFiles       []string `json:",omitempty"`
+	VendorPropFiles    []string `json:",omitempty"`
 
 	EnableUffdGc *string `json:",omitempty"`
 

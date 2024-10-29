@@ -21,7 +21,9 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
 	"github.com/google/blueprint/proptools"
+	"github.com/google/blueprint/uniquelist"
 )
 
 // BuildParameters describes the set of potential parameters to build a Ninja rule.
@@ -261,7 +263,7 @@ type moduleContext struct {
 	// the OutputFilesProvider in GenerateBuildActions
 	outputFiles OutputFilesInfo
 
-	TransitiveInstallFiles *DepSet[InstallPath]
+	TransitiveInstallFiles depset.DepSet[InstallPath]
 
 	// set of dependency module:location mappings used to populate the license metadata for
 	// apex containers.
@@ -553,8 +555,8 @@ func (m *moduleContext) PackageFile(installPath InstallPath, name string, srcPat
 	return m.packageFile(fullInstallPath, srcPath, false)
 }
 
-func (m *moduleContext) getAconfigPaths() *Paths {
-	return &m.aconfigFilePaths
+func (m *moduleContext) getAconfigPaths() Paths {
+	return m.aconfigFilePaths
 }
 
 func (m *moduleContext) setAconfigPaths(paths Paths) {
@@ -569,12 +571,12 @@ func (m *moduleContext) packageFile(fullInstallPath InstallPath, srcPath Path, e
 		srcPath:               srcPath,
 		symlinkTarget:         "",
 		executable:            executable,
-		effectiveLicenseFiles: &licenseFiles,
+		effectiveLicenseFiles: uniquelist.Make(licenseFiles),
 		partition:             fullInstallPath.partition,
 		skipInstall:           m.skipInstall(),
-		aconfigPaths:          m.getAconfigPaths(),
+		aconfigPaths:          uniquelist.Make(m.getAconfigPaths()),
 		archType:              m.target.Arch.ArchType,
-		overrides:             &overrides,
+		overrides:             uniquelist.Make(overrides),
 		owner:                 m.ModuleName(),
 	}
 	m.packagingSpecs = append(m.packagingSpecs, spec)
@@ -702,9 +704,9 @@ func (m *moduleContext) InstallSymlink(installPath InstallPath, name string, src
 		executable:       false,
 		partition:        fullInstallPath.partition,
 		skipInstall:      m.skipInstall(),
-		aconfigPaths:     m.getAconfigPaths(),
+		aconfigPaths:     uniquelist.Make(m.getAconfigPaths()),
 		archType:         m.target.Arch.ArchType,
-		overrides:        &overrides,
+		overrides:        uniquelist.Make(overrides),
 		owner:            m.ModuleName(),
 	})
 
@@ -749,9 +751,9 @@ func (m *moduleContext) InstallAbsoluteSymlink(installPath InstallPath, name str
 		executable:       false,
 		partition:        fullInstallPath.partition,
 		skipInstall:      m.skipInstall(),
-		aconfigPaths:     m.getAconfigPaths(),
+		aconfigPaths:     uniquelist.Make(m.getAconfigPaths()),
 		archType:         m.target.Arch.ArchType,
-		overrides:        &overrides,
+		overrides:        uniquelist.Make(overrides),
 		owner:            m.ModuleName(),
 	})
 
