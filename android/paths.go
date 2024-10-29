@@ -15,9 +15,6 @@
 package android
 
 import (
-	"bytes"
-	"encoding/gob"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/gobtools"
 	"github.com/google/blueprint/pathtools"
 )
 
@@ -342,6 +340,11 @@ type OptionalPath struct {
 	invalidReason string // Not applicable if path != nil. "" if the reason is unknown.
 }
 
+type optionalPathGob struct {
+	Path          Path
+	InvalidReason string
+}
+
 // OptionalPathForPath returns an OptionalPath containing the path.
 func OptionalPathForPath(path Path) OptionalPath {
 	return OptionalPath{path: path}
@@ -351,6 +354,26 @@ func OptionalPathForPath(path Path) OptionalPath {
 func InvalidOptionalPath(reason string) OptionalPath {
 
 	return OptionalPath{invalidReason: reason}
+}
+
+func (p *OptionalPath) ToGob() *optionalPathGob {
+	return &optionalPathGob{
+		Path:          p.path,
+		InvalidReason: p.invalidReason,
+	}
+}
+
+func (p *OptionalPath) FromGob(data *optionalPathGob) {
+	p.path = data.Path
+	p.invalidReason = data.InvalidReason
+}
+
+func (p OptionalPath) GobEncode() ([]byte, error) {
+	return gobtools.CustomGobEncode[optionalPathGob](&p)
+}
+
+func (p *OptionalPath) GobDecode(data []byte) error {
+	return gobtools.CustomGobDecode[optionalPathGob](data, p)
 }
 
 // Valid returns whether there is a valid path
@@ -524,6 +547,58 @@ func PathsRelativeToModuleSourceDir(input SourceInput) Paths {
 		for _, m := range missingDeps {
 			input.Context.ModuleErrorf(`missing dependency on %q, is the property annotated with android:"path"?`, m)
 		}
+	}
+	return ret
+}
+
+// DirectoryPathsForModuleSrcExcludes returns a Paths{} containing the resolved references in
+// directory paths. Elements of paths are resolved as:
+//   - filepath, relative to local module directory, resolves as a filepath relative to the local
+//     source directory
+//   - other modules using the ":name" syntax. These modules must implement DirProvider.
+//
+// TODO(b/358302178): Implement DirectoryPath and change the return type.
+func DirectoryPathsForModuleSrc(ctx ModuleMissingDepsPathContext, paths []string) Paths {
+	var ret Paths
+
+	for _, path := range paths {
+		if m, t := SrcIsModuleWithTag(path); m != "" {
+			module := GetModuleFromPathDep(ctx, m, t)
+			if module == nil {
+				ctx.ModuleErrorf(`missing dependency on %q, is the property annotated with android:"path"?`, m)
+				continue
+			}
+			if t != "" {
+				ctx.ModuleErrorf("DirProvider dependency %q does not support the tag %q", module, t)
+				continue
+			}
+			mctx, ok := ctx.(OtherModuleProviderContext)
+			if !ok {
+				panic(fmt.Errorf("%s is not an OtherModuleProviderContext", ctx))
+			}
+			if dirProvider, ok := OtherModuleProvider(mctx, module, DirProvider); ok {
+				ret = append(ret, dirProvider.Dirs...)
+			} else {
+				ReportPathErrorf(ctx, "module %q does not implement DirProvider", module)
+			}
+		} else {
+			p := pathForModuleSrc(ctx, path)
+			if isDir, err := ctx.Config().fs.IsDir(p.String()); err != nil {
+				ReportPathErrorf(ctx, "%s: %s", p, err.Error())
+			} else if !isDir {
+				ReportPathErrorf(ctx, "module directory path %q is not a directory", p)
+			} else {
+				ret = append(ret, p)
+			}
+		}
+	}
+
+	seen := make(map[Path]bool, len(ret))
+	for _, path := range ret {
+		if seen[path] {
+			ReportPathErrorf(ctx, "duplicated path %q", path)
+		}
+		seen[path] = true
 	}
 	return ret
 }
@@ -1065,26 +1140,29 @@ type basePath struct {
 	rel  string
 }
 
-func (p basePath) GobEncode() ([]byte, error) {
-	w := new(bytes.Buffer)
-	encoder := gob.NewEncoder(w)
-	err := errors.Join(encoder.Encode(p.path), encoder.Encode(p.rel))
-	if err != nil {
-		return nil, err
-	}
+type basePathGob struct {
+	Path string
+	Rel  string
+}
 
-	return w.Bytes(), nil
+func (p *basePath) ToGob() *basePathGob {
+	return &basePathGob{
+		Path: p.path,
+		Rel:  p.rel,
+	}
+}
+
+func (p *basePath) FromGob(data *basePathGob) {
+	p.path = data.Path
+	p.rel = data.Rel
+}
+
+func (p basePath) GobEncode() ([]byte, error) {
+	return gobtools.CustomGobEncode[basePathGob](&p)
 }
 
 func (p *basePath) GobDecode(data []byte) error {
-	r := bytes.NewBuffer(data)
-	decoder := gob.NewDecoder(r)
-	err := errors.Join(decoder.Decode(&p.path), decoder.Decode(&p.rel))
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return gobtools.CustomGobDecode[basePathGob](data, p)
 }
 
 func (p basePath) Ext() string {
@@ -1337,26 +1415,32 @@ type OutputPath struct {
 	fullPath string
 }
 
-func (p OutputPath) GobEncode() ([]byte, error) {
-	w := new(bytes.Buffer)
-	encoder := gob.NewEncoder(w)
-	err := errors.Join(encoder.Encode(p.basePath), encoder.Encode(p.outDir), encoder.Encode(p.fullPath))
-	if err != nil {
-		return nil, err
-	}
+type outputPathGob struct {
+	BasePath basePath
+	OutDir   string
+	FullPath string
+}
 
-	return w.Bytes(), nil
+func (p *OutputPath) ToGob() *outputPathGob {
+	return &outputPathGob{
+		BasePath: p.basePath,
+		OutDir:   p.outDir,
+		FullPath: p.fullPath,
+	}
+}
+
+func (p *OutputPath) FromGob(data *outputPathGob) {
+	p.basePath = data.BasePath
+	p.outDir = data.OutDir
+	p.fullPath = data.FullPath
+}
+
+func (p OutputPath) GobEncode() ([]byte, error) {
+	return gobtools.CustomGobEncode[outputPathGob](&p)
 }
 
 func (p *OutputPath) GobDecode(data []byte) error {
-	r := bytes.NewBuffer(data)
-	decoder := gob.NewDecoder(r)
-	err := errors.Join(decoder.Decode(&p.basePath), decoder.Decode(&p.outDir), decoder.Decode(&p.fullPath))
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return gobtools.CustomGobDecode[outputPathGob](data, p)
 }
 
 func (p OutputPath) withRel(rel string) OutputPath {
@@ -1756,30 +1840,41 @@ type InstallPath struct {
 	fullPath string
 }
 
-func (p *InstallPath) GobEncode() ([]byte, error) {
-	w := new(bytes.Buffer)
-	encoder := gob.NewEncoder(w)
-	err := errors.Join(encoder.Encode(p.basePath), encoder.Encode(p.soongOutDir),
-		encoder.Encode(p.partitionDir), encoder.Encode(p.partition),
-		encoder.Encode(p.makePath), encoder.Encode(p.fullPath))
-	if err != nil {
-		return nil, err
-	}
+type installPathGob struct {
+	BasePath     basePath
+	SoongOutDir  string
+	PartitionDir string
+	Partition    string
+	MakePath     bool
+	FullPath     string
+}
 
-	return w.Bytes(), nil
+func (p *InstallPath) ToGob() *installPathGob {
+	return &installPathGob{
+		BasePath:     p.basePath,
+		SoongOutDir:  p.soongOutDir,
+		PartitionDir: p.partitionDir,
+		Partition:    p.partition,
+		MakePath:     p.makePath,
+		FullPath:     p.fullPath,
+	}
+}
+
+func (p *InstallPath) FromGob(data *installPathGob) {
+	p.basePath = data.BasePath
+	p.soongOutDir = data.SoongOutDir
+	p.partitionDir = data.PartitionDir
+	p.partition = data.Partition
+	p.makePath = data.MakePath
+	p.fullPath = data.FullPath
+}
+
+func (p InstallPath) GobEncode() ([]byte, error) {
+	return gobtools.CustomGobEncode[installPathGob](&p)
 }
 
 func (p *InstallPath) GobDecode(data []byte) error {
-	r := bytes.NewBuffer(data)
-	decoder := gob.NewDecoder(r)
-	err := errors.Join(decoder.Decode(&p.basePath), decoder.Decode(&p.soongOutDir),
-		decoder.Decode(&p.partitionDir), decoder.Decode(&p.partition),
-		decoder.Decode(&p.makePath), decoder.Decode(&p.fullPath))
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return gobtools.CustomGobDecode[installPathGob](data, p)
 }
 
 // Will panic if called from outside a test environment.

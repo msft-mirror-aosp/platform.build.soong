@@ -429,7 +429,9 @@ def append_additional_vendor_props(args):
   # Build system set BOARD_API_LEVEL to show the api level of the vendor API surface.
   # This must not be altered outside of build system.
   if config["VendorApiLevel"]:
-    props.append(f"ro.board.api_level={config['VendorApiLevel']}")
+    props.append(f"ro.board.api_level?={config['VendorApiLevel']}")
+    if config["VendorApiLevelPropOverride"]:
+      props.append(f"ro.board.api_level={config['VendorApiLevelPropOverride']}")
 
   # RELEASE_BOARD_API_LEVEL_FROZEN is true when the vendor API surface is frozen.
   if build_flags["RELEASE_BOARD_API_LEVEL_FROZEN"]:
@@ -522,7 +524,6 @@ def build_system_ext_prop(args):
 
   build_prop(args, gen_build_info=False, gen_common_build_props=True, variables=variables)
 
-'''
 def build_vendor_prop(args):
   config = args.config
 
@@ -539,7 +540,6 @@ def build_vendor_prop(args):
     ]
 
   build_prop(args, gen_build_info=False, gen_common_build_props=True, variables=variables)
-'''
 
 def build_product_prop(args):
   config = args.config
@@ -606,8 +606,8 @@ def main():
         build_odm_prop(args)
       case "product":
         build_product_prop(args)
-      # case "vendor":  # NOT IMPLEMENTED
-      #  build_vendor_prop(args)
+      case "vendor":
+        build_vendor_prop(args)
       case _:
         sys.exit(f"not supported partition {args.partition}")
 

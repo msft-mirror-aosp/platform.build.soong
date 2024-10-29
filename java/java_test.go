@@ -569,8 +569,7 @@ func TestBinary(t *testing.T) {
 
 	bar := ctx.ModuleForTests("bar", buildOS+"_common")
 	barJar := bar.Output("bar.jar").Output.String()
-	barWrapper := ctx.ModuleForTests("bar", buildOS+"_x86_64")
-	barWrapperDeps := barWrapper.Output("bar").Implicits.Strings()
+	barWrapperDeps := bar.Output("bar").Implicits.Strings()
 
 	libjni := ctx.ModuleForTests("libjni", buildOS+"_x86_64_shared")
 	libjniSO := libjni.Rule("Cp").Output.String()
@@ -1174,7 +1173,7 @@ func TestJavaLibraryOutputFiles(t *testing.T) {
 
 				filegroup {
 					name: "core-jar",
-					srcs: [":core{.jar}"],
+					device_common_srcs: [":core{.jar}"],
 				}
 		`),
 	})
@@ -1190,7 +1189,7 @@ func TestJavaImportOutputFiles(t *testing.T) {
 
 				filegroup {
 					name: "core-jar",
-					srcs: [":core{.jar}"],
+					device_common_srcs: [":core{.jar}"],
 				}
 		`),
 	})
@@ -1931,7 +1930,7 @@ func TestDeviceBinaryWrapperGeneration(t *testing.T) {
 			main_class: "foo.bar.jb",
 		}
 	`)
-	wrapperPath := fmt.Sprint(ctx.ModuleForTests("foo", "android_arm64_armv8-a").AllOutputs())
+	wrapperPath := fmt.Sprint(ctx.ModuleForTests("foo", "android_common").AllOutputs())
 	if !strings.Contains(wrapperPath, "foo.sh") {
 		t.Errorf("wrapper file foo.sh is not generated")
 	}
@@ -3125,13 +3124,6 @@ cc_library_shared {
 }
 `
 	res, _ := testJava(t, bp)
-	// The first variant installs the native library via the common variant, so check the deps of both variants.
-	nativeVariantDepsWithDups := findDepsOfModule(res, res.ModuleForTests("myjavabin", "android_arm64_armv8-a").Module(), "mynativelib")
-	nativeVariantDepsWithDups = append(nativeVariantDepsWithDups, findDepsOfModule(res, res.ModuleForTests("myjavabin", "android_common").Module(), "mynativelib")...)
-
-	nativeVariantDepsUnique := map[blueprint.Module]bool{}
-	for _, dep := range nativeVariantDepsWithDups {
-		nativeVariantDepsUnique[dep] = true
-	}
-	android.AssertIntEquals(t, "Create a dep on the first variant", 1, len(nativeVariantDepsUnique))
+	deps := findDepsOfModule(res, res.ModuleForTests("myjavabin", "android_common").Module(), "mynativelib")
+	android.AssertIntEquals(t, "Create a dep on the first variant", 1, len(deps))
 }

@@ -176,7 +176,7 @@ func (t SanitizerType) registerMutators(ctx android.RegisterMutatorsContext) {
 	switch t {
 	case cfi, Hwasan, Asan, tsan, Fuzzer, scs, Memtag_stack:
 		sanitizer := &sanitizerSplitMutator{t}
-		ctx.BottomUp(t.variationName()+"_markapexes", sanitizer.markSanitizableApexesMutator).Parallel()
+		ctx.BottomUp(t.variationName()+"_markapexes", sanitizer.markSanitizableApexesMutator)
 		ctx.Transition(t.variationName(), sanitizer)
 	case Memtag_heap, Memtag_globals, intOverflow:
 		// do nothing
@@ -1830,10 +1830,7 @@ func sanitizerLibrariesTxtFactory() android.Module {
 
 type sanitizerLibraryDependencyTag struct {
 	blueprint.BaseDependencyTag
-}
-
-func (t sanitizerLibraryDependencyTag) AllowDisabledModuleDependency(target android.Module) bool {
-	return true
+	android.AlwaysAllowDisabledModuleDependencyTag
 }
 
 var _ android.AllowDisabledModuleDependency = (*sanitizerLibraryDependencyTag)(nil)

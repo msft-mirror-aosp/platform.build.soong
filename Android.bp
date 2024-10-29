@@ -142,10 +142,29 @@ all_apex_contributions {
     visibility: ["//visibility:public"],
 }
 
+// Defaults to share configs between "baremetal" Soong modules, currently only
+// used for code running in kernel context within Android Virtualization
+// Framework guests.
+cc_defaults {
+    name: "cc_baremetal_defaults",
+    arch: {
+        arm64: {
+            cflags: [
+                // Prevent the compiler from optimizing code using SVE, as the
+                // baremetal environment might not have configured the hardware.
+                "-Xclang -target-feature",
+                "-Xclang -sve",
+            ],
+        },
+    },
+    defaults_visibility: ["//visibility:public"],
+}
+
 product_config {
     name: "product_config",
     visibility: [
         "//build/make/target/product/generic",
+        "//build/soong/fsgen",
     ],
 }
 
@@ -153,10 +172,11 @@ build_prop {
     name: "system-build.prop",
     stem: "build.prop",
     product_config: ":product_config",
-    // Currently, only microdroid and cf system image can refer to system-build.prop
+    // Currently, only microdroid, Ravenwood, and cf system image can refer to system-build.prop
     visibility: [
         "//build/make/target/product/generic",
         "//packages/modules/Virtualization/build/microdroid",
+        "//frameworks/base/ravenwood",
     ],
 }
 
