@@ -2195,6 +2195,10 @@ func (c *config) OdmPropFiles(ctx PathContext) Paths {
 	return PathsForSource(ctx, c.productVariables.OdmPropFiles)
 }
 
+func (c *config) VendorPropFiles(ctx PathContext) Paths {
+	return PathsForSource(ctx, c.productVariables.VendorPropFiles)
+}
+
 func (c *config) ExtraAllowedDepsTxt() string {
 	return String(c.productVariables.ExtraAllowedDepsTxt)
 }
