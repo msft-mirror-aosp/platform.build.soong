@@ -469,7 +469,7 @@ func TestPrebuiltFontInstallDirPath(t *testing.T) {
 		}
 	`)
 
-	p := result.Module("foo.conf", "android_arm64_armv8-a").(*PrebuiltEtc)
+	p := result.Module("foo.conf", "android_common").(*PrebuiltEtc)
 	expected := "out/soong/target/product/test_device/system/fonts"
 	android.AssertPathRelativeToTopEquals(t, "install dir", expected, p.installDirPaths[0])
 }
