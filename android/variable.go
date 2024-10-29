@@ -521,6 +521,7 @@ type ProductVariables struct {
 	SystemExtPropFiles []string `json:",omitempty"`
 	ProductPropFiles   []string `json:",omitempty"`
 	OdmPropFiles       []string `json:",omitempty"`
+	VendorPropFiles    []string `json:",omitempty"`
 
 	EnableUffdGc *string `json:",omitempty"`
 
