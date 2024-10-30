@@ -360,6 +360,29 @@ func parseCStd(cStdPtr *string) string {
 	}
 }
 
+func addTargetFlags(ctx android.ModuleContext, flags Flags, tc config.Toolchain, version string, bpf bool) Flags {
+	target := "-target " + tc.ClangTriple()
+	if ctx.Os().Class == android.Device {
+		if version == "" || version == "current" {
+			target += strconv.Itoa(android.FutureApiLevelInt)
+		} else {
+			apiLevel := nativeApiLevelOrPanic(ctx, version)
+			target += strconv.Itoa(apiLevel.FinalOrFutureInt())
+		}
+	}
+
+	// bpf targets don't need the default target triple. b/308826679
+	if bpf {
+		target = "--target=bpf"
+	}
+
+	flags.Global.CFlags = append(flags.Global.CFlags, target)
+	flags.Global.AsFlags = append(flags.Global.AsFlags, target)
+	flags.Global.LdFlags = append(flags.Global.LdFlags, target)
+
+	return flags
+}
+
 // Create a Flags struct that collects the compile flags from global values,
 // per-target values, module type values, and per-module Blueprints properties
 func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps PathDeps) Flags {
@@ -513,25 +536,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 	flags.Local.ConlyFlags = config.ClangFilterUnknownCflags(flags.Local.ConlyFlags)
 	flags.Local.LdFlags = config.ClangFilterUnknownCflags(flags.Local.LdFlags)
 
-	target := "-target " + tc.ClangTriple()
-	if ctx.Os().Class == android.Device {
-		version := ctx.minSdkVersion()
-		if version == "" || version == "current" {
-			target += strconv.Itoa(android.FutureApiLevelInt)
-		} else {
-			apiLevel := nativeApiLevelOrPanic(ctx, version)
-			target += strconv.Itoa(apiLevel.FinalOrFutureInt())
-		}
-	}
-
-	// bpf targets don't need the default target triple. b/308826679
-	if proptools.Bool(compiler.Properties.Bpf_target) {
-		target = "--target=bpf"
-	}
-
-	flags.Global.CFlags = append(flags.Global.CFlags, target)
-	flags.Global.AsFlags = append(flags.Global.AsFlags, target)
-	flags.Global.LdFlags = append(flags.Global.LdFlags, target)
+	flags = addTargetFlags(ctx, flags, tc, ctx.minSdkVersion(), Bool(compiler.Properties.Bpf_target))
 
 	hod := "Host"
 	if ctx.Os().Class == android.Device {

@@ -25,6 +25,7 @@ import (
 	"sync"
 
 	"android/soong/android"
+	"android/soong/cc/config"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/depset"
@@ -459,11 +460,15 @@ func (library *libraryDecorator) linkerProps() []interface{} {
 	return props
 }
 
-// linkerFlags takes a Flags struct and augments it to contain linker flags that are defined by this
-// library, or that are implied by attributes of this library (such as whether this library is a
-// shared library).
-func (library *libraryDecorator) linkerFlags(ctx ModuleContext, flags Flags) Flags {
-	flags = library.baseLinker.linkerFlags(ctx, flags)
+func commonLibraryLinkerFlags(ctx android.ModuleContext, flags Flags,
+	toolchain config.Toolchain, libName string) Flags {
+
+	mod, ok := ctx.Module().(LinkableInterface)
+
+	if !ok {
+		ctx.ModuleErrorf("trying to add linker flags to a non-LinkableInterface module.")
+		return flags
+	}
 
 	// MinGW spits out warnings about -fPIC even for -fpie?!) being ignored because
 	// all code is position independent, and then those warnings get promoted to
@@ -471,27 +476,18 @@ func (library *libraryDecorator) linkerFlags(ctx ModuleContext, flags Flags) Fla
 	if !ctx.Windows() {
 		flags.Global.CFlags = append(flags.Global.CFlags, "-fPIC")
 	}
-
-	if library.static() {
-		flags.Local.CFlags = append(flags.Local.CFlags, library.StaticProperties.Static.Cflags.GetOrDefault(ctx, nil)...)
-	} else if library.shared() {
-		flags.Local.CFlags = append(flags.Local.CFlags, library.SharedProperties.Shared.Cflags.GetOrDefault(ctx, nil)...)
-	}
-
-	if library.shared() {
-		libName := library.getLibName(ctx)
+	if mod.Shared() {
 		var f []string
-		if ctx.toolchain().Bionic() {
+		if toolchain.Bionic() {
 			f = append(f,
 				"-nostdlib",
 				"-Wl,--gc-sections",
 			)
 		}
-
 		if ctx.Darwin() {
 			f = append(f,
 				"-dynamiclib",
-				"-install_name @rpath/"+libName+flags.Toolchain.ShlibSuffix(),
+				"-install_name @rpath/"+libName+toolchain.ShlibSuffix(),
 			)
 			if ctx.Arch().ArchType == android.X86 {
 				f = append(f,
@@ -501,11 +497,25 @@ func (library *libraryDecorator) linkerFlags(ctx ModuleContext, flags Flags) Fla
 		} else {
 			f = append(f, "-shared")
 			if !ctx.Windows() {
-				f = append(f, "-Wl,-soname,"+libName+flags.Toolchain.ShlibSuffix())
+				f = append(f, "-Wl,-soname,"+libName+toolchain.ShlibSuffix())
 			}
 		}
-
 		flags.Global.LdFlags = append(flags.Global.LdFlags, f...)
+	}
+
+	return flags
+}
+
+// linkerFlags takes a Flags struct and augments it to contain linker flags that are defined by this
+// library, or that are implied by attributes of this library (such as whether this library is a
+// shared library).
+func (library *libraryDecorator) linkerFlags(ctx ModuleContext, flags Flags) Flags {
+	flags = library.baseLinker.linkerFlags(ctx, flags)
+	flags = commonLibraryLinkerFlags(ctx, flags, ctx.toolchain(), library.getLibName(ctx))
+	if library.static() {
+		flags.Local.CFlags = append(flags.Local.CFlags, library.StaticProperties.Static.Cflags.GetOrDefault(ctx, nil)...)
+	} else if library.shared() {
+		flags.Local.CFlags = append(flags.Local.CFlags, library.SharedProperties.Shared.Cflags.GetOrDefault(ctx, nil)...)
 	}
 
 	return flags
