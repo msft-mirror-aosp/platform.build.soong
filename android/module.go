@@ -1667,7 +1667,7 @@ func (m *ModuleBase) generateModuleTarget(ctx *moduleContext) {
 	}
 }
 
-func determineModuleKind(m *ModuleBase, ctx blueprint.EarlyModuleContext) moduleKind {
+func determineModuleKind(m *ModuleBase, ctx ModuleErrorContext) moduleKind {
 	var socSpecific = Bool(m.commonProperties.Vendor) || Bool(m.commonProperties.Proprietary) || Bool(m.commonProperties.Soc_specific)
 	var deviceSpecific = Bool(m.commonProperties.Device_specific)
 	var productSpecific = Bool(m.commonProperties.Product_specific)
