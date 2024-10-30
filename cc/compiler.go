@@ -785,7 +785,7 @@ func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathD
 	objs := compileObjs(ctx, buildFlags, "", srcs,
 		append(android.PathsForModuleSrc(ctx, compiler.Properties.Tidy_disabled_srcs), compiler.generatedSources...),
 		android.PathsForModuleSrc(ctx, compiler.Properties.Tidy_timeout_srcs),
-		pathDeps, compiler.cFlagsDeps)
+		pathDeps, compiler.cFlagsDeps, ctx.getSharedFlags())
 
 	if ctx.Failed() {
 		return Objects{}
@@ -795,10 +795,12 @@ func (compiler *baseCompiler) compile(ctx ModuleContext, flags Flags, deps PathD
 }
 
 // Compile a list of source files into objects a specified subdirectory
-func compileObjs(ctx ModuleContext, flags builderFlags, subdir string,
-	srcFiles, noTidySrcs, timeoutTidySrcs, pathDeps android.Paths, cFlagsDeps android.Paths) Objects {
+func compileObjs(ctx android.ModuleContext, flags builderFlags, subdir string,
+	srcFiles, noTidySrcs, timeoutTidySrcs, pathDeps android.Paths, cFlagsDeps android.Paths,
+	sharedFlags *SharedFlags) Objects {
 
-	return transformSourceToObj(ctx, subdir, srcFiles, noTidySrcs, timeoutTidySrcs, flags, pathDeps, cFlagsDeps)
+	return transformSourceToObj(ctx, subdir, srcFiles, noTidySrcs, timeoutTidySrcs, flags, pathDeps, cFlagsDeps,
+		sharedFlags)
 }
 
 // Properties for rust_bindgen related to generating rust bindings.

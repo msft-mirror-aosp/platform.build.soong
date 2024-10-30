@@ -406,10 +406,6 @@ func (mod *Module) HasLlndkStubs() bool {
 	return false
 }
 
-func (mod *Module) StubsVersion() string {
-	panic(fmt.Errorf("StubsVersion called on non-versioned module: %q", mod.BaseModuleName()))
-}
-
 func (mod *Module) SdkVersion() string {
 	return ""
 }
@@ -560,6 +556,9 @@ func (mod *Module) ExportedCrateLinkDirs() []string {
 
 func (mod *Module) PreventInstall() bool {
 	return mod.Properties.PreventInstall
+}
+func (c *Module) ForceDisableSanitizers() {
+	c.sanitize.Properties.ForceDisable = true
 }
 
 func (mod *Module) MarkAsCoverageVariant(coverage bool) {
@@ -743,11 +742,28 @@ func (mod *Module) IsNdk(config android.Config) bool {
 	return false
 }
 
+func (mod *Module) IsStubs() bool {
+	return false
+}
+
 func (mod *Module) HasStubsVariants() bool {
 	return false
 }
 
-func (mod *Module) IsStubs() bool {
+func (mod *Module) ApexSdkVersion() android.ApiLevel {
+	panic(fmt.Errorf("ApexSdkVersion called on unsupported Rust module: %q", mod.BaseModuleName()))
+}
+
+func (mod *Module) ImplementationModuleNameForMake(ctx android.BaseModuleContext) string {
+	return mod.Name()
+}
+
+func (mod *Module) Multilib() string {
+	return mod.Arch().ArchType.Multilib
+}
+
+func (mod *Module) IsCrt() bool {
+	// Rust does not currently provide any crt modules.
 	return false
 }
 
@@ -771,6 +787,7 @@ func (ctx moduleContext) apexVariationName() string {
 }
 
 var _ cc.LinkableInterface = (*Module)(nil)
+var _ cc.VersionedLinkableInterface = (*Module)(nil)
 
 func (mod *Module) Init() android.Module {
 	mod.AddProperties(&mod.Properties)
@@ -879,6 +896,25 @@ func (mod *Module) nativeCoverage() bool {
 		return false
 	}
 	return mod.compiler != nil && mod.compiler.nativeCoverage()
+}
+
+func (mod *Module) SetStl(s string) {
+	// STL is a CC concept; do nothing for Rust
+}
+
+func (mod *Module) SetSdkVersion(s string) {
+	panic(fmt.Errorf("SetSdkVersion called on unsupported Rust module: %q", mod.BaseModuleName()))
+}
+
+func (mod *Module) SetMinSdkVersion(s string) {
+	mod.Properties.Min_sdk_version = StringPtr(s)
+}
+
+func (mod *Module) VersionedInterface() cc.VersionedInterface {
+	if _, ok := mod.compiler.(cc.VersionedInterface); ok {
+		return mod.compiler.(cc.VersionedInterface)
+	}
+	return nil
 }
 
 func (mod *Module) EverInstallable() bool {
@@ -1063,6 +1099,12 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		}
 	}
 	android.SetProvider(ctx, RustInfoProvider, rustInfo)
+
+	ccInfo := &cc.CcInfo{
+		IsPrebuilt: mod.IsPrebuilt(),
+	}
+
+	android.SetProvider(ctx, cc.CcInfoProvider, ccInfo)
 
 	mod.setOutputFiles(ctx)
 

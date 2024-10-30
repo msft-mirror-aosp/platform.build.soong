@@ -457,7 +457,7 @@ func CheckSdkVersionAtLeast(ctx ModuleContext, SdkVersion android.ApiLevel) bool
 	if ctx.minSdkVersion() == "current" {
 		return true
 	}
-	parsedSdkVersion, err := nativeApiLevelFromUser(ctx, ctx.minSdkVersion())
+	parsedSdkVersion, err := NativeApiLevelFromUser(ctx, ctx.minSdkVersion())
 	if err != nil {
 		ctx.PropertyErrorf("min_sdk_version",
 			"Invalid min_sdk_version value (must be int or current): %q",

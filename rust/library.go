@@ -277,6 +277,71 @@ func (library *libraryDecorator) stdLinkage(device bool) RustLinkage {
 var _ compiler = (*libraryDecorator)(nil)
 var _ libraryInterface = (*libraryDecorator)(nil)
 var _ exportedFlagsProducer = (*libraryDecorator)(nil)
+var _ cc.VersionedInterface = (*libraryDecorator)(nil)
+
+func (library *libraryDecorator) HasLLNDKStubs() bool {
+	// Rust does not support LLNDK yet.
+	return false
+}
+
+func (library *libraryDecorator) HasVendorPublicLibrary() bool {
+	// Rust does not support vendor public library.
+	return false
+}
+
+func (library *libraryDecorator) HasLLNDKHeaders() bool {
+	// Rust does not support LLNDK yet.
+	return false
+}
+
+func (library *libraryDecorator) HasStubsVariants() bool {
+	return false
+}
+
+func (library *libraryDecorator) IsStubsImplementationRequired() bool {
+	return false
+}
+
+func (library *libraryDecorator) GetAPIListCoverageXMLPath() android.ModuleOutPath {
+	panic(fmt.Errorf("GetAPIListCoverageXMLPath called on unsupported Rust module"))
+}
+
+func (library *libraryDecorator) AllStubsVersions() []string {
+	panic(fmt.Errorf("AllStubsVersions called on unsupported Rust module"))
+}
+
+func (library *libraryDecorator) SetAllStubsVersions(versions []string) {
+	panic(fmt.Errorf("ApexSdkVersion called on unsupported Rust module"))
+}
+
+func (library *libraryDecorator) SetStubsVersion(version string) {
+	panic(fmt.Errorf("SetStubsVersion called on unsupported Rust module"))
+}
+
+func (library *libraryDecorator) SetBuildStubs(isLatest bool) {
+	panic(fmt.Errorf("SetBuildStubs called on unsupported Rust module"))
+}
+
+func (library *libraryDecorator) BuildStubs() bool {
+	return false
+}
+
+func (library *libraryDecorator) ImplementationModuleName(name string) string {
+	panic(fmt.Errorf("ImplementationModuleName called on unsupported Rust module"))
+}
+
+func (library *libraryDecorator) IsLLNDKMovedToApex() bool {
+	// Rust does not support LLNDK.
+	return false
+}
+
+func (library *libraryDecorator) StubsVersions(ctx android.BaseModuleContext) []string {
+	panic(fmt.Errorf("StubsVersions called on unsupported Rust module"))
+}
+
+func (library *libraryDecorator) StubsVersion() string {
+	panic(fmt.Errorf("StubsVersions called on unsupported Rust module"))
+}
 
 // rust_library produces all Rust variants (rust_library_dylib and
 // rust_library_rlib).
