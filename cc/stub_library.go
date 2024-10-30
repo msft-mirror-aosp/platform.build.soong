@@ -59,10 +59,6 @@ func (s *stubLibraries) GenerateBuildActions(ctx android.SingletonContext) {
 	vendorStubLibraryMap := make(map[string]bool)
 	ctx.VisitAllModules(func(module android.Module) {
 		if m, ok := module.(VersionedLinkableInterface); ok {
-			// TODO(ivanlozano) remove this when Rust supports stubs
-			if m.RustLibraryInterface() {
-				return
-			}
 			if IsStubTarget(android.OtherModuleProviderOrDefault(ctx, m, LinkableInfoProvider)) {
 				if name := getInstalledFileName(ctx, m); name != "" {
 					stubLibraryMap[name] = true

@@ -851,6 +851,25 @@ func genRustStaticlibSrcFile(crateNames []string) string {
 	return strings.Join(lines, "\n")
 }
 
+func BuildRustStubs(ctx android.ModuleContext, outputFile android.ModuleOutPath,
+	crtBegin, crtEnd android.Paths, stubObjs Objects, ccFlags Flags) {
+
+	// Instantiate paths
+	sharedLibs := android.Paths{}
+	staticLibs := android.Paths{}
+	lateStaticLibs := android.Paths{}
+	wholeStaticLibs := android.Paths{}
+	deps := android.Paths{}
+	implicitOutputs := android.WritablePaths{}
+	validations := android.Paths{}
+	groupLate := false
+
+	builderFlags := flagsToBuilderFlags(ccFlags)
+	transformObjToDynamicBinary(ctx, stubObjs.objFiles, sharedLibs, staticLibs,
+		lateStaticLibs, wholeStaticLibs, deps, crtBegin, crtEnd,
+		groupLate, builderFlags, outputFile, implicitOutputs, validations)
+}
+
 // Generate a rule for compiling multiple .o files, plus static libraries, whole static libraries,
 // and shared libraries, to a shared library (.so) or dynamic executable
 func transformObjToDynamicBinary(ctx android.ModuleContext,

@@ -471,7 +471,7 @@ func CheckSdkVersionAtLeast(ctx ModuleContext, SdkVersion android.ApiLevel) bool
 
 // ModuleContext extends BaseModuleContext
 // BaseModuleContext should know if LLD is used?
-func commonLinkerFlags(ctx android.ModuleContext, flags Flags, useClangLld bool,
+func CommonLinkerFlags(ctx android.ModuleContext, flags Flags, useClangLld bool,
 	toolchain config.Toolchain, allow_undefined_symbols bool) Flags {
 	hod := "Host"
 	if ctx.Os().Class == android.Device {
@@ -480,7 +480,7 @@ func commonLinkerFlags(ctx android.ModuleContext, flags Flags, useClangLld bool,
 
 	mod, ok := ctx.Module().(LinkableInterface)
 	if !ok {
-		ctx.ModuleErrorf("trying to add commonLinkerFlags to non-LinkableInterface module.")
+		ctx.ModuleErrorf("trying to add CommonLinkerFlags to non-LinkableInterface module.")
 		return flags
 	}
 	if useClangLld {
@@ -531,7 +531,7 @@ func (linker *baseLinker) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 	toolchain := ctx.toolchain()
 	allow_undefined_symbols := Bool(linker.Properties.Allow_undefined_symbols)
 
-	flags = commonLinkerFlags(ctx, flags, linker.useClangLld(ctx), toolchain,
+	flags = CommonLinkerFlags(ctx, flags, linker.useClangLld(ctx), toolchain,
 		allow_undefined_symbols)
 
 	if !toolchain.Bionic() && ctx.Os() != android.LinuxMusl {

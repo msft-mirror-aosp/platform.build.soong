@@ -360,7 +360,7 @@ func parseCStd(cStdPtr *string) string {
 	}
 }
 
-func addTargetFlags(ctx android.ModuleContext, flags Flags, tc config.Toolchain, version string, bpf bool) Flags {
+func AddTargetFlags(ctx android.ModuleContext, flags Flags, tc config.Toolchain, version string, bpf bool) Flags {
 	target := "-target " + tc.ClangTriple()
 	if ctx.Os().Class == android.Device {
 		if version == "" || version == "current" {
@@ -536,7 +536,7 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags, deps
 	flags.Local.ConlyFlags = config.ClangFilterUnknownCflags(flags.Local.ConlyFlags)
 	flags.Local.LdFlags = config.ClangFilterUnknownCflags(flags.Local.LdFlags)
 
-	flags = addTargetFlags(ctx, flags, tc, ctx.minSdkVersion(), Bool(compiler.Properties.Bpf_target))
+	flags = AddTargetFlags(ctx, flags, tc, ctx.minSdkVersion(), Bool(compiler.Properties.Bpf_target))
 
 	hod := "Host"
 	if ctx.Os().Class == android.Device {

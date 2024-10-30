@@ -354,7 +354,7 @@ func (c coverageTransitionMutator) Mutate(ctx android.BottomUpMutatorContext, va
 	}
 }
 
-func parseSymbolFileForAPICoverage(ctx android.ModuleContext, symbolFile string) android.ModuleOutPath {
+func ParseSymbolFileForAPICoverage(ctx android.ModuleContext, symbolFile string) android.ModuleOutPath {
 	apiLevelsJson := android.GetApiLevelsJson(ctx)
 	symbolFilePath := android.PathForModuleSrc(ctx, symbolFile)
 	outputFile := ctx.Module().(LinkableInterface).BaseModuleName() + ".xml"

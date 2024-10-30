@@ -460,7 +460,7 @@ func (library *libraryDecorator) linkerProps() []interface{} {
 	return props
 }
 
-func commonLibraryLinkerFlags(ctx android.ModuleContext, flags Flags,
+func CommonLibraryLinkerFlags(ctx android.ModuleContext, flags Flags,
 	toolchain config.Toolchain, libName string) Flags {
 
 	mod, ok := ctx.Module().(LinkableInterface)
@@ -511,7 +511,7 @@ func commonLibraryLinkerFlags(ctx android.ModuleContext, flags Flags,
 // shared library).
 func (library *libraryDecorator) linkerFlags(ctx ModuleContext, flags Flags) Flags {
 	flags = library.baseLinker.linkerFlags(ctx, flags)
-	flags = commonLibraryLinkerFlags(ctx, flags, ctx.toolchain(), library.getLibName(ctx))
+	flags = CommonLibraryLinkerFlags(ctx, flags, ctx.toolchain(), library.getLibName(ctx))
 	if library.static() {
 		flags.Local.CFlags = append(flags.Local.CFlags, library.StaticProperties.Static.Cflags.GetOrDefault(ctx, nil)...)
 	} else if library.shared() {
@@ -558,7 +558,7 @@ func (library *libraryDecorator) compilerFlags(ctx ModuleContext, flags Flags, d
 		flags.Local.CommonFlags = removeInclude(flags.Local.CommonFlags)
 		flags.Local.CFlags = removeInclude(flags.Local.CFlags)
 
-		flags = addStubLibraryCompilerFlags(flags)
+		flags = AddStubLibraryCompilerFlags(flags)
 	}
 	return flags
 }
@@ -735,7 +735,7 @@ func (library *libraryDecorator) compileModuleLibApiStubs(ctx ModuleContext, fla
 		nativeAbiResult.VersionScript)
 	// Parse symbol file to get API list for coverage
 	if library.StubsVersion() == "current" && ctx.PrimaryArch() && !ctx.inRecovery() && !ctx.inProduct() && !ctx.inVendor() {
-		library.apiListCoverageXmlPath = parseSymbolFileForAPICoverage(ctx, symbolFile)
+		library.apiListCoverageXmlPath = ParseSymbolFileForAPICoverage(ctx, symbolFile)
 	}
 
 	return objs
@@ -2360,10 +2360,6 @@ func moduleVersionedInterface(module blueprint.Module) VersionedInterface {
 
 // setStubsVersions normalizes the versions in the Stubs.Versions property into MutatedProperties.AllStubsVersions.
 func setStubsVersions(mctx android.BaseModuleContext, module VersionedLinkableInterface) {
-	// TODO(ivanlozano) remove this when Rust supports stubs
-	if module.RustLibraryInterface() {
-		return
-	}
 	if !module.BuildSharedVariant() || !canBeVersionVariant(module) {
 		return
 	}
@@ -2385,10 +2381,6 @@ func (versionTransitionMutator) Split(ctx android.BaseModuleContext) []string {
 		return []string{""}
 	}
 	if m, ok := ctx.Module().(VersionedLinkableInterface); ok {
-		// TODO(ivanlozano) remove this when Rust supports stubs
-		if m.RustLibraryInterface() {
-			return []string{""}
-		}
 		if m.CcLibraryInterface() && canBeVersionVariant(m) {
 			setStubsVersions(ctx, m)
 			return append(slices.Clone(m.VersionedInterface().AllStubsVersions()), "")
@@ -2439,11 +2431,6 @@ func (versionTransitionMutator) Mutate(ctx android.BottomUpMutatorContext, varia
 
 	m, ok := ctx.Module().(VersionedLinkableInterface)
 	if library := moduleVersionedInterface(ctx.Module()); library != nil && canBeVersionVariant(m) {
-		// TODO(ivanlozano) remove this when Rust supports stubs
-		if m.RustLibraryInterface() {
-			return
-		}
-
 		isLLNDK := m.IsLlndk()
 		isVendorPublicLibrary := m.IsVendorPublicLibrary()
 

@@ -236,7 +236,7 @@ func init() {
 	pctx.StaticVariable("StubLibraryCompilerFlags", strings.Join(stubLibraryCompilerFlags, " "))
 }
 
-func addStubLibraryCompilerFlags(flags Flags) Flags {
+func AddStubLibraryCompilerFlags(flags Flags) Flags {
 	flags.Global.CFlags = append(flags.Global.CFlags, stubLibraryCompilerFlags...)
 	// All symbols in the stubs library should be visible.
 	if inList("-fvisibility=hidden", flags.Local.CFlags) {
@@ -247,7 +247,7 @@ func addStubLibraryCompilerFlags(flags Flags) Flags {
 
 func (stub *stubDecorator) compilerFlags(ctx ModuleContext, flags Flags, deps PathDeps) Flags {
 	flags = stub.baseCompiler.compilerFlags(ctx, flags, deps)
-	return addStubLibraryCompilerFlags(flags)
+	return AddStubLibraryCompilerFlags(flags)
 }
 
 type NdkApiOutputs struct {
@@ -510,7 +510,7 @@ func (c *stubDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) O
 		}
 	}
 	if c.apiLevel.IsCurrent() && ctx.PrimaryArch() {
-		c.parsedCoverageXmlPath = parseSymbolFileForAPICoverage(ctx, symbolFile)
+		c.parsedCoverageXmlPath = ParseSymbolFileForAPICoverage(ctx, symbolFile)
 	}
 	return objs
 }
