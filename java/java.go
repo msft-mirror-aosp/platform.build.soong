@@ -944,6 +944,7 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		// Even though the source javalib is not used, we need to hide it to prevent duplicate installation rules.
 		// TODO (b/331665856): Implement a principled solution for this.
 		j.HideFromMake()
+		j.SkipInstall()
 	}
 	j.provideHiddenAPIPropertyInfo(ctx)
 
