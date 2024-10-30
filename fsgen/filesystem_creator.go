@@ -228,8 +228,9 @@ type multilibDepsStruct struct {
 }
 
 type packagingPropsStruct struct {
-	Deps     []string
-	Multilib multilibDepsStruct
+	High_priority_deps []string
+	Deps               []string
+	Multilib           multilibDepsStruct
 }
 
 func fullyQualifiedModuleName(moduleName, namespace string) string {
@@ -305,12 +306,16 @@ func removeOverriddenDeps(mctx android.BottomUpMutatorContext) {
 	})
 }
 
+var HighPriorityDeps = []string{}
+
 func generateDepStruct(deps map[string]*depCandidateProps) *packagingPropsStruct {
 	depsStruct := packagingPropsStruct{}
 	for depName, depProps := range deps {
 		bitness := getBitness(depProps.Arch)
 		fullyQualifiedDepName := fullyQualifiedModuleName(depName, depProps.Namespace)
-		if android.InList("32", bitness) && android.InList("64", bitness) {
+		if android.InList(depName, HighPriorityDeps) {
+			depsStruct.High_priority_deps = append(depsStruct.High_priority_deps, fullyQualifiedDepName)
+		} else if android.InList("32", bitness) && android.InList("64", bitness) {
 			// If both 32 and 64 bit variants are enabled for this module
 			switch depProps.Multilib {
 			case string(android.MultilibBoth):
