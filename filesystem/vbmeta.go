@@ -98,7 +98,7 @@ type chainedPartitionProperties struct {
 func vbmetaFactory() android.Module {
 	module := &vbmeta{}
 	module.AddProperties(&module.properties)
-	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	return module
 }
 
@@ -265,20 +265,19 @@ func (v *vbmeta) extractPublicKeys(ctx android.ModuleContext) map[string]android
 	return result
 }
 
-var _ android.AndroidMkEntriesProvider = (*vbmeta)(nil)
+var _ android.AndroidMkProviderInfoProducer = (*vbmeta)(nil)
 
-// Implements android.AndroidMkEntriesProvider
-func (v *vbmeta) AndroidMkEntries() []android.AndroidMkEntries {
-	return []android.AndroidMkEntries{android.AndroidMkEntries{
-		Class:      "ETC",
-		OutputFile: android.OptionalPathForPath(v.output),
-		ExtraEntries: []android.AndroidMkExtraEntriesFunc{
-			func(ctx android.AndroidMkExtraEntriesContext, entries *android.AndroidMkEntries) {
-				entries.SetString("LOCAL_MODULE_PATH", v.installDir.String())
-				entries.SetString("LOCAL_INSTALLED_MODULE_STEM", v.installFileName())
-			},
+func (v *vbmeta) PrepareAndroidMKProviderInfo(config android.Config) *android.AndroidMkProviderInfo {
+	providerData := android.AndroidMkProviderInfo{
+		PrimaryInfo: android.AndroidMkInfo{
+			Class:      "ETC",
+			OutputFile: android.OptionalPathForPath(v.output),
+			EntryMap:   make(map[string][]string),
 		},
-	}}
+	}
+	providerData.PrimaryInfo.SetString("LOCAL_MODULE_PATH", v.installDir.String())
+	providerData.PrimaryInfo.SetString("LOCAL_INSTALLED_MODULE_STEM", v.installFileName())
+	return &providerData
 }
 
 var _ Filesystem = (*vbmeta)(nil)

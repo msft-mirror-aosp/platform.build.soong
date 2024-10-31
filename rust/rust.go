@@ -20,16 +20,15 @@ import (
 	"strings"
 
 	"android/soong/bloaty"
-	"android/soong/testing"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
 	"android/soong/cc"
 	cc_config "android/soong/cc/config"
 	"android/soong/fuzz"
-	"android/soong/multitree"
 	"android/soong/rust/config"
 )
 
@@ -48,11 +47,11 @@ func init() {
 func registerPreDepsMutators(ctx android.RegisterMutatorsContext) {
 	ctx.Transition("rust_libraries", &libraryTransitionMutator{})
 	ctx.Transition("rust_stdlinkage", &libstdTransitionMutator{})
-	ctx.BottomUp("rust_begin", BeginMutator).Parallel()
+	ctx.BottomUp("rust_begin", BeginMutator)
 }
 
 func registerPostDepsMutators(ctx android.RegisterMutatorsContext) {
-	ctx.BottomUp("rust_sanitizers", rustSanitizerRuntimeMutator).Parallel()
+	ctx.BottomUp("rust_sanitizers", rustSanitizerRuntimeMutator)
 }
 
 type Flags struct {
@@ -180,7 +179,7 @@ type Module struct {
 	// For apex variants, this is set as apex.min_sdk_version
 	apexSdkVersion android.ApiLevel
 
-	transitiveAndroidMkSharedLibs *android.DepSet[string]
+	transitiveAndroidMkSharedLibs depset.DepSet[string]
 }
 
 func (mod *Module) Header() bool {
@@ -921,7 +920,7 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	if mod.compiler != nil {
 		flags = mod.compiler.compilerFlags(ctx, flags)
 		flags = mod.compiler.cfgFlags(ctx, flags)
-		flags = mod.compiler.featureFlags(ctx, flags)
+		flags = mod.compiler.featureFlags(ctx, mod, flags)
 	}
 	if mod.coverage != nil {
 		flags, deps = mod.coverage.flags(ctx, flags, deps)
@@ -947,6 +946,7 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 			sourceLib := sourceMod.(*Module).compiler.(*libraryDecorator)
 			mod.sourceProvider.setOutputFiles(sourceLib.sourceProvider.Srcs())
 		}
+		ctx.CheckbuildFile(mod.sourceProvider.Srcs()...)
 		android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: mod.sourceProvider.Srcs().Strings()})
 	}
 
@@ -957,15 +957,13 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 			return
 		}
 		mod.outputFile = android.OptionalPathForPath(buildOutput.outputFile)
+		ctx.CheckbuildFile(buildOutput.outputFile)
 		if buildOutput.kytheFile != nil {
 			mod.kytheFiles = append(mod.kytheFiles, buildOutput.kytheFile)
 		}
 		bloaty.MeasureSizeForPaths(ctx, mod.compiler.strippedOutputFilePath(), android.OptionalPathForPath(mod.compiler.unstrippedOutputFilePath()))
 
 		mod.docTimestampFile = mod.compiler.rustdoc(ctx, flags, deps)
-		if mod.docTimestampFile.Valid() {
-			ctx.CheckbuildFile(mod.docTimestampFile.Path())
-		}
 
 		apexInfo, _ := android.ModuleProvider(actx, android.ApexInfoProvider)
 		if !proptools.BoolDefault(mod.Installable(), mod.EverInstallable()) && !mod.ProcMacro() {
@@ -993,9 +991,6 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		}
 
 		ctx.Phony("rust", ctx.RustModule().OutputFile().Path())
-	}
-	if mod.testModule {
-		android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 	}
 
 	mod.setOutputFiles(ctx)
@@ -1219,48 +1214,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 	skipModuleList := map[string]bool{}
 
-	var apiImportInfo multitree.ApiImportInfo
-	hasApiImportInfo := false
-
-	ctx.VisitDirectDeps(func(dep android.Module) {
-		if dep.Name() == "api_imports" {
-			apiImportInfo, _ = android.OtherModuleProvider(ctx, dep, multitree.ApiImportsProvider)
-			hasApiImportInfo = true
-		}
-	})
-
-	if hasApiImportInfo {
-		targetStubModuleList := map[string]string{}
-		targetOrigModuleList := map[string]string{}
-
-		// Search for dependency which both original module and API imported library with APEX stub exists
-		ctx.VisitDirectDeps(func(dep android.Module) {
-			depName := ctx.OtherModuleName(dep)
-			if apiLibrary, ok := apiImportInfo.ApexSharedLibs[depName]; ok {
-				targetStubModuleList[apiLibrary] = depName
-			}
-		})
-		ctx.VisitDirectDeps(func(dep android.Module) {
-			depName := ctx.OtherModuleName(dep)
-			if origLibrary, ok := targetStubModuleList[depName]; ok {
-				targetOrigModuleList[origLibrary] = depName
-			}
-		})
-
-		// Decide which library should be used between original and API imported library
-		ctx.VisitDirectDeps(func(dep android.Module) {
-			depName := ctx.OtherModuleName(dep)
-			if apiLibrary, ok := targetOrigModuleList[depName]; ok {
-				if cc.ShouldUseStubForApex(ctx, dep) {
-					skipModuleList[depName] = true
-				} else {
-					skipModuleList[apiLibrary] = true
-				}
-			}
-		})
-	}
-
-	var transitiveAndroidMkSharedLibs []*android.DepSet[string]
+	var transitiveAndroidMkSharedLibs []depset.DepSet[string]
 	var directAndroidMkSharedLibs []string
 
 	ctx.VisitDirectDeps(func(dep android.Module) {
@@ -1496,7 +1450,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		}
 	})
 
-	mod.transitiveAndroidMkSharedLibs = android.NewDepSet[string](android.PREORDER, directAndroidMkSharedLibs, transitiveAndroidMkSharedLibs)
+	mod.transitiveAndroidMkSharedLibs = depset.New[string](depset.PREORDER, directAndroidMkSharedLibs, transitiveAndroidMkSharedLibs)
 
 	var rlibDepFiles RustLibraries
 	aliases := mod.compiler.Aliases()
@@ -1610,13 +1564,6 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	deps := mod.deps(ctx)
 	var commonDepVariations []blueprint.Variation
 
-	apiImportInfo := cc.GetApiImports(mod, actx)
-	if mod.usePublicApi() || mod.useVendorApi() {
-		for idx, lib := range deps.SharedLibs {
-			deps.SharedLibs[idx] = cc.GetReplaceModuleName(lib, apiImportInfo.SharedLibs)
-		}
-	}
-
 	if ctx.Os() == android.Android {
 		deps.SharedLibs, _ = cc.FilterNdkLibs(mod, ctx.Config(), deps.SharedLibs)
 	}
@@ -1709,15 +1656,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		variations := []blueprint.Variation{
 			{Mutator: "link", Variation: "shared"},
 		}
-		// For core variant, add a dep on the implementation (if it exists) and its .apiimport (if it exists)
-		// GenerateAndroidBuildActions will pick the correct impl/stub based on the api_domain boundary
-		if _, ok := apiImportInfo.ApexSharedLibs[name]; !ok || ctx.OtherModuleExists(name) {
-			cc.AddSharedLibDependenciesWithVersions(ctx, mod, variations, depTag, name, version, false)
-		}
-
-		if apiLibraryName, ok := apiImportInfo.ApexSharedLibs[name]; ok {
-			cc.AddSharedLibDependenciesWithVersions(ctx, mod, variations, depTag, apiLibraryName, version, false)
-		}
+		cc.AddSharedLibDependenciesWithVersions(ctx, mod, variations, depTag, name, version, false)
 	}
 
 	for _, lib := range deps.WholeStaticLibs {
@@ -1813,6 +1752,16 @@ func (mod *Module) HostToolPath() android.OptionalPath {
 }
 
 var _ android.ApexModule = (*Module)(nil)
+
+// If a module is marked for exclusion from apexes, don't provide apex variants.
+// TODO(b/362509506): remove this once stubs are properly supported by rust_ffi targets.
+func (m *Module) CanHaveApexVariants() bool {
+	if m.ApexExclude() {
+		return false
+	} else {
+		return m.ApexModuleBase.CanHaveApexVariants()
+	}
+}
 
 func (mod *Module) MinSdkVersion() string {
 	return String(mod.Properties.Min_sdk_version)

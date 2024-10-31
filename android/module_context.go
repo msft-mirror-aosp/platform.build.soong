@@ -16,6 +16,7 @@ package android
 
 import (
 	"fmt"
+	"github.com/google/blueprint/depset"
 	"path"
 	"path/filepath"
 	"strings"
@@ -85,7 +86,9 @@ type ModuleBuildParams BuildParams
 type ModuleContext interface {
 	BaseModuleContext
 
-	blueprintModuleContext() blueprint.ModuleContext
+	// BlueprintModuleContext returns the blueprint.ModuleContext that the ModuleContext wraps.  It may only be
+	// used by the golang module types that need to call into the bootstrap module types.
+	BlueprintModuleContext() blueprint.ModuleContext
 
 	// Deprecated: use ModuleContext.Build instead.
 	ModuleBuild(pctx PackageContext, params ModuleBuildParams)
@@ -121,6 +124,16 @@ type ModuleContext interface {
 	// or by InstallFilesInfo.TransitivePackagingSpecs on modules that depend on this module through
 	// dependency tags for which IsInstallDepNeeded returns true.
 	InstallFile(installPath InstallPath, name string, srcPath Path, deps ...InstallPath) InstallPath
+
+	// InstallFileWithoutCheckbuild creates a rule to copy srcPath to name in the installPath directory,
+	// with the given additional dependencies, but does not add the file to the list of files to build
+	// during `m checkbuild`.
+	//
+	// The installed file will be returned by FilesToInstall(), and the PackagingSpec for the
+	// installed file will be returned by PackagingSpecs() on this module or by
+	// TransitivePackagingSpecs() on modules that depend on this module through dependency tags
+	// for which IsInstallDepNeeded returns true.
+	InstallFileWithoutCheckbuild(installPath InstallPath, name string, srcPath Path, deps ...InstallPath) InstallPath
 
 	// InstallFileWithExtraFilesZip creates a rule to copy srcPath to name in the installPath
 	// directory, and also unzip a zip file containing extra files to install into the same
@@ -168,7 +181,8 @@ type ModuleContext interface {
 	// dependency tags for which IsInstallDepNeeded returns true.
 	PackageFile(installPath InstallPath, name string, srcPath Path) PackagingSpec
 
-	CheckbuildFile(srcPath Path)
+	CheckbuildFile(srcPaths ...Path)
+	UncheckedModule()
 
 	InstallInData() bool
 	InstallInTestcases() bool
@@ -183,7 +197,7 @@ type ModuleContext interface {
 	InstallInVendor() bool
 	InstallForceOS() (*OsType, *ArchType)
 
-	RequiredModuleNames(ctx ConfigAndErrorContext) []string
+	RequiredModuleNames(ctx ConfigurableEvaluatorContext) []string
 	HostRequiredModuleNames() []string
 	TargetRequiredModuleNames() []string
 
@@ -237,16 +251,18 @@ type ModuleContext interface {
 type moduleContext struct {
 	bp blueprint.ModuleContext
 	baseModuleContext
-	packagingSpecs  []PackagingSpec
-	installFiles    InstallPaths
-	checkbuildFiles Paths
-	module          Module
-	phonies         map[string]Paths
+	packagingSpecs   []PackagingSpec
+	installFiles     InstallPaths
+	checkbuildFiles  Paths
+	checkbuildTarget Path
+	uncheckedModule  bool
+	module           Module
+	phonies          map[string]Paths
 	// outputFiles stores the output of a module by tag and is used to set
 	// the OutputFilesProvider in GenerateBuildActions
 	outputFiles OutputFilesInfo
 
-	TransitiveInstallFiles *DepSet[InstallPath]
+	TransitiveInstallFiles depset.DepSet[InstallPath]
 
 	// set of dependency module:location mappings used to populate the license metadata for
 	// apex containers.
@@ -512,17 +528,22 @@ func (m *moduleContext) requiresFullInstall() bool {
 
 func (m *moduleContext) InstallFile(installPath InstallPath, name string, srcPath Path,
 	deps ...InstallPath) InstallPath {
-	return m.installFile(installPath, name, srcPath, deps, false, true, nil)
+	return m.installFile(installPath, name, srcPath, deps, false, true, true, nil)
+}
+
+func (m *moduleContext) InstallFileWithoutCheckbuild(installPath InstallPath, name string, srcPath Path,
+	deps ...InstallPath) InstallPath {
+	return m.installFile(installPath, name, srcPath, deps, false, true, false, nil)
 }
 
 func (m *moduleContext) InstallExecutable(installPath InstallPath, name string, srcPath Path,
 	deps ...InstallPath) InstallPath {
-	return m.installFile(installPath, name, srcPath, deps, true, true, nil)
+	return m.installFile(installPath, name, srcPath, deps, true, true, true, nil)
 }
 
 func (m *moduleContext) InstallFileWithExtraFilesZip(installPath InstallPath, name string, srcPath Path,
 	extraZip Path, deps ...InstallPath) InstallPath {
-	return m.installFile(installPath, name, srcPath, deps, false, true, &extraFilesZip{
+	return m.installFile(installPath, name, srcPath, deps, false, true, true, &extraFilesZip{
 		zip: extraZip,
 		dir: installPath,
 	})
@@ -562,7 +583,7 @@ func (m *moduleContext) packageFile(fullInstallPath InstallPath, srcPath Path, e
 }
 
 func (m *moduleContext) installFile(installPath InstallPath, name string, srcPath Path, deps []InstallPath,
-	executable bool, hooks bool, extraZip *extraFilesZip) InstallPath {
+	executable bool, hooks bool, checkbuild bool, extraZip *extraFilesZip) InstallPath {
 
 	fullInstallPath := installPath.Join(m, name)
 	if hooks {
@@ -629,7 +650,9 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 
 	m.packageFile(fullInstallPath, srcPath, executable)
 
-	m.checkbuildFiles = append(m.checkbuildFiles, srcPath)
+	if checkbuild {
+		m.checkbuildFiles = append(m.checkbuildFiles, srcPath)
+	}
 
 	return fullInstallPath
 }
@@ -670,7 +693,6 @@ func (m *moduleContext) InstallSymlink(installPath InstallPath, name string, src
 		}
 
 		m.installFiles = append(m.installFiles, fullInstallPath)
-		m.checkbuildFiles = append(m.checkbuildFiles, srcPath)
 	}
 
 	overrides := CopyOf(m.Module().base().commonProperties.Overrides)
@@ -743,18 +765,24 @@ func (m *moduleContext) InstallTestData(installPath InstallPath, data []DataPath
 	ret := make(InstallPaths, 0, len(data))
 	for _, d := range data {
 		relPath := d.ToRelativeInstallPath()
-		installed := m.installFile(installPath, relPath, d.SrcPath, nil, false, false, nil)
+		installed := m.installFile(installPath, relPath, d.SrcPath, nil, false, false, true, nil)
 		ret = append(ret, installed)
 	}
 
 	return ret
 }
 
-func (m *moduleContext) CheckbuildFile(srcPath Path) {
-	m.checkbuildFiles = append(m.checkbuildFiles, srcPath)
+// CheckbuildFile specifies the output files that should be built by checkbuild.
+func (m *moduleContext) CheckbuildFile(srcPaths ...Path) {
+	m.checkbuildFiles = append(m.checkbuildFiles, srcPaths...)
 }
 
-func (m *moduleContext) blueprintModuleContext() blueprint.ModuleContext {
+// UncheckedModule marks the current module has having no files that should be built by checkbuild.
+func (m *moduleContext) UncheckedModule() {
+	m.uncheckedModule = true
+}
+
+func (m *moduleContext) BlueprintModuleContext() blueprint.ModuleContext {
 	return m.bp
 }
 
@@ -830,7 +858,7 @@ func (m *moduleContext) ExpandOptionalSource(srcFile *string, _ string) Optional
 	return OptionalPath{}
 }
 
-func (m *moduleContext) RequiredModuleNames(ctx ConfigAndErrorContext) []string {
+func (m *moduleContext) RequiredModuleNames(ctx ConfigurableEvaluatorContext) []string {
 	return m.module.RequiredModuleNames(ctx)
 }
 
