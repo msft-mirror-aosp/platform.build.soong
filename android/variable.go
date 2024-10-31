@@ -536,6 +536,11 @@ type ProductVariables struct {
 	ExtraAllowedDepsTxt *string `json:",omitempty"`
 
 	AdbKeys *string `json:",omitempty"`
+
+	DeviceMatrixFile       []string `json:",omitempty"`
+	ProductManifestFiles   []string `json:",omitempty"`
+	SystemManifestFile     []string `json:",omitempty"`
+	SystemExtManifestFiles []string `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {
@@ -592,8 +597,9 @@ type PartitionVariables struct {
 
 	BoardAvbEnable bool `json:",omitempty"`
 
-	ProductPackages      []string `json:",omitempty"`
-	ProductPackagesDebug []string `json:",omitempty"`
+	ProductPackages        []string `json:",omitempty"`
+	ProductPackagesDebug   []string `json:",omitempty"`
+	VendorLinkerConfigSrcs []string `json:",omitempty"`
 
 	ProductCopyFiles map[string]string `json:",omitempty"`
 }
