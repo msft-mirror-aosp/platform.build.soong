@@ -147,9 +147,7 @@ type FilesystemProperties struct {
 
 	Erofs ErofsProperties
 
-	// List of files (in .json format) that will be converted to a linker config file (in .pb format).
-	// The linker config file be installed in the filesystem at /etc/linker.config.pb
-	Linker_config_srcs []string `android:"path"`
+	Linkerconfig LinkerConfigProperties
 
 	// Determines if the module is auto-generated from Soong or not. If the module is
 	// auto-generated, its deps are exempted from visibility enforcement.
@@ -166,6 +164,16 @@ type ErofsProperties struct {
 	Compress_hints *string `android:"path"`
 
 	Sparse *bool
+}
+
+type LinkerConfigProperties struct {
+
+	// Build a linker.config.pb file
+	Gen_linker_config *bool
+
+	// List of files (in .json format) that will be converted to a linker config file (in .pb format).
+	// The linker config file be installed in the filesystem at /etc/linker.config.pb
+	Linker_config_srcs []string `android:"path"`
 }
 
 // android_filesystem packages a set of modules and their transitive dependencies into a filesystem
@@ -690,13 +698,13 @@ func (f *filesystem) buildEventLogtagsFile(ctx android.ModuleContext, builder *a
 }
 
 func (f *filesystem) buildLinkerConfigFile(ctx android.ModuleContext, builder *android.RuleBuilder, rebasedDir android.OutputPath) {
-	if len(f.properties.Linker_config_srcs) == 0 {
+	if !proptools.Bool(f.properties.Linkerconfig.Gen_linker_config) {
 		return
 	}
 
 	provideModules, _ := f.getLibsForLinkerConfig(ctx)
 	output := rebasedDir.Join(ctx, "etc", "linker.config.pb")
-	linkerconfig.BuildLinkerConfig(ctx, builder, android.PathsForModuleSrc(ctx, f.properties.Linker_config_srcs), provideModules, nil, output)
+	linkerconfig.BuildLinkerConfig(ctx, builder, android.PathsForModuleSrc(ctx, f.properties.Linkerconfig.Linker_config_srcs), provideModules, nil, output)
 
 	f.appendToEntry(ctx, output)
 }
