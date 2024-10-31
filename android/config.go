@@ -419,10 +419,10 @@ var defaultPartialCompileFlags = partialCompileFlags{
 }
 
 func (c *config) parsePartialCompileFlags(isEngBuild bool) (partialCompileFlags, error) {
-	value := c.Getenv("SOONG_PARTIAL_COMPILE")
 	if !isEngBuild {
 		return partialCompileFlags{}, nil
 	}
+	value := c.Getenv("SOONG_PARTIAL_COMPILE")
 	if value == "" {
 		return defaultPartialCompileFlags, nil
 	}
@@ -621,12 +621,6 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 	}
 	variant, ok := os.LookupEnv("TARGET_BUILD_VARIANT")
 	isEngBuild := !ok || variant == "eng"
-
-	if isEngBuild {
-		// Partial Compile is only supported on eng builds.
-		config.env["SOONG_PARTIAL_COMPILE"] = "false"
-		config.env["SOONG_USE_PARTIAL_COMPILE"] = ""
-	}
 
 	config.deviceConfig = &deviceConfig{
 		config: config,
