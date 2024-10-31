@@ -16,7 +16,9 @@ package metrics
 // This file contain code to extract host information on linux from
 // /proc/cpuinfo and /proc/meminfo relevant to machine performance
 
-import ()
+import (
+	"android/soong/finder/fs"
+)
 
 func NewCpuInfo(fileSystem fs.FileSystem) (*CpuInfo, error) {
 	return &CpuInfo{}, nil
