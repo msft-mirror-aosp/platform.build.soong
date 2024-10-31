@@ -15,15 +15,13 @@
 package android
 
 import (
-	"bytes"
-	"encoding/gob"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/gobtools"
 	"github.com/google/blueprint/proptools"
 )
 
@@ -67,34 +65,56 @@ type PackagingSpec struct {
 	owner string
 }
 
-func (p *PackagingSpec) GobEncode() ([]byte, error) {
-	w := new(bytes.Buffer)
-	encoder := gob.NewEncoder(w)
-	err := errors.Join(encoder.Encode(p.relPathInPackage), encoder.Encode(p.srcPath),
-		encoder.Encode(p.symlinkTarget), encoder.Encode(p.executable),
-		encoder.Encode(p.effectiveLicenseFiles), encoder.Encode(p.partition),
-		encoder.Encode(p.skipInstall), encoder.Encode(p.aconfigPaths),
-		encoder.Encode(p.archType))
-	if err != nil {
-		return nil, err
-	}
+type packagingSpecGob struct {
+	RelPathInPackage      string
+	SrcPath               Path
+	SymlinkTarget         string
+	Executable            bool
+	EffectiveLicenseFiles *Paths
+	Partition             string
+	SkipInstall           bool
+	AconfigPaths          *Paths
+	ArchType              ArchType
+	Overrides             *[]string
+	Owner                 string
+}
 
-	return w.Bytes(), nil
+func (p *PackagingSpec) ToGob() *packagingSpecGob {
+	return &packagingSpecGob{
+		RelPathInPackage:      p.relPathInPackage,
+		SrcPath:               p.srcPath,
+		SymlinkTarget:         p.symlinkTarget,
+		Executable:            p.executable,
+		EffectiveLicenseFiles: p.effectiveLicenseFiles,
+		Partition:             p.partition,
+		SkipInstall:           p.skipInstall,
+		AconfigPaths:          p.aconfigPaths,
+		ArchType:              p.archType,
+		Overrides:             p.overrides,
+		Owner:                 p.owner,
+	}
+}
+
+func (p *PackagingSpec) FromGob(data *packagingSpecGob) {
+	p.relPathInPackage = data.RelPathInPackage
+	p.srcPath = data.SrcPath
+	p.symlinkTarget = data.SymlinkTarget
+	p.executable = data.Executable
+	p.effectiveLicenseFiles = data.EffectiveLicenseFiles
+	p.partition = data.Partition
+	p.skipInstall = data.SkipInstall
+	p.aconfigPaths = data.AconfigPaths
+	p.archType = data.ArchType
+	p.overrides = data.Overrides
+	p.owner = data.Owner
+}
+
+func (p *PackagingSpec) GobEncode() ([]byte, error) {
+	return gobtools.CustomGobEncode[packagingSpecGob](p)
 }
 
 func (p *PackagingSpec) GobDecode(data []byte) error {
-	r := bytes.NewBuffer(data)
-	decoder := gob.NewDecoder(r)
-	err := errors.Join(decoder.Decode(&p.relPathInPackage), decoder.Decode(&p.srcPath),
-		decoder.Decode(&p.symlinkTarget), decoder.Decode(&p.executable),
-		decoder.Decode(&p.effectiveLicenseFiles), decoder.Decode(&p.partition),
-		decoder.Decode(&p.skipInstall), decoder.Decode(&p.aconfigPaths),
-		decoder.Decode(&p.archType))
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return gobtools.CustomGobDecode[packagingSpecGob](data, p)
 }
 
 func (p *PackagingSpec) Equals(other *PackagingSpec) bool {
@@ -358,7 +378,17 @@ func (p *PackagingBase) AddDeps(ctx BottomUpMutatorContext, depTag blueprint.Dep
 			if p.IgnoreMissingDependencies && !ctx.OtherModuleExists(dep) {
 				continue
 			}
-			ctx.AddFarVariationDependencies(t.Variations(), depTag, dep)
+			targetVariation := t.Variations()
+			sharedVariation := blueprint.Variation{
+				Mutator:   "link",
+				Variation: "shared",
+			}
+			// If a shared variation exists, use that. Static variants do not provide any standalone files
+			// for packaging.
+			if ctx.OtherModuleFarDependencyVariantExists([]blueprint.Variation{sharedVariation}, dep) {
+				targetVariation = append(targetVariation, sharedVariation)
+			}
+			ctx.AddFarVariationDependencies(targetVariation, depTag, dep)
 		}
 	}
 }
@@ -366,6 +396,11 @@ func (p *PackagingBase) AddDeps(ctx BottomUpMutatorContext, depTag blueprint.Dep
 func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter func(PackagingSpec) bool) map[string]PackagingSpec {
 	// all packaging specs gathered from the dep.
 	var all []PackagingSpec
+	// Name of the dependency which requested the packaging spec.
+	// If this dep is overridden, the packaging spec will not be installed via this dependency chain.
+	// (the packaging spec might still be installed if there are some other deps which depend on it).
+	var depNames []string
+
 	// list of module names overridden
 	var overridden []string
 
@@ -400,6 +435,7 @@ func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter
 				}
 			}
 			all = append(all, ps)
+			depNames = append(depNames, child.Name())
 			if ps.overrides != nil {
 				overridden = append(overridden, *ps.overrides...)
 			}
@@ -408,8 +444,12 @@ func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter
 
 	// all minus packaging specs that are overridden
 	var filtered []PackagingSpec
-	for _, ps := range all {
+	for index, ps := range all {
 		if ps.owner != "" && InList(ps.owner, overridden) {
+			continue
+		}
+		// The dependency which requested this packaging spec has been overridden.
+		if InList(depNames[index], overridden) {
 			continue
 		}
 		filtered = append(filtered, ps)
