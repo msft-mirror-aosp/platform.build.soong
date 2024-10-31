@@ -96,6 +96,7 @@ var createStorageInfo = []createStorageStruct{
 	{"package.map", "create_aconfig_package_map_file", "package_map"},
 	{"flag.map", "create_aconfig_flag_map_file", "flag_map"},
 	{"flag.val", "create_aconfig_flag_val_file", "flag_val"},
+	{"flag.info", "create_aconfig_flag_info_file", "flag_info"},
 }
 
 var (
@@ -252,10 +253,10 @@ var (
 
 	apexHostVerifierRule = pctx.StaticRule("apexHostVerifierRule", blueprint.RuleParams{
 		Command: `${host_apex_verifier} --deapexer=${deapexer} --debugfs=${debugfs_static} ` +
-			`--fsckerofs=${fsck_erofs} --apex=${in} && touch ${out}`,
+			`--fsckerofs=${fsck_erofs} --apex=${in} --partition_tag=${partition_tag} && touch ${out}`,
 		CommandDeps: []string{"${host_apex_verifier}", "${deapexer}", "${debugfs_static}", "${fsck_erofs}"},
 		Description: "run host_apex_verifier",
-	})
+	}, "partition_tag")
 
 	assembleVintfRule = pctx.StaticRule("assembleVintfRule", blueprint.RuleParams{
 		Command:     `rm -f $out && VINTF_IGNORE_TARGET_FCM_VERSION=true ${assemble_vintf} -i $in -o $out`,
@@ -359,14 +360,14 @@ func (a *apexBundle) buildManifest(ctx android.ModuleContext, provideNativeLibs,
 	}
 
 	manifestJsonFullOut := android.PathForModuleOut(ctx, "apex_manifest_full.json")
-	defaultVersion := android.DefaultUpdatableModuleVersion
+	defaultVersion := ctx.Config().ReleaseDefaultUpdatableModuleVersion()
 	if a.properties.Variant_version != nil {
 		defaultVersionInt, err := strconv.Atoi(defaultVersion)
 		if err != nil {
-			ctx.ModuleErrorf("expected DefaultUpdatableModuleVersion to be an int, but got %s", defaultVersion)
+			ctx.ModuleErrorf("expected RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION to be an int, but got %s", defaultVersion)
 		}
 		if defaultVersionInt%10 != 0 {
-			ctx.ModuleErrorf("expected DefaultUpdatableModuleVersion to end in a zero, but got %s", defaultVersion)
+			ctx.ModuleErrorf("expected RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION to end in a zero, but got %s", defaultVersion)
 		}
 		variantVersion := []rune(*a.properties.Variant_version)
 		if len(variantVersion) != 1 || variantVersion[0] < '0' || variantVersion[0] > '9' {
@@ -620,7 +621,8 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 				}
 			} else {
 				if installSymbolFiles {
-					installedPath = ctx.InstallFile(apexDir.Join(ctx, fi.installDir), fi.stem(), fi.builtFile)
+					// store installedPath. symlinks might be created if required.
+					installedPath = apexDir.Join(ctx, fi.installDir, fi.stem())
 				}
 			}
 
@@ -963,7 +965,7 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 			runApexElfCheckerUnwanted(ctx, unsignedOutputFile.OutputPath, a.properties.Unwanted_transitive_deps))
 	}
 	if !a.testApex && android.InList(a.payloadFsType, []fsType{ext4, erofs}) {
-		validations = append(validations, runApexHostVerifier(ctx, unsignedOutputFile.OutputPath))
+		validations = append(validations, runApexHostVerifier(ctx, a, unsignedOutputFile.OutputPath))
 	}
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        rule,
@@ -1061,8 +1063,9 @@ func (a *apexBundle) getOverrideManifestPackageName(ctx android.ModuleContext) s
 		}
 		return ""
 	}
-	if a.overridableProperties.Package_name != "" {
-		return a.overridableProperties.Package_name
+	packageNameFromProp := a.overridableProperties.Package_name.GetOrDefault(ctx, "")
+	if packageNameFromProp != "" {
+		return packageNameFromProp
 	}
 	manifestPackageName, overridden := ctx.DeviceConfig().OverrideManifestPackageNameFor(ctx.ModuleName())
 	if overridden {
@@ -1079,7 +1082,7 @@ func (a *apexBundle) buildApexDependencyInfo(ctx android.ModuleContext) {
 	}
 
 	depInfos := android.DepNameToDepInfoMap{}
-	a.WalkPayloadDeps(ctx, func(ctx android.ModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
+	a.WalkPayloadDeps(ctx, func(ctx android.BaseModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
 		if from.Name() == to.Name() {
 			// This can happen for cc.reuseObjTag. We are not interested in tracking this.
 			// As soon as the dependency graph crosses the APEX boundary, don't go further.
@@ -1146,10 +1149,23 @@ func (a *apexBundle) buildApexDependencyInfo(ctx android.ModuleContext) {
 func (a *apexBundle) buildLintReports(ctx android.ModuleContext) {
 	depSetsBuilder := java.NewLintDepSetBuilder()
 	for _, fi := range a.filesInfo {
-		depSetsBuilder.Transitive(fi.lintDepSets)
+		if fi.lintInfo != nil {
+			depSetsBuilder.Transitive(fi.lintInfo)
+		}
 	}
 
-	a.lintReports = java.BuildModuleLintReportZips(ctx, depSetsBuilder.Build())
+	depSets := depSetsBuilder.Build()
+	var validations android.Paths
+
+	if a.checkStrictUpdatabilityLinting(ctx) {
+		baselines := depSets.Baseline.ToList()
+		if len(baselines) > 0 {
+			outputFile := java.VerifyStrictUpdatabilityChecks(ctx, baselines)
+			validations = append(validations, outputFile)
+		}
+	}
+
+	a.lintReports = java.BuildModuleLintReportZips(ctx, depSets, validations)
 }
 
 func (a *apexBundle) buildCannedFsConfig(ctx android.ModuleContext) android.OutputPath {
@@ -1260,12 +1276,15 @@ func runApexElfCheckerUnwanted(ctx android.ModuleContext, apexFile android.Outpu
 	return timestamp
 }
 
-func runApexHostVerifier(ctx android.ModuleContext, apexFile android.OutputPath) android.Path {
+func runApexHostVerifier(ctx android.ModuleContext, a *apexBundle, apexFile android.OutputPath) android.Path {
 	timestamp := android.PathForModuleOut(ctx, "host_apex_verifier.timestamp")
 	ctx.Build(pctx, android.BuildParams{
 		Rule:   apexHostVerifierRule,
 		Input:  apexFile,
 		Output: timestamp,
+		Args: map[string]string{
+			"partition_tag": a.PartitionTag(ctx.DeviceConfig()),
+		},
 	})
 	return timestamp
 }

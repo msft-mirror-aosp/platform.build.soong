@@ -40,6 +40,7 @@ const bp = `
 			name: "base",
 			sdk_version: "current",
                         data: [":HelperApp", "data/testfile"],
+                        host_required: ["other-module"],
                         test_suites: ["general-tests"],
 		}
 
@@ -80,6 +81,7 @@ func TestModuleConfigAndroidTest(t *testing.T) {
 	android.AssertArrayString(t, "", entries.EntryMap["LOCAL_COMPATIBILITY_SUPPORT_FILES"], []string{})
 
 	android.AssertArrayString(t, "", entries.EntryMap["LOCAL_REQUIRED_MODULES"], []string{"base"})
+	android.AssertArrayString(t, "", entries.EntryMap["LOCAL_HOST_REQUIRED_MODULES"], []string{"other-module"})
 	android.AssertArrayString(t, "", entries.EntryMap["LOCAL_CERTIFICATE"], []string{"build/make/target/product/security/testkey.x509.pem"})
 	android.AssertStringEquals(t, "", entries.Class, "APPS")
 
@@ -121,24 +123,24 @@ func TestModuleConfigOptions(t *testing.T) {
 // Ensure we error for a base we don't support.
 func TestModuleConfigWithHostBaseShouldFailWithExplicitMessage(t *testing.T) {
 	badBp := `
-		java_test_host {
-			name: "base",
-                        srcs: ["a.java"],
+        java_test {
+            name: "base",
+            srcs: ["a.java"],
 		}
 
-                test_module_config {
-                        name: "derived_test",
-                        base: "base",
-                        exclude_filters: ["android.test.example.devcodelab.DevCodelabTest#testHelloFail"],
-                        include_annotations: ["android.platform.test.annotations.LargeTest"],
-                        test_suites: ["general-tests"],
-                }`
+        test_module_config {
+            name: "derived_test",
+            base: "base",
+            exclude_filters: ["android.test.example.devcodelab.DevCodelabTest#testHelloFail"],
+            include_annotations: ["android.platform.test.annotations.LargeTest"],
+            test_suites: ["general-tests"],
+        }`
 
 	android.GroupFixturePreparers(
 		java.PrepareForTestWithJavaDefaultModules,
 		android.FixtureRegisterWithContext(RegisterTestModuleConfigBuildComponents),
 	).ExtendWithErrorHandler(
-		android.FixtureExpectsAtLeastOneErrorMatchingPattern("'java_test_host' module used as base, but 'android_test' expected")).
+		android.FixtureExpectsAtLeastOneErrorMatchingPattern("'base' module used as base but it is not a 'android_test' module.")).
 		RunTestWithBp(t, badBp)
 }
 

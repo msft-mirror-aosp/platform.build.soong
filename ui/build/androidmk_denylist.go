@@ -25,6 +25,8 @@ var androidmk_denylist []string = []string{
 	"dalvik/",
 	"developers/",
 	"development/",
+	"device/common/",
+	"device/google_car/",
 	"device/sample/",
 	"frameworks/",
 	// Do not block other directories in kernel/, see b/319658303.
@@ -41,6 +43,15 @@ var androidmk_denylist []string = []string{
 	"trusty/",
 	// Add back toolchain/ once defensive Android.mk files are removed
 	//"toolchain/",
+	"vendor/google_contexthub/",
+	"vendor/google_data/",
+	"vendor/google_elmyra/",
+	"vendor/google_mhl/",
+	"vendor/google_pdk/",
+	"vendor/google_testing/",
+	"vendor/partner_testing/",
+	"vendor/partner_tools/",
+	"vendor/pdk/",
 }
 
 func blockAndroidMks(ctx Context, androidMks []string) {
@@ -52,4 +63,38 @@ func blockAndroidMks(ctx Context, androidMks []string) {
 			}
 		}
 	}
+}
+
+// The Android.mk files in these directories are for NDK build system.
+var external_ndk_androidmks []string = []string{
+	"external/fmtlib/",
+	"external/google-breakpad/",
+	"external/googletest/",
+	"external/libaom/",
+	"external/libusb/",
+	"external/libvpx/",
+	"external/libwebm/",
+	"external/libwebsockets/",
+	"external/vulkan-validation-layers/",
+	"external/walt/",
+	"external/webp/",
+}
+
+func ignoreNdkAndroidMks(androidMks []string) (filtered []string) {
+	filter := func(s string) bool {
+		for _, d := range external_ndk_androidmks {
+			if strings.HasPrefix(s, d) {
+				return false
+			}
+		}
+		return true
+	}
+
+	for _, l := range androidMks {
+		if filter(l) {
+			filtered = append(filtered, l)
+		}
+	}
+
+	return
 }
