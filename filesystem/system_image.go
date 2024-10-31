@@ -94,7 +94,7 @@ func (s *systemImage) buildLinkerConfigFile(ctx android.ModuleContext, root andr
 	})
 
 	builder := android.NewRuleBuilder(pctx, ctx)
-	linkerconfig.BuildLinkerConfig(ctx, builder, input, provideModules, requireModules, output)
+	linkerconfig.BuildLinkerConfig(ctx, builder, android.Paths{input}, provideModules, requireModules, output)
 	builder.Build("conv_linker_config", "Generate linker config protobuf "+output.String())
 	return output
 }
