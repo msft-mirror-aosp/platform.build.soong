@@ -2234,3 +2234,19 @@ func (c *config) BoardAvbSystemAddHashtreeFooterArgs() []string {
 func (c Config) InstallApexSystemServerDexpreoptSamePartition() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_INSTALL_APEX_SYSTEMSERVER_DEXPREOPT_SAME_PARTITION")
 }
+
+func (c *config) DeviceMatrixFile() []string {
+	return c.productVariables.DeviceMatrixFile
+}
+
+func (c *config) ProductManifestFiles() []string {
+	return c.productVariables.ProductManifestFiles
+}
+
+func (c *config) SystemManifestFile() []string {
+	return c.productVariables.SystemManifestFile
+}
+
+func (c *config) SystemExtManifestFiles() []string {
+	return c.productVariables.SystemExtManifestFiles
+}
