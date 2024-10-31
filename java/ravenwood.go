@@ -33,8 +33,8 @@ func RegisterRavenwoodBuildComponents(ctx android.RegistrationContext) {
 var ravenwoodLibContentTag = dependencyTag{name: "ravenwoodlibcontent"}
 var ravenwoodUtilsTag = dependencyTag{name: "ravenwoodutils"}
 var ravenwoodRuntimeTag = dependencyTag{name: "ravenwoodruntime"}
-var ravenwoodDataTag = dependencyTag{name: "ravenwooddata"}
 var ravenwoodTestResourceApkTag = dependencyTag{name: "ravenwoodtestresapk"}
+var ravenwoodTestInstResourceApkTag = dependencyTag{name: "ravenwoodtest-inst-res-apk"}
 
 const ravenwoodUtilsName = "ravenwood-utils"
 const ravenwoodRuntimeName = "ravenwood-runtime"
@@ -54,14 +54,20 @@ func getLibPath(archType android.ArchType) string {
 }
 
 type ravenwoodTestProperties struct {
-	Jni_libs []string
+	Jni_libs proptools.Configurable[[]string]
 
 	// Specify another android_app module here to copy it to the test directory, so that
-	// the ravenwood test can access it.
+	// the ravenwood test can access it. This APK will be loaded as resources of the test
+	// target app.
 	// TODO: For now, we simply refer to another android_app module and copy it to the
 	// test directory. Eventually, android_ravenwood_test should support all the resource
 	// related properties and build resources from the `res/` directory.
 	Resource_apk *string
+
+	// Specify another android_app module here to copy it to the test directory, so that
+	// the ravenwood test can access it. This APK will be loaded as resources of the test
+	// instrumentation app itself.
+	Inst_resource_apk *string
 }
 
 type ravenwoodTest struct {
@@ -120,13 +126,17 @@ func (r *ravenwoodTest) DepsMutator(ctx android.BottomUpMutatorContext) {
 	}
 
 	// Add jni libs
-	for _, lib := range r.ravenwoodTestProperties.Jni_libs {
+	for _, lib := range r.ravenwoodTestProperties.Jni_libs.GetOrDefault(ctx, nil) {
 		ctx.AddVariationDependencies(ctx.Config().BuildOSTarget.Variations(), jniLibTag, lib)
 	}
 
 	// Resources APK
 	if resourceApk := proptools.String(r.ravenwoodTestProperties.Resource_apk); resourceApk != "" {
 		ctx.AddVariationDependencies(nil, ravenwoodTestResourceApkTag, resourceApk)
+	}
+
+	if resourceApk := proptools.String(r.ravenwoodTestProperties.Inst_resource_apk); resourceApk != "" {
+		ctx.AddVariationDependencies(nil, ravenwoodTestInstResourceApkTag, resourceApk)
 	}
 }
 
@@ -195,13 +205,16 @@ func (r *ravenwoodTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	resApkInstallPath := installPath.Join(ctx, "ravenwood-res-apks")
-	if resApk := ctx.GetDirectDepsWithTag(ravenwoodTestResourceApkTag); len(resApk) > 0 {
-		for _, installFile := range android.OtherModuleProviderOrDefault(
-			ctx, resApk[0], android.InstallFilesProvider).InstallFiles {
-			installResApk := ctx.InstallFile(resApkInstallPath, "ravenwood-res.apk", installFile)
+
+	copyResApk := func(tag blueprint.DependencyTag, toFileName string) {
+		if resApk := ctx.GetDirectDepsWithTag(tag); len(resApk) > 0 {
+			installFile := android.OutputFileForModule(ctx, resApk[0], "")
+			installResApk := ctx.InstallFile(resApkInstallPath, toFileName, installFile)
 			installDeps = append(installDeps, installResApk)
 		}
 	}
+	copyResApk(ravenwoodTestResourceApkTag, "ravenwood-res.apk")
+	copyResApk(ravenwoodTestInstResourceApkTag, "ravenwood-inst-res.apk")
 
 	// Install our JAR with all dependencies
 	ctx.InstallFile(installPath, ctx.ModuleName()+".jar", r.outputFile, installDeps...)
@@ -225,10 +238,13 @@ func (r *ravenwoodTest) AndroidMkEntries() []android.AndroidMkEntries {
 type ravenwoodLibgroupProperties struct {
 	Libs []string
 
-	Jni_libs []string
+	Jni_libs proptools.Configurable[[]string]
 
 	// We use this to copy framework-res.apk to the ravenwood runtime directory.
-	Data []string
+	Data []string `android:"path,arch_variant"`
+
+	// We use this to copy font files to the ravenwood runtime directory.
+	Fonts []string `android:"path,arch_variant"`
 }
 
 type ravenwoodLibgroup struct {
@@ -264,11 +280,8 @@ func (r *ravenwoodLibgroup) DepsMutator(ctx android.BottomUpMutatorContext) {
 	for _, lib := range r.ravenwoodLibgroupProperties.Libs {
 		ctx.AddVariationDependencies(nil, ravenwoodLibContentTag, lib)
 	}
-	for _, lib := range r.ravenwoodLibgroupProperties.Jni_libs {
+	for _, lib := range r.ravenwoodLibgroupProperties.Jni_libs.GetOrDefault(ctx, nil) {
 		ctx.AddVariationDependencies(ctx.Config().BuildOSTarget.Variations(), jniLibTag, lib)
-	}
-	for _, data := range r.ravenwoodLibgroupProperties.Data {
-		ctx.AddVariationDependencies(nil, ravenwoodDataTag, data)
 	}
 }
 
@@ -309,10 +322,15 @@ func (r *ravenwoodLibgroup) GenerateAndroidBuildActions(ctx android.ModuleContex
 	}
 
 	dataInstallPath := installPath.Join(ctx, "ravenwood-data")
-	for _, data := range r.ravenwoodLibgroupProperties.Data {
-		libModule := ctx.GetDirectDepWithTag(data, ravenwoodDataTag)
-		file := android.OutputFileForModule(ctx, libModule, "")
+	data := android.PathsForModuleSrc(ctx, r.ravenwoodLibgroupProperties.Data)
+	for _, file := range data {
 		ctx.InstallFile(dataInstallPath, file.Base(), file)
+	}
+
+	fontsInstallPath := installPath.Join(ctx, "fonts")
+	fonts := android.PathsForModuleSrc(ctx, r.ravenwoodLibgroupProperties.Fonts)
+	for _, file := range fonts {
+		ctx.InstallFile(fontsInstallPath, file.Base(), file)
 	}
 
 	// Normal build should perform install steps

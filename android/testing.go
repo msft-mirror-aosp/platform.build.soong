@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -197,8 +198,8 @@ func NewTestArchContext(config Config) *TestContext {
 
 type TestContext struct {
 	*Context
-	preArch, preDeps, postDeps, finalDeps []RegisterMutatorFunc
-	NameResolver                          *NameResolver
+	preArch, preDeps, postDeps, postApex, finalDeps []RegisterMutatorFunc
+	NameResolver                                    *NameResolver
 
 	// The list of singletons registered for the test.
 	singletons sortableComponents
@@ -227,6 +228,10 @@ func (ctx *TestContext) PreDepsMutators(f RegisterMutatorFunc) {
 
 func (ctx *TestContext) PostDepsMutators(f RegisterMutatorFunc) {
 	ctx.postDeps = append(ctx.postDeps, f)
+}
+
+func (ctx *TestContext) PostApexMutators(f RegisterMutatorFunc) {
+	ctx.postApex = append(ctx.postApex, f)
 }
 
 func (ctx *TestContext) FinalDepsMutators(f RegisterMutatorFunc) {
@@ -449,7 +454,7 @@ func globallyRegisteredComponentsOrder() *registrationSorter {
 func (ctx *TestContext) Register() {
 	globalOrder := globallyRegisteredComponentsOrder()
 
-	mutators := collateRegisteredMutators(ctx.preArch, ctx.preDeps, ctx.postDeps, ctx.finalDeps)
+	mutators := collateRegisteredMutators(ctx.preArch, ctx.preDeps, ctx.postDeps, ctx.postApex, ctx.finalDeps)
 	// Ensure that the mutators used in the test are in the same order as they are used at runtime.
 	globalOrder.mutatorOrder.enforceOrdering(mutators)
 	mutators.registerAll(ctx.Context)
@@ -1148,6 +1153,30 @@ func AndroidMkEntriesForTest(t *testing.T, ctx *TestContext, mod blueprint.Modul
 	return entriesList
 }
 
+func AndroidMkInfoForTest(t *testing.T, ctx *TestContext, mod blueprint.Module) *AndroidMkProviderInfo {
+	if runtime.GOOS == "darwin" && mod.(Module).base().Os() != Darwin {
+		// The AndroidMkInfo provider is not set in this case.
+		t.Skip("AndroidMkInfo provider is not set on darwin")
+	}
+
+	t.Helper()
+	var ok bool
+	if _, ok = mod.(AndroidMkProviderInfoProducer); !ok {
+		t.Errorf("module does not implement AndroidMkProviderInfoProducer: " + mod.Name())
+	}
+
+	info := OtherModuleProviderOrDefault(ctx, mod, AndroidMkInfoProvider)
+	aconfigUpdateAndroidMkInfos(ctx, mod.(Module), info)
+	info.PrimaryInfo.fillInEntries(ctx, mod)
+	if len(info.ExtraInfo) > 0 {
+		for _, ei := range info.ExtraInfo {
+			ei.fillInEntries(ctx, mod)
+		}
+	}
+
+	return info
+}
+
 func AndroidMkDataForTest(t *testing.T, ctx *TestContext, mod blueprint.Module) AndroidMkData {
 	t.Helper()
 	var p AndroidMkDataProvider
@@ -1326,7 +1355,15 @@ func (ctx *panickingConfigAndErrorContext) Config() Config {
 	return ctx.ctx.Config()
 }
 
-func PanickingConfigAndErrorContext(ctx *TestContext) ConfigAndErrorContext {
+func (ctx *panickingConfigAndErrorContext) HasMutatorFinished(mutatorName string) bool {
+	return ctx.ctx.HasMutatorFinished(mutatorName)
+}
+
+func (ctx *panickingConfigAndErrorContext) otherModuleProvider(m blueprint.Module, p blueprint.AnyProviderKey) (any, bool) {
+	return ctx.ctx.otherModuleProvider(m, p)
+}
+
+func PanickingConfigAndErrorContext(ctx *TestContext) ConfigurableEvaluatorContext {
 	return &panickingConfigAndErrorContext{
 		ctx: ctx,
 	}

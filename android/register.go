@@ -91,7 +91,13 @@ type mutator struct {
 	bottomUpMutator   blueprint.BottomUpMutator
 	topDownMutator    blueprint.TopDownMutator
 	transitionMutator blueprint.TransitionMutator
-	parallel          bool
+
+	usesRename              bool
+	usesReverseDependencies bool
+	usesReplaceDependencies bool
+	usesCreateModule        bool
+	mutatesDependencies     bool
+	mutatesGlobalState      bool
 }
 
 var _ sortableComponent = &mutator{}
@@ -235,6 +241,7 @@ type RegistrationContext interface {
 
 	PreDepsMutators(f RegisterMutatorFunc)
 	PostDepsMutators(f RegisterMutatorFunc)
+	PostApexMutators(f RegisterMutatorFunc)
 	FinalDepsMutators(f RegisterMutatorFunc)
 }
 
@@ -324,6 +331,10 @@ func (ctx *initRegistrationContext) PreDepsMutators(f RegisterMutatorFunc) {
 
 func (ctx *initRegistrationContext) PostDepsMutators(f RegisterMutatorFunc) {
 	PostDepsMutators(f)
+}
+
+func (ctx *initRegistrationContext) PostApexMutators(f RegisterMutatorFunc) {
+	PostApexMutators(f)
 }
 
 func (ctx *initRegistrationContext) FinalDepsMutators(f RegisterMutatorFunc) {

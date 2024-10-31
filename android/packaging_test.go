@@ -64,7 +64,7 @@ type packageTestModule struct {
 	ModuleBase
 	PackagingBase
 	properties struct {
-		Install_deps []string `android:`
+		Install_deps []string
 	}
 	entries []string
 }
@@ -118,6 +118,7 @@ func runPackagingTest(t *testing.T, config testConfig, bp string, expected []str
 	}
 
 	result := GroupFixturePreparers(
+		PrepareForTestWithDefaults,
 		PrepareForTestWithArchMutator,
 		FixtureRegisterWithContext(func(ctx RegistrationContext) {
 			ctx.RegisterModuleType("component", componentTestModuleFactory)
