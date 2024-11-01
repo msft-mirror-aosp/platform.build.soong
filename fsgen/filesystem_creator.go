@@ -480,7 +480,8 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 	}
 
 	if partitionType == "vendor" || partitionType == "product" {
-		fsProps.Linker_config_srcs = f.createLinkerConfigSourceFilegroups(ctx, partitionType)
+		fsProps.Linkerconfig.Gen_linker_config = proptools.BoolPtr(true)
+		fsProps.Linkerconfig.Linker_config_srcs = f.createLinkerConfigSourceFilegroups(ctx, partitionType)
 	}
 
 	var module android.Module
