@@ -540,6 +540,8 @@ type ProductVariables struct {
 	ProductManifestFiles   []string `json:",omitempty"`
 	SystemManifestFile     []string `json:",omitempty"`
 	SystemExtManifestFiles []string `json:",omitempty"`
+	DeviceManifestFiles    []string `json:",omitempty"`
+	OdmManifestFiles       []string `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {
