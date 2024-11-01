@@ -725,7 +725,7 @@ func PrebuiltFontFactory() android.Module {
 	module := &PrebuiltEtc{}
 	InitPrebuiltEtcModule(module, "fonts")
 	// This module is device-only
-	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
 	return module
 }
