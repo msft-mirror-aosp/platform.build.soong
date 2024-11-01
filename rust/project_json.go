@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"android/soong/android"
+	"android/soong/rust/config"
 )
 
 // This singleton collects Rust crate definitions and generates a JSON file
@@ -55,7 +56,8 @@ type rustProjectCrate struct {
 }
 
 type rustProjectJson struct {
-	Crates []rustProjectCrate `json:"crates"`
+	Sysroot string             `json:"sysroot"`
+	Crates  []rustProjectCrate `json:"crates"`
 }
 
 // crateInfo is used during the processing to keep track of the known crates.
@@ -202,6 +204,8 @@ func (singleton *projectGeneratorSingleton) GenerateBuildActions(ctx android.Sin
 	if !ctx.Config().IsEnvTrue(envVariableCollectRustDeps) {
 		return
 	}
+
+	singleton.project.Sysroot = config.RustPath(ctx)
 
 	singleton.knownCrates = make(map[string]crateInfo)
 	ctx.VisitAllModules(func(module android.Module) {
