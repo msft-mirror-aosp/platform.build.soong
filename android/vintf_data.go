@@ -26,6 +26,8 @@ const (
 	systemManifestType    = "system_manifest"
 	productManifestType   = "product_manifest"
 	systemExtManifestType = "system_ext_manifest"
+	vendorManifestType    = "vendor_manifest"
+	odmManifestType       = "odm_manifest"
 
 	defaultDcm               = "system/libhidl/vintfdata/device_compatibility_matrix.default.xml"
 	defaultSystemManifest    = "system/libhidl/vintfdata/manifest.xml"
@@ -111,6 +113,27 @@ func (m *vintfDataRule) GenerateAndroidBuildActions(ctx ModuleContext) {
 		if len(systemExtManifestFiles) > 0 {
 			inputPaths = append(inputPaths, systemExtManifestFiles...)
 		}
+	case vendorManifestType:
+		assembleVintfEnvs = append(assembleVintfEnvs, fmt.Sprintf("BOARD_SEPOLICY_VERS=\"%s\"", ctx.DeviceConfig().BoardSepolicyVers()))
+		assembleVintfEnvs = append(assembleVintfEnvs, fmt.Sprintf("PRODUCT_ENFORCE_VINTF_MANIFEST=%t", *ctx.Config().productVariables.Enforce_vintf_manifest))
+		deviceManifestFiles := PathsForSource(ctx, ctx.Config().DeviceManifestFiles())
+		// Only need to generate the manifest if DEVICE_MANIFEST_FILE is defined.
+		if len(deviceManifestFiles) == 0 {
+			m.noAction = true
+			return
+		}
+
+		inputPaths = append(inputPaths, deviceManifestFiles...)
+	case odmManifestType:
+		assembleVintfEnvs = append(assembleVintfEnvs, "VINTF_IGNORE_TARGET_FCM_VERSION=true")
+		odmManifestFiles := PathsForSource(ctx, ctx.Config().OdmManifestFiles())
+		// Only need to generate the manifest if ODM_MANIFEST_FILES is defined.
+		if len(odmManifestFiles) == 0 {
+			m.noAction = true
+			return
+		}
+
+		inputPaths = append(inputPaths, odmManifestFiles...)
 	default:
 		panic(fmt.Errorf("For %s: The attribute 'type' value only allowed device_cm, system_manifest, product_manifest, system_ext_manifest!", ctx.Module().Name()))
 	}
