@@ -44,13 +44,14 @@ type rustProjectDep struct {
 }
 
 type rustProjectCrate struct {
-	DisplayName string            `json:"display_name"`
-	RootModule  string            `json:"root_module"`
-	Edition     string            `json:"edition,omitempty"`
-	Deps        []rustProjectDep  `json:"deps"`
-	Cfg         []string          `json:"cfg"`
-	Env         map[string]string `json:"env"`
-	ProcMacro   bool              `json:"is_proc_macro"`
+	DisplayName    string            `json:"display_name"`
+	RootModule     string            `json:"root_module"`
+	Edition        string            `json:"edition,omitempty"`
+	Deps           []rustProjectDep  `json:"deps"`
+	Cfg            []string          `json:"cfg"`
+	Env            map[string]string `json:"env"`
+	ProcMacro      bool              `json:"is_proc_macro"`
+	ProcMacroDylib *string           `json:"proc_macro_dylib_path"`
 }
 
 type rustProjectJson struct {
@@ -135,16 +136,21 @@ func (singleton *projectGeneratorSingleton) addCrate(ctx android.SingletonContex
 		return 0, false
 	}
 
-	_, procMacro := rModule.compiler.(*procMacroDecorator)
+	var procMacroDylib *string = nil
+	if procDec, procMacro := rModule.compiler.(*procMacroDecorator); procMacro {
+		procMacroDylib = new(string)
+		*procMacroDylib = procDec.baseCompiler.unstrippedOutputFilePath().String()
+	}
 
 	crate := rustProjectCrate{
-		DisplayName: rModule.Name(),
-		RootModule:  rootModule.String(),
-		Edition:     rModule.compiler.edition(),
-		Deps:        make([]rustProjectDep, 0),
-		Cfg:         make([]string, 0),
-		Env:         make(map[string]string),
-		ProcMacro:   procMacro,
+		DisplayName:    rModule.Name(),
+		RootModule:     rootModule.String(),
+		Edition:        rModule.compiler.edition(),
+		Deps:           make([]rustProjectDep, 0),
+		Cfg:            make([]string, 0),
+		Env:            make(map[string]string),
+		ProcMacro:      procMacroDylib != nil,
+		ProcMacroDylib: procMacroDylib,
 	}
 
 	if rModule.compiler.cargoOutDir().Valid() {
