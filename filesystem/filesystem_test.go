@@ -670,18 +670,21 @@ func TestInstallLinkerConfigFile(t *testing.T) {
 android_filesystem {
     name: "myfilesystem",
     deps: ["libfoo_has_no_stubs", "libfoo_has_stubs"],
-    linker_config_srcs: ["linker.config.json"]
+    linker_config_srcs: ["linker.config.json"],
+    partition_type: "vendor",
 }
 cc_library {
     name: "libfoo_has_no_stubs",
+    vendor: true,
 }
 cc_library {
     name: "libfoo_has_stubs",
     stubs: {symbol_file: "libfoo.map.txt"},
+    vendor: true,
 }
 	`)
 
 	linkerConfigCmd := result.ModuleForTests("myfilesystem", "android_common").Rule("build_filesystem_image").RuleParams.Command
-	android.AssertStringDoesContain(t, "", linkerConfigCmd, "conv_linker_config proto --force -s linker.config.json")
-	android.AssertStringDoesContain(t, "", linkerConfigCmd, "--key provideLibs --value libfoo_has_stubs.so")
+	android.AssertStringDoesContain(t, "Could not find linker.config.json file in cmd", linkerConfigCmd, "conv_linker_config proto --force -s linker.config.json")
+	android.AssertStringDoesContain(t, "Could not find stub in `provideLibs`", linkerConfigCmd, "--key provideLibs --value libfoo_has_stubs.so")
 }
