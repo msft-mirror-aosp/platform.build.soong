@@ -184,6 +184,7 @@ func initFilesystemModule(module android.DefaultableModule, filesystemModule *fi
 	module.AddProperties(&filesystemModule.properties)
 	android.InitPackageModule(filesystemModule)
 	filesystemModule.PackagingBase.DepsCollectFirstTargetOnly = true
+	filesystemModule.PackagingBase.AllowHighPriorityDeps = true
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
 }
