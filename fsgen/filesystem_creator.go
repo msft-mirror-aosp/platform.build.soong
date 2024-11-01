@@ -116,6 +116,9 @@ func createFsGenState(ctx android.LoadHookContext) *FsGenState {
 		if ctx.DeviceConfig().BuildingProductImage() && ctx.DeviceConfig().ProductPath() == "product" {
 			generatedPartitions = append(generatedPartitions, "product")
 		}
+		if ctx.DeviceConfig().BuildingOdmImage() && ctx.DeviceConfig().OdmPath() == "odm" {
+			generatedPartitions = append(generatedPartitions, "odm")
+		}
 
 		return &FsGenState{
 			depCandidates: candidates,
@@ -144,7 +147,12 @@ func createFsGenState(ctx android.LoadHookContext) *FsGenState {
 					"fs_config_dirs_vendor":                                defaultDepCandidateProps(ctx.Config()),
 					generatedModuleName(ctx.Config(), "vendor-build.prop"): defaultDepCandidateProps(ctx.Config()),
 				},
-				"odm":     newMultilibDeps(),
+				"odm": &map[string]*depCandidateProps{
+					// fs_config_* files are automatically installed for all products with odm partitions.
+					// https://cs.android.com/android/_/android/platform/build/+/e4849e87ab660b59a6501b3928693db065ee873b:tools/fs_config/Android.mk;l=34;drc=8d6481b92c4b4e9b9f31a61545b6862090fcc14b;bpv=1;bpt=0
+					"fs_config_files_odm": defaultDepCandidateProps(ctx.Config()),
+					"fs_config_dirs_odm":  defaultDepCandidateProps(ctx.Config()),
+				},
 				"product": newMultilibDeps(),
 				"system_ext": &map[string]*depCandidateProps{
 					// VNDK apexes are automatically included.
@@ -423,6 +431,9 @@ func (f *filesystemCreator) createDeviceModule(ctx android.LoadHookContext) {
 	if android.InList("product", f.properties.Generated_partition_types) {
 		partitionProps.Product_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "product"))
 	}
+	if android.InList("odm", f.properties.Generated_partition_types) {
+		partitionProps.Odm_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "odm"))
+	}
 
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
 }
@@ -466,6 +477,15 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 			},
 		}
 		fsProps.Base_dir = proptools.StringPtr("vendor")
+	case "odm":
+		fsProps.Symlinks = []filesystem.SymlinkDefinition{
+			filesystem.SymlinkDefinition{
+				Target: proptools.StringPtr("/odm_dlkm/lib/modules"),
+				Name:   proptools.StringPtr("odm/lib/modules"),
+			},
+		}
+		fsProps.Base_dir = proptools.StringPtr("odm")
+
 	}
 }
 
@@ -708,7 +728,7 @@ func generateBpContent(ctx android.EarlyModuleContext, partitionType string) str
 	if !fsTypeSupported {
 		return ""
 	}
-	if partitionType == "vendor" {
+	if partitionType == "vendor" || partitionType == "odm" {
 		return "" // TODO: Handle struct props
 	}
 
