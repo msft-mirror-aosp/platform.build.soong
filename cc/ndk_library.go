@@ -439,7 +439,7 @@ func (this *stubDecorator) diffAbi(ctx ModuleContext) {
 				"non-current API level %s", this.apiLevel))
 		}
 
-		// Preview ABI levels are not recording in prebuilts. ABI compatibility
+		// Preview ABI levels are not recorded in prebuilts. ABI compatibility
 		// for preview APIs is still monitored via "current" so we have early
 		// warning rather than learning about an ABI break during finalization,
 		// but is only checked against the "current" API dumps in the out
