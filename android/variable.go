@@ -341,6 +341,7 @@ type ProductVariables struct {
 	VendorPath           *string `json:",omitempty"`
 	BuildingVendorImage  *bool   `json:",omitempty"`
 	OdmPath              *string `json:",omitempty"`
+	BuildingOdmImage     *bool   `json:",omitempty"`
 	ProductPath          *string `json:",omitempty"`
 	BuildingProductImage *bool   `json:",omitempty"`
 	SystemExtPath        *string `json:",omitempty"`

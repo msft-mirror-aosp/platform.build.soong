@@ -1549,6 +1549,10 @@ func (c *deviceConfig) OdmPath() string {
 	return "odm"
 }
 
+func (c *deviceConfig) BuildingOdmImage() bool {
+	return proptools.Bool(c.config.productVariables.BuildingOdmImage)
+}
+
 func (c *deviceConfig) ProductPath() string {
 	if c.config.productVariables.ProductPath != nil {
 		return *c.config.productVariables.ProductPath
