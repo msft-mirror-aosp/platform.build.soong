@@ -85,6 +85,7 @@ type Module interface {
 	PartitionTag(DeviceConfig) string
 	HideFromMake()
 	IsHideFromMake() bool
+	SkipInstall()
 	IsSkipInstall() bool
 	MakeUninstallable()
 	ReplacedByPrebuilt()
@@ -1421,6 +1422,7 @@ func (m *ModuleBase) IsSkipInstall() bool {
 func (m *ModuleBase) MakeUninstallable() {
 	m.commonProperties.UninstallableApexPlatformVariant = true
 	m.HideFromMake()
+	m.SkipInstall()
 }
 
 func (m *ModuleBase) ReplacedByPrebuilt() {
