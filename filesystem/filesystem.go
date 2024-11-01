@@ -25,6 +25,7 @@ import (
 
 	"android/soong/android"
 	"android/soong/cc"
+	"android/soong/linkerconfig"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
@@ -145,6 +146,10 @@ type FilesystemProperties struct {
 	Unchecked_module *bool `blueprint:"mutated"`
 
 	Erofs ErofsProperties
+
+	// List of files (in .json format) that will be converted to a linker config file (in .pb format).
+	// The linker config file be installed in the filesystem at /etc/linker.config.pb
+	Linker_config_srcs []string `android:"path"`
 
 	// Determines if the module is auto-generated from Soong or not. If the module is
 	// auto-generated, its deps are exempted from visibility enforcement.
@@ -428,6 +433,7 @@ func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) androi
 	f.buildFsverityMetadataFiles(ctx, builder, specs, rootDir, rebasedDir)
 	f.buildEventLogtagsFile(ctx, builder, rebasedDir)
 	f.buildAconfigFlagsFiles(ctx, builder, specs, rebasedDir)
+	f.buildLinkerConfigFile(ctx, builder, rebasedDir)
 	f.copyFilesToProductOut(ctx, builder, rebasedDir)
 
 	// run host_init_verifier
@@ -591,6 +597,7 @@ func (f *filesystem) buildCpioImage(ctx android.ModuleContext, compressed bool) 
 	f.buildFsverityMetadataFiles(ctx, builder, specs, rootDir, rebasedDir)
 	f.buildEventLogtagsFile(ctx, builder, rebasedDir)
 	f.buildAconfigFlagsFiles(ctx, builder, specs, rebasedDir)
+	f.buildLinkerConfigFile(ctx, builder, rebasedDir)
 	f.copyFilesToProductOut(ctx, builder, rebasedDir)
 
 	output := android.PathForModuleOut(ctx, f.installFileName()).OutputPath
@@ -680,6 +687,32 @@ func (f *filesystem) buildEventLogtagsFile(ctx android.ModuleContext, builder *a
 	}
 
 	f.appendToEntry(ctx, eventLogtagsPath)
+}
+
+func (f *filesystem) buildLinkerConfigFile(ctx android.ModuleContext, builder *android.RuleBuilder, rebasedDir android.OutputPath) {
+	getCStubLibs := func() []android.Module {
+		// Determine the list of C stub libraries that are part of this filesystem.
+		// These will be added to `provideLibs`.
+		// The current implementation assumes that stub libraries are listed explicitly in `deps`
+		// (direct deps). If this is not true, ctx.VisitDeps will need to be replaced by ctx.WalkDeps.
+		ret := []android.Module{}
+		ctx.VisitDirectDeps(func(child android.Module) {
+			if c, ok := child.(*cc.Module); ok && c.HasStubsVariants() {
+				ret = append(ret, c)
+			}
+		})
+		return ret
+	}
+
+	if len(f.properties.Linker_config_srcs) == 0 {
+		return
+	}
+
+	// cp to the final output
+	output := rebasedDir.Join(ctx, "etc", "linker.config.pb")
+	linkerconfig.BuildLinkerConfig(ctx, builder, android.PathsForModuleSrc(ctx, f.properties.Linker_config_srcs), getCStubLibs(), nil, output)
+
+	f.appendToEntry(ctx, output)
 }
 
 type partition interface {
