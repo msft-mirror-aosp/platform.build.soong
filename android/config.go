@@ -2250,3 +2250,11 @@ func (c *config) SystemManifestFile() []string {
 func (c *config) SystemExtManifestFiles() []string {
 	return c.productVariables.SystemExtManifestFiles
 }
+
+func (c *config) DeviceManifestFiles() []string {
+	return c.productVariables.DeviceManifestFiles
+}
+
+func (c *config) OdmManifestFiles() []string {
+	return c.productVariables.OdmManifestFiles
+}
