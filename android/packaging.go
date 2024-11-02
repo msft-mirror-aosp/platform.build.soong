@@ -17,6 +17,7 @@ package android
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -207,42 +208,69 @@ type PackagingBase struct {
 	// If this is set to true by a module type inheriting PackagingBase, the deps property
 	// collects the first target only even with compile_multilib: true.
 	DepsCollectFirstTargetOnly bool
+
+	// If this is set to try by a module type inheriting PackagingBase, the module type is
+	// allowed to utilize High_priority_deps.
+	AllowHighPriorityDeps bool
 }
 
-type depsProperty struct {
+type DepsProperty struct {
+	// Deps that have higher priority in packaging when there is a packaging conflict.
+	// For example, if multiple files are being installed to same filepath, the install file
+	// of the module listed in this property will have a higher priority over those in other
+	// deps properties.
+	High_priority_deps []string `android:"arch_variant"`
+
 	// Modules to include in this package
 	Deps proptools.Configurable[[]string] `android:"arch_variant"`
 }
 
 type packagingMultilibProperties struct {
-	First    depsProperty `android:"arch_variant"`
-	Common   depsProperty `android:"arch_variant"`
-	Lib32    depsProperty `android:"arch_variant"`
-	Lib64    depsProperty `android:"arch_variant"`
-	Both     depsProperty `android:"arch_variant"`
-	Prefer32 depsProperty `android:"arch_variant"`
+	First    DepsProperty `android:"arch_variant"`
+	Common   DepsProperty `android:"arch_variant"`
+	Lib32    DepsProperty `android:"arch_variant"`
+	Lib64    DepsProperty `android:"arch_variant"`
+	Both     DepsProperty `android:"arch_variant"`
+	Prefer32 DepsProperty `android:"arch_variant"`
 }
 
 type packagingArchProperties struct {
-	Arm64  depsProperty
-	Arm    depsProperty
-	X86_64 depsProperty
-	X86    depsProperty
+	Arm64  DepsProperty
+	Arm    DepsProperty
+	X86_64 DepsProperty
+	X86    DepsProperty
 }
 
 type PackagingProperties struct {
-	Deps     proptools.Configurable[[]string] `android:"arch_variant"`
-	Multilib packagingMultilibProperties      `android:"arch_variant"`
+	DepsProperty
+
+	Multilib packagingMultilibProperties `android:"arch_variant"`
 	Arch     packagingArchProperties
 }
 
 func InitPackageModule(p PackageModule) {
 	base := p.packagingBase()
-	p.AddProperties(&base.properties)
+	p.AddProperties(&base.properties, &base.properties.DepsProperty)
 }
 
 func (p *PackagingBase) packagingBase() *PackagingBase {
 	return p
+}
+
+func (p *PackagingBase) highPriorityDeps() []string {
+	return slices.Concat(
+		p.properties.High_priority_deps,
+		p.properties.Multilib.Both.High_priority_deps,
+		p.properties.Multilib.Common.High_priority_deps,
+		p.properties.Multilib.First.High_priority_deps,
+		p.properties.Multilib.Lib32.High_priority_deps,
+		p.properties.Multilib.Lib64.High_priority_deps,
+		p.properties.Multilib.Prefer32.High_priority_deps,
+		p.properties.Arch.Arm.High_priority_deps,
+		p.properties.Arch.Arm64.High_priority_deps,
+		p.properties.Arch.X86.High_priority_deps,
+		p.properties.Arch.X86_64.High_priority_deps,
+	)
 }
 
 // From deps and multilib.*.deps, select the dependencies that are for the given arch deps is for
@@ -250,54 +278,58 @@ func (p *PackagingBase) packagingBase() *PackagingBase {
 // multi target, deps is selected for each of the targets and is NOT selected for the current
 // architecture which would be Common.
 func (p *PackagingBase) getDepsForArch(ctx BaseModuleContext, arch ArchType) []string {
-	get := func(prop proptools.Configurable[[]string]) []string {
-		return prop.GetOrDefault(ctx, nil)
+	if len(p.highPriorityDeps()) > 0 && !p.AllowHighPriorityDeps {
+		ctx.ModuleErrorf("Usage of high_priority_deps is not allowed for %s module type", ctx.ModuleType())
+	}
+
+	get := func(prop DepsProperty) []string {
+		return Concat(prop.Deps.GetOrDefault(ctx, nil), prop.High_priority_deps)
 	}
 
 	var ret []string
 	if arch == ctx.Target().Arch.ArchType && len(ctx.MultiTargets()) == 0 {
-		ret = append(ret, get(p.properties.Deps)...)
+		ret = append(ret, get(p.properties.DepsProperty)...)
 	} else if arch.Multilib == "lib32" {
-		ret = append(ret, get(p.properties.Multilib.Lib32.Deps)...)
+		ret = append(ret, get(p.properties.Multilib.Lib32)...)
 		// multilib.prefer32.deps are added for lib32 only when they support 32-bit arch
-		for _, dep := range get(p.properties.Multilib.Prefer32.Deps) {
+		for _, dep := range get(p.properties.Multilib.Prefer32) {
 			if checkIfOtherModuleSupportsLib32(ctx, dep) {
 				ret = append(ret, dep)
 			}
 		}
 	} else if arch.Multilib == "lib64" {
-		ret = append(ret, get(p.properties.Multilib.Lib64.Deps)...)
+		ret = append(ret, get(p.properties.Multilib.Lib64)...)
 		// multilib.prefer32.deps are added for lib64 only when they don't support 32-bit arch
-		for _, dep := range get(p.properties.Multilib.Prefer32.Deps) {
+		for _, dep := range get(p.properties.Multilib.Prefer32) {
 			if !checkIfOtherModuleSupportsLib32(ctx, dep) {
 				ret = append(ret, dep)
 			}
 		}
 	} else if arch == Common {
-		ret = append(ret, get(p.properties.Multilib.Common.Deps)...)
+		ret = append(ret, get(p.properties.Multilib.Common)...)
 	}
 
 	if p.DepsCollectFirstTargetOnly {
-		if len(get(p.properties.Multilib.First.Deps)) > 0 {
+		if len(get(p.properties.Multilib.First)) > 0 {
 			ctx.PropertyErrorf("multilib.first.deps", "not supported. use \"deps\" instead")
 		}
 		for i, t := range ctx.MultiTargets() {
 			if t.Arch.ArchType == arch {
-				ret = append(ret, get(p.properties.Multilib.Both.Deps)...)
+				ret = append(ret, get(p.properties.Multilib.Both)...)
 				if i == 0 {
-					ret = append(ret, get(p.properties.Deps)...)
+					ret = append(ret, get(p.properties.DepsProperty)...)
 				}
 			}
 		}
 	} else {
-		if len(get(p.properties.Multilib.Both.Deps)) > 0 {
+		if len(get(p.properties.Multilib.Both)) > 0 {
 			ctx.PropertyErrorf("multilib.both.deps", "not supported. use \"deps\" instead")
 		}
 		for i, t := range ctx.MultiTargets() {
 			if t.Arch.ArchType == arch {
-				ret = append(ret, get(p.properties.Deps)...)
+				ret = append(ret, get(p.properties.DepsProperty)...)
 				if i == 0 {
-					ret = append(ret, get(p.properties.Multilib.First.Deps)...)
+					ret = append(ret, get(p.properties.Multilib.First)...)
 				}
 			}
 		}
@@ -306,13 +338,13 @@ func (p *PackagingBase) getDepsForArch(ctx BaseModuleContext, arch ArchType) []s
 	if ctx.Arch().ArchType == Common {
 		switch arch {
 		case Arm64:
-			ret = append(ret, get(p.properties.Arch.Arm64.Deps)...)
+			ret = append(ret, get(p.properties.Arch.Arm64)...)
 		case Arm:
-			ret = append(ret, get(p.properties.Arch.Arm.Deps)...)
+			ret = append(ret, get(p.properties.Arch.Arm)...)
 		case X86_64:
-			ret = append(ret, get(p.properties.Arch.X86_64.Deps)...)
+			ret = append(ret, get(p.properties.Arch.X86_64)...)
 		case X86:
-			ret = append(ret, get(p.properties.Arch.X86.Deps)...)
+			ret = append(ret, get(p.properties.Arch.X86)...)
 		}
 	}
 
@@ -360,6 +392,8 @@ type PackagingItem interface {
 	IsPackagingItem() bool
 }
 
+var _ PackagingItem = (*PackagingItemAlwaysDepTag)(nil)
+
 // DepTag provides default implementation of PackagingItem interface.
 // PackagingBase-derived modules can define their own dependency tag by embedding this, which
 // can be passed to AddDeps() or AddDependencies().
@@ -371,8 +405,14 @@ func (PackagingItemAlwaysDepTag) IsPackagingItem() bool {
 	return true
 }
 
+// highPriorityDepTag provides default implementation of HighPriorityPackagingItem interface.
+type highPriorityDepTag struct {
+	blueprint.DependencyTag
+}
+
 // See PackageModule.AddDeps
 func (p *PackagingBase) AddDeps(ctx BottomUpMutatorContext, depTag blueprint.DependencyTag) {
+	highPriorityDeps := p.highPriorityDeps()
 	for _, t := range getSupportedTargets(ctx) {
 		for _, dep := range p.getDepsForArch(ctx, t.Arch.ArchType) {
 			if p.IgnoreMissingDependencies && !ctx.OtherModuleExists(dep) {
@@ -388,14 +428,22 @@ func (p *PackagingBase) AddDeps(ctx BottomUpMutatorContext, depTag blueprint.Dep
 			if ctx.OtherModuleFarDependencyVariantExists([]blueprint.Variation{sharedVariation}, dep) {
 				targetVariation = append(targetVariation, sharedVariation)
 			}
+			if InList(dep, highPriorityDeps) {
+				depTag = highPriorityDepTag{depTag}
+			}
+
 			ctx.AddFarVariationDependencies(targetVariation, depTag, dep)
 		}
 	}
 }
 
 func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter func(PackagingSpec) bool) map[string]PackagingSpec {
-	// all packaging specs gathered from the dep.
-	var all []PackagingSpec
+	// packaging specs gathered from the dep that are not high priorities.
+	var regularPriorities []PackagingSpec
+
+	// all packaging specs gathered from the high priority deps.
+	var highPriorities []PackagingSpec
+
 	// Name of the dependency which requested the packaging spec.
 	// If this dep is overridden, the packaging spec will not be installed via this dependency chain.
 	// (the packaging spec might still be installed if there are some other deps which depend on it).
@@ -420,7 +468,8 @@ func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter
 	}
 
 	ctx.VisitDirectDeps(func(child Module) {
-		if pi, ok := ctx.OtherModuleDependencyTag(child).(PackagingItem); !ok || !pi.IsPackagingItem() {
+		depTag := ctx.OtherModuleDependencyTag(child)
+		if pi, ok := depTag.(PackagingItem); !ok || !pi.IsPackagingItem() {
 			return
 		}
 		for _, ps := range OtherModuleProviderOrDefault(
@@ -434,7 +483,13 @@ func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter
 					continue
 				}
 			}
-			all = append(all, ps)
+
+			if _, ok := depTag.(highPriorityDepTag); ok {
+				highPriorities = append(highPriorities, ps)
+			} else {
+				regularPriorities = append(regularPriorities, ps)
+			}
+
 			depNames = append(depNames, child.Name())
 			if ps.overrides != nil {
 				overridden = append(overridden, *ps.overrides...)
@@ -442,21 +497,26 @@ func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter
 		}
 	})
 
-	// all minus packaging specs that are overridden
-	var filtered []PackagingSpec
-	for index, ps := range all {
-		if ps.owner != "" && InList(ps.owner, overridden) {
-			continue
+	filterOverridden := func(input []PackagingSpec) []PackagingSpec {
+		// input minus packaging specs that are overridden
+		var filtered []PackagingSpec
+		for index, ps := range input {
+			if ps.owner != "" && InList(ps.owner, overridden) {
+				continue
+			}
+			// The dependency which requested this packaging spec has been overridden.
+			if InList(depNames[index], overridden) {
+				continue
+			}
+			filtered = append(filtered, ps)
 		}
-		// The dependency which requested this packaging spec has been overridden.
-		if InList(depNames[index], overridden) {
-			continue
-		}
-		filtered = append(filtered, ps)
+		return filtered
 	}
 
+	filteredRegularPriority := filterOverridden(regularPriorities)
+
 	m := make(map[string]PackagingSpec)
-	for _, ps := range filtered {
+	for _, ps := range filteredRegularPriority {
 		dstPath := ps.relPathInPackage
 		if existingPs, ok := m[dstPath]; ok {
 			if !existingPs.Equals(&ps) {
@@ -466,6 +526,21 @@ func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter
 		}
 		m[dstPath] = ps
 	}
+
+	filteredHighPriority := filterOverridden(highPriorities)
+	highPriorityPs := make(map[string]PackagingSpec)
+	for _, ps := range filteredHighPriority {
+		dstPath := ps.relPathInPackage
+		if existingPs, ok := highPriorityPs[dstPath]; ok {
+			if !existingPs.Equals(&ps) {
+				ctx.ModuleErrorf("packaging conflict at %v:\n%v\n%v", dstPath, existingPs, ps)
+			}
+			continue
+		}
+		highPriorityPs[dstPath] = ps
+		m[dstPath] = ps
+	}
+
 	return m
 }
 
