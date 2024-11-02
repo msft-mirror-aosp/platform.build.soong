@@ -16,14 +16,13 @@ package android
 
 import (
 	"fmt"
+	"github.com/google/blueprint/depset"
 	"path"
 	"path/filepath"
 	"strings"
 
 	"github.com/google/blueprint"
-	"github.com/google/blueprint/depset"
 	"github.com/google/blueprint/proptools"
-	"github.com/google/blueprint/uniquelist"
 )
 
 // BuildParameters describes the set of potential parameters to build a Ninja rule.
@@ -498,10 +497,6 @@ func (m *moduleContext) skipInstall() bool {
 		return true
 	}
 
-	if m.module.base().commonProperties.HideFromMake {
-		return true
-	}
-
 	// We'll need a solution for choosing which of modules with the same name in different
 	// namespaces to install.  For now, reuse the list of namespaces exported to Make as the
 	// list of namespaces to install in a Soong-only build.
@@ -517,6 +512,10 @@ func (m *moduleContext) skipInstall() bool {
 // not created and this module can only be installed to packaging modules like android_filesystem.
 func (m *moduleContext) requiresFullInstall() bool {
 	if m.skipInstall() {
+		return false
+	}
+
+	if m.module.base().commonProperties.HideFromMake {
 		return false
 	}
 
@@ -555,8 +554,8 @@ func (m *moduleContext) PackageFile(installPath InstallPath, name string, srcPat
 	return m.packageFile(fullInstallPath, srcPath, false)
 }
 
-func (m *moduleContext) getAconfigPaths() Paths {
-	return m.aconfigFilePaths
+func (m *moduleContext) getAconfigPaths() *Paths {
+	return &m.aconfigFilePaths
 }
 
 func (m *moduleContext) setAconfigPaths(paths Paths) {
@@ -571,12 +570,12 @@ func (m *moduleContext) packageFile(fullInstallPath InstallPath, srcPath Path, e
 		srcPath:               srcPath,
 		symlinkTarget:         "",
 		executable:            executable,
-		effectiveLicenseFiles: uniquelist.Make(licenseFiles),
+		effectiveLicenseFiles: &licenseFiles,
 		partition:             fullInstallPath.partition,
 		skipInstall:           m.skipInstall(),
-		aconfigPaths:          uniquelist.Make(m.getAconfigPaths()),
+		aconfigPaths:          m.getAconfigPaths(),
 		archType:              m.target.Arch.ArchType,
-		overrides:             uniquelist.Make(overrides),
+		overrides:             &overrides,
 		owner:                 m.ModuleName(),
 	}
 	m.packagingSpecs = append(m.packagingSpecs, spec)
@@ -704,9 +703,9 @@ func (m *moduleContext) InstallSymlink(installPath InstallPath, name string, src
 		executable:       false,
 		partition:        fullInstallPath.partition,
 		skipInstall:      m.skipInstall(),
-		aconfigPaths:     uniquelist.Make(m.getAconfigPaths()),
+		aconfigPaths:     m.getAconfigPaths(),
 		archType:         m.target.Arch.ArchType,
-		overrides:        uniquelist.Make(overrides),
+		overrides:        &overrides,
 		owner:            m.ModuleName(),
 	})
 
@@ -751,9 +750,9 @@ func (m *moduleContext) InstallAbsoluteSymlink(installPath InstallPath, name str
 		executable:       false,
 		partition:        fullInstallPath.partition,
 		skipInstall:      m.skipInstall(),
-		aconfigPaths:     uniquelist.Make(m.getAconfigPaths()),
+		aconfigPaths:     m.getAconfigPaths(),
 		archType:         m.target.Arch.ArchType,
-		overrides:        uniquelist.Make(overrides),
+		overrides:        &overrides,
 		owner:            m.ModuleName(),
 	})
 
