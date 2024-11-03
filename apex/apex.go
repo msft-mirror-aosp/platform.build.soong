@@ -833,6 +833,7 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 		deps.Merge(ctx, a.properties.Multilib.Both)
 		deps.Merge(ctx, ApexNativeDependencies{
 			Native_shared_libs: a.properties.Native_shared_libs,
+			Rust_dyn_libs:      a.properties.Rust_dyn_libs,
 			Tests:              a.properties.Tests,
 			Jni_libs:           a.properties.Jni_libs,
 		})
@@ -1311,9 +1312,6 @@ func apexModuleTypeRequiresVariant(module ApexInfoMutator) bool {
 // See android.UpdateDirectlyInAnyApex
 // TODO(jiyong): move this to android/apex.go?
 func apexDirectlyInAnyMutator(mctx android.BottomUpMutatorContext) {
-	if !mctx.Module().Enabled(mctx) {
-		return
-	}
 	if am, ok := mctx.Module().(android.ApexModule); ok {
 		android.UpdateDirectlyInAnyApex(mctx, am)
 	}
