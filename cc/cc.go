@@ -35,6 +35,14 @@ import (
 	"android/soong/genrule"
 )
 
+type CcMakeVarsInfo struct {
+	WarningsAllowed string
+	UsingWnoError   string
+	MissingProfile  string
+}
+
+var CcMakeVarsInfoProvider = blueprint.NewProvider[*CcMakeVarsInfo]()
+
 func init() {
 	RegisterCCBuildComponents(android.InitRegistrationContext)
 
@@ -531,6 +539,7 @@ type ModuleContextIntf interface {
 	getSharedFlags() *SharedFlags
 	notInPlatform() bool
 	optimizeForSize() bool
+	getOrCreateMakeVarsInfo() *CcMakeVarsInfo
 }
 
 type SharedFlags struct {
@@ -845,9 +854,10 @@ type Module struct {
 	sourceProperties android.SourceProperties
 
 	// initialize before calling Init
-	hod        android.HostOrDeviceSupported
-	multilib   android.Multilib
-	testModule bool
+	hod         android.HostOrDeviceSupported
+	multilib    android.Multilib
+	testModule  bool
+	incremental bool
 
 	// Allowable SdkMemberTypes of this module type.
 	sdkMemberTypes []android.SdkMemberType
@@ -913,7 +923,15 @@ type Module struct {
 	hasSysprop      bool
 	hasWinMsg       bool
 	hasYacc         bool
+
+	makeVarsInfo *CcMakeVarsInfo
 }
+
+func (c *Module) IncrementalSupported() bool {
+	return c.incremental
+}
+
+var _ blueprint.Incremental = (*Module)(nil)
 
 func (c *Module) AddJSONData(d *map[string]interface{}) {
 	c.AndroidModuleBase().AddJSONData(d)
@@ -1700,6 +1718,13 @@ func (ctx *moduleContextImpl) notInPlatform() bool {
 	return ctx.mod.NotInPlatform()
 }
 
+func (ctx *moduleContextImpl) getOrCreateMakeVarsInfo() *CcMakeVarsInfo {
+	if ctx.mod.makeVarsInfo == nil {
+		ctx.mod.makeVarsInfo = &CcMakeVarsInfo{}
+	}
+	return ctx.mod.makeVarsInfo
+}
+
 func newBaseModule(hod android.HostOrDeviceSupported, multilib android.Multilib) *Module {
 	return &Module{
 		hod:      hod,
@@ -2091,6 +2116,10 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	}
 
 	c.setOutputFiles(ctx)
+
+	if c.makeVarsInfo != nil {
+		android.SetProvider(ctx, CcMakeVarsInfoProvider, c.makeVarsInfo)
+	}
 }
 
 func (c *Module) setOutputFiles(ctx ModuleContext) {
