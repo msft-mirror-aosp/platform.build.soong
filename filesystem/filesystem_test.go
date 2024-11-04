@@ -559,3 +559,135 @@ func TestFilterOutUnsupportedArches(t *testing.T) {
 		}
 	}
 }
+
+func TestErofsPartition(t *testing.T) {
+	result := fixture.RunTestWithBp(t, `
+		android_filesystem {
+			name: "erofs_partition",
+			type: "erofs",
+			erofs: {
+				compressor: "lz4hc,9",
+				compress_hints: "compress_hints.txt",
+			},
+			deps: ["binfoo"],
+		}
+
+		cc_binary {
+			name: "binfoo",
+		}
+	`)
+
+	partition := result.ModuleForTests("erofs_partition", "android_common")
+	buildImageConfig := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("prop"))
+	android.AssertStringDoesContain(t, "erofs fs type", buildImageConfig, "fs_type=erofs")
+	android.AssertStringDoesContain(t, "erofs fs type compress algorithm", buildImageConfig, "erofs_default_compressor=lz4hc,9")
+	android.AssertStringDoesContain(t, "erofs fs type compress hint", buildImageConfig, "erofs_default_compress_hints=compress_hints.txt")
+	android.AssertStringDoesContain(t, "erofs fs type sparse", buildImageConfig, "erofs_sparse_flag=-s")
+}
+
+// If a system_ext/ module depends on system/ module, the dependency should *not*
+// be installed in system_ext/
+func TestDoNotPackageCrossPartitionDependencies(t *testing.T) {
+	t.Skip() // TODO (spandandas): Re-enable this
+	result := fixture.RunTestWithBp(t, `
+		android_filesystem {
+			name: "myfilesystem",
+			deps: ["binfoo"],
+			partition_type: "system_ext",
+		}
+
+		cc_binary {
+			name: "binfoo",
+			shared_libs: ["libfoo"],
+			system_ext_specific: true,
+		}
+		cc_library_shared {
+			name: "libfoo", // installed in system/
+		}
+	`)
+
+	partition := result.ModuleForTests("myfilesystem", "android_common")
+	fileList := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("fileList"))
+	android.AssertDeepEquals(t, "filesystem with dependencies on different partition", "bin/binfoo\n", fileList)
+}
+
+// If a cc_library is listed in `deps`, and it has a shared and static variant, then the shared variant
+// should be installed.
+func TestUseSharedVariationOfNativeLib(t *testing.T) {
+	result := fixture.RunTestWithBp(t, `
+		android_filesystem {
+			name: "myfilesystem",
+			deps: ["libfoo"],
+		}
+		// cc_library will create a static and shared variant.
+		cc_library {
+			name: "libfoo",
+		}
+	`)
+
+	partition := result.ModuleForTests("myfilesystem", "android_common")
+	fileList := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("fileList"))
+	android.AssertDeepEquals(t, "cc_library listed in deps", "lib64/libc++.so\nlib64/libc.so\nlib64/libdl.so\nlib64/libfoo.so\nlib64/libm.so\n", fileList)
+}
+
+// binfoo1 overrides binbar. transitive deps of binbar should not be installed.
+func TestDoNotInstallTransitiveDepOfOverriddenModule(t *testing.T) {
+	result := fixture.RunTestWithBp(t, `
+android_filesystem {
+    name: "myfilesystem",
+    deps: ["binfoo1", "libfoo2", "binbar"],
+}
+cc_binary {
+    name: "binfoo1",
+    shared_libs: ["libfoo"],
+    overrides: ["binbar"],
+}
+cc_library {
+    name: "libfoo",
+}
+cc_library {
+    name: "libfoo2",
+    overrides: ["libfoo"],
+}
+// binbar gets overridden by binfoo1
+// therefore, libbar should not be installed
+cc_binary {
+    name: "binbar",
+    shared_libs: ["libbar"]
+}
+cc_library {
+    name: "libbar",
+}
+	`)
+
+	partition := result.ModuleForTests("myfilesystem", "android_common")
+	fileList := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("fileList"))
+	android.AssertDeepEquals(t, "Shared library dep of overridden binary should not be installed", fileList, "bin/binfoo1\nlib64/libc++.so\nlib64/libc.so\nlib64/libdl.so\nlib64/libfoo2.so\nlib64/libm.so\n")
+}
+
+func TestInstallLinkerConfigFile(t *testing.T) {
+	result := fixture.RunTestWithBp(t, `
+android_filesystem {
+    name: "myfilesystem",
+    deps: ["libfoo_has_no_stubs", "libfoo_has_stubs"],
+    linkerconfig: {
+	    gen_linker_config: true,
+	    linker_config_srcs: ["linker.config.json"],
+    },
+    partition_type: "vendor",
+}
+cc_library {
+    name: "libfoo_has_no_stubs",
+    vendor: true,
+}
+cc_library {
+    name: "libfoo_has_stubs",
+    stubs: {symbol_file: "libfoo.map.txt"},
+    vendor: true,
+}
+	`)
+
+	linkerConfigCmd := result.ModuleForTests("myfilesystem", "android_common").Rule("build_filesystem_image").RuleParams.Command
+	android.AssertStringDoesContain(t, "Could not find linker.config.json file in cmd", linkerConfigCmd, "conv_linker_config proto --force -s linker.config.json")
+	android.AssertStringDoesContain(t, "Could not find stub in `provideLibs`", linkerConfigCmd, "--key provideLibs --value libfoo_has_stubs.so")
+}

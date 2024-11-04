@@ -16,6 +16,7 @@ package android
 
 import (
 	"fmt"
+	"github.com/google/blueprint/depset"
 	"path"
 	"path/filepath"
 	"strings"
@@ -85,7 +86,9 @@ type ModuleBuildParams BuildParams
 type ModuleContext interface {
 	BaseModuleContext
 
-	blueprintModuleContext() blueprint.ModuleContext
+	// BlueprintModuleContext returns the blueprint.ModuleContext that the ModuleContext wraps.  It may only be
+	// used by the golang module types that need to call into the bootstrap module types.
+	BlueprintModuleContext() blueprint.ModuleContext
 
 	// Deprecated: use ModuleContext.Build instead.
 	ModuleBuild(pctx PackageContext, params ModuleBuildParams)
@@ -194,7 +197,7 @@ type ModuleContext interface {
 	InstallInVendor() bool
 	InstallForceOS() (*OsType, *ArchType)
 
-	RequiredModuleNames(ctx ConfigAndErrorContext) []string
+	RequiredModuleNames(ctx ConfigurableEvaluatorContext) []string
 	HostRequiredModuleNames() []string
 	TargetRequiredModuleNames() []string
 
@@ -259,7 +262,7 @@ type moduleContext struct {
 	// the OutputFilesProvider in GenerateBuildActions
 	outputFiles OutputFilesInfo
 
-	TransitiveInstallFiles *DepSet[InstallPath]
+	TransitiveInstallFiles depset.DepSet[InstallPath]
 
 	// set of dependency module:location mappings used to populate the license metadata for
 	// apex containers.
@@ -494,10 +497,6 @@ func (m *moduleContext) skipInstall() bool {
 		return true
 	}
 
-	if m.module.base().commonProperties.HideFromMake {
-		return true
-	}
-
 	// We'll need a solution for choosing which of modules with the same name in different
 	// namespaces to install.  For now, reuse the list of namespaces exported to Make as the
 	// list of namespaces to install in a Soong-only build.
@@ -513,6 +512,10 @@ func (m *moduleContext) skipInstall() bool {
 // not created and this module can only be installed to packaging modules like android_filesystem.
 func (m *moduleContext) requiresFullInstall() bool {
 	if m.skipInstall() {
+		return false
+	}
+
+	if m.module.base().commonProperties.HideFromMake {
 		return false
 	}
 
@@ -779,7 +782,7 @@ func (m *moduleContext) UncheckedModule() {
 	m.uncheckedModule = true
 }
 
-func (m *moduleContext) blueprintModuleContext() blueprint.ModuleContext {
+func (m *moduleContext) BlueprintModuleContext() blueprint.ModuleContext {
 	return m.bp
 }
 
@@ -855,7 +858,7 @@ func (m *moduleContext) ExpandOptionalSource(srcFile *string, _ string) Optional
 	return OptionalPath{}
 }
 
-func (m *moduleContext) RequiredModuleNames(ctx ConfigAndErrorContext) []string {
+func (m *moduleContext) RequiredModuleNames(ctx ConfigurableEvaluatorContext) []string {
 	return m.module.RequiredModuleNames(ctx)
 }
 
