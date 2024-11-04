@@ -17,7 +17,6 @@ package android
 import (
 	"fmt"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 
@@ -257,79 +256,76 @@ func (p *PackagingBase) packagingBase() *PackagingBase {
 	return p
 }
 
-func (p *PackagingBase) highPriorityDeps() []string {
-	return slices.Concat(
-		p.properties.High_priority_deps,
-		p.properties.Multilib.Both.High_priority_deps,
-		p.properties.Multilib.Common.High_priority_deps,
-		p.properties.Multilib.First.High_priority_deps,
-		p.properties.Multilib.Lib32.High_priority_deps,
-		p.properties.Multilib.Lib64.High_priority_deps,
-		p.properties.Multilib.Prefer32.High_priority_deps,
-		p.properties.Arch.Arm.High_priority_deps,
-		p.properties.Arch.Arm64.High_priority_deps,
-		p.properties.Arch.X86.High_priority_deps,
-		p.properties.Arch.X86_64.High_priority_deps,
-	)
-}
-
 // From deps and multilib.*.deps, select the dependencies that are for the given arch deps is for
 // the current archicture when this module is not configured for multi target. When configured for
 // multi target, deps is selected for each of the targets and is NOT selected for the current
 // architecture which would be Common.
-func (p *PackagingBase) getDepsForArch(ctx BaseModuleContext, arch ArchType) []string {
-	if len(p.highPriorityDeps()) > 0 && !p.AllowHighPriorityDeps {
-		ctx.ModuleErrorf("Usage of high_priority_deps is not allowed for %s module type", ctx.ModuleType())
+// It returns two lists, the normal and high priority deps, respectively.
+func (p *PackagingBase) getDepsForArch(ctx BaseModuleContext, arch ArchType) ([]string, []string) {
+	var normalDeps []string
+	var highPriorityDeps []string
+
+	get := func(prop DepsProperty) {
+		normalDeps = append(normalDeps, prop.Deps.GetOrDefault(ctx, nil)...)
+		highPriorityDeps = append(highPriorityDeps, prop.High_priority_deps...)
+	}
+	has := func(prop DepsProperty) bool {
+		return len(prop.Deps.GetOrDefault(ctx, nil)) > 0 || len(prop.High_priority_deps) > 0
 	}
 
-	get := func(prop DepsProperty) []string {
-		return Concat(prop.Deps.GetOrDefault(ctx, nil), prop.High_priority_deps)
-	}
-
-	var ret []string
 	if arch == ctx.Target().Arch.ArchType && len(ctx.MultiTargets()) == 0 {
-		ret = append(ret, get(p.properties.DepsProperty)...)
+		get(p.properties.DepsProperty)
 	} else if arch.Multilib == "lib32" {
-		ret = append(ret, get(p.properties.Multilib.Lib32)...)
+		get(p.properties.Multilib.Lib32)
 		// multilib.prefer32.deps are added for lib32 only when they support 32-bit arch
-		for _, dep := range get(p.properties.Multilib.Prefer32) {
+		for _, dep := range p.properties.Multilib.Prefer32.Deps.GetOrDefault(ctx, nil) {
 			if checkIfOtherModuleSupportsLib32(ctx, dep) {
-				ret = append(ret, dep)
+				normalDeps = append(normalDeps, dep)
+			}
+		}
+		for _, dep := range p.properties.Multilib.Prefer32.High_priority_deps {
+			if checkIfOtherModuleSupportsLib32(ctx, dep) {
+				highPriorityDeps = append(highPriorityDeps, dep)
 			}
 		}
 	} else if arch.Multilib == "lib64" {
-		ret = append(ret, get(p.properties.Multilib.Lib64)...)
+		get(p.properties.Multilib.Lib64)
 		// multilib.prefer32.deps are added for lib64 only when they don't support 32-bit arch
-		for _, dep := range get(p.properties.Multilib.Prefer32) {
+		for _, dep := range p.properties.Multilib.Prefer32.Deps.GetOrDefault(ctx, nil) {
 			if !checkIfOtherModuleSupportsLib32(ctx, dep) {
-				ret = append(ret, dep)
+				normalDeps = append(normalDeps, dep)
+			}
+		}
+		for _, dep := range p.properties.Multilib.Prefer32.High_priority_deps {
+			if !checkIfOtherModuleSupportsLib32(ctx, dep) {
+				highPriorityDeps = append(highPriorityDeps, dep)
 			}
 		}
 	} else if arch == Common {
-		ret = append(ret, get(p.properties.Multilib.Common)...)
+		get(p.properties.Multilib.Common)
 	}
 
 	if p.DepsCollectFirstTargetOnly {
-		if len(get(p.properties.Multilib.First)) > 0 {
+		if has(p.properties.Multilib.First) {
 			ctx.PropertyErrorf("multilib.first.deps", "not supported. use \"deps\" instead")
 		}
 		for i, t := range ctx.MultiTargets() {
 			if t.Arch.ArchType == arch {
-				ret = append(ret, get(p.properties.Multilib.Both)...)
+				get(p.properties.Multilib.Both)
 				if i == 0 {
-					ret = append(ret, get(p.properties.DepsProperty)...)
+					get(p.properties.DepsProperty)
 				}
 			}
 		}
 	} else {
-		if len(get(p.properties.Multilib.Both)) > 0 {
+		if has(p.properties.Multilib.Both) {
 			ctx.PropertyErrorf("multilib.both.deps", "not supported. use \"deps\" instead")
 		}
 		for i, t := range ctx.MultiTargets() {
 			if t.Arch.ArchType == arch {
-				ret = append(ret, get(p.properties.DepsProperty)...)
+				get(p.properties.DepsProperty)
 				if i == 0 {
-					ret = append(ret, get(p.properties.Multilib.First)...)
+					get(p.properties.Multilib.First)
 				}
 			}
 		}
@@ -338,17 +334,21 @@ func (p *PackagingBase) getDepsForArch(ctx BaseModuleContext, arch ArchType) []s
 	if ctx.Arch().ArchType == Common {
 		switch arch {
 		case Arm64:
-			ret = append(ret, get(p.properties.Arch.Arm64)...)
+			get(p.properties.Arch.Arm64)
 		case Arm:
-			ret = append(ret, get(p.properties.Arch.Arm)...)
+			get(p.properties.Arch.Arm)
 		case X86_64:
-			ret = append(ret, get(p.properties.Arch.X86_64)...)
+			get(p.properties.Arch.X86_64)
 		case X86:
-			ret = append(ret, get(p.properties.Arch.X86)...)
+			get(p.properties.Arch.X86)
 		}
 	}
 
-	return FirstUniqueStrings(ret)
+	if len(highPriorityDeps) > 0 && !p.AllowHighPriorityDeps {
+		ctx.ModuleErrorf("Usage of high_priority_deps is not allowed for %s module type", ctx.ModuleType())
+	}
+
+	return FirstUniqueStrings(normalDeps), FirstUniqueStrings(highPriorityDeps)
 }
 
 func getSupportedTargets(ctx BaseModuleContext) []Target {
@@ -412,27 +412,34 @@ type highPriorityDepTag struct {
 
 // See PackageModule.AddDeps
 func (p *PackagingBase) AddDeps(ctx BottomUpMutatorContext, depTag blueprint.DependencyTag) {
-	highPriorityDeps := p.highPriorityDeps()
-	for _, t := range getSupportedTargets(ctx) {
-		for _, dep := range p.getDepsForArch(ctx, t.Arch.ArchType) {
-			if p.IgnoreMissingDependencies && !ctx.OtherModuleExists(dep) {
-				continue
-			}
-			targetVariation := t.Variations()
-			sharedVariation := blueprint.Variation{
-				Mutator:   "link",
-				Variation: "shared",
-			}
-			// If a shared variation exists, use that. Static variants do not provide any standalone files
-			// for packaging.
-			if ctx.OtherModuleFarDependencyVariantExists([]blueprint.Variation{sharedVariation}, dep) {
-				targetVariation = append(targetVariation, sharedVariation)
-			}
-			if InList(dep, highPriorityDeps) {
-				depTag = highPriorityDepTag{depTag}
-			}
+	addDep := func(t Target, dep string, highPriority bool) {
+		if p.IgnoreMissingDependencies && !ctx.OtherModuleExists(dep) {
+			return
+		}
+		targetVariation := t.Variations()
+		sharedVariation := blueprint.Variation{
+			Mutator:   "link",
+			Variation: "shared",
+		}
+		// If a shared variation exists, use that. Static variants do not provide any standalone files
+		// for packaging.
+		if ctx.OtherModuleFarDependencyVariantExists([]blueprint.Variation{sharedVariation}, dep) {
+			targetVariation = append(targetVariation, sharedVariation)
+		}
+		depTagToUse := depTag
+		if highPriority {
+			depTagToUse = highPriorityDepTag{depTag}
+		}
 
-			ctx.AddFarVariationDependencies(targetVariation, depTag, dep)
+		ctx.AddFarVariationDependencies(targetVariation, depTagToUse, dep)
+	}
+	for _, t := range getSupportedTargets(ctx) {
+		normalDeps, highPriorityDeps := p.getDepsForArch(ctx, t.Arch.ArchType)
+		for _, dep := range normalDeps {
+			addDep(t, dep, false)
+		}
+		for _, dep := range highPriorityDeps {
+			addDep(t, dep, true)
 		}
 	}
 }

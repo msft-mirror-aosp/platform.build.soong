@@ -341,6 +341,7 @@ type ProductVariables struct {
 	VendorPath           *string `json:",omitempty"`
 	BuildingVendorImage  *bool   `json:",omitempty"`
 	OdmPath              *string `json:",omitempty"`
+	BuildingOdmImage     *bool   `json:",omitempty"`
 	ProductPath          *string `json:",omitempty"`
 	BuildingProductImage *bool   `json:",omitempty"`
 	SystemExtPath        *string `json:",omitempty"`
@@ -540,6 +541,8 @@ type ProductVariables struct {
 	ProductManifestFiles   []string `json:",omitempty"`
 	SystemManifestFile     []string `json:",omitempty"`
 	SystemExtManifestFiles []string `json:",omitempty"`
+	DeviceManifestFiles    []string `json:",omitempty"`
+	OdmManifestFiles       []string `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {
