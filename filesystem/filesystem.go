@@ -147,9 +147,7 @@ type FilesystemProperties struct {
 
 	Erofs ErofsProperties
 
-	// List of files (in .json format) that will be converted to a linker config file (in .pb format).
-	// The linker config file be installed in the filesystem at /etc/linker.config.pb
-	Linker_config_srcs []string `android:"path"`
+	Linkerconfig LinkerConfigProperties
 
 	// Determines if the module is auto-generated from Soong or not. If the module is
 	// auto-generated, its deps are exempted from visibility enforcement.
@@ -168,6 +166,16 @@ type ErofsProperties struct {
 	Sparse *bool
 }
 
+type LinkerConfigProperties struct {
+
+	// Build a linker.config.pb file
+	Gen_linker_config *bool
+
+	// List of files (in .json format) that will be converted to a linker config file (in .pb format).
+	// The linker config file be installed in the filesystem at /etc/linker.config.pb
+	Linker_config_srcs []string `android:"path"`
+}
+
 // android_filesystem packages a set of modules and their transitive dependencies into a filesystem
 // image. The filesystem images are expected to be mounted in the target device, which means the
 // modules in the filesystem image are built for the target device (i.e. Android, not Linux host).
@@ -184,6 +192,7 @@ func initFilesystemModule(module android.DefaultableModule, filesystemModule *fi
 	module.AddProperties(&filesystemModule.properties)
 	android.InitPackageModule(filesystemModule)
 	filesystemModule.PackagingBase.DepsCollectFirstTargetOnly = true
+	filesystemModule.PackagingBase.AllowHighPriorityDeps = true
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
 }
@@ -690,27 +699,13 @@ func (f *filesystem) buildEventLogtagsFile(ctx android.ModuleContext, builder *a
 }
 
 func (f *filesystem) buildLinkerConfigFile(ctx android.ModuleContext, builder *android.RuleBuilder, rebasedDir android.OutputPath) {
-	getCStubLibs := func() []android.Module {
-		// Determine the list of C stub libraries that are part of this filesystem.
-		// These will be added to `provideLibs`.
-		// The current implementation assumes that stub libraries are listed explicitly in `deps`
-		// (direct deps). If this is not true, ctx.VisitDeps will need to be replaced by ctx.WalkDeps.
-		ret := []android.Module{}
-		ctx.VisitDirectDeps(func(child android.Module) {
-			if c, ok := child.(*cc.Module); ok && c.HasStubsVariants() {
-				ret = append(ret, c)
-			}
-		})
-		return ret
-	}
-
-	if len(f.properties.Linker_config_srcs) == 0 {
+	if !proptools.Bool(f.properties.Linkerconfig.Gen_linker_config) {
 		return
 	}
 
-	// cp to the final output
+	provideModules, _ := f.getLibsForLinkerConfig(ctx)
 	output := rebasedDir.Join(ctx, "etc", "linker.config.pb")
-	linkerconfig.BuildLinkerConfig(ctx, builder, android.PathsForModuleSrc(ctx, f.properties.Linker_config_srcs), getCStubLibs(), nil, output)
+	linkerconfig.BuildLinkerConfig(ctx, builder, android.PathsForModuleSrc(ctx, f.properties.Linkerconfig.Linker_config_srcs), provideModules, nil, output)
 
 	f.appendToEntry(ctx, output)
 }
@@ -822,4 +817,49 @@ var _ partition = (*filesystemDefaults)(nil)
 
 func (f *filesystemDefaults) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	validatePartitionType(ctx, f)
+}
+
+// getLibsForLinkerConfig returns
+// 1. A list of libraries installed in this filesystem
+// 2. A list of dep libraries _not_ installed in this filesystem
+//
+// `linkerconfig.BuildLinkerConfig` will convert these two to a linker.config.pb for the filesystem
+// (1) will be added to --provideLibs if they are C libraries with a stable interface (has stubs)
+// (2) will be added to --requireLibs if they are C libraries with a stable interface (has stubs)
+func (f *filesystem) getLibsForLinkerConfig(ctx android.ModuleContext) ([]android.Module, []android.Module) {
+	// we need "Module"s for packaging items
+	modulesInPackageByModule := make(map[android.Module]bool)
+	modulesInPackageByName := make(map[string]bool)
+
+	deps := f.gatherFilteredPackagingSpecs(ctx)
+	ctx.WalkDeps(func(child, parent android.Module) bool {
+		for _, ps := range android.OtherModuleProviderOrDefault(
+			ctx, child, android.InstallFilesProvider).PackagingSpecs {
+			if _, ok := deps[ps.RelPathInPackage()]; ok {
+				modulesInPackageByModule[child] = true
+				modulesInPackageByName[child.Name()] = true
+				return true
+			}
+		}
+		return true
+	})
+
+	provideModules := make([]android.Module, 0, len(modulesInPackageByModule))
+	for mod := range modulesInPackageByModule {
+		provideModules = append(provideModules, mod)
+	}
+
+	var requireModules []android.Module
+	ctx.WalkDeps(func(child, parent android.Module) bool {
+		_, parentInPackage := modulesInPackageByModule[parent]
+		_, childInPackageName := modulesInPackageByName[child.Name()]
+
+		// When parent is in the package, and child (or its variant) is not, this can be from an interface.
+		if parentInPackage && !childInPackageName {
+			requireModules = append(requireModules, child)
+		}
+		return true
+	})
+
+	return provideModules, requireModules
 }
