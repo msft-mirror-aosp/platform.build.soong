@@ -670,7 +670,10 @@ func TestInstallLinkerConfigFile(t *testing.T) {
 android_filesystem {
     name: "myfilesystem",
     deps: ["libfoo_has_no_stubs", "libfoo_has_stubs"],
-    linker_config_srcs: ["linker.config.json"],
+    linkerconfig: {
+	    gen_linker_config: true,
+	    linker_config_srcs: ["linker.config.json"],
+    },
     partition_type: "vendor",
 }
 cc_library {
