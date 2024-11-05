@@ -10,6 +10,7 @@ bootstrap_go_package {
         "soong",
         "soong-android",
         "soong-filesystem",
+        "soong-kernel",
     ],
     srcs: [
         "filesystem_creator.go",
