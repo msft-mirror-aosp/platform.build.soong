@@ -605,6 +605,9 @@ type PartitionVariables struct {
 	ProductLinkerConfigSrcs []string `json:",omitempty"`
 
 	ProductCopyFiles map[string]string `json:",omitempty"`
+
+	BuildingSystemDlkmImage bool     `json:",omitempty"`
+	SystemKernelModules     []string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
