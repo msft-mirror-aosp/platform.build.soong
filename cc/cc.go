@@ -43,6 +43,14 @@ type CcMakeVarsInfo struct {
 
 var CcMakeVarsInfoProvider = blueprint.NewProvider[*CcMakeVarsInfo]()
 
+type CcObjectInfo struct {
+	objFiles   android.Paths
+	tidyFiles  android.Paths
+	kytheFiles android.Paths
+}
+
+var CcObjectInfoProvider = blueprint.NewProvider[CcObjectInfo]()
+
 func init() {
 	RegisterCCBuildComponents(android.InitRegistrationContext)
 
@@ -648,10 +656,6 @@ type installer interface {
 	installInRoot() bool
 }
 
-type xref interface {
-	XrefCcFiles() android.Paths
-}
-
 type overridable interface {
 	overriddenModules() []string
 }
@@ -900,12 +904,6 @@ type Module struct {
 	staticAnalogue *StaticLibraryInfo
 
 	makeLinkType string
-	// Kythe (source file indexer) paths for this compilation module
-	kytheFiles android.Paths
-	// Object .o file output paths for this compilation module
-	objFiles android.Paths
-	// Tidy .tidy file output paths for this compilation module
-	tidyFiles android.Paths
 
 	// For apex variants, this is set as apex.min_sdk_version
 	apexSdkVersion android.ApiLevel
@@ -1471,10 +1469,6 @@ func InstallToBootstrap(name string, config android.Config) bool {
 		return true
 	}
 	return isBionic(name)
-}
-
-func (c *Module) XrefCcFiles() android.Paths {
-	return c.kytheFiles
 }
 
 func (c *Module) isCfiAssemblySupportEnabled() bool {
@@ -2048,9 +2042,6 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		if ctx.Failed() {
 			return
 		}
-		c.kytheFiles = objs.kytheFiles
-		c.objFiles = objs.objFiles
-		c.tidyFiles = objs.tidyFiles
 	}
 
 	if c.linker != nil {
@@ -2115,10 +2106,27 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		c.hasYacc = b.hasSrcExt(ctx, ".y") || b.hasSrcExt(ctx, ".yy")
 	}
 
+	ccObjectInfo := CcObjectInfo{
+		kytheFiles: objs.kytheFiles,
+	}
+	if !ctx.Config().KatiEnabled() || !android.ShouldSkipAndroidMkProcessing(ctx, c) {
+		ccObjectInfo.objFiles = objs.objFiles
+		ccObjectInfo.tidyFiles = objs.tidyFiles
+	}
+	if len(ccObjectInfo.kytheFiles)+len(ccObjectInfo.objFiles)+len(ccObjectInfo.tidyFiles) > 0 {
+		android.SetProvider(ctx, CcObjectInfoProvider, ccObjectInfo)
+	}
+
 	c.setOutputFiles(ctx)
 
 	if c.makeVarsInfo != nil {
 		android.SetProvider(ctx, CcMakeVarsInfoProvider, c.makeVarsInfo)
+	}
+}
+
+func setOutputFilesIfNotEmpty(ctx ModuleContext, files android.Paths, tag string) {
+	if len(files) > 0 {
+		ctx.SetOutputFiles(files, tag)
 	}
 }
 
@@ -3958,9 +3966,10 @@ type kytheExtractAllSingleton struct {
 
 func (ks *kytheExtractAllSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 	var xrefTargets android.Paths
-	ctx.VisitAllModules(func(module android.Module) {
-		if ccModule, ok := module.(xref); ok {
-			xrefTargets = append(xrefTargets, ccModule.XrefCcFiles()...)
+	ctx.VisitAllModuleProxies(func(module android.ModuleProxy) {
+		files := android.OtherModuleProviderOrDefault(ctx, module, CcObjectInfoProvider).kytheFiles
+		if len(files) > 0 {
+			xrefTargets = append(xrefTargets, files...)
 		}
 	})
 	// TODO(asmundak): Perhaps emit a rule to output a warning if there were no xrefTargets
