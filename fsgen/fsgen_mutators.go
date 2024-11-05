@@ -160,16 +160,17 @@ func checkDepModuleInMultipleNamespaces(mctx android.BottomUpMutatorContext, fou
 }
 
 func appendDepIfAppropriate(mctx android.BottomUpMutatorContext, deps *multilibDeps, installPartition string) {
-	checkDepModuleInMultipleNamespaces(mctx, *deps, mctx.Module().Name(), installPartition)
-	if _, ok := (*deps)[mctx.Module().Name()]; ok {
+	moduleName := mctx.ModuleName()
+	checkDepModuleInMultipleNamespaces(mctx, *deps, moduleName, installPartition)
+	if _, ok := (*deps)[moduleName]; ok {
 		// Prefer the namespace-specific module over the platform module
 		if mctx.Namespace().Path != "." {
-			(*deps)[mctx.Module().Name()].Namespace = mctx.Namespace().Path
+			(*deps)[moduleName].Namespace = mctx.Namespace().Path
 		}
-		(*deps)[mctx.Module().Name()].Arch = append((*deps)[mctx.Module().Name()].Arch, mctx.Module().Target().Arch.ArchType)
+		(*deps)[moduleName].Arch = append((*deps)[moduleName].Arch, mctx.Module().Target().Arch.ArchType)
 	} else {
 		multilib, _ := mctx.Module().DecodeMultilib(mctx)
-		(*deps)[mctx.Module().Name()] = &depCandidateProps{
+		(*deps)[moduleName] = &depCandidateProps{
 			Namespace: mctx.Namespace().Path,
 			Multilib:  multilib,
 			Arch:      []android.ArchType{mctx.Module().Target().Arch.ArchType},
@@ -181,7 +182,7 @@ func collectDepsMutator(mctx android.BottomUpMutatorContext) {
 	fsGenState := mctx.Config().Get(fsGenStateOnceKey).(*FsGenState)
 
 	m := mctx.Module()
-	if m.Target().Os.Class == android.Device && slices.Contains(fsGenState.depCandidates, m.Name()) {
+	if m.Target().Os.Class == android.Device && slices.Contains(fsGenState.depCandidates, mctx.ModuleName()) {
 		installPartition := m.PartitionTag(mctx.DeviceConfig())
 		fsGenState.fsDepsMutex.Lock()
 		// Only add the module as dependency when:
