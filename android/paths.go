@@ -551,15 +551,35 @@ func PathsRelativeToModuleSourceDir(input SourceInput) Paths {
 	return ret
 }
 
+type directoryPath struct {
+	basePath
+}
+
+func (d *directoryPath) String() string {
+	return d.basePath.String()
+}
+
+func (d *directoryPath) base() basePath {
+	return d.basePath
+}
+
+// DirectoryPath represents a source path for directories. Incompatible with Path by design.
+type DirectoryPath interface {
+	String() string
+	base() basePath
+}
+
+var _ DirectoryPath = (*directoryPath)(nil)
+
+type DirectoryPaths []DirectoryPath
+
 // DirectoryPathsForModuleSrcExcludes returns a Paths{} containing the resolved references in
 // directory paths. Elements of paths are resolved as:
 //   - filepath, relative to local module directory, resolves as a filepath relative to the local
 //     source directory
 //   - other modules using the ":name" syntax. These modules must implement DirProvider.
-//
-// TODO(b/358302178): Implement DirectoryPath and change the return type.
-func DirectoryPathsForModuleSrc(ctx ModuleMissingDepsPathContext, paths []string) Paths {
-	var ret Paths
+func DirectoryPathsForModuleSrc(ctx ModuleMissingDepsPathContext, paths []string) DirectoryPaths {
+	var ret DirectoryPaths
 
 	for _, path := range paths {
 		if m, t := SrcIsModuleWithTag(path); m != "" {
@@ -588,12 +608,12 @@ func DirectoryPathsForModuleSrc(ctx ModuleMissingDepsPathContext, paths []string
 			} else if !isDir {
 				ReportPathErrorf(ctx, "module directory path %q is not a directory", p)
 			} else {
-				ret = append(ret, p)
+				ret = append(ret, &directoryPath{basePath{path: p.path, rel: p.rel}})
 			}
 		}
 	}
 
-	seen := make(map[Path]bool, len(ret))
+	seen := make(map[DirectoryPath]bool, len(ret))
 	for _, path := range ret {
 		if seen[path] {
 			ReportPathErrorf(ctx, "duplicated path %q", path)
