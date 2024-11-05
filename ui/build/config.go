@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	"android/soong/finder/fs"
 	"android/soong/shared"
 	"android/soong/ui/metrics"
 
@@ -68,7 +69,6 @@ type Config struct{ *configImpl }
 
 type configImpl struct {
 	// Some targets that are implemented in soong_build
-	// (bp2build, json-module-graph) are not here and have their own bits below.
 	arguments     []string
 	goma          bool
 	environ       *Environment
@@ -83,7 +83,6 @@ type configImpl struct {
 	checkbuild               bool
 	dist                     bool
 	jsonModuleGraph          bool
-	queryview                bool
 	reportMkMetrics          bool // Collect and report mk2bp migration progress metrics.
 	soongDocs                bool
 	skipConfig               bool
@@ -98,7 +97,6 @@ type configImpl struct {
 	buildFromSourceStub      bool
 	incrementalBuildActions  bool
 	ensureAllowlistIntegrity bool // For CI builds - make sure modules are mixed-built
-	partialCompileFlags      partialCompileFlags
 
 	// From the product config
 	katiArgs        []string
@@ -109,7 +107,9 @@ type configImpl struct {
 	sandboxConfig   *SandboxConfig
 
 	// Autodetected
-	totalRAM uint64
+	totalRAM      uint64
+	systemCpuInfo *metrics.CpuInfo
+	systemMemInfo *metrics.MemInfo
 
 	brokenDupRules       bool
 	brokenUsesNetwork    bool
@@ -136,16 +136,6 @@ type configImpl struct {
 
 	// Which builder are we using
 	ninjaCommand ninjaCommandType
-}
-
-type partialCompileFlags struct {
-	// Is partial compilation enabled at all?
-	enabled bool
-
-	// Whether to use d8 instead of r8
-	use_d8 bool
-
-	// Add others as needed.
 }
 
 type NinjaWeightListSource uint
@@ -250,6 +240,14 @@ func NewConfig(ctx Context, args ...string) Config {
 	ret.keepGoing = 1
 
 	ret.totalRAM = detectTotalRAM(ctx)
+	ret.systemCpuInfo, err = metrics.NewCpuInfo(fs.OsFs)
+	if err != nil {
+		ctx.Fatalln("Failed to get cpuinfo:", err)
+	}
+	ret.systemMemInfo, err = metrics.NewMemInfo(fs.OsFs)
+	if err != nil {
+		ctx.Fatalln("Failed to get meminfo:", err)
+	}
 	ret.parseArgs(ctx, args)
 
 	if ret.ninjaWeightListSource == HINT_FROM_SOONG {
@@ -304,10 +302,22 @@ func NewConfig(ctx Context, args ...string) Config {
 		ret.sandboxConfig.SetSrcDirIsRO(srcDirIsWritable == "false")
 	}
 
-	ret.partialCompileFlags = parsePartialCompileFlags(ctx)
-
 	if os.Getenv("GENERATE_SOONG_DEBUG") == "true" {
 		ret.moduleDebugFile, _ = filepath.Abs(shared.JoinPath(ret.SoongOutDir(), "soong-debug-info.json"))
+	}
+
+	// If SOONG_USE_PARTIAL_COMPILE is set, make it one of "true" or the empty string.
+	// This simplifies the generated Ninja rules, so that they only need to check for the empty string.
+	if value, ok := os.LookupEnv("SOONG_USE_PARTIAL_COMPILE"); ok {
+		if value == "true" || value == "1" || value == "y" || value == "yes" {
+			value = "true"
+		} else {
+			value = ""
+		}
+		err = os.Setenv("SOONG_USE_PARTIAL_COMPILE", value)
+		if err != nil {
+			ctx.Fatalln("Failed to set SOONG_USE_PARTIAL_COMPILE: %v", err)
+		}
 	}
 
 	ret.ninjaCommand = NINJA_NINJA
@@ -382,7 +392,6 @@ func NewConfig(ctx Context, args ...string) Config {
 		// Use config.ninjaCommand instead.
 		"SOONG_NINJA",
 		"SOONG_USE_N2",
-		"SOONG_PARTIAL_COMPILE",
 	)
 
 	if ret.UseGoma() || ret.ForceUseGoma() {
@@ -501,78 +510,6 @@ func NewConfig(ctx Context, args ...string) Config {
 	return c
 }
 
-// Parse SOONG_PARTIAL_COMPILE.
-//
-// The user-facing documentation shows:
-//
-// - empty or not set: "The current default state"
-// - "true" or "on": enable all stable partial compile features.
-// - "false" or "off": disable partial compile completely.
-//
-// What we actually allow is a comma separated list of tokens, whose first
-// character may be "+" (enable) or "-" (disable).  If neither is present, "+"
-// is assumed.  For example, "on,+use_d8" will enable partial compilation, and
-// additionally set the use_d8 flag (regardless of whether it is opt-in or
-// opt-out).
-//
-// To add a new feature to the list, add the field in the struct
-// `partialCompileFlags` above, and then add the name of the field in the
-// switch statement below.
-func parsePartialCompileFlags(ctx Context) partialCompileFlags {
-	defaultFlags := partialCompileFlags{
-		// Set any opt-out flags here.  Opt-in flags are off by default.
-		enabled: false,
-	}
-	value, ok := os.LookupEnv("SOONG_PARTIAL_COMPILE")
-
-	if !ok {
-		return defaultFlags
-	}
-
-	ret := defaultFlags
-	tokens := strings.Split(strings.ToLower(value), ",")
-	makeVal := func(state string, defaultValue bool) bool {
-		switch state {
-		case "":
-			return defaultValue
-		case "-":
-			return false
-		case "+":
-			return true
-		}
-		return false
-	}
-	for _, tok := range tokens {
-		var state string
-		switch tok[0:1] {
-		case "":
-			// Ignore empty tokens.
-			continue
-		case "-", "+":
-			state = tok[0:1]
-			tok = tok[1:]
-		default:
-			// Treat `feature` as `+feature`.
-			state = "+"
-		}
-		switch tok {
-		case "true", "on", "yes":
-			ret = defaultFlags
-			ret.enabled = true
-		case "false", "off", "no":
-			// Set everything to false.
-			ret = partialCompileFlags{}
-		case "enabled":
-			ret.enabled = makeVal(state, defaultFlags.enabled)
-		case "use_d8":
-			ret.use_d8 = makeVal(state, defaultFlags.use_d8)
-		default:
-			ctx.Fatalln("Unknown SOONG_PARTIAL_COMPILE value:", value)
-		}
-	}
-	return ret
-}
-
 // NewBuildActionConfig returns a build configuration based on the build action. The arguments are
 // processed based on the build action and extracts any arguments that belongs to the build action.
 func NewBuildActionConfig(action BuildAction, dir string, ctx Context, args ...string) Config {
@@ -624,9 +561,23 @@ func storeConfigMetrics(ctx Context, config Config) {
 
 	ctx.Metrics.BuildConfig(buildConfig(config))
 
+	cpuInfo := &smpb.SystemCpuInfo{
+		VendorId:  proto.String(config.systemCpuInfo.VendorId),
+		ModelName: proto.String(config.systemCpuInfo.ModelName),
+		CpuCores:  proto.Int32(config.systemCpuInfo.CpuCores),
+		Flags:     proto.String(config.systemCpuInfo.Flags),
+	}
+	memInfo := &smpb.SystemMemInfo{
+		MemTotal:     proto.Uint64(config.systemMemInfo.MemTotal),
+		MemFree:      proto.Uint64(config.systemMemInfo.MemFree),
+		MemAvailable: proto.Uint64(config.systemMemInfo.MemAvailable),
+	}
+
 	s := &smpb.SystemResourceInfo{
 		TotalPhysicalMemory: proto.Uint64(config.TotalRAM()),
 		AvailableCpus:       proto.Int32(int32(runtime.NumCPU())),
+		CpuInfo:             cpuInfo,
+		MemInfo:             memInfo,
 	}
 	ctx.Metrics.SystemResourceInfo(s)
 }
@@ -983,8 +934,6 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			c.dist = true
 		} else if arg == "json-module-graph" {
 			c.jsonModuleGraph = true
-		} else if arg == "queryview" {
-			c.queryview = true
 		} else if arg == "soong_docs" {
 			c.soongDocs = true
 		} else {
@@ -1079,7 +1028,7 @@ func (c *configImpl) SoongBuildInvocationNeeded() bool {
 		return true
 	}
 
-	if !c.JsonModuleGraph() && !c.Queryview() && !c.SoongDocs() {
+	if !c.JsonModuleGraph() && !c.SoongDocs() {
 		// Command line was empty, the default Ninja target is built
 		return true
 	}
@@ -1152,10 +1101,6 @@ func (c *configImpl) SoongDocsHtml() string {
 	return shared.JoinPath(c.SoongOutDir(), "docs/soong_build.html")
 }
 
-func (c *configImpl) QueryviewMarkerFile() string {
-	return shared.JoinPath(c.SoongOutDir(), "queryview.marker")
-}
-
 func (c *configImpl) ModuleGraphFile() string {
 	return shared.JoinPath(c.SoongOutDir(), "module-graph.json")
 }
@@ -1191,10 +1136,6 @@ func (c *configImpl) Dist() bool {
 
 func (c *configImpl) JsonModuleGraph() bool {
 	return c.jsonModuleGraph
-}
-
-func (c *configImpl) Queryview() bool {
-	return c.queryview
 }
 
 func (c *configImpl) SoongDocs() bool {
@@ -1413,7 +1354,7 @@ func (c *configImpl) sandboxPath(base, in string) string {
 
 func (c *configImpl) UseRBE() bool {
 	// These alternate modes of running Soong do not use RBE / reclient.
-	if c.Queryview() || c.JsonModuleGraph() {
+	if c.JsonModuleGraph() {
 		return false
 	}
 
@@ -1853,10 +1794,6 @@ func (c *configImpl) SkipMetricsUpload() bool {
 
 func (c *configImpl) EnsureAllowlistIntegrity() bool {
 	return c.ensureAllowlistIntegrity
-}
-
-func (c *configImpl) PartialCompileFlags() partialCompileFlags {
-	return c.partialCompileFlags
 }
 
 // Returns a Time object if one was passed via a command-line flag.

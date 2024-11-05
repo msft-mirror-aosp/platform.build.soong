@@ -64,3 +64,37 @@ func blockAndroidMks(ctx Context, androidMks []string) {
 		}
 	}
 }
+
+// The Android.mk files in these directories are for NDK build system.
+var external_ndk_androidmks []string = []string{
+	"external/fmtlib/",
+	"external/google-breakpad/",
+	"external/googletest/",
+	"external/libaom/",
+	"external/libusb/",
+	"external/libvpx/",
+	"external/libwebm/",
+	"external/libwebsockets/",
+	"external/vulkan-validation-layers/",
+	"external/walt/",
+	"external/webp/",
+}
+
+func ignoreNdkAndroidMks(androidMks []string) (filtered []string) {
+	filter := func(s string) bool {
+		for _, d := range external_ndk_androidmks {
+			if strings.HasPrefix(s, d) {
+				return false
+			}
+		}
+		return true
+	}
+
+	for _, l := range androidMks {
+		if filter(l) {
+			filtered = append(filtered, l)
+		}
+	}
+
+	return
+}

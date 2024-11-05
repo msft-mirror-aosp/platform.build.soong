@@ -15,9 +15,6 @@
 package android
 
 import (
-	"bytes"
-	"encoding/gob"
-	"errors"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -27,6 +24,8 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
+	"github.com/google/blueprint/gobtools"
 	"github.com/google/blueprint/proptools"
 )
 
@@ -86,6 +85,7 @@ type Module interface {
 	PartitionTag(DeviceConfig) string
 	HideFromMake()
 	IsHideFromMake() bool
+	SkipInstall()
 	IsSkipInstall() bool
 	MakeUninstallable()
 	ReplacedByPrebuilt()
@@ -116,6 +116,14 @@ type Module interface {
 	VintfFragmentModuleNames(ctx ConfigurableEvaluatorContext) []string
 
 	ConfigurableEvaluator(ctx ConfigurableEvaluatorContext) proptools.ConfigurableEvaluator
+
+	// The usage of this method is experimental and should not be used outside of fsgen package.
+	// This will be removed once product packaging migration to Soong is complete.
+	DecodeMultilib(ctx ConfigContext) (string, string)
+
+	// WARNING: This should not be used outside build/soong/fsgen
+	// Overrides returns the list of modules which should not be installed if this module is installed.
+	Overrides() []string
 }
 
 // Qualified id for a module
@@ -542,6 +550,13 @@ func (t *CommonTestOptions) SetAndroidMkEntries(entries *AndroidMkEntries) {
 	}
 }
 
+func (t *CommonTestOptions) SetAndroidMkInfoEntries(entries *AndroidMkInfo) {
+	entries.SetBoolIfTrue("LOCAL_IS_UNIT_TEST", Bool(t.Unit_test))
+	if len(t.Tags) > 0 {
+		entries.AddStrings("LOCAL_TEST_OPTIONS_TAGS", t.Tags...)
+	}
+}
+
 // The key to use in TaggedDistFiles when a Dist structure does not specify a
 // tag property. This intentionally does not use "" as the default because that
 // would mean that an empty tag would have a different meaning when used in a dist
@@ -608,10 +623,9 @@ type hostCrossProperties struct {
 type Multilib string
 
 const (
-	MultilibBoth        Multilib = "both"
-	MultilibFirst       Multilib = "first"
-	MultilibCommon      Multilib = "common"
-	MultilibCommonFirst Multilib = "common_first"
+	MultilibBoth   Multilib = "both"
+	MultilibFirst  Multilib = "first"
+	MultilibCommon Multilib = "common"
 )
 
 type HostOrDeviceSupported int
@@ -1006,14 +1020,6 @@ func addRequiredDeps(ctx BottomUpMutatorContext) {
 			return
 		}
 
-		// Do not create a dependency from common variant to arch variant for `common_first` modules
-		if multilib, _ := decodeMultilib(ctx, ctx.Module().base()); multilib == string(MultilibCommonFirst) {
-			commonVariant := ctx.Arch().ArchType.Multilib == ""
-			if bothInAndroid && commonVariant && InList(target.Arch.ArchType.Multilib, []string{"lib32", "lib64"}) {
-				return
-			}
-		}
-
 		variation := target.Variations()
 		if ctx.OtherModuleFarDependencyVariantExists(variation, depName) {
 			ctx.AddFarVariationDependencies(variation, RequiredDepTag, depName)
@@ -1078,6 +1084,11 @@ func addVintfFragmentDeps(ctx BottomUpMutatorContext) {
 
 	modPartition := mod.PartitionTag(deviceConfig)
 	for _, vintf := range vintfModules {
+		if vintf == nil {
+			// TODO(b/372091092): Remove this. Having it gives us missing dependency errors instead
+			// of nil pointer dereference errors, but we should resolve the missing dependencies.
+			continue
+		}
 		if vintfModule, ok := vintf.(*vintfFragmentModule); ok {
 			vintfPartition := vintfModule.PartitionTag(deviceConfig)
 			if modPartition != vintfPartition {
@@ -1411,6 +1422,7 @@ func (m *ModuleBase) IsSkipInstall() bool {
 func (m *ModuleBase) MakeUninstallable() {
 	m.commonProperties.UninstallableApexPlatformVariant = true
 	m.HideFromMake()
+	m.SkipInstall()
 }
 
 func (m *ModuleBase) ReplacedByPrebuilt() {
@@ -1440,9 +1452,9 @@ func (m *ModuleBase) EffectiveLicenseFiles() Paths {
 
 // computeInstallDeps finds the installed paths of all dependencies that have a dependency
 // tag that is annotated as needing installation via the isInstallDepNeeded method.
-func (m *ModuleBase) computeInstallDeps(ctx ModuleContext) ([]*DepSet[InstallPath], []*DepSet[PackagingSpec]) {
-	var installDeps []*DepSet[InstallPath]
-	var packagingSpecs []*DepSet[PackagingSpec]
+func (m *ModuleBase) computeInstallDeps(ctx ModuleContext) ([]depset.DepSet[InstallPath], []depset.DepSet[PackagingSpec]) {
+	var installDeps []depset.DepSet[InstallPath]
+	var packagingSpecs []depset.DepSet[PackagingSpec]
 	ctx.VisitDirectDeps(func(dep Module) {
 		if isInstallDepNeeded(dep, ctx.OtherModuleDependencyTag(dep)) {
 			// Installation is still handled by Make, so anything hidden from Make is not
@@ -1664,7 +1676,7 @@ func (m *ModuleBase) generateModuleTarget(ctx *moduleContext) {
 	}
 }
 
-func determineModuleKind(m *ModuleBase, ctx blueprint.EarlyModuleContext) moduleKind {
+func determineModuleKind(m *ModuleBase, ctx ModuleErrorContext) moduleKind {
 	var socSpecific = Bool(m.commonProperties.Vendor) || Bool(m.commonProperties.Proprietary) || Bool(m.commonProperties.Soc_specific)
 	var deviceSpecific = Bool(m.commonProperties.Device_specific)
 	var productSpecific = Bool(m.commonProperties.Product_specific)
@@ -1775,12 +1787,12 @@ type InstallFilesInfo struct {
 	KatiInstalls             katiInstalls
 	KatiSymlinks             katiInstalls
 	TestData                 []DataPath
-	TransitivePackagingSpecs *DepSet[PackagingSpec]
+	TransitivePackagingSpecs depset.DepSet[PackagingSpec]
 	LicenseMetadataFile      WritablePath
 
 	// The following fields are private before, make it private again once we have
 	// better solution.
-	TransitiveInstallFiles *DepSet[InstallPath]
+	TransitiveInstallFiles depset.DepSet[InstallPath]
 	// katiInitRcInstalls and katiVintfInstalls track the install rules created by Soong that are
 	// allowed to have duplicates across modules and variants.
 	KatiInitRcInstalls           katiInstalls
@@ -1806,6 +1818,26 @@ type FinalModuleBuildTargetsInfo struct {
 
 var FinalModuleBuildTargetsProvider = blueprint.NewProvider[FinalModuleBuildTargetsInfo]()
 
+type CommonPropertiesProviderData struct {
+	Enabled bool
+	// Whether the module has been replaced by a prebuilt
+	ReplacedByPrebuilt bool
+}
+
+var CommonPropertiesProviderKey = blueprint.NewProvider[CommonPropertiesProviderData]()
+
+type PrebuiltModuleProviderData struct {
+	// Empty for now
+}
+
+var PrebuiltModuleProviderKey = blueprint.NewProvider[PrebuiltModuleProviderData]()
+
+type HostToolProviderData struct {
+	HostToolPath OptionalPath
+}
+
+var HostToolProviderKey = blueprint.NewProvider[HostToolProviderData]()
+
 func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) {
 	ctx := &moduleContext{
 		module:            m.module,
@@ -1826,7 +1858,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	// set the TransitiveInstallFiles to only the transitive dependencies to be used as the dependencies
 	// of installed files of this module.  It will be replaced by a depset including the installed
 	// files of this module at the end for use by modules that depend on this one.
-	ctx.TransitiveInstallFiles = NewDepSet[InstallPath](TOPOLOGICAL, nil, dependencyInstallFiles)
+	ctx.TransitiveInstallFiles = depset.New[InstallPath](depset.TOPOLOGICAL, nil, dependencyInstallFiles)
 
 	// Temporarily continue to call blueprintCtx.GetMissingDependencies() to maintain the previous behavior of never
 	// reporting missing dependency errors in Blueprint when AllowMissingDependencies == true.
@@ -1985,9 +2017,9 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		}
 	}
 
-	ctx.TransitiveInstallFiles = NewDepSet[InstallPath](TOPOLOGICAL, ctx.installFiles, dependencyInstallFiles)
+	ctx.TransitiveInstallFiles = depset.New[InstallPath](depset.TOPOLOGICAL, ctx.installFiles, dependencyInstallFiles)
 	installFiles.TransitiveInstallFiles = ctx.TransitiveInstallFiles
-	installFiles.TransitivePackagingSpecs = NewDepSet[PackagingSpec](TOPOLOGICAL, ctx.packagingSpecs, dependencyPackagingSpecs)
+	installFiles.TransitivePackagingSpecs = depset.New[PackagingSpec](depset.TOPOLOGICAL, ctx.packagingSpecs, dependencyPackagingSpecs)
 
 	SetProvider(ctx, InstallFilesProvider, installFiles)
 	buildLicenseMetadata(ctx, ctx.licenseMetadataFile)
@@ -2051,6 +2083,27 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		})
 	}
 	buildComplianceMetadataProvider(ctx, m)
+
+	commonData := CommonPropertiesProviderData{
+		ReplacedByPrebuilt: m.commonProperties.ReplacedByPrebuilt,
+	}
+	if m.commonProperties.ForcedDisabled {
+		commonData.Enabled = false
+	} else {
+		commonData.Enabled = m.commonProperties.Enabled.GetOrDefault(m.ConfigurableEvaluator(ctx), !m.Os().DefaultDisabled)
+	}
+	SetProvider(ctx, CommonPropertiesProviderKey, commonData)
+	if p, ok := m.module.(PrebuiltInterface); ok && p.Prebuilt() != nil {
+		SetProvider(ctx, PrebuiltModuleProviderKey, PrebuiltModuleProviderData{})
+	}
+	if h, ok := m.module.(HostToolProvider); ok {
+		SetProvider(ctx, HostToolProviderKey, HostToolProviderData{
+			HostToolPath: h.HostToolPath()})
+	}
+
+	if p, ok := m.module.(AndroidMkProviderInfoProducer); ok && !shouldSkipAndroidMkProcessing(ctx, m) {
+		SetProvider(ctx, AndroidMkInfoProvider, p.PrepareAndroidMKProviderInfo(ctx.Config()))
+	}
 }
 
 func SetJarJarPrefixHandler(handler func(ModuleContext)) {
@@ -2130,36 +2183,47 @@ type katiInstall struct {
 	orderOnlyDeps Paths
 	executable    bool
 	extraFiles    *extraFilesZip
-
-	absFrom string
+	absFrom       string
 }
 
-func (p *katiInstall) GobEncode() ([]byte, error) {
-	w := new(bytes.Buffer)
-	encoder := gob.NewEncoder(w)
-	err := errors.Join(encoder.Encode(p.from), encoder.Encode(p.to),
-		encoder.Encode(p.implicitDeps), encoder.Encode(p.orderOnlyDeps),
-		encoder.Encode(p.executable), encoder.Encode(p.extraFiles),
-		encoder.Encode(p.absFrom))
-	if err != nil {
-		return nil, err
-	}
-
-	return w.Bytes(), nil
+type katiInstallGob struct {
+	From          Path
+	To            InstallPath
+	ImplicitDeps  Paths
+	OrderOnlyDeps Paths
+	Executable    bool
+	ExtraFiles    *extraFilesZip
+	AbsFrom       string
 }
 
-func (p *katiInstall) GobDecode(data []byte) error {
-	r := bytes.NewBuffer(data)
-	decoder := gob.NewDecoder(r)
-	err := errors.Join(decoder.Decode(&p.from), decoder.Decode(&p.to),
-		decoder.Decode(&p.implicitDeps), decoder.Decode(&p.orderOnlyDeps),
-		decoder.Decode(&p.executable), decoder.Decode(&p.extraFiles),
-		decoder.Decode(&p.absFrom))
-	if err != nil {
-		return err
+func (k *katiInstall) ToGob() *katiInstallGob {
+	return &katiInstallGob{
+		From:          k.from,
+		To:            k.to,
+		ImplicitDeps:  k.implicitDeps,
+		OrderOnlyDeps: k.orderOnlyDeps,
+		Executable:    k.executable,
+		ExtraFiles:    k.extraFiles,
+		AbsFrom:       k.absFrom,
 	}
+}
 
-	return nil
+func (k *katiInstall) FromGob(data *katiInstallGob) {
+	k.from = data.From
+	k.to = data.To
+	k.implicitDeps = data.ImplicitDeps
+	k.orderOnlyDeps = data.OrderOnlyDeps
+	k.executable = data.Executable
+	k.extraFiles = data.ExtraFiles
+	k.absFrom = data.AbsFrom
+}
+
+func (k *katiInstall) GobEncode() ([]byte, error) {
+	return gobtools.CustomGobEncode[katiInstallGob](k)
+}
+
+func (k *katiInstall) GobDecode(data []byte) error {
+	return gobtools.CustomGobDecode[katiInstallGob](data, k)
 }
 
 type extraFilesZip struct {
@@ -2167,26 +2231,29 @@ type extraFilesZip struct {
 	dir InstallPath
 }
 
-func (p *extraFilesZip) GobEncode() ([]byte, error) {
-	w := new(bytes.Buffer)
-	encoder := gob.NewEncoder(w)
-	err := errors.Join(encoder.Encode(p.zip), encoder.Encode(p.dir))
-	if err != nil {
-		return nil, err
-	}
-
-	return w.Bytes(), nil
+type extraFilesZipGob struct {
+	Zip Path
+	Dir InstallPath
 }
 
-func (p *extraFilesZip) GobDecode(data []byte) error {
-	r := bytes.NewBuffer(data)
-	decoder := gob.NewDecoder(r)
-	err := errors.Join(decoder.Decode(&p.zip), decoder.Decode(&p.dir))
-	if err != nil {
-		return err
+func (e *extraFilesZip) ToGob() *extraFilesZipGob {
+	return &extraFilesZipGob{
+		Zip: e.zip,
+		Dir: e.dir,
 	}
+}
 
-	return nil
+func (e *extraFilesZip) FromGob(data *extraFilesZipGob) {
+	e.zip = data.Zip
+	e.dir = data.Dir
+}
+
+func (e *extraFilesZip) GobEncode() ([]byte, error) {
+	return gobtools.CustomGobEncode[extraFilesZipGob](e)
+}
+
+func (e *extraFilesZip) GobDecode(data []byte) error {
+	return gobtools.CustomGobDecode[extraFilesZipGob](data, e)
 }
 
 type katiInstalls []katiInstall
@@ -2236,6 +2303,14 @@ func (m *ModuleBase) MakeAsSystemExt() {
 // IsNativeBridgeSupported returns true if "native_bridge_supported" is explicitly set as "true"
 func (m *ModuleBase) IsNativeBridgeSupported() bool {
 	return proptools.Bool(m.commonProperties.Native_bridge_supported)
+}
+
+func (m *ModuleBase) DecodeMultilib(ctx ConfigContext) (string, string) {
+	return decodeMultilib(ctx, m)
+}
+
+func (m *ModuleBase) Overrides() []string {
+	return m.commonProperties.Overrides
 }
 
 type ConfigContext interface {

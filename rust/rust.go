@@ -20,9 +20,9 @@ import (
 	"strings"
 
 	"android/soong/bloaty"
-	"android/soong/testing"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
@@ -47,11 +47,11 @@ func init() {
 func registerPreDepsMutators(ctx android.RegisterMutatorsContext) {
 	ctx.Transition("rust_libraries", &libraryTransitionMutator{})
 	ctx.Transition("rust_stdlinkage", &libstdTransitionMutator{})
-	ctx.BottomUp("rust_begin", BeginMutator).Parallel()
+	ctx.BottomUp("rust_begin", BeginMutator)
 }
 
 func registerPostDepsMutators(ctx android.RegisterMutatorsContext) {
-	ctx.BottomUp("rust_sanitizers", rustSanitizerRuntimeMutator).Parallel()
+	ctx.BottomUp("rust_sanitizers", rustSanitizerRuntimeMutator)
 }
 
 type Flags struct {
@@ -179,7 +179,7 @@ type Module struct {
 	// For apex variants, this is set as apex.min_sdk_version
 	apexSdkVersion android.ApiLevel
 
-	transitiveAndroidMkSharedLibs *android.DepSet[string]
+	transitiveAndroidMkSharedLibs depset.DepSet[string]
 }
 
 func (mod *Module) Header() bool {
@@ -974,6 +974,7 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 			// side dependencies. In particular, proc-macros need to be captured in the
 			// host snapshot.
 			mod.HideFromMake()
+			mod.SkipInstall()
 		} else if !mod.installable(apexInfo) {
 			mod.SkipInstall()
 		}
@@ -991,9 +992,6 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		}
 
 		ctx.Phony("rust", ctx.RustModule().OutputFile().Path())
-	}
-	if mod.testModule {
-		android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 	}
 
 	mod.setOutputFiles(ctx)
@@ -1217,7 +1215,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 	skipModuleList := map[string]bool{}
 
-	var transitiveAndroidMkSharedLibs []*android.DepSet[string]
+	var transitiveAndroidMkSharedLibs []depset.DepSet[string]
 	var directAndroidMkSharedLibs []string
 
 	ctx.VisitDirectDeps(func(dep android.Module) {
@@ -1453,7 +1451,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		}
 	})
 
-	mod.transitiveAndroidMkSharedLibs = android.NewDepSet[string](android.PREORDER, directAndroidMkSharedLibs, transitiveAndroidMkSharedLibs)
+	mod.transitiveAndroidMkSharedLibs = depset.New[string](depset.PREORDER, directAndroidMkSharedLibs, transitiveAndroidMkSharedLibs)
 
 	var rlibDepFiles RustLibraries
 	aliases := mod.compiler.Aliases()
@@ -1755,6 +1753,16 @@ func (mod *Module) HostToolPath() android.OptionalPath {
 }
 
 var _ android.ApexModule = (*Module)(nil)
+
+// If a module is marked for exclusion from apexes, don't provide apex variants.
+// TODO(b/362509506): remove this once stubs are properly supported by rust_ffi targets.
+func (m *Module) CanHaveApexVariants() bool {
+	if m.ApexExclude() {
+		return false
+	} else {
+		return m.ApexModuleBase.CanHaveApexVariants()
+	}
+}
 
 func (mod *Module) MinSdkVersion() string {
 	return String(mod.Properties.Min_sdk_version)

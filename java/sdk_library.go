@@ -1403,6 +1403,7 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		// Even though the source javalib is not used, we need to hide it to prevent duplicate installation rules.
 		// TODO (b/331665856): Implement a principled solution for this.
 		module.HideFromMake()
+		module.SkipInstall()
 	}
 
 	module.stem = proptools.StringDefault(module.overridableProperties.Stem, ctx.ModuleName())
@@ -2479,21 +2480,5 @@ func (s *sdkLibrarySdkMemberProperties) AddToPropertySet(ctx android.SdkMemberCo
 			dests = append(dests, dest)
 		}
 		propertySet.AddProperty("doctag_files", dests)
-	}
-}
-
-// TODO(b/358613520): This can be removed when modules are no longer allowed to depend on the top-level library.
-func (s *SdkLibrary) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
-	s.Library.IDEInfo(ctx, dpInfo)
-	if s.implLibraryModule != nil {
-		dpInfo.Deps = append(dpInfo.Deps, s.implLibraryModule.Name())
-	} else {
-		// This java_sdk_library does not have an implementation (it sets `api_only` to true).
-		// Examples of this are `art.module.intra.core.api` (IntraCore api surface).
-		// Return the "public" stubs for these.
-		stubPaths := s.findClosestScopePath(apiScopePublic)
-		if len(stubPaths.stubsHeaderPath) > 0 {
-			dpInfo.Jars = append(dpInfo.Jars, stubPaths.stubsHeaderPath[0].String())
-		}
 	}
 }
