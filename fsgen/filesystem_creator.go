@@ -774,9 +774,6 @@ func generateBpContent(ctx android.EarlyModuleContext, partitionType string) str
 	if !fsTypeSupported {
 		return ""
 	}
-	if partitionType == "vendor" || partitionType == "odm" {
-		return "" // TODO: Handle struct props
-	}
 
 	baseProps := generateBaseProps(proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), partitionType)))
 	deps := ctx.Config().Get(fsGenStateOnceKey).(*FsGenState).fsDeps[partitionType]
@@ -784,7 +781,8 @@ func generateBpContent(ctx android.EarlyModuleContext, partitionType string) str
 
 	result, err := proptools.RepackProperties([]interface{}{baseProps, fsProps, depProps})
 	if err != nil {
-		ctx.ModuleErrorf(err.Error())
+		ctx.ModuleErrorf("%s", err.Error())
+		return ""
 	}
 
 	moduleType := "android_filesystem"
