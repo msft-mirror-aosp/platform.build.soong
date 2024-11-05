@@ -8,6 +8,8 @@ bootstrap_go_package {
     deps: [
         "blueprint",
         "blueprint-bootstrap",
+        "blueprint-depset",
+        "blueprint-gobtools",
         "blueprint-metrics",
         "sbox_proto",
         "soong",
@@ -50,8 +52,8 @@ bootstrap_go_package {
         "deapexer.go",
         "defaults.go",
         "defs.go",
-        "depset_generic.go",
         "deptag.go",
+        "dirgroup.go",
         "early_module_context.go",
         "expand.go",
         "filegroup.go",
@@ -71,6 +73,7 @@ bootstrap_go_package {
         "module.go",
         "module_context.go",
         "module_info_json.go",
+        "module_proxy.go",
         "mutator.go",
         "namespace.go",
         "neverallow.go",
@@ -105,10 +108,10 @@ bootstrap_go_package {
         "test_asserts.go",
         "test_suites.go",
         "testing.go",
-        "updatable_modules.go",
         "util.go",
         "variable.go",
         "vintf_fragment.go",
+        "vintf_data.go",
         "visibility.go",
     ],
     testSrcs: [
@@ -122,7 +125,6 @@ bootstrap_go_package {
         "configured_jars_test.go",
         "csuite_config_test.go",
         "defaults_test.go",
-        "depset_test.go",
         "deptag_test.go",
         "expand_test.go",
         "filegroup_test.go",
@@ -154,4 +156,6 @@ bootstrap_go_package {
         "vintf_fragment_test.go",
         "visibility_test.go",
     ],
+    // Used by plugins
+    visibility: ["//visibility:public"],
 }

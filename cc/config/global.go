@@ -72,6 +72,9 @@ var (
 
 		// Warnings disabled by default.
 
+		// We should encourage use of C23 features even when the whole project
+		// isn't C23-ready.
+		"-Wno-c23-extensions",
 		// Designated initializer syntax is recommended by the Google C++ style
 		// and is OK to use even if not formally supported by the chosen C++
 		// version.
@@ -172,7 +175,6 @@ var (
 		"-Werror=address",
 		"-Werror=sequence-point",
 		"-Werror=format-security",
-		"-nostdlibinc",
 	}
 
 	commonGlobalLldflags = []string{
@@ -286,6 +288,8 @@ var (
 		// New warnings to be fixed after clang-r468909
 		"-Wno-error=deprecated-builtins", // http://b/241601211
 		"-Wno-error=deprecated",          // in external/googletest/googletest
+		// Disabling until the warning is fixed in libc++abi header files b/366180429
+		"-Wno-deprecated-dynamic-exception-spec",
 		// New warnings to be fixed after clang-r475365
 		"-Wno-error=enum-constexpr-conversion", // http://b/243964282
 		// New warnings to be fixed after clang-r522817

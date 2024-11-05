@@ -32,7 +32,7 @@ func init() {
 }
 
 func registerKernelBuildComponents(ctx android.RegistrationContext) {
-	ctx.RegisterModuleType("prebuilt_kernel_modules", prebuiltKernelModulesFactory)
+	ctx.RegisterModuleType("prebuilt_kernel_modules", PrebuiltKernelModulesFactory)
 }
 
 type prebuiltKernelModules struct {
@@ -58,7 +58,7 @@ type prebuiltKernelModulesProperties struct {
 // prebuilt_kernel_modules installs a set of prebuilt kernel module files to the correct directory.
 // In addition, this module builds modules.load, modules.dep, modules.softdep and modules.alias
 // using depmod and installs them as well.
-func prebuiltKernelModulesFactory() android.Module {
+func PrebuiltKernelModulesFactory() android.Module {
 	module := &prebuiltKernelModules{}
 	module.AddProperties(&module.properties)
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)

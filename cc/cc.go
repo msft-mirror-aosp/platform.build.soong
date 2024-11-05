@@ -24,9 +24,8 @@ import (
 	"strconv"
 	"strings"
 
-	"android/soong/testing"
-
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/aidl_library"
@@ -35,6 +34,14 @@ import (
 	"android/soong/fuzz"
 	"android/soong/genrule"
 )
+
+type CcMakeVarsInfo struct {
+	WarningsAllowed string
+	UsingWnoError   string
+	MissingProfile  string
+}
+
+var CcMakeVarsInfoProvider = blueprint.NewProvider[*CcMakeVarsInfo]()
 
 func init() {
 	RegisterCCBuildComponents(android.InitRegistrationContext)
@@ -48,10 +55,10 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 
 	ctx.PreDepsMutators(func(ctx android.RegisterMutatorsContext) {
 		ctx.Transition("sdk", &sdkTransitionMutator{})
-		ctx.BottomUp("llndk", llndkMutator).Parallel()
+		ctx.BottomUp("llndk", llndkMutator)
 		ctx.Transition("link", &linkageTransitionMutator{})
 		ctx.Transition("version", &versionTransitionMutator{})
-		ctx.BottomUp("begin", BeginMutator).Parallel()
+		ctx.BottomUp("begin", BeginMutator)
 	})
 
 	ctx.PostDepsMutators(func(ctx android.RegisterMutatorsContext) {
@@ -59,10 +66,10 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 			san.registerMutators(ctx)
 		}
 
-		ctx.TopDown("sanitize_runtime_deps", sanitizerRuntimeDepsMutator).Parallel()
-		ctx.BottomUp("sanitize_runtime", sanitizerRuntimeMutator).Parallel()
+		ctx.BottomUp("sanitize_runtime_deps", sanitizerRuntimeDepsMutator)
+		ctx.BottomUp("sanitize_runtime", sanitizerRuntimeMutator)
 
-		ctx.TopDown("fuzz_deps", fuzzMutatorDeps)
+		ctx.Transition("fuzz", &fuzzTransitionMutator{})
 
 		ctx.Transition("coverage", &coverageTransitionMutator{})
 
@@ -72,13 +79,13 @@ func RegisterCCBuildComponents(ctx android.RegistrationContext) {
 
 		ctx.Transition("lto", &ltoTransitionMutator{})
 
-		ctx.BottomUp("check_linktype", checkLinkTypeMutator).Parallel()
-		ctx.TopDown("double_loadable", checkDoubleLoadableLibraries).Parallel()
+		ctx.BottomUp("check_linktype", checkLinkTypeMutator)
+		ctx.BottomUp("double_loadable", checkDoubleLoadableLibraries)
 	})
 
-	ctx.FinalDepsMutators(func(ctx android.RegisterMutatorsContext) {
+	ctx.PostApexMutators(func(ctx android.RegisterMutatorsContext) {
 		// sabi mutator needs to be run after apex mutator finishes.
-		ctx.TopDown("sabi_deps", sabiDepsMutator)
+		ctx.Transition("sabi", &sabiTransitionMutator{})
 	})
 
 	ctx.RegisterParallelSingletonType("kythe_extract_all", kytheExtractAllFactory)
@@ -119,9 +126,10 @@ type Deps struct {
 
 	ObjFiles []string
 
-	GeneratedSources []string
-	GeneratedHeaders []string
-	GeneratedDeps    []string
+	GeneratedSources            []string
+	GeneratedHeaders            []string
+	DeviceFirstGeneratedHeaders []string
+	GeneratedDeps               []string
 
 	ReexportGeneratedHeaders []string
 
@@ -137,7 +145,7 @@ type Deps struct {
 
 	// LLNDK headers for the ABI checker to check LLNDK implementation library.
 	// An LLNDK implementation is the core variant. LLNDK header libs are reexported by the vendor variant.
-	// The core variant cannot depend on the vendor variant because of the order of CreateVariations.
+	// The core variant cannot depend on the vendor variant because of the order of imageTransitionMutator.Split().
 	// Instead, the LLNDK implementation depends on the LLNDK header libs.
 	LlndkHeaderLibs []string
 }
@@ -169,7 +177,7 @@ type PathDeps struct {
 	RustRlibDeps []RustRlibDep
 
 	// Transitive static library dependencies of static libraries for use in ordering.
-	TranstiveStaticLibrariesForOrdering *android.DepSet[android.Path]
+	TranstiveStaticLibrariesForOrdering depset.DepSet[android.Path]
 
 	// Paths to .o files
 	Objs Objects
@@ -531,6 +539,7 @@ type ModuleContextIntf interface {
 	getSharedFlags() *SharedFlags
 	notInPlatform() bool
 	optimizeForSize() bool
+	getOrCreateMakeVarsInfo() *CcMakeVarsInfo
 }
 
 type SharedFlags struct {
@@ -845,9 +854,10 @@ type Module struct {
 	sourceProperties android.SourceProperties
 
 	// initialize before calling Init
-	hod        android.HostOrDeviceSupported
-	multilib   android.Multilib
-	testModule bool
+	hod         android.HostOrDeviceSupported
+	multilib    android.Multilib
+	testModule  bool
+	incremental bool
 
 	// Allowable SdkMemberTypes of this module type.
 	sdkMemberTypes []android.SdkMemberType
@@ -878,7 +888,7 @@ type Module struct {
 
 	cachedToolchain config.Toolchain
 
-	subAndroidMkOnce map[subAndroidMkProvider]bool
+	subAndroidMkOnce map[subAndroidMkProviderInfoProducer]bool
 
 	// Flags used to compile this module
 	flags Flags
@@ -913,7 +923,15 @@ type Module struct {
 	hasSysprop      bool
 	hasWinMsg       bool
 	hasYacc         bool
+
+	makeVarsInfo *CcMakeVarsInfo
 }
+
+func (c *Module) IncrementalSupported() bool {
+	return c.incremental
+}
+
+var _ blueprint.Incremental = (*Module)(nil)
 
 func (c *Module) AddJSONData(d *map[string]interface{}) {
 	c.AndroidModuleBase().AddJSONData(d)
@@ -1700,6 +1718,13 @@ func (ctx *moduleContextImpl) notInPlatform() bool {
 	return ctx.mod.NotInPlatform()
 }
 
+func (ctx *moduleContextImpl) getOrCreateMakeVarsInfo() *CcMakeVarsInfo {
+	if ctx.mod.makeVarsInfo == nil {
+		ctx.mod.makeVarsInfo = &CcMakeVarsInfo{}
+	}
+	return ctx.mod.makeVarsInfo
+}
+
 func newBaseModule(hod android.HostOrDeviceSupported, multilib android.Multilib) *Module {
 	return &Module{
 		hod:      hod,
@@ -2037,9 +2062,6 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 
 		c.maybeUnhideFromMake()
 	}
-	if c.testModule {
-		android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
-	}
 
 	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: deps.GeneratedSources.Strings()})
 
@@ -2094,6 +2116,10 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	}
 
 	c.setOutputFiles(ctx)
+
+	if c.makeVarsInfo != nil {
+		android.SetProvider(ctx, CcMakeVarsInfoProvider, c.makeVarsInfo)
+	}
 }
 
 func (c *Module) setOutputFiles(ctx ModuleContext) {
@@ -2169,6 +2195,7 @@ func (c *Module) maybeInstall(ctx ModuleContext, apexInfo android.ApexInfo) {
 		// modules can be hidden from make as some are needed for resolving make side
 		// dependencies.
 		c.HideFromMake()
+		c.SkipInstall()
 	} else if !installable(c, apexInfo) {
 		c.SkipInstall()
 	}
@@ -2348,6 +2375,10 @@ func AddSharedLibDependenciesWithVersions(ctx android.BottomUpMutatorContext, mo
 		variations = append(variations, blueprint.Variation{Mutator: "version", Variation: version})
 		if tag, ok := depTag.(libraryDependencyTag); ok {
 			tag.explicitlyVersioned = true
+			// depTag is an interface that contains a concrete non-pointer struct.  That makes the local
+			// tag variable a copy of the contents of depTag, and updating it doesn't change depTag.  Reassign
+			// the modified copy to depTag.
+			depTag = tag
 		} else {
 			panic(fmt.Errorf("Unexpected dependency tag: %T", depTag))
 		}
@@ -2609,6 +2640,11 @@ func (c *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 		actx.AddDependency(c, depTag, gen)
 	}
 
+	for _, gen := range deps.DeviceFirstGeneratedHeaders {
+		depTag := genHeaderDepTag
+		actx.AddVariationDependencies(ctx.Config().AndroidFirstDeviceTarget.Variations(), depTag, gen)
+	}
+
 	crtVariations := GetCrtVariations(ctx, c)
 	actx.AddVariationDependencies(crtVariations, objDepTag, deps.ObjFiles...)
 	for _, crt := range deps.CrtBegin {
@@ -2783,7 +2819,7 @@ func checkLinkTypeMutator(ctx android.BottomUpMutatorContext) {
 // If a library has a vendor variant and is a (transitive) dependency of an LLNDK library,
 // it is subject to be double loaded. Such lib should be explicitly marked as double_loadable: true
 // or as vndk-sp (vndk: { enabled: true, support_system_process: true}).
-func checkDoubleLoadableLibraries(ctx android.TopDownMutatorContext) {
+func checkDoubleLoadableLibraries(ctx android.BottomUpMutatorContext) {
 	check := func(child, parent android.Module) bool {
 		to, ok := child.(*Module)
 		if !ok {
@@ -3376,19 +3412,17 @@ func ChooseStubOrImpl(ctx android.ModuleContext, dep android.Module) (SharedLibr
 
 // orderStaticModuleDeps rearranges the order of the static library dependencies of the module
 // to match the topological order of the dependency tree, including any static analogues of
-// direct shared libraries.  It returns the ordered static dependencies, and an android.DepSet
+// direct shared libraries.  It returns the ordered static dependencies, and a depset.DepSet
 // of the transitive dependencies.
-func orderStaticModuleDeps(staticDeps []StaticLibraryInfo, sharedDeps []SharedLibraryInfo) (ordered android.Paths, transitive *android.DepSet[android.Path]) {
-	transitiveStaticLibsBuilder := android.NewDepSetBuilder[android.Path](android.TOPOLOGICAL)
+func orderStaticModuleDeps(staticDeps []StaticLibraryInfo, sharedDeps []SharedLibraryInfo) (ordered android.Paths, transitive depset.DepSet[android.Path]) {
+	transitiveStaticLibsBuilder := depset.NewBuilder[android.Path](depset.TOPOLOGICAL)
 	var staticPaths android.Paths
 	for _, staticDep := range staticDeps {
 		staticPaths = append(staticPaths, staticDep.StaticLibrary)
 		transitiveStaticLibsBuilder.Transitive(staticDep.TransitiveStaticLibrariesForOrdering)
 	}
 	for _, sharedDep := range sharedDeps {
-		if sharedDep.TransitiveStaticLibrariesForOrdering != nil {
-			transitiveStaticLibsBuilder.Transitive(sharedDep.TransitiveStaticLibrariesForOrdering)
-		}
+		transitiveStaticLibsBuilder.Transitive(sharedDep.TransitiveStaticLibrariesForOrdering)
 	}
 	transitiveStaticLibs := transitiveStaticLibsBuilder.Build()
 

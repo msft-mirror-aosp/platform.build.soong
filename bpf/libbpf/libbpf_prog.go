@@ -61,6 +61,7 @@ var (
 )
 
 func registerLibbpfProgBuildComponents(ctx android.RegistrationContext) {
+	ctx.RegisterModuleType("libbpf_defaults", defaultsFactory)
 	ctx.RegisterModuleType("libbpf_prog", LibbpfProgFactory)
 }
 
@@ -88,57 +89,61 @@ type LibbpfProgProperties struct {
 	// be added to the include path using -I
 	Local_include_dirs []string `android:"arch_variant"`
 
+	Header_libs []string `android:"arch_variant"`
+
 	// optional subdirectory under which this module is installed into.
 	Relative_install_path string
 }
 
 type libbpfProg struct {
 	android.ModuleBase
+	android.DefaultableModuleBase
 	properties LibbpfProgProperties
-	objs android.Paths
+	objs       android.Paths
 }
 
 var _ android.ImageInterface = (*libbpfProg)(nil)
 
-func (libbpf *libbpfProg) ImageMutatorBegin(ctx android.BaseModuleContext) {}
+func (libbpf *libbpfProg) ImageMutatorBegin(ctx android.ImageInterfaceContext) {}
 
-func (libbpf *libbpfProg) VendorVariantNeeded(ctx android.BaseModuleContext) bool {
+func (libbpf *libbpfProg) VendorVariantNeeded(ctx android.ImageInterfaceContext) bool {
 	return false
 }
 
-func (libbpf *libbpfProg) ProductVariantNeeded(ctx android.BaseModuleContext) bool {
+func (libbpf *libbpfProg) ProductVariantNeeded(ctx android.ImageInterfaceContext) bool {
 	return false
 }
 
-func (libbpf *libbpfProg) CoreVariantNeeded(ctx android.BaseModuleContext) bool {
+func (libbpf *libbpfProg) CoreVariantNeeded(ctx android.ImageInterfaceContext) bool {
 	return true
 }
 
-func (libbpf *libbpfProg) RamdiskVariantNeeded(ctx android.BaseModuleContext) bool {
+func (libbpf *libbpfProg) RamdiskVariantNeeded(ctx android.ImageInterfaceContext) bool {
 	return false
 }
 
-func (libbpf *libbpfProg) VendorRamdiskVariantNeeded(ctx android.BaseModuleContext) bool {
+func (libbpf *libbpfProg) VendorRamdiskVariantNeeded(ctx android.ImageInterfaceContext) bool {
 	return false
 }
 
-func (libbpf *libbpfProg) DebugRamdiskVariantNeeded(ctx android.BaseModuleContext) bool {
+func (libbpf *libbpfProg) DebugRamdiskVariantNeeded(ctx android.ImageInterfaceContext) bool {
 	return false
 }
 
-func (libbpf *libbpfProg) RecoveryVariantNeeded(ctx android.BaseModuleContext) bool {
+func (libbpf *libbpfProg) RecoveryVariantNeeded(ctx android.ImageInterfaceContext) bool {
 	return false
 }
 
-func (libbpf *libbpfProg) ExtraImageVariations(ctx android.BaseModuleContext) []string {
+func (libbpf *libbpfProg) ExtraImageVariations(ctx android.ImageInterfaceContext) []string {
 	return nil
 }
 
-func (libbpf *libbpfProg) SetImageVariation(ctx android.BaseModuleContext, variation string) {
+func (libbpf *libbpfProg) SetImageVariation(ctx android.ImageInterfaceContext, variation string) {
 }
 
 func (libbpf *libbpfProg) DepsMutator(ctx android.BottomUpMutatorContext) {
 	ctx.AddDependency(ctx.Module(), libbpfProgDepTag, "libbpf_headers")
+	ctx.AddVariationDependencies(nil, cc.HeaderDepTag(), libbpf.properties.Header_libs...)
 }
 
 func (libbpf *libbpfProg) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -179,6 +184,11 @@ func (libbpf *libbpfProg) GenerateAndroidBuildActions(ctx android.ModuleContext)
 			} else {
 				depName := ctx.OtherModuleName(dep)
 				ctx.ModuleErrorf("module %q is not a genrule", depName)
+			}
+		} else if depTag == cc.HeaderDepTag() {
+			depExporterInfo, _ := android.OtherModuleProvider(ctx, dep, cc.FlagExporterInfoProvider)
+			for _, dir := range depExporterInfo.IncludeDirs {
+				cflags = append(cflags, "-I "+dir.String())
 			}
 		}
 	})
@@ -269,10 +279,32 @@ func (libbpf *libbpfProg) AndroidMk() android.AndroidMkData {
 	}
 }
 
+type Defaults struct {
+	android.ModuleBase
+	android.DefaultsModuleBase
+}
+
+func defaultsFactory() android.Module {
+	return DefaultsFactory()
+}
+
+func DefaultsFactory(props ...interface{}) android.Module {
+	module := &Defaults{}
+
+	module.AddProperties(props...)
+	module.AddProperties(&LibbpfProgProperties{})
+
+	android.InitDefaultsModule(module)
+
+	return module
+}
+
 func LibbpfProgFactory() android.Module {
 	module := &libbpfProg{}
 
 	module.AddProperties(&module.properties)
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
+	android.InitDefaultableModule(module)
+
 	return module
 }

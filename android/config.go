@@ -84,7 +84,6 @@ type CmdArgs struct {
 	SoongOutDir    string
 	SoongVariables string
 
-	BazelQueryViewDir string
 	ModuleGraphFile   string
 	ModuleActionsFile string
 	DocFile           string
@@ -98,11 +97,6 @@ type CmdArgs struct {
 const (
 	// Don't use bazel at all during module analysis.
 	AnalysisNoBazel SoongBuildMode = iota
-
-	// Generate BUILD files which faithfully represent the dependency graph of
-	// blueprint modules. Individual BUILD targets will not, however, faitfhully
-	// express build semantics.
-	GenerateQueryView
 
 	// Create a JSON representation of the module graph and exit.
 	GenerateModuleGraph
@@ -238,11 +232,23 @@ func (c Config) ReleaseAconfigFlagDefaultPermission() string {
 	return c.config.productVariables.ReleaseAconfigFlagDefaultPermission
 }
 
+// Enable object size sanitizer
+func (c Config) ReleaseBuildObjectSizeSanitizer() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_BUILD_OBJECT_SIZE_SANITIZER")
+}
+
 // The flag indicating behavior for the tree wrt building modules or using prebuilts
 // derived from RELEASE_DEFAULT_MODULE_BUILD_FROM_SOURCE
 func (c Config) ReleaseDefaultModuleBuildFromSource() bool {
 	return c.config.productVariables.ReleaseDefaultModuleBuildFromSource == nil ||
 		Bool(c.config.productVariables.ReleaseDefaultModuleBuildFromSource)
+}
+
+func (c Config) ReleaseDefaultUpdatableModuleVersion() string {
+	if val, exists := c.GetBuildFlag("RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION"); exists {
+		return val
+	}
+	panic("RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION is missing from build flags.")
 }
 
 func (c Config) ReleaseDisableVerifyOverlaps() bool {
@@ -273,6 +279,10 @@ func (c Config) ReleaseHiddenApiExportableStubs() bool {
 // Enable read flag from new storage
 func (c Config) ReleaseReadFromNewStorage() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_READ_FROM_NEW_STORAGE")
+}
+
+func (c Config) ReleaseCreateAconfigStorageFile() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_CREATE_ACONFIG_STORAGE_FILE")
 }
 
 // A DeviceConfig object represents the configuration for a particular device
@@ -307,6 +317,9 @@ type config struct {
 	BuildOSCommonTarget      Target // the Target for common (java) tools run on the build machine
 	AndroidCommonTarget      Target // the Target for common modules for the Android device
 	AndroidFirstDeviceTarget Target // the first Target for modules for the Android device
+
+	// Flags for Partial Compile, derived from SOONG_PARTIAL_COMPILE.
+	partialCompileFlags partialCompileFlags
 
 	// multilibConflicts for an ArchType is true if there is earlier configured
 	// device architecture with the same multilib value.
@@ -357,6 +370,16 @@ type config struct {
 	ensureAllowlistIntegrity bool
 }
 
+type partialCompileFlags struct {
+	// Is partial compilation enabled at all?
+	enabled bool
+
+	// Whether to use d8 instead of r8
+	use_d8 bool
+
+	// Add others as needed.
+}
+
 type deviceConfig struct {
 	config *config
 	OncePer
@@ -364,6 +387,91 @@ type deviceConfig struct {
 
 type jsonConfigurable interface {
 	SetDefaultConfig()
+}
+
+// Parse SOONG_PARTIAL_COMPILE.
+//
+// SOONG_PARTIAL_COMPILE determines which features are enabled or disabled in
+// rule generation.  Changing this environment variable causes reanalysis.
+//
+// SOONG_USE_PARTIAL_COMPILE determines whether or not we **use** PARTIAL_COMPILE.
+// Rule generation must support both cases, since changing it does not cause
+// reanalysis.
+//
+// The user-facing documentation shows:
+//
+// - empty or not set: "The current default state"
+// - "true" or "on": enable all stable partial compile features.
+// - "false" or "off": disable partial compile completely.
+//
+// What we actually allow is a comma separated list of tokens, whose first
+// character may be "+" (enable) or "-" (disable).  If neither is present, "+"
+// is assumed.  For example, "on,+use_d8" will enable partial compilation, and
+// additionally set the use_d8 flag (regardless of whether it is opt-in or
+// opt-out).
+//
+// To add a new feature to the list, add the field in the struct
+// `partialCompileFlags` above, and then add the name of the field in the
+// switch statement below.
+var defaultPartialCompileFlags = partialCompileFlags{
+	// Set any opt-out flags here.  Opt-in flags are off by default.
+	enabled: false,
+}
+
+func (c *config) parsePartialCompileFlags(isEngBuild bool) (partialCompileFlags, error) {
+	if !isEngBuild {
+		return partialCompileFlags{}, nil
+	}
+	value := c.Getenv("SOONG_PARTIAL_COMPILE")
+	if value == "" {
+		return defaultPartialCompileFlags, nil
+	}
+
+	ret := defaultPartialCompileFlags
+	tokens := strings.Split(strings.ToLower(value), ",")
+	makeVal := func(state string, defaultValue bool) bool {
+		switch state {
+		case "":
+			return defaultValue
+		case "-":
+			return false
+		case "+":
+			return true
+		}
+		return false
+	}
+	for _, tok := range tokens {
+		var state string
+		if len(tok) == 0 {
+			continue
+		}
+		switch tok[0:1] {
+		case "":
+			// Ignore empty tokens.
+			continue
+		case "-", "+":
+			state = tok[0:1]
+			tok = tok[1:]
+		default:
+			// Treat `feature` as `+feature`.
+			state = "+"
+		}
+		switch tok {
+		case "true":
+			ret = defaultPartialCompileFlags
+			ret.enabled = true
+		case "false":
+			// Set everything to false.
+			ret = partialCompileFlags{}
+		case "enabled":
+			ret.enabled = makeVal(state, defaultPartialCompileFlags.enabled)
+		case "use_d8":
+			ret.use_d8 = makeVal(state, defaultPartialCompileFlags.use_d8)
+		default:
+			return partialCompileFlags{}, fmt.Errorf("Unknown SOONG_PARTIAL_COMPILE value: %v", tok)
+		}
+	}
+	return ret, nil
 }
 
 func loadConfig(config *config) error {
@@ -511,6 +619,8 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 
 		buildFromSourceStub: cmdArgs.BuildFromSourceStub,
 	}
+	variant, ok := os.LookupEnv("TARGET_BUILD_VARIANT")
+	isEngBuild := !ok || variant == "eng"
 
 	config.deviceConfig = &deviceConfig{
 		config: config,
@@ -548,6 +658,11 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 	// Sets up the map of target OSes to the finer grained compilation targets
 	// that are configured from the product variables.
 	targets, err := decodeTargetProductVariables(config)
+	if err != nil {
+		return Config{}, err
+	}
+
+	config.partialCompileFlags, err = config.parsePartialCompileFlags(isEngBuild)
 	if err != nil {
 		return Config{}, err
 	}
@@ -600,7 +715,6 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 			config.BuildMode = mode
 		}
 	}
-	setBuildMode(cmdArgs.BazelQueryViewDir, GenerateQueryView)
 	setBuildMode(cmdArgs.ModuleGraphFile, GenerateModuleGraph)
 	setBuildMode(cmdArgs.DocFile, GenerateDocFile)
 
@@ -983,6 +1097,10 @@ func (c *config) DefaultAppTargetSdk(ctx EarlyModuleContext) ApiLevel {
 	return ApiLevelOrPanic(ctx, codename)
 }
 
+func (c *config) PartialCompileFlags() partialCompileFlags {
+	return c.partialCompileFlags
+}
+
 func (c *config) AppsDefaultVersionName() string {
 	return String(c.productVariables.AppsDefaultVersionName)
 }
@@ -1247,7 +1365,7 @@ func (c *config) TidyChecks() string {
 }
 
 func (c *config) LibartImgHostBaseAddress() string {
-	return "0x60000000"
+	return "0x70000000"
 }
 
 func (c *config) LibartImgDeviceBaseAddress() string {
@@ -1273,12 +1391,18 @@ func (c *config) EnforceRROForModule(name string) bool {
 	}
 	return false
 }
+
 func (c *config) EnforceRROExcludedOverlay(path string) bool {
 	excluded := c.productVariables.EnforceRROExcludedOverlays
 	if len(excluded) > 0 {
 		return HasAnyPrefix(path, excluded)
 	}
 	return false
+}
+
+func (c *config) EnforceRROGlobally() bool {
+	enforceList := c.productVariables.EnforceRROTargets
+	return InList("*", enforceList)
 }
 
 func (c *config) ExportedNamespaces() []string {
@@ -1398,6 +1522,10 @@ func (c *deviceConfig) VendorPath() string {
 	return "vendor"
 }
 
+func (c *deviceConfig) BuildingVendorImage() bool {
+	return proptools.Bool(c.config.productVariables.BuildingVendorImage)
+}
+
 func (c *deviceConfig) CurrentApiLevelForVendorModules() string {
 	return StringDefault(c.config.productVariables.DeviceCurrentApiLevelForVendorModules, "current")
 }
@@ -1421,11 +1549,19 @@ func (c *deviceConfig) OdmPath() string {
 	return "odm"
 }
 
+func (c *deviceConfig) BuildingOdmImage() bool {
+	return proptools.Bool(c.config.productVariables.BuildingOdmImage)
+}
+
 func (c *deviceConfig) ProductPath() string {
 	if c.config.productVariables.ProductPath != nil {
 		return *c.config.productVariables.ProductPath
 	}
 	return "product"
+}
+
+func (c *deviceConfig) BuildingProductImage() bool {
+	return proptools.Bool(c.config.productVariables.BuildingProductImage)
 }
 
 func (c *deviceConfig) SystemExtPath() string {
@@ -1684,14 +1820,6 @@ func (c *config) EnforceSystemCertificateAllowList() []string {
 
 func (c *config) EnforceProductPartitionInterface() bool {
 	return Bool(c.productVariables.EnforceProductPartitionInterface)
-}
-
-func (c *config) EnforceInterPartitionJavaSdkLibrary() bool {
-	return Bool(c.productVariables.EnforceInterPartitionJavaSdkLibrary)
-}
-
-func (c *config) InterPartitionJavaLibraryAllowList() []string {
-	return c.productVariables.InterPartitionJavaLibraryAllowList
 }
 
 func (c *config) ProductHiddenAPIStubs() []string {
@@ -1965,6 +2093,10 @@ func (c *config) GetBuildFlag(name string) (string, bool) {
 	return val, ok
 }
 
+func (c *config) UseOptimizedResourceShrinkingByDefault() bool {
+	return c.productVariables.GetBuildFlagBool("RELEASE_USE_OPTIMIZED_RESOURCE_SHRINKING_BY_DEFAULT")
+}
+
 func (c *config) UseResourceProcessorByDefault() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_USE_RESOURCE_PROCESSOR_BY_DEFAULT")
 }
@@ -2072,6 +2204,14 @@ func (c *config) OdmPropFiles(ctx PathContext) Paths {
 	return PathsForSource(ctx, c.productVariables.OdmPropFiles)
 }
 
+func (c *config) VendorPropFiles(ctx PathContext) Paths {
+	return PathsForSource(ctx, c.productVariables.VendorPropFiles)
+}
+
+func (c *config) ExtraAllowedDepsTxt() string {
+	return String(c.productVariables.ExtraAllowedDepsTxt)
+}
+
 func (c *config) EnableUffdGc() string {
 	return String(c.productVariables.EnableUffdGc)
 }
@@ -2090,4 +2230,35 @@ func (c *config) BoardAvbEnable() bool {
 
 func (c *config) BoardAvbSystemAddHashtreeFooterArgs() []string {
 	return c.productVariables.BoardAvbSystemAddHashtreeFooterArgs
+}
+
+// Returns true if RELEASE_INSTALL_APEX_SYSTEMSERVER_DEXPREOPT_SAME_PARTITION is set to true.
+// If true, dexpreopt files of apex system server jars will be installed in the same partition as the parent apex.
+// If false, all these files will be installed in /system partition.
+func (c Config) InstallApexSystemServerDexpreoptSamePartition() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_INSTALL_APEX_SYSTEMSERVER_DEXPREOPT_SAME_PARTITION")
+}
+
+func (c *config) DeviceMatrixFile() []string {
+	return c.productVariables.DeviceMatrixFile
+}
+
+func (c *config) ProductManifestFiles() []string {
+	return c.productVariables.ProductManifestFiles
+}
+
+func (c *config) SystemManifestFile() []string {
+	return c.productVariables.SystemManifestFile
+}
+
+func (c *config) SystemExtManifestFiles() []string {
+	return c.productVariables.SystemExtManifestFiles
+}
+
+func (c *config) DeviceManifestFiles() []string {
+	return c.productVariables.DeviceManifestFiles
+}
+
+func (c *config) OdmManifestFiles() []string {
+	return c.productVariables.OdmManifestFiles
 }

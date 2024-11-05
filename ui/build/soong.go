@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"android/soong/ui/tracer"
@@ -51,7 +52,6 @@ const (
 
 	soongBuildTag      = "build"
 	jsonModuleGraphTag = "modulegraph"
-	queryviewTag       = "queryview"
 	soongDocsTag       = "soong_docs"
 
 	// bootstrapEpoch is used to determine if an incremental build is incompatible with the current
@@ -287,6 +287,15 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	ctx.BeginTrace(metrics.RunSoong, "blueprint bootstrap")
 	defer ctx.EndTrace()
 
+	st := ctx.Status.StartTool()
+	defer st.Finish()
+	st.SetTotalActions(1)
+	action := &status.Action{
+		Description: "bootstrap blueprint",
+		Outputs:     []string{"bootstrap blueprint"},
+	}
+	st.StartAction(action)
+
 	// Clean up some files for incremental builds across incompatible changes.
 	bootstrapEpochCleanup(ctx, config)
 
@@ -306,8 +315,6 @@ func bootstrapBlueprint(ctx Context, config Config) {
 		mainSoongBuildExtraArgs = append(mainSoongBuildExtraArgs, "--incremental-build-actions")
 	}
 
-	queryviewDir := filepath.Join(config.SoongOutDir(), "queryview")
-
 	pbfs := []PrimaryBuilderFactory{
 		{
 			name:         soongBuildTag,
@@ -324,15 +331,6 @@ func bootstrapBlueprint(ctx Context, config Config) {
 			specificArgs: append(baseArgs,
 				"--module_graph_file", config.ModuleGraphFile(),
 				"--module_actions_file", config.ModuleActionsFile(),
-			),
-		},
-		{
-			name:        queryviewTag,
-			description: fmt.Sprintf("generating the Soong module graph as a Bazel workspace at %s", queryviewDir),
-			config:      config,
-			output:      config.QueryviewMarkerFile(),
-			specificArgs: append(baseArgs,
-				"--bazel_queryview_dir", queryviewDir,
 			),
 		},
 		{
@@ -406,8 +404,17 @@ func bootstrapBlueprint(ctx Context, config Config) {
 	// since `bootstrap.ninja` is regenerated unconditionally, we ignore the deps, i.e. little
 	// reason to write a `bootstrap.ninja.d` file
 	_, err := bootstrap.RunBlueprint(blueprintArgs, bootstrap.DoEverything, blueprintCtx, blueprintConfig)
+
+	result := status.ActionResult{
+		Action: action,
+	}
 	if err != nil {
-		ctx.Fatal(err)
+		result.Error = err
+		result.Output = err.Error()
+	}
+	st.FinishAction(result)
+	if err != nil {
+		ctx.Fatalf("bootstrap failed")
 	}
 }
 
@@ -571,10 +578,6 @@ func runSoong(ctx Context, config Config) {
 			checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(jsonModuleGraphTag))
 		}
 
-		if config.Queryview() {
-			checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(queryviewTag))
-		}
-
 		if config.SoongDocs() {
 			checkEnvironmentFile(ctx, soongBuildEnv, config.UsedEnvFile(soongDocsTag))
 		}
@@ -669,10 +672,6 @@ func runSoong(ctx Context, config Config) {
 		targets = append(targets, config.ModuleGraphFile())
 	}
 
-	if config.Queryview() {
-		targets = append(targets, config.QueryviewMarkerFile())
-	}
-
 	if config.SoongDocs() {
 		targets = append(targets, config.SoongDocsHtml())
 	}
@@ -765,7 +764,11 @@ func checkGlobs(ctx Context, finalOutFile string) error {
 	globsChan := make(chan pathtools.GlobResult)
 	errorsChan := make(chan error)
 	wg := sync.WaitGroup{}
+
 	hasChangedGlobs := false
+	var changedGlobNameMutex sync.Mutex
+	var changedGlobName string
+
 	for i := 0; i < runtime.NumCPU()*2; i++ {
 		wg.Add(1)
 		go func() {
@@ -780,7 +783,7 @@ func checkGlobs(ctx Context, finalOutFile string) error {
 				hasNewDep := false
 				for _, dep := range cachedGlob.Deps {
 					info, err := os.Stat(dep)
-					if errors.Is(err, fs.ErrNotExist) {
+					if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 						hasNewDep = true
 						break
 					} else if err != nil {
@@ -803,6 +806,15 @@ func checkGlobs(ctx Context, finalOutFile string) error {
 				} else {
 					if !slices.Equal(result.Matches, cachedGlob.Matches) {
 						hasChangedGlobs = true
+
+						changedGlobNameMutex.Lock()
+						defer changedGlobNameMutex.Unlock()
+						changedGlobName = result.Pattern
+						if len(result.Excludes) > 2 {
+							changedGlobName += fmt.Sprintf(" (excluding %d other patterns)", len(result.Excludes))
+						} else if len(result.Excludes) > 0 {
+							changedGlobName += " (excluding " + strings.Join(result.Excludes, " and ") + ")"
+						}
 					}
 				}
 			}
@@ -854,6 +866,7 @@ func checkGlobs(ctx Context, finalOutFile string) error {
 
 	if hasChangedGlobs {
 		fmt.Fprintf(os.Stdout, "Globs changed, rerunning soong...\n")
+		fmt.Fprintf(os.Stdout, "One culprit glob (may be more): %s\n", changedGlobName)
 		// Write the current time to the glob_results file. We just need
 		// some unique value to trigger a rerun, it doesn't matter what it is.
 		err = os.WriteFile(

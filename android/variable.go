@@ -29,7 +29,7 @@ func init() {
 
 func registerVariableBuildComponents(ctx RegistrationContext) {
 	ctx.PreDepsMutators(func(ctx RegisterMutatorsContext) {
-		ctx.BottomUp("variable", VariableMutator).Parallel()
+		ctx.BottomUp("variable", VariableMutator)
 	})
 }
 
@@ -193,6 +193,9 @@ type variableProperties struct {
 			Required               []string
 			Vintf_fragment_modules []string
 		}
+		SelinuxIgnoreNeverallows struct {
+			Required []string
+		}
 	} `android:"arch_variant"`
 }
 
@@ -212,6 +215,7 @@ type ProductVariables struct {
 	Platform_display_version_name          *string  `json:",omitempty"`
 	Platform_version_name                  *string  `json:",omitempty"`
 	Platform_sdk_version                   *int     `json:",omitempty"`
+	Platform_sdk_minor_version             *int     `json:",omitempty"`
 	Platform_sdk_codename                  *string  `json:",omitempty"`
 	Platform_sdk_version_or_codename       *string  `json:",omitempty"`
 	Platform_sdk_final                     *bool    `json:",omitempty"`
@@ -238,7 +242,8 @@ type ProductVariables struct {
 	DeviceMaxPageSizeSupported            *string  `json:",omitempty"`
 	DeviceNoBionicPageSizeMacro           *bool    `json:",omitempty"`
 
-	VendorApiLevel *string `json:",omitempty"`
+	VendorApiLevel             *string `json:",omitempty"`
+	VendorApiLevelPropOverride *string `json:",omitempty"`
 
 	DeviceSecondaryArch        *string  `json:",omitempty"`
 	DeviceSecondaryArchVariant *string  `json:",omitempty"`
@@ -334,10 +339,13 @@ type ProductVariables struct {
 	HWASanIncludePaths []string `json:",omitempty"`
 	HWASanExcludePaths []string `json:",omitempty"`
 
-	VendorPath    *string `json:",omitempty"`
-	OdmPath       *string `json:",omitempty"`
-	ProductPath   *string `json:",omitempty"`
-	SystemExtPath *string `json:",omitempty"`
+	VendorPath           *string `json:",omitempty"`
+	BuildingVendorImage  *bool   `json:",omitempty"`
+	OdmPath              *string `json:",omitempty"`
+	BuildingOdmImage     *bool   `json:",omitempty"`
+	ProductPath          *string `json:",omitempty"`
+	BuildingProductImage *bool   `json:",omitempty"`
+	SystemExtPath        *string `json:",omitempty"`
 
 	ClangTidy  *bool   `json:",omitempty"`
 	TidyChecks *string `json:",omitempty"`
@@ -428,9 +436,6 @@ type ProductVariables struct {
 
 	EnforceProductPartitionInterface *bool `json:",omitempty"`
 
-	EnforceInterPartitionJavaSdkLibrary *bool    `json:",omitempty"`
-	InterPartitionJavaLibraryAllowList  []string `json:",omitempty"`
-
 	BoardUsesRecoveryAsBoot *bool `json:",omitempty"`
 
 	BoardKernelBinaries                []string `json:",omitempty"`
@@ -478,6 +483,8 @@ type ProductVariables struct {
 
 	ProductManufacturer string `json:",omitempty"`
 	ProductBrand        string `json:",omitempty"`
+	ProductDevice       string `json:",omitempty"`
+	ProductModel        string `json:",omitempty"`
 
 	ReleaseVersion          string   `json:",omitempty"`
 	ReleaseAconfigValueSets []string `json:",omitempty"`
@@ -516,6 +523,7 @@ type ProductVariables struct {
 	SystemExtPropFiles []string `json:",omitempty"`
 	ProductPropFiles   []string `json:",omitempty"`
 	OdmPropFiles       []string `json:",omitempty"`
+	VendorPropFiles    []string `json:",omitempty"`
 
 	EnableUffdGc *string `json:",omitempty"`
 
@@ -523,6 +531,19 @@ type ProductVariables struct {
 	BoardAvbSystemAddHashtreeFooterArgs    []string `json:",omitempty"`
 	DeviceFrameworkCompatibilityMatrixFile []string `json:",omitempty"`
 	DeviceProductCompatibilityMatrixFile   []string `json:",omitempty"`
+
+	PartitionVarsForSoongMigrationOnlyDoNotUse PartitionVariables
+
+	ExtraAllowedDepsTxt *string `json:",omitempty"`
+
+	AdbKeys *string `json:",omitempty"`
+
+	DeviceMatrixFile       []string `json:",omitempty"`
+	ProductManifestFiles   []string `json:",omitempty"`
+	SystemManifestFile     []string `json:",omitempty"`
+	SystemExtManifestFiles []string `json:",omitempty"`
+	DeviceManifestFiles    []string `json:",omitempty"`
+	OdmManifestFiles       []string `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {
@@ -579,7 +600,15 @@ type PartitionVariables struct {
 
 	BoardAvbEnable bool `json:",omitempty"`
 
-	ProductPackages []string `json:",omitempty"`
+	ProductPackages         []string `json:",omitempty"`
+	ProductPackagesDebug    []string `json:",omitempty"`
+	VendorLinkerConfigSrcs  []string `json:",omitempty"`
+	ProductLinkerConfigSrcs []string `json:",omitempty"`
+
+	ProductCopyFiles map[string]string `json:",omitempty"`
+
+	BuildingSystemDlkmImage bool     `json:",omitempty"`
+	SystemKernelModules     []string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
