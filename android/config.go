@@ -867,7 +867,7 @@ func (c *config) IsEnvFalse(key string) bool {
 }
 
 func (c *config) TargetsJava21() bool {
-	return c.IsEnvTrue("EXPERIMENTAL_TARGET_JAVA_VERSION_21")
+	return c.productVariables.GetBuildFlagBool("RELEASE_TARGET_JAVA_21")
 }
 
 // EnvDeps returns the environment variables this build depends on. The first
