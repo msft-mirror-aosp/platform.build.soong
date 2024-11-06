@@ -196,6 +196,9 @@ type ModuleContext interface {
 	InstallInOdm() bool
 	InstallInProduct() bool
 	InstallInVendor() bool
+	InstallInSystemDlkm() bool
+	InstallInVendorDlkm() bool
+	InstallInOdmDlkm() bool
 	InstallForceOS() (*OsType, *ArchType)
 
 	RequiredModuleNames(ctx ConfigurableEvaluatorContext) []string
@@ -491,6 +494,18 @@ func (m *moduleContext) InstallInProduct() bool {
 
 func (m *moduleContext) InstallInVendor() bool {
 	return m.module.InstallInVendor()
+}
+
+func (m *moduleContext) InstallInSystemDlkm() bool {
+	return m.module.InstallInSystemDlkm()
+}
+
+func (m *moduleContext) InstallInVendorDlkm() bool {
+	return m.module.InstallInVendorDlkm()
+}
+
+func (m *moduleContext) InstallInOdmDlkm() bool {
+	return m.module.InstallInOdmDlkm()
 }
 
 func (m *moduleContext) skipInstall() bool {
