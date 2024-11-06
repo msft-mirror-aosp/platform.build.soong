@@ -205,23 +205,7 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 	}
 	module.HideFromMake()
 	if partitionType == "vendor" {
-		// Create a build prop for vendor
-		vendorBuildProps := &struct {
-			Name           *string
-			Vendor         *bool
-			Stem           *string
-			Product_config *string
-		}{
-			Name:           proptools.StringPtr(generatedModuleName(ctx.Config(), "vendor-build.prop")),
-			Vendor:         proptools.BoolPtr(true),
-			Stem:           proptools.StringPtr("build.prop"),
-			Product_config: proptools.StringPtr(":product_config"),
-		}
-		vendorBuildProp := ctx.CreateModule(
-			android.BuildPropFactory,
-			vendorBuildProps,
-		)
-		vendorBuildProp.HideFromMake()
+		f.createVendorBuildProp(ctx)
 	}
 	return true
 }
@@ -259,6 +243,50 @@ func (f *filesystemCreator) createPrebuiltKernelModules(ctx android.LoadHookCont
 		// Add to deps
 		(*fsGenState.fsDeps[partitionType])[name] = defaultDepCandidateProps(ctx.Config())
 	}
+}
+
+// Create a build_prop and android_info module. This will be used to create /vendor/build.prop
+func (f *filesystemCreator) createVendorBuildProp(ctx android.LoadHookContext) {
+	// Create a android_info for vendor
+	// The board info files might be in a directory outside the root soong namespace, so create
+	// the module in "."
+	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
+	androidInfoProps := &struct {
+		Name                  *string
+		Board_info_files      []string
+		Bootloader_board_name *string
+	}{
+		Name:             proptools.StringPtr(generatedModuleName(ctx.Config(), "android-info.prop")),
+		Board_info_files: partitionVars.BoardInfoFiles,
+	}
+	if len(androidInfoProps.Board_info_files) == 0 {
+		androidInfoProps.Bootloader_board_name = proptools.StringPtr(partitionVars.BootLoaderBoardName)
+	}
+	androidInfoProp := ctx.CreateModuleInDirectory(
+		android.AndroidInfoFactory,
+		".",
+		androidInfoProps,
+	)
+	androidInfoProp.HideFromMake()
+	// Create a build prop for vendor
+	vendorBuildProps := &struct {
+		Name           *string
+		Vendor         *bool
+		Stem           *string
+		Product_config *string
+		Android_info   *string
+	}{
+		Name:           proptools.StringPtr(generatedModuleName(ctx.Config(), "vendor-build.prop")),
+		Vendor:         proptools.BoolPtr(true),
+		Stem:           proptools.StringPtr("build.prop"),
+		Product_config: proptools.StringPtr(":product_config"),
+		Android_info:   proptools.StringPtr(":" + androidInfoProp.Name()),
+	}
+	vendorBuildProp := ctx.CreateModule(
+		android.BuildPropFactory,
+		vendorBuildProps,
+	)
+	vendorBuildProp.HideFromMake()
 }
 
 // createLinkerConfigSourceFilegroups creates filegroup modules to generate linker.config.pb for the following partitions
