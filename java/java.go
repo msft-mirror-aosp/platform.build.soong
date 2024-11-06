@@ -1610,6 +1610,8 @@ func (j *Test) generateAndroidBuildActionsWithConfig(ctx android.ModuleContext, 
 		j.data = append(j.data, android.OutputFileForModule(ctx, dep, ""))
 	})
 
+	var directImplementationDeps android.Paths
+	var transitiveImplementationDeps []depset.DepSet[android.Path]
 	ctx.VisitDirectDepsWithTag(jniLibTag, func(dep android.Module) {
 		sharedLibInfo, _ := android.OtherModuleProvider(ctx, dep, cc.SharedLibraryInfoProvider)
 		if sharedLibInfo.SharedLibrary != nil {
@@ -1628,9 +1630,18 @@ func (j *Test) generateAndroidBuildActionsWithConfig(ctx android.ModuleContext, 
 				Output: relocatedLib,
 			})
 			j.data = append(j.data, relocatedLib)
+
+			directImplementationDeps = append(directImplementationDeps, android.OutputFileForModule(ctx, dep, ""))
+			if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
+				transitiveImplementationDeps = append(transitiveImplementationDeps, info.ImplementationDeps)
+			}
 		} else {
 			ctx.PropertyErrorf("jni_libs", "%q of type %q is not supported", dep.Name(), ctx.OtherModuleType(dep))
 		}
+	})
+
+	android.SetProvider(ctx, cc.ImplementationDepInfoProvider, &cc.ImplementationDepInfo{
+		ImplementationDeps: depset.New(depset.PREORDER, directImplementationDeps, transitiveImplementationDeps),
 	})
 
 	j.Library.GenerateAndroidBuildActions(ctx)
