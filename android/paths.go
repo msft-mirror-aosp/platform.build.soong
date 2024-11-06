@@ -117,6 +117,9 @@ type ModuleInstallPathContext interface {
 	InstallInOdm() bool
 	InstallInProduct() bool
 	InstallInVendor() bool
+	InstallInSystemDlkm() bool
+	InstallInVendorDlkm() bool
+	InstallInOdmDlkm() bool
 	InstallForceOS() (*OsType, *ArchType)
 }
 
@@ -168,6 +171,18 @@ func (ctx *baseModuleContextToModuleInstallPathContext) InstallInProduct() bool 
 
 func (ctx *baseModuleContextToModuleInstallPathContext) InstallInVendor() bool {
 	return ctx.Module().InstallInVendor()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInSystemDlkm() bool {
+	return ctx.Module().InstallInSystemDlkm()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInVendorDlkm() bool {
+	return ctx.Module().InstallInVendorDlkm()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInOdmDlkm() bool {
+	return ctx.Module().InstallInOdmDlkm()
 }
 
 func (ctx *baseModuleContextToModuleInstallPathContext) InstallForceOS() (*OsType, *ArchType) {
@@ -2131,6 +2146,12 @@ func modulePartition(ctx ModuleInstallPathContext, device bool) string {
 			partition = ctx.DeviceConfig().SystemExtPath()
 		} else if ctx.InstallInRoot() {
 			partition = "root"
+		} else if ctx.InstallInSystemDlkm() {
+			partition = ctx.DeviceConfig().SystemDlkmPath()
+		} else if ctx.InstallInVendorDlkm() {
+			partition = ctx.DeviceConfig().VendorDlkmPath()
+		} else if ctx.InstallInOdmDlkm() {
+			partition = ctx.DeviceConfig().OdmDlkmPath()
 		} else {
 			partition = "system"
 		}
@@ -2334,6 +2355,9 @@ type testModuleInstallPathContext struct {
 	inOdm           bool
 	inProduct       bool
 	inVendor        bool
+	inSystemDlkm    bool
+	inVendorDlkm    bool
+	inOdmDlkm       bool
 	forceOS         *OsType
 	forceArch       *ArchType
 }
@@ -2386,6 +2410,18 @@ func (m testModuleInstallPathContext) InstallInProduct() bool {
 
 func (m testModuleInstallPathContext) InstallInVendor() bool {
 	return m.inVendor
+}
+
+func (m testModuleInstallPathContext) InstallInSystemDlkm() bool {
+	return m.inSystemDlkm
+}
+
+func (m testModuleInstallPathContext) InstallInVendorDlkm() bool {
+	return m.inVendorDlkm
+}
+
+func (m testModuleInstallPathContext) InstallInOdmDlkm() bool {
+	return m.inOdmDlkm
 }
 
 func (m testModuleInstallPathContext) InstallForceOS() (*OsType, *ArchType) {
