@@ -1822,6 +1822,8 @@ type CommonPropertiesProviderData struct {
 	Enabled bool
 	// Whether the module has been replaced by a prebuilt
 	ReplacedByPrebuilt bool
+	// The Target of artifacts that this module variant is responsible for creating.
+	CompileTarget Target
 }
 
 var CommonPropertiesProviderKey = blueprint.NewProvider[CommonPropertiesProviderData]()
@@ -2086,6 +2088,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 
 	commonData := CommonPropertiesProviderData{
 		ReplacedByPrebuilt: m.commonProperties.ReplacedByPrebuilt,
+		CompileTarget:      m.commonProperties.CompileTarget,
 	}
 	if m.commonProperties.ForcedDisabled {
 		commonData.Enabled = false
