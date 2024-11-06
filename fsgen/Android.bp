@@ -14,6 +14,8 @@ bootstrap_go_package {
     ],
     srcs: [
         "filesystem_creator.go",
+        "fsgen_mutators.go",
+        "prebuilt_etc_modules_gen.go",
     ],
     testSrcs: [
         "filesystem_creator_test.go",
