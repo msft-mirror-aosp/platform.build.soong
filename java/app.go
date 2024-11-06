@@ -1361,7 +1361,7 @@ func AndroidAppFactory() android.Module {
 			Filter_product *string
 			Aaptflags      []string
 			Manifest       *string
-			Resource_dirs  []string
+			Resource_dirs  proptools.Configurable[[]string]
 			Flags_packages []string
 		}{
 			Name:           proptools.StringPtr(rroPackageName),
