@@ -334,6 +334,8 @@ func createPrebuiltEtcBpDefineRule() Rule {
 			"prebuilt_res",
 			"prebuilt_wlc_upt",
 			"prebuilt_odm",
+			"prebuilt_vendor_dlkm",
+			"prebuilt_bt_firmware",
 		).
 		DefinedInBpFile().
 		Because("module type not allowed to be defined in bp file")
