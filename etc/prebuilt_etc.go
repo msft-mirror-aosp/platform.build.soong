@@ -135,15 +135,6 @@ type prebuiltEtcProperties struct {
 	// Install symlinks to the installed file.
 	Symlinks []string `android:"arch_variant"`
 
-	// Install to partition system_dlkm when set to true.
-	System_dlkm_specific *bool `android:"arch_variant"`
-
-	// Install to partition vendor_dlkm when set to true.
-	Vendor_dlkm_specific *bool `android:"arch_variant"`
-
-	// Install to partition odm_dlkm when set to true.
-	Odm_dlkm_specific *bool `android:"arch_variant"`
-
 	// Install to partition oem when set to true.
 	Oem_specific *bool `android:"arch_variant"`
 }
@@ -384,13 +375,7 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	baseInstallDirPath := android.PathForModuleInstall(ctx, p.installBaseDir(ctx), p.SubDir())
 	// TODO(b/377304441)
-	if android.Bool(p.properties.System_dlkm_specific) {
-		baseInstallDirPath = android.PathForModuleInPartitionInstall(ctx, ctx.DeviceConfig().SystemDlkmPath(), p.installBaseDir(ctx), p.SubDir())
-	} else if android.Bool(p.properties.Vendor_dlkm_specific) {
-		baseInstallDirPath = android.PathForModuleInPartitionInstall(ctx, ctx.DeviceConfig().VendorDlkmPath(), p.installBaseDir(ctx), p.SubDir())
-	} else if android.Bool(p.properties.Odm_dlkm_specific) {
-		baseInstallDirPath = android.PathForModuleInPartitionInstall(ctx, ctx.DeviceConfig().OdmDlkmPath(), p.installBaseDir(ctx), p.SubDir())
-	} else if android.Bool(p.properties.Oem_specific) {
+	if android.Bool(p.properties.Oem_specific) {
 		baseInstallDirPath = android.PathForModuleInPartitionInstall(ctx, ctx.DeviceConfig().OemPath(), p.installBaseDir(ctx), p.SubDir())
 	}
 
