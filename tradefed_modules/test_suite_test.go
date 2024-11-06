@@ -21,7 +21,7 @@ import (
 
 func TestTestSuites(t *testing.T) {
 	t.Parallel()
-	android.GroupFixturePreparers(
+	ctx := android.GroupFixturePreparers(
 		java.PrepareForTestWithJavaDefaultModules,
 		android.FixtureRegisterWithContext(RegisterTestSuiteBuildComponents),
 	).RunTestWithBp(t, `
@@ -44,4 +44,10 @@ func TestTestSuites(t *testing.T) {
 			]
 		}
 	`)
+	manifestPath := ctx.ModuleForTests("my-suite", "").Output("out/soong/test_suites/my-suite/my-suite.json")
+	got := android.ContentFromFileRuleForTests(t, ctx.TestContext, manifestPath)
+	want := `{"name": "my-suite"}` + "\n"
+	if got != want {
+		t.Errorf("my-suite.json content was %q, want %q", got, want)
+	}
 }

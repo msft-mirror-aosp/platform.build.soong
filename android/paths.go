@@ -2057,6 +2057,10 @@ func PathForMainlineSdksInstall(ctx PathContext, paths ...string) InstallPath {
 	return base.Join(ctx, paths...)
 }
 
+func PathForSuiteInstall(ctx PathContext, suite string, pathComponents ...string) InstallPath {
+	return pathForPartitionInstallDir(ctx, "test_suites", "test_suites", false).Join(ctx, suite).Join(ctx, pathComponents...)
+}
+
 func InstallPathToOnDevicePath(ctx PathContext, path InstallPath) string {
 	rel := Rel(ctx, strings.TrimSuffix(path.PartitionDir(), path.partition), path.String())
 	return "/" + rel
