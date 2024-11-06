@@ -870,28 +870,6 @@ func (i ApexMembership) merge(other ApexMembership) ApexMembership {
 	return notInApex
 }
 
-// Tests whether a module named moduleName is directly included in the apexBundle where this
-// ApexContents is tagged.
-func (ac *ApexContents) DirectlyInApex(moduleName string) bool {
-	return ac.contents[moduleName] == directlyInApex
-}
-
-// Tests whether a module named moduleName is included in the apexBundle where this ApexContent is
-// tagged.
-func (ac *ApexContents) InApex(moduleName string) bool {
-	return ac.contents[moduleName] != notInApex
-}
-
-// Tests whether a module named moduleName is directly depended on by all APEXes in an ApexInfo.
-func DirectlyInAllApexes(apexInfo ApexInfo, moduleName string) bool {
-	for _, contents := range apexInfo.ApexContents {
-		if !contents.DirectlyInApex(moduleName) {
-			return false
-		}
-	}
-	return true
-}
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 //Below are routines for extra safety checks.
 //
