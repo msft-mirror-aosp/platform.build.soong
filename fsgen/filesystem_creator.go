@@ -136,6 +136,26 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 			"framework/oat/*/*", // framework/oat/{arch}
 		}
 		fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
+		// TODO(b/377734331): only generate the symlinks if the relevant partitions exist
+		fsProps.Symlinks = []filesystem.SymlinkDefinition{
+			filesystem.SymlinkDefinition{
+				Target: proptools.StringPtr("/product"),
+				Name:   proptools.StringPtr("system/product"),
+			},
+			filesystem.SymlinkDefinition{
+				Target: proptools.StringPtr("/system_ext"),
+				Name:   proptools.StringPtr("system/system_ext"),
+			},
+			filesystem.SymlinkDefinition{
+				Target: proptools.StringPtr("/vendor"),
+				Name:   proptools.StringPtr("system/vendor"),
+			},
+			filesystem.SymlinkDefinition{
+				Target: proptools.StringPtr("/system_dlkm/lib/modules"),
+				Name:   proptools.StringPtr("system/lib/modules"),
+			},
+		}
+		fsProps.Base_dir = proptools.StringPtr("system")
 	case "system_ext":
 		fsProps.Fsverity.Inputs = []string{
 			"framework/*",
