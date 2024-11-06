@@ -1549,6 +1549,10 @@ func (c *deviceConfig) OdmPath() string {
 	return "odm"
 }
 
+func (c *deviceConfig) BuildingOdmImage() bool {
+	return proptools.Bool(c.config.productVariables.BuildingOdmImage)
+}
+
 func (c *deviceConfig) ProductPath() string {
 	if c.config.productVariables.ProductPath != nil {
 		return *c.config.productVariables.ProductPath
@@ -2233,4 +2237,28 @@ func (c *config) BoardAvbSystemAddHashtreeFooterArgs() []string {
 // If false, all these files will be installed in /system partition.
 func (c Config) InstallApexSystemServerDexpreoptSamePartition() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_INSTALL_APEX_SYSTEMSERVER_DEXPREOPT_SAME_PARTITION")
+}
+
+func (c *config) DeviceMatrixFile() []string {
+	return c.productVariables.DeviceMatrixFile
+}
+
+func (c *config) ProductManifestFiles() []string {
+	return c.productVariables.ProductManifestFiles
+}
+
+func (c *config) SystemManifestFile() []string {
+	return c.productVariables.SystemManifestFile
+}
+
+func (c *config) SystemExtManifestFiles() []string {
+	return c.productVariables.SystemExtManifestFiles
+}
+
+func (c *config) DeviceManifestFiles() []string {
+	return c.productVariables.DeviceManifestFiles
+}
+
+func (c *config) OdmManifestFiles() []string {
+	return c.productVariables.OdmManifestFiles
 }
