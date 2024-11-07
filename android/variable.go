@@ -577,6 +577,14 @@ type PartitionQualifiedVariablesType struct {
 	BoardAvbRollbackIndexLocation string `json:",omitempty"`
 }
 
+type ChainedAvbPartitionProps struct {
+	Partitions            []string `json:",omitempty"`
+	Key                   string   `json:",omitempty"`
+	Algorithm             string   `json:",omitempty"`
+	RollbackIndex         string   `json:",omitempty"`
+	RollbackIndexLocation string   `json:",omitempty"`
+}
+
 type PartitionVariables struct {
 	ProductDirectory            string `json:",omitempty"`
 	PartitionQualifiedVariables map[string]PartitionQualifiedVariablesType
@@ -601,7 +609,12 @@ type PartitionVariables struct {
 	ProductUseDynamicPartitionSize bool   `json:",omitempty"`
 	CopyImagesForTargetFilesZip    bool   `json:",omitempty"`
 
-	BoardAvbEnable bool `json:",omitempty"`
+	BoardAvbEnable          bool                                `json:",omitempty"`
+	BoardAvbAlgorithm       string                              `json:",omitempty"`
+	BoardAvbKeyPath         string                              `json:",omitempty"`
+	BoardAvbRollbackIndex   string                              `json:",omitempty"`
+	BuildingVbmetaImage     bool                                `json:",omitempty"`
+	ChainedVbmetaPartitions map[string]ChainedAvbPartitionProps `json:",omitempty"`
 
 	ProductPackages         []string `json:",omitempty"`
 	ProductPackagesDebug    []string `json:",omitempty"`
