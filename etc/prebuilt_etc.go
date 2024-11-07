@@ -76,6 +76,8 @@ func RegisterPrebuiltEtcBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("prebuilt_res", PrebuiltResFactory)
 	ctx.RegisterModuleType("prebuilt_wlc_upt", PrebuiltWlcUptFactory)
 	ctx.RegisterModuleType("prebuilt_odm", PrebuiltOdmFactory)
+	ctx.RegisterModuleType("prebuilt_vendor_dlkm", PrebuiltVendorDlkmFactory)
+	ctx.RegisterModuleType("prebuilt_bt_firmware", PrebuiltBtFirmwareFactory)
 
 	ctx.RegisterModuleType("prebuilt_defaults", defaultsFactory)
 
@@ -132,6 +134,18 @@ type prebuiltEtcProperties struct {
 
 	// Install symlinks to the installed file.
 	Symlinks []string `android:"arch_variant"`
+
+	// Install to partition system_dlkm when set to true.
+	System_dlkm_specific *bool `android:"arch_variant"`
+
+	// Install to partition vendor_dlkm when set to true.
+	Vendor_dlkm_specific *bool `android:"arch_variant"`
+
+	// Install to partition odm_dlkm when set to true.
+	Odm_dlkm_specific *bool `android:"arch_variant"`
+
+	// Install to partition oem when set to true.
+	Oem_specific *bool `android:"arch_variant"`
 }
 
 type prebuiltSubdirProperties struct {
@@ -369,6 +383,16 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		ctx.PropertyErrorf("sub_dir", "relative_install_path is set. Cannot set sub_dir")
 	}
 	baseInstallDirPath := android.PathForModuleInstall(ctx, p.installBaseDir(ctx), p.SubDir())
+	// TODO(b/377304441)
+	if android.Bool(p.properties.System_dlkm_specific) {
+		baseInstallDirPath = android.PathForModuleInPartitionInstall(ctx, ctx.DeviceConfig().SystemDlkmPath(), p.installBaseDir(ctx), p.SubDir())
+	} else if android.Bool(p.properties.Vendor_dlkm_specific) {
+		baseInstallDirPath = android.PathForModuleInPartitionInstall(ctx, ctx.DeviceConfig().VendorDlkmPath(), p.installBaseDir(ctx), p.SubDir())
+	} else if android.Bool(p.properties.Odm_dlkm_specific) {
+		baseInstallDirPath = android.PathForModuleInPartitionInstall(ctx, ctx.DeviceConfig().OdmDlkmPath(), p.installBaseDir(ctx), p.SubDir())
+	} else if android.Bool(p.properties.Oem_specific) {
+		baseInstallDirPath = android.PathForModuleInPartitionInstall(ctx, ctx.DeviceConfig().OemPath(), p.installBaseDir(ctx), p.SubDir())
+	}
 
 	filename := proptools.String(p.properties.Filename)
 	filenameFromSrc := proptools.Bool(p.properties.Filename_from_src)
@@ -905,6 +929,26 @@ func PrebuiltWlcUptFactory() android.Module {
 func PrebuiltOdmFactory() android.Module {
 	module := &PrebuiltEtc{}
 	InitPrebuiltEtcModule(module, "odm")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_vendor_dlkm installs files in <partition>/vendor_dlkm directory.
+func PrebuiltVendorDlkmFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "vendor_dlkm")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_bt_firmware installs files in <partition>/bt_firmware directory.
+func PrebuiltBtFirmwareFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "bt_firmware")
 	// This module is device-only
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
