@@ -20,10 +20,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
@@ -456,6 +458,12 @@ type apexBundle struct {
 	// List of files to be included in this APEX. This is filled in the first part of
 	// GenerateAndroidBuildActions.
 	filesInfo []apexFile
+
+	// List of files that were excluded by the unwanted_transitive_deps property.
+	unwantedTransitiveFilesInfo []apexFile
+
+	// List of files that were excluded due to conflicts with other variants of the same module.
+	duplicateTransitiveFilesInfo []apexFile
 
 	// List of other module names that should be installed when this APEX gets installed (LOCAL_REQUIRED_MODULES).
 	makeModulesToInstall []string
@@ -1865,6 +1873,14 @@ type visitorContext struct {
 
 	// visitor skips these from this list of module names
 	unwantedTransitiveDeps []string
+
+	// unwantedTransitiveFilesInfo contains files that would have been in the apex
+	// except that they were listed in unwantedTransitiveDeps.
+	unwantedTransitiveFilesInfo []apexFile
+
+	// duplicateTransitiveFilesInfo contains files that would ahve been in the apex
+	// except that another variant of the same module was already in the apex.
+	duplicateTransitiveFilesInfo []apexFile
 }
 
 func (vctx *visitorContext) normalizeFileInfo(mctx android.ModuleContext) {
@@ -1875,6 +1891,7 @@ func (vctx *visitorContext) normalizeFileInfo(mctx android.ModuleContext) {
 		// Needs additional verification for the resulting APEX to ensure that skipped artifacts don't make problems.
 		// For example, DT_NEEDED modules should be found within the APEX unless they are marked in `requiredNativeLibs`.
 		if f.transitiveDep && f.module != nil && android.InList(mctx.OtherModuleName(f.module), vctx.unwantedTransitiveDeps) {
+			vctx.unwantedTransitiveFilesInfo = append(vctx.unwantedTransitiveFilesInfo, f)
 			continue
 		}
 		dest := filepath.Join(f.installDir, f.builtFile.Base())
@@ -1885,6 +1902,8 @@ func (vctx *visitorContext) normalizeFileInfo(mctx android.ModuleContext) {
 				mctx.ModuleErrorf("apex file %v is provided by two different files %v and %v",
 					dest, e.builtFile, f.builtFile)
 				return
+			} else {
+				vctx.duplicateTransitiveFilesInfo = append(vctx.duplicateTransitiveFilesInfo, f)
 			}
 			// If a module is directly included and also transitively depended on
 			// consider it as directly included.
@@ -1899,6 +1918,7 @@ func (vctx *visitorContext) normalizeFileInfo(mctx android.ModuleContext) {
 	for _, v := range encountered {
 		vctx.filesInfo = append(vctx.filesInfo, v)
 	}
+
 	sort.Slice(vctx.filesInfo, func(i, j int) bool {
 		// Sort by destination path so as to ensure consistent ordering even if the source of the files
 		// changes.
@@ -2329,6 +2349,8 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// 3) some fields in apexBundle struct are configured
 	a.installDir = android.PathForModuleInstall(ctx, "apex")
 	a.filesInfo = vctx.filesInfo
+	a.unwantedTransitiveFilesInfo = vctx.unwantedTransitiveFilesInfo
+	a.duplicateTransitiveFilesInfo = vctx.duplicateTransitiveFilesInfo
 
 	a.setPayloadFsType(ctx)
 	a.setSystemLibLink(ctx)
@@ -2355,6 +2377,8 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	a.setOutputFiles(ctx)
 	a.enforcePartitionTagOnApexSystemServerJar(ctx)
+
+	a.verifyNativeImplementationLibs(ctx)
 }
 
 // Set prebuiltInfoProvider. This will be used by `apex_prebuiltinfo_singleton` to print out a metadata file
@@ -2907,4 +2931,106 @@ func rBcpPackages() map[string][]string {
 
 func (a *apexBundle) IsTestApex() bool {
 	return a.testApex
+}
+
+// verifyNativeImplementationLibs compares the list of transitive implementation libraries used to link native
+// libraries in the apex against the list of implementation libraries in the apex, ensuring that none of the
+// libraries in the apex have references to private APIs from outside the apex.
+func (a *apexBundle) verifyNativeImplementationLibs(ctx android.ModuleContext) {
+	var directImplementationLibs android.Paths
+	var transitiveImplementationLibs []depset.DepSet[android.Path]
+
+	if a.properties.IsCoverageVariant {
+		return
+	}
+
+	if a.testApex {
+		return
+	}
+
+	if a.UsePlatformApis() {
+		return
+	}
+
+	checkApexTag := func(tag blueprint.DependencyTag) bool {
+		switch tag {
+		case sharedLibTag, jniLibTag, executableTag, androidAppTag:
+			return true
+		default:
+			return false
+		}
+	}
+
+	checkTransitiveTag := func(tag blueprint.DependencyTag) bool {
+		switch {
+		case cc.IsSharedDepTag(tag), java.IsJniDepTag(tag), rust.IsRlibDepTag(tag), rust.IsDylibDepTag(tag), checkApexTag(tag):
+			return true
+		default:
+			return false
+		}
+	}
+
+	var appEmbeddedJNILibs android.Paths
+	ctx.VisitDirectDeps(func(dep android.Module) {
+		tag := ctx.OtherModuleDependencyTag(dep)
+		if !checkApexTag(tag) {
+			return
+		}
+		if tag == sharedLibTag || tag == jniLibTag {
+			outputFile := android.OutputFileForModule(ctx, dep, "")
+			directImplementationLibs = append(directImplementationLibs, outputFile)
+		}
+		if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
+			transitiveImplementationLibs = append(transitiveImplementationLibs, info.ImplementationDeps)
+		}
+		if info, ok := android.OtherModuleProvider(ctx, dep, java.AppInfoProvider); ok {
+			appEmbeddedJNILibs = append(appEmbeddedJNILibs, info.EmbeddedJNILibs...)
+		}
+	})
+
+	depSet := depset.New(depset.PREORDER, directImplementationLibs, transitiveImplementationLibs)
+	allImplementationLibs := depSet.ToList()
+
+	allFileInfos := slices.Concat(a.filesInfo, a.unwantedTransitiveFilesInfo, a.duplicateTransitiveFilesInfo)
+
+	for _, lib := range allImplementationLibs {
+		inApex := slices.ContainsFunc(allFileInfos, func(fi apexFile) bool {
+			return fi.builtFile == lib
+		})
+		inApkInApex := slices.Contains(appEmbeddedJNILibs, lib)
+
+		if !inApex && !inApkInApex {
+			ctx.ModuleErrorf("library in apex transitively linked against implementation library %q not in apex", lib)
+			var depPath []android.Module
+			ctx.WalkDeps(func(child, parent android.Module) bool {
+				if depPath != nil {
+					return false
+				}
+
+				tag := ctx.OtherModuleDependencyTag(child)
+
+				if parent == ctx.Module() {
+					if !checkApexTag(tag) {
+						return false
+					}
+				}
+
+				if checkTransitiveTag(tag) {
+					if android.OutputFileForModule(ctx, child, "") == lib {
+						depPath = ctx.GetWalkPath()
+					}
+					return true
+				}
+
+				return false
+			})
+			if depPath != nil {
+				ctx.ModuleErrorf("dependency path:")
+				for _, m := range depPath {
+					ctx.ModuleErrorf("   %s", ctx.OtherModuleName(m))
+				}
+				return
+			}
+		}
+	}
 }
