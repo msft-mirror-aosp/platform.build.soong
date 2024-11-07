@@ -145,6 +145,7 @@ func createFsGenState(ctx android.LoadHookContext, generatedPrebuiltEtcModuleNam
 				},
 				"system_dlkm": {},
 			},
+			soongGeneratedPartitions:  generatedPartitions(ctx),
 			fsDepsMutex:               sync.Mutex{},
 			moduleToInstallationProps: map[string]installationProperties{},
 		}

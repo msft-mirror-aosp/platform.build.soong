@@ -25,19 +25,19 @@ import (
 )
 
 func init() {
-	android.RegisterModuleType("vbmeta", VbmetaFactory)
+	android.RegisterModuleType("vbmeta", vbmetaFactory)
 }
 
 type vbmeta struct {
 	android.ModuleBase
 
-	properties VbmetaProperties
+	properties vbmetaProperties
 
 	output     android.OutputPath
 	installDir android.InstallPath
 }
 
-type VbmetaProperties struct {
+type vbmetaProperties struct {
 	// Name of the partition stored in vbmeta desc. Defaults to the name of this module.
 	Partition_name *string
 
@@ -50,8 +50,9 @@ type VbmetaProperties struct {
 	// Algorithm that avbtool will use to sign this vbmeta image. Default is SHA256_RSA4096.
 	Algorithm *string
 
-	// The rollback index. If unspecified, the rollback index is from PLATFORM_SECURITY_PATCH
-	Rollback_index *int64
+	// File whose content will provide the rollback index. If unspecified, the rollback index
+	// is from PLATFORM_SECURITY_PATCH
+	Rollback_index_file *string `android:"path"`
 
 	// Rollback index location of this vbmeta image. Must be 0, 1, 2, etc. Default is 0.
 	Rollback_index_location *int64
@@ -61,7 +62,7 @@ type VbmetaProperties struct {
 	Partitions proptools.Configurable[[]string]
 
 	// List of chained partitions that this vbmeta deletages the verification.
-	Chained_partitions []ChainedPartitionProperties
+	Chained_partitions []chainedPartitionProperties
 
 	// List of key-value pair of avb properties
 	Avb_properties []avbProperty
@@ -75,7 +76,7 @@ type avbProperty struct {
 	Value *string
 }
 
-type ChainedPartitionProperties struct {
+type chainedPartitionProperties struct {
 	// Name of the chained partition
 	Name *string
 
@@ -94,7 +95,7 @@ type ChainedPartitionProperties struct {
 }
 
 // vbmeta is the partition image that has the verification information for other partitions.
-func VbmetaFactory() android.Module {
+func vbmetaFactory() android.Module {
 	module := &vbmeta{}
 	module.AddProperties(&module.properties)
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
@@ -216,12 +217,15 @@ func (v *vbmeta) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 // Returns the embedded shell command that prints the rollback index
 func (v *vbmeta) rollbackIndexCommand(ctx android.ModuleContext) string {
-	if v.properties.Rollback_index != nil {
-		return fmt.Sprintf("%d", *v.properties.Rollback_index)
+	var cmd string
+	if v.properties.Rollback_index_file != nil {
+		f := android.PathForModuleSrc(ctx, proptools.String(v.properties.Rollback_index_file))
+		cmd = "cat " + f.String()
 	} else {
-		// Take the first line and remove the newline char
-		return "$(date -d 'TZ=\"GMT\" " + ctx.Config().PlatformSecurityPatch() + "' +%s | head -1 | tr -d '\n'" + ")"
+		cmd = "date -d 'TZ=\"GMT\" " + ctx.Config().PlatformSecurityPatch() + "' +%s"
 	}
+	// Take the first line and remove the newline char
+	return "$(" + cmd + " | head -1 | tr -d '\n'" + ")"
 }
 
 // Extract public keys from chained_partitions.private_key. The keys are indexed with the partition
