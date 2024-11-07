@@ -113,6 +113,7 @@ def generate_common_build_props(args):
   print("####################################")
 
   config = args.config
+  build_flags = config["BuildFlags"]
   partition = args.partition
 
   if partition == "system":
@@ -164,6 +165,7 @@ def generate_common_build_props(args):
   print(f"ro.{partition}.build.version.release={config['Platform_version_last_stable']}")
   print(f"ro.{partition}.build.version.release_or_codename={config['Platform_version_name']}")
   print(f"ro.{partition}.build.version.sdk={config['Platform_sdk_version']}")
+  print(f"ro.{partition}.build.version.sdk_minor={build_flags['RELEASE_PLATFORM_SDK_MINOR_VERSION']}")
 
 def generate_build_info(args):
   print()

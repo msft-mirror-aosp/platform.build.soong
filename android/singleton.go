@@ -64,6 +64,7 @@ type SingletonContext interface {
 
 	VisitAllModulesBlueprint(visit func(blueprint.Module))
 	VisitAllModules(visit func(Module))
+	VisitAllModuleProxies(visit func(proxy ModuleProxy))
 	VisitAllModulesIf(pred func(Module) bool, visit func(Module))
 
 	VisitDirectDeps(module Module, visit func(Module))
@@ -76,6 +77,8 @@ type SingletonContext interface {
 		visit func(Module))
 
 	VisitAllModuleVariants(module Module, visit func(Module))
+
+	VisitAllModuleVariantProxies(module Module, visit func(proxy ModuleProxy))
 
 	PrimaryModule(module Module) Module
 	FinalModule(module Module) Module
@@ -193,13 +196,23 @@ func (s *singletonContextAdaptor) Eval(pctx PackageContext, ninjaStr string) (st
 }
 
 // visitAdaptor wraps a visit function that takes an android.Module parameter into
-// a function that takes an blueprint.Module parameter and only calls the visit function if the
+// a function that takes a blueprint.Module parameter and only calls the visit function if the
 // blueprint.Module is an android.Module.
 func visitAdaptor(visit func(Module)) func(blueprint.Module) {
 	return func(module blueprint.Module) {
 		if aModule, ok := module.(Module); ok {
 			visit(aModule)
 		}
+	}
+}
+
+// visitProxyAdaptor wraps a visit function that takes an android.ModuleProxy parameter into
+// a function that takes a blueprint.ModuleProxy parameter.
+func visitProxyAdaptor(visit func(proxy ModuleProxy)) func(proxy blueprint.ModuleProxy) {
+	return func(module blueprint.ModuleProxy) {
+		visit(ModuleProxy{
+			module: module,
+		})
 	}
 }
 
@@ -224,6 +237,10 @@ func (s *singletonContextAdaptor) VisitAllModules(visit func(Module)) {
 	s.SingletonContext.VisitAllModules(visitAdaptor(visit))
 }
 
+func (s *singletonContextAdaptor) VisitAllModuleProxies(visit func(proxy ModuleProxy)) {
+	s.SingletonContext.VisitAllModuleProxies(visitProxyAdaptor(visit))
+}
+
 func (s *singletonContextAdaptor) VisitAllModulesIf(pred func(Module) bool, visit func(Module)) {
 	s.SingletonContext.VisitAllModulesIf(predAdaptor(pred), visitAdaptor(visit))
 }
@@ -246,6 +263,10 @@ func (s *singletonContextAdaptor) VisitDepsDepthFirstIf(module Module, pred func
 
 func (s *singletonContextAdaptor) VisitAllModuleVariants(module Module, visit func(Module)) {
 	s.SingletonContext.VisitAllModuleVariants(module, visitAdaptor(visit))
+}
+
+func (s *singletonContextAdaptor) VisitAllModuleVariantProxies(module Module, visit func(proxy ModuleProxy)) {
+	s.SingletonContext.VisitAllModuleVariantProxies(module, visitProxyAdaptor(visit))
 }
 
 func (s *singletonContextAdaptor) PrimaryModule(module Module) Module {
