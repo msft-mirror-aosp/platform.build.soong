@@ -1465,8 +1465,9 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.data = append(a.data, android.PathsForModuleSrc(ctx, a.testProperties.Device_common_data)...)
 	a.data = append(a.data, android.PathsForModuleSrc(ctx, a.testProperties.Device_first_data)...)
 	a.data = append(a.data, android.PathsForModuleSrc(ctx, a.testProperties.Device_first_prefer32_data)...)
+
 	android.SetProvider(ctx, tradefed.BaseTestProviderKey, tradefed.BaseTestProviderData{
-		InstalledFiles:          a.data,
+		TestcaseRelDataFiles:    testcaseRel(a.data),
 		OutputFile:              a.OutputFile(),
 		TestConfig:              a.testConfig,
 		HostRequiredModuleNames: a.HostRequiredModuleNames(),
@@ -1474,12 +1475,22 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		IsHost:                  false,
 		LocalCertificate:        a.certificate.AndroidMkString(),
 		IsUnitTest:              Bool(a.testProperties.Test_options.Unit_test),
+		MkInclude:               "$(BUILD_SYSTEM)/soong_app_prebuilt.mk",
+		MkAppClass:              "APPS",
 	})
 	android.SetProvider(ctx, android.TestOnlyProviderKey, android.TestModuleInformation{
 		TestOnly:       true,
 		TopLevelTarget: true,
 	})
 
+}
+
+func testcaseRel(paths android.Paths) []string {
+	relPaths := []string{}
+	for _, p := range paths {
+		relPaths = append(relPaths, p.Rel())
+	}
+	return relPaths
 }
 
 func (a *AndroidTest) FixTestConfig(ctx android.ModuleContext, testConfig android.Path) android.Path {
