@@ -340,12 +340,16 @@ type ProductVariables struct {
 	HWASanExcludePaths []string `json:",omitempty"`
 
 	VendorPath           *string `json:",omitempty"`
+	VendorDlkmPath       *string `json:",omitempty"`
 	BuildingVendorImage  *bool   `json:",omitempty"`
 	OdmPath              *string `json:",omitempty"`
 	BuildingOdmImage     *bool   `json:",omitempty"`
+	OdmDlkmPath          *string `json:",omitempty"`
 	ProductPath          *string `json:",omitempty"`
 	BuildingProductImage *bool   `json:",omitempty"`
 	SystemExtPath        *string `json:",omitempty"`
+	SystemDlkmPath       *string `json:",omitempty"`
+	OemPath              *string `json:",omitempty"`
 
 	ClangTidy  *bool   `json:",omitempty"`
 	TidyChecks *string `json:",omitempty"`
@@ -604,6 +608,9 @@ type PartitionVariables struct {
 	ProductPackagesDebug    []string `json:",omitempty"`
 	VendorLinkerConfigSrcs  []string `json:",omitempty"`
 	ProductLinkerConfigSrcs []string `json:",omitempty"`
+
+	BoardInfoFiles      []string `json:",omitempty"`
+	BootLoaderBoardName string   `json:",omitempty"`
 
 	ProductCopyFiles map[string]string `json:",omitempty"`
 
