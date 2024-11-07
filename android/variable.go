@@ -628,8 +628,16 @@ type PartitionVariables struct {
 
 	ProductCopyFiles map[string]string `json:",omitempty"`
 
-	BuildingSystemDlkmImage bool     `json:",omitempty"`
-	SystemKernelModules     []string `json:",omitempty"`
+	BuildingSystemDlkmImage   bool     `json:",omitempty"`
+	SystemKernelModules       []string `json:",omitempty"`
+	SystemKernelBlocklistFile string   `json:",omitempty"`
+	SystemKernelLoadModules   []string `json:",omitempty"`
+	BuildingVendorDlkmImage   bool     `json:",omitempty"`
+	VendorKernelModules       []string `json:",omitempty"`
+	VendorKernelBlocklistFile string   `json:",omitempty"`
+	BuildingOdmDlkmImage      bool     `json:",omitempty"`
+	OdmKernelModules          []string `json:",omitempty"`
+	OdmKernelBlocklistFile    string   `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
