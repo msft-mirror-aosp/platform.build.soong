@@ -109,6 +109,12 @@ func (p *buildPropModule) partition(config DeviceConfig) string {
 		return "product"
 	} else if p.SystemExtSpecific() {
 		return "system_ext"
+	} else if p.InstallInSystemDlkm() {
+		return "system_dlkm"
+	} else if p.InstallInVendorDlkm() {
+		return "vendor_dlkm"
+	} else if p.InstallInOdmDlkm() {
+		return "odm_dlkm"
 	}
 	return "system"
 }
@@ -119,6 +125,9 @@ var validPartitions = []string{
 	"product",
 	"odm",
 	"vendor",
+	"system_dlkm",
+	"vendor_dlkm",
+	"odm_dlkm",
 }
 
 func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
