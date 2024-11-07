@@ -1557,16 +1557,14 @@ func (j *TestHost) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	j.Test.generateAndroidBuildActionsWithConfig(ctx, configs)
 	android.SetProvider(ctx, tradefed.BaseTestProviderKey, tradefed.BaseTestProviderData{
-		TestcaseRelDataFiles: testcaseRel(j.data),
-		OutputFile:           j.outputFile,
-		TestConfig:           j.testConfig,
-		RequiredModuleNames:  j.RequiredModuleNames(ctx),
-		TestSuites:           j.testProperties.Test_suites,
-		IsHost:               true,
-		LocalSdkVersion:      j.sdkVersion.String(),
-		IsUnitTest:           Bool(j.testProperties.Test_options.Unit_test),
-		MkInclude:            "$(BUILD_SYSTEM)/soong_java_prebuilt.mk",
-		MkAppClass:           "JAVA_LIBRARIES",
+		InstalledFiles:      j.data,
+		OutputFile:          j.outputFile,
+		TestConfig:          j.testConfig,
+		RequiredModuleNames: j.RequiredModuleNames(ctx),
+		TestSuites:          j.testProperties.Test_suites,
+		IsHost:              true,
+		LocalSdkVersion:     j.sdkVersion.String(),
+		IsUnitTest:          Bool(j.testProperties.Test_options.Unit_test),
 	})
 }
 
