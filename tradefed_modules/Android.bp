@@ -9,7 +9,6 @@ bootstrap_go_package {
         "blueprint",
         "soong-android",
         "soong-java",
-        "soong-sh",
         "soong-tradefed",
     ],
     srcs: [
