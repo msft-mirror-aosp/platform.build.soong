@@ -34,8 +34,6 @@ type PartitionNameProperties struct {
 	Vendor_partition_name *string
 	// Name of the Odm partition filesystem module
 	Odm_partition_name *string
-	// The vbmeta partition and its "chained" partitions
-	Vbmeta_partitions []string
 }
 
 type androidDevice struct {
@@ -48,6 +46,7 @@ func AndroidDeviceFactory() android.Module {
 	module := &androidDevice{}
 	module.AddProperties(&module.partitionProps)
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
+
 	return module
 }
 
@@ -70,9 +69,6 @@ func (a *androidDevice) DepsMutator(ctx android.BottomUpMutatorContext) {
 	addDependencyIfDefined(a.partitionProps.Product_partition_name)
 	addDependencyIfDefined(a.partitionProps.Vendor_partition_name)
 	addDependencyIfDefined(a.partitionProps.Odm_partition_name)
-	for _, vbmetaPartition := range a.partitionProps.Vbmeta_partitions {
-		ctx.AddDependency(ctx.Module(), filesystemDepTag, vbmetaPartition)
-	}
 }
 
 func (a *androidDevice) GenerateAndroidBuildActions(ctx android.ModuleContext) {
