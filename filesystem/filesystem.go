@@ -52,12 +52,6 @@ type filesystem struct {
 
 	properties FilesystemProperties
 
-	// Function that builds extra files under the root directory and returns the files
-	buildExtraFiles func(ctx android.ModuleContext, root android.OutputPath) android.OutputPaths
-
-	// Function that filters PackagingSpec in PackagingBase.GatherPackagingSpecs()
-	filterPackagingSpec func(spec android.PackagingSpec) bool
-
 	output     android.OutputPath
 	installDir android.InstallPath
 
@@ -65,7 +59,17 @@ type filesystem struct {
 
 	// Keeps the entries installed from this filesystem
 	entries []string
+
+	filesystemBuilder filesystemBuilder
 }
+
+type filesystemBuilder interface {
+	BuildLinkerConfigFile(ctx android.ModuleContext, builder *android.RuleBuilder, rebasedDir android.OutputPath)
+	// Function that filters PackagingSpec in PackagingBase.GatherPackagingSpecs()
+	FilterPackagingSpec(spec android.PackagingSpec) bool
+}
+
+var _ filesystemBuilder = (*filesystem)(nil)
 
 type SymlinkDefinition struct {
 	Target *string
@@ -183,7 +187,7 @@ type LinkerConfigProperties struct {
 // partitions like system.img. For example, cc_library modules are placed under ./lib[64] directory.
 func FilesystemFactory() android.Module {
 	module := &filesystem{}
-	module.filterPackagingSpec = module.filterInstallablePackagingSpec
+	module.filesystemBuilder = module
 	initFilesystemModule(module, module)
 	return module
 }
@@ -275,7 +279,7 @@ func (f *filesystem) partitionName() string {
 	return proptools.StringDefault(f.properties.Partition_name, f.Name())
 }
 
-func (f *filesystem) filterInstallablePackagingSpec(ps android.PackagingSpec) bool {
+func (f *filesystem) FilterPackagingSpec(ps android.PackagingSpec) bool {
 	// Filesystem module respects the installation semantic. A PackagingSpec from a module with
 	// IsSkipInstall() is skipped.
 	if proptools.Bool(f.properties.Is_auto_generated) { // TODO (spandandas): Remove this.
@@ -377,25 +381,6 @@ func (f *filesystem) buildNonDepsFiles(ctx android.ModuleContext, builder *andro
 		builder.Command().Text("ln -sf").Text(proptools.ShellEscape(target)).Text(dst.String())
 		f.appendToEntry(ctx, dst)
 	}
-
-	// create extra files if there's any
-	if f.buildExtraFiles != nil {
-		rootForExtraFiles := android.PathForModuleGen(ctx, "root-extra").OutputPath
-		extraFiles := f.buildExtraFiles(ctx, rootForExtraFiles)
-		for _, extraFile := range extraFiles {
-			rel, err := filepath.Rel(rootForExtraFiles.String(), extraFile.String())
-			if err != nil || strings.HasPrefix(rel, "..") {
-				ctx.ModuleErrorf("can't make %q relative to %q", extraFile, rootForExtraFiles)
-			}
-			f.appendToEntry(ctx, rootDir.Join(ctx, rel))
-		}
-		if len(extraFiles) > 0 {
-			builder.Command().BuiltTool("merge_directories").
-				Implicits(extraFiles.Paths()).
-				Text(rootDir.String()).
-				Text(rootForExtraFiles.String())
-		}
-	}
 }
 
 func (f *filesystem) copyPackagingSpecs(ctx android.ModuleContext, builder *android.RuleBuilder, specs map[string]android.PackagingSpec, rootDir, rebasedDir android.WritablePath) []string {
@@ -442,7 +427,7 @@ func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) androi
 	f.buildFsverityMetadataFiles(ctx, builder, specs, rootDir, rebasedDir)
 	f.buildEventLogtagsFile(ctx, builder, rebasedDir)
 	f.buildAconfigFlagsFiles(ctx, builder, specs, rebasedDir)
-	f.buildLinkerConfigFile(ctx, builder, rebasedDir)
+	f.filesystemBuilder.BuildLinkerConfigFile(ctx, builder, rebasedDir)
 	f.copyFilesToProductOut(ctx, builder, rebasedDir)
 
 	// run host_init_verifier
@@ -606,7 +591,7 @@ func (f *filesystem) buildCpioImage(ctx android.ModuleContext, compressed bool) 
 	f.buildFsverityMetadataFiles(ctx, builder, specs, rootDir, rebasedDir)
 	f.buildEventLogtagsFile(ctx, builder, rebasedDir)
 	f.buildAconfigFlagsFiles(ctx, builder, specs, rebasedDir)
-	f.buildLinkerConfigFile(ctx, builder, rebasedDir)
+	f.filesystemBuilder.BuildLinkerConfigFile(ctx, builder, rebasedDir)
 	f.copyFilesToProductOut(ctx, builder, rebasedDir)
 
 	output := android.PathForModuleOut(ctx, f.installFileName()).OutputPath
@@ -698,7 +683,7 @@ func (f *filesystem) buildEventLogtagsFile(ctx android.ModuleContext, builder *a
 	f.appendToEntry(ctx, eventLogtagsPath)
 }
 
-func (f *filesystem) buildLinkerConfigFile(ctx android.ModuleContext, builder *android.RuleBuilder, rebasedDir android.OutputPath) {
+func (f *filesystem) BuildLinkerConfigFile(ctx android.ModuleContext, builder *android.RuleBuilder, rebasedDir android.OutputPath) {
 	if !proptools.Bool(f.properties.Linkerconfig.Gen_linker_config) {
 		return
 	}
@@ -765,7 +750,7 @@ func (f *filesystem) SignedOutputPath() android.Path {
 // Note that "apex" module installs its contents to "apex"(fake partition) as well
 // for symbol lookup by imitating "activated" paths.
 func (f *filesystem) gatherFilteredPackagingSpecs(ctx android.ModuleContext) map[string]android.PackagingSpec {
-	specs := f.PackagingBase.GatherPackagingSpecsWithFilter(ctx, f.filterPackagingSpec)
+	specs := f.PackagingBase.GatherPackagingSpecsWithFilter(ctx, f.filesystemBuilder.FilterPackagingSpec)
 	return specs
 }
 
