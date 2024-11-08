@@ -410,11 +410,6 @@ type BaseProperties struct {
 	// variant to have a ".sdk" suffix.
 	SdkAndPlatformVariantVisibleToMake bool `blueprint:"mutated"`
 
-	// List of APEXes that this module has private access to for testing purpose. The module
-	// can depend on libraries that are not exported by the APEXes and use private symbols
-	// from the exported libraries.
-	Test_for []string `android:"arch_variant"`
-
 	Target struct {
 		Platform struct {
 			// List of modules required by the core variant.
@@ -965,7 +960,6 @@ func (c *Module) AddJSONData(d *map[string]interface{}) {
 		"IsLlndk":                c.IsLlndk(),
 		"IsVendorPublicLibrary":  c.IsVendorPublicLibrary(),
 		"ApexSdkVersion":         c.apexSdkVersion,
-		"TestFor":                c.TestFor(),
 		"AidlSrcs":               c.hasAidl,
 		"LexSrcs":                c.hasLex,
 		"ProtoSrcs":              c.hasProto,
@@ -3688,10 +3682,6 @@ func (c *Module) AvailableFor(what string) bool {
 	} else {
 		return c.ApexModuleBase.AvailableFor(what)
 	}
-}
-
-func (c *Module) TestFor() []string {
-	return c.Properties.Test_for
 }
 
 func (c *Module) EverInstallable() bool {
