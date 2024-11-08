@@ -383,6 +383,19 @@ func (m *testModuleConfigModule) generateManifestAndConfig(ctx android.ModuleCon
 
 	// 4) Module.config / AndroidTest.xml
 	m.testConfig = m.fixTestConfig(ctx, m.provider.TestConfig)
+
+	// 5) We provide so we can be listed in test_suites.
+	android.SetProvider(ctx, tradefed.BaseTestProviderKey, tradefed.BaseTestProviderData{
+		InstalledFiles:          m.supportFiles.Paths(),
+		OutputFile:              baseApk,
+		TestConfig:              m.testConfig,
+		HostRequiredModuleNames: m.provider.HostRequiredModuleNames,
+		RequiredModuleNames:     m.provider.RequiredModuleNames,
+		TestSuites:              m.tradefedProperties.Test_suites,
+		IsHost:                  m.provider.IsHost,
+		LocalCertificate:        m.provider.LocalCertificate,
+		IsUnitTest:              m.provider.IsUnitTest,
+	})
 }
 
 var _ android.AndroidMkEntriesProvider = (*testModuleConfigHostModule)(nil)

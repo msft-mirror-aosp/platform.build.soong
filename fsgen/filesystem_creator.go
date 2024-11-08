@@ -44,6 +44,9 @@ func registerBuildComponents(ctx android.RegistrationContext) {
 type filesystemCreatorProps struct {
 	Generated_partition_types   []string `blueprint:"mutated"`
 	Unsupported_partition_types []string `blueprint:"mutated"`
+
+	Vbmeta_module_names    []string `blueprint:"mutated"`
+	Vbmeta_partition_names []string `blueprint:"mutated"`
 }
 
 type filesystemCreator struct {
@@ -67,16 +70,24 @@ func filesystemCreatorFactory() android.Module {
 }
 
 func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
-	soongGeneratedPartitions := &ctx.Config().Get(fsGenStateOnceKey).(*FsGenState).soongGeneratedPartitions
-	for _, partitionType := range *soongGeneratedPartitions {
+	soongGeneratedPartitions := generatedPartitions(ctx)
+	finalSoongGeneratedPartitions := make([]string, 0, len(soongGeneratedPartitions))
+	for _, partitionType := range soongGeneratedPartitions {
 		if f.createPartition(ctx, partitionType) {
 			f.properties.Generated_partition_types = append(f.properties.Generated_partition_types, partitionType)
+			finalSoongGeneratedPartitions = append(finalSoongGeneratedPartitions, partitionType)
 		} else {
 			f.properties.Unsupported_partition_types = append(f.properties.Unsupported_partition_types, partitionType)
-			_, *soongGeneratedPartitions = android.RemoveFromList(partitionType, *soongGeneratedPartitions)
 		}
 	}
-	f.createDeviceModule(ctx)
+
+	for _, x := range createVbmetaPartitions(ctx, finalSoongGeneratedPartitions) {
+		f.properties.Vbmeta_module_names = append(f.properties.Vbmeta_module_names, x.moduleName)
+		f.properties.Vbmeta_partition_names = append(f.properties.Vbmeta_partition_names, x.partitionName)
+	}
+
+	ctx.Config().Get(fsGenStateOnceKey).(*FsGenState).soongGeneratedPartitions = finalSoongGeneratedPartitions
+	f.createDeviceModule(ctx, finalSoongGeneratedPartitions, f.properties.Vbmeta_module_names)
 }
 
 func generatedModuleName(cfg android.Config, suffix string) string {
@@ -91,7 +102,11 @@ func generatedModuleNameForPartition(cfg android.Config, partitionType string) s
 	return generatedModuleName(cfg, fmt.Sprintf("%s_image", partitionType))
 }
 
-func (f *filesystemCreator) createDeviceModule(ctx android.LoadHookContext) {
+func (f *filesystemCreator) createDeviceModule(
+	ctx android.LoadHookContext,
+	generatedPartitionTypes []string,
+	vbmetaPartitions []string,
+) {
 	baseProps := &struct {
 		Name *string
 	}{
@@ -100,21 +115,22 @@ func (f *filesystemCreator) createDeviceModule(ctx android.LoadHookContext) {
 
 	// Currently, only the system and system_ext partition module is created.
 	partitionProps := &filesystem.PartitionNameProperties{}
-	if android.InList("system", f.properties.Generated_partition_types) {
+	if android.InList("system", generatedPartitionTypes) {
 		partitionProps.System_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system"))
 	}
-	if android.InList("system_ext", f.properties.Generated_partition_types) {
+	if android.InList("system_ext", generatedPartitionTypes) {
 		partitionProps.System_ext_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system_ext"))
 	}
-	if android.InList("vendor", f.properties.Generated_partition_types) {
+	if android.InList("vendor", generatedPartitionTypes) {
 		partitionProps.Vendor_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "vendor"))
 	}
-	if android.InList("product", f.properties.Generated_partition_types) {
+	if android.InList("product", generatedPartitionTypes) {
 		partitionProps.Product_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "product"))
 	}
-	if android.InList("odm", f.properties.Generated_partition_types) {
+	if android.InList("odm", generatedPartitionTypes) {
 		partitionProps.Odm_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "odm"))
 	}
+	partitionProps.Vbmeta_partitions = vbmetaPartitions
 
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
 }
@@ -136,6 +152,26 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 			"framework/oat/*/*", // framework/oat/{arch}
 		}
 		fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
+		// TODO(b/377734331): only generate the symlinks if the relevant partitions exist
+		fsProps.Symlinks = []filesystem.SymlinkDefinition{
+			filesystem.SymlinkDefinition{
+				Target: proptools.StringPtr("/product"),
+				Name:   proptools.StringPtr("system/product"),
+			},
+			filesystem.SymlinkDefinition{
+				Target: proptools.StringPtr("/system_ext"),
+				Name:   proptools.StringPtr("system/system_ext"),
+			},
+			filesystem.SymlinkDefinition{
+				Target: proptools.StringPtr("/vendor"),
+				Name:   proptools.StringPtr("system/vendor"),
+			},
+			filesystem.SymlinkDefinition{
+				Target: proptools.StringPtr("/system_dlkm/lib/modules"),
+				Name:   proptools.StringPtr("system/lib/modules"),
+			},
+		}
+		fsProps.Base_dir = proptools.StringPtr("system")
 	case "system_ext":
 		fsProps.Fsverity.Inputs = []string{
 			"framework/*",
@@ -211,38 +247,28 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 }
 
 // createPrebuiltKernelModules creates `prebuilt_kernel_modules`. These modules will be added to deps of the
-// autogenerated *_dlkm filsystem modules.
-// The input `kernelModules` is a space separated list of .ko files in the workspace. This will be partitioned per directory
-// and a `prebuilt_kernel_modules` will be created per partition.
-// These autogenerated modules will be subsequently added to the deps of the top level *_dlkm android_filesystem
+// autogenerated *_dlkm filsystem modules. Each _dlkm partition should have a single prebuilt_kernel_modules dependency.
+// This ensures that the depmod artifacts (modules.* installed in /lib/modules/) are generated with a complete view.
+
+// The input `kernelModules` is a space separated list of .ko files in the workspace.
 func (f *filesystemCreator) createPrebuiltKernelModules(ctx android.LoadHookContext, partitionType string, kernelModules []string) {
-	// Partition the files per directory
-	dirToFiles := map[string][]string{}
-	for _, kernelModule := range kernelModules {
-		dir := filepath.Dir(kernelModule)
-		base := filepath.Base(kernelModule)
-		dirToFiles[dir] = append(dirToFiles[dir], base)
-	}
-	// Create a prebuilt_kernel_modules module per partition
 	fsGenState := ctx.Config().Get(fsGenStateOnceKey).(*FsGenState)
-	for index, dir := range android.SortedKeys(dirToFiles) {
-		name := generatedModuleName(ctx.Config(), fmt.Sprintf("%s-kernel-modules-%s", partitionType, strconv.Itoa(index)))
-		props := &struct {
-			Name *string
-			Srcs []string
-		}{
-			Name: proptools.StringPtr(name),
-			Srcs: dirToFiles[dir],
-		}
-		kernelModule := ctx.CreateModuleInDirectory(
-			kernel.PrebuiltKernelModulesFactory,
-			dir,
-			props,
-		)
-		kernelModule.HideFromMake()
-		// Add to deps
-		(*fsGenState.fsDeps[partitionType])[name] = defaultDepCandidateProps(ctx.Config())
+	name := generatedModuleName(ctx.Config(), fmt.Sprintf("%s-kernel-modules", partitionType))
+	props := &struct {
+		Name *string
+		Srcs []string
+	}{
+		Name: proptools.StringPtr(name),
+		Srcs: kernelModules,
 	}
+	kernelModule := ctx.CreateModuleInDirectory(
+		kernel.PrebuiltKernelModulesFactory,
+		".", // create in root directory for now
+		props,
+	)
+	kernelModule.HideFromMake()
+	// Add to deps
+	(*fsGenState.fsDeps[partitionType])[name] = defaultDepCandidateProps(ctx.Config())
 }
 
 // Create a build_prop and android_info module. This will be used to create /vendor/build.prop
@@ -334,12 +360,15 @@ func (f *filesystemCreator) createLinkerConfigSourceFilegroups(ctx android.LoadH
 type filesystemBaseProperty struct {
 	Name             *string
 	Compile_multilib *string
+	Visibility       []string
 }
 
 func generateBaseProps(namePtr *string) *filesystemBaseProperty {
 	return &filesystemBaseProperty{
 		Name:             namePtr,
 		Compile_multilib: proptools.StringPtr("both"),
+		// The vbmeta modules are currently in the root directory and depend on the partitions
+		Visibility: []string{"//.", "//build/soong:__subpackages__"},
 	}
 }
 
@@ -435,15 +464,41 @@ func createFailingCommand(ctx android.ModuleContext, message string) android.Pat
 	return file
 }
 
+func createVbmetaDiff(ctx android.ModuleContext, vbmetaModuleName string, vbmetaPartitionName string) android.Path {
+	vbmetaModule := ctx.GetDirectDepWithTag(vbmetaModuleName, generatedVbmetaPartitionDepTag)
+	outputFilesProvider, ok := android.OtherModuleProvider(ctx, vbmetaModule, android.OutputFilesProvider)
+	if !ok {
+		ctx.ModuleErrorf("Expected module %s to provide OutputFiles", vbmetaModule)
+	}
+	if len(outputFilesProvider.DefaultOutputFiles) != 1 {
+		ctx.ModuleErrorf("Expected 1 output file from module %s", vbmetaModule)
+	}
+	soongVbMetaFile := outputFilesProvider.DefaultOutputFiles[0]
+	makeVbmetaFile := android.PathForArbitraryOutput(ctx, fmt.Sprintf("target/product/%s/%s.img", ctx.Config().DeviceName(), vbmetaPartitionName))
+
+	diffTestResultFile := android.PathForModuleOut(ctx, fmt.Sprintf("diff_test_%s.txt", vbmetaModuleName))
+	builder := android.NewRuleBuilder(pctx, ctx)
+	builder.Command().Text("diff").
+		Input(soongVbMetaFile).
+		Input(makeVbmetaFile)
+	builder.Command().Text("touch").Output(diffTestResultFile)
+	builder.Build(vbmetaModuleName+" diff test", vbmetaModuleName+" diff test")
+	return diffTestResultFile
+}
+
 type systemImageDepTagType struct {
 	blueprint.BaseDependencyTag
 }
 
 var generatedFilesystemDepTag systemImageDepTagType
+var generatedVbmetaPartitionDepTag systemImageDepTagType
 
 func (f *filesystemCreator) DepsMutator(ctx android.BottomUpMutatorContext) {
 	for _, partitionType := range f.properties.Generated_partition_types {
 		ctx.AddDependency(ctx.Module(), generatedFilesystemDepTag, generatedModuleNameForPartition(ctx.Config(), partitionType))
+	}
+	for _, vbmetaModule := range f.properties.Vbmeta_module_names {
+		ctx.AddDependency(ctx.Module(), generatedVbmetaPartitionDepTag, vbmetaModule)
 	}
 }
 
@@ -473,6 +528,11 @@ func (f *filesystemCreator) GenerateAndroidBuildActions(ctx android.ModuleContex
 		diffTestFile := createFailingCommand(ctx, fmt.Sprintf("Couldn't build %s partition", partitionType))
 		diffTestFiles = append(diffTestFiles, diffTestFile)
 		ctx.Phony(fmt.Sprintf("soong_generated_%s_filesystem_test", partitionType), diffTestFile)
+	}
+	for i, vbmetaModule := range f.properties.Vbmeta_module_names {
+		diffTestFile := createVbmetaDiff(ctx, vbmetaModule, f.properties.Vbmeta_partition_names[i])
+		diffTestFiles = append(diffTestFiles, diffTestFile)
+		ctx.Phony(fmt.Sprintf("soong_generated_%s_filesystem_test", f.properties.Vbmeta_partition_names[i]), diffTestFile)
 	}
 	ctx.Phony("soong_generated_filesystem_tests", diffTestFiles...)
 }
