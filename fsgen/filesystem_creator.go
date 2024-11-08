@@ -234,11 +234,6 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 	var module android.Module
 	if partitionType == "system" {
 		module = ctx.CreateModule(filesystem.SystemImageFactory, baseProps, fsProps)
-	} else if partitionType == "system_dlkm" {
-		// Do not set partition_type. build/soong/android/paths#modulePartition currently does not support dlkm
-		// partitions. Since `android_filesystem` uses a partition based filter, setting the partition here
-		// would result in missing in entries.
-		module = ctx.CreateModule(filesystem.FilesystemFactory, baseProps, fsProps)
 	} else {
 		// Explicitly set the partition.
 		fsProps.Partition_type = proptools.StringPtr(partitionType)
@@ -260,11 +255,17 @@ func (f *filesystemCreator) createPrebuiltKernelModules(ctx android.LoadHookCont
 	fsGenState := ctx.Config().Get(fsGenStateOnceKey).(*FsGenState)
 	name := generatedModuleName(ctx.Config(), fmt.Sprintf("%s-kernel-modules", partitionType))
 	props := &struct {
-		Name *string
-		Srcs []string
+		Name                 *string
+		Srcs                 []string
+		System_dlkm_specific *bool
+		Vendor_dlkm_specific *bool // TODO (b/377562851)
+		Odm_dlkm_specific    *bool // TODO (b/377563262)
 	}{
 		Name: proptools.StringPtr(name),
 		Srcs: kernelModules,
+	}
+	if partitionType == "system_dlkm" {
+		props.System_dlkm_specific = proptools.BoolPtr(true)
 	}
 	kernelModule := ctx.CreateModuleInDirectory(
 		kernel.PrebuiltKernelModulesFactory,
