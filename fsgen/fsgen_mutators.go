@@ -93,6 +93,9 @@ func generatedPartitions(ctx android.LoadHookContext) []string {
 	if ctx.DeviceConfig().BuildingOdmImage() && ctx.DeviceConfig().OdmPath() == "odm" {
 		generatedPartitions = append(generatedPartitions, "odm")
 	}
+	if ctx.DeviceConfig().BuildingUserdataImage() && ctx.DeviceConfig().UserdataPath() == "data" {
+		generatedPartitions = append(generatedPartitions, "userdata")
+	}
 	if ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.BuildingSystemDlkmImage {
 		generatedPartitions = append(generatedPartitions, "system_dlkm")
 	}
@@ -144,6 +147,7 @@ func createFsGenState(ctx android.LoadHookContext, generatedPrebuiltEtcModuleNam
 					"com.android.vndk.v34": defaultDepCandidateProps(ctx.Config()),
 				},
 				"system_dlkm": {},
+				"userdata":    {},
 			},
 			fsDepsMutex:               sync.Mutex{},
 			moduleToInstallationProps: map[string]installationProperties{},

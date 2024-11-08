@@ -130,6 +130,9 @@ func (f *filesystemCreator) createDeviceModule(
 	if android.InList("odm", generatedPartitionTypes) {
 		partitionProps.Odm_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "odm"))
 	}
+	if android.InList("userdata", f.properties.Generated_partition_types) {
+		partitionProps.Userdata_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "userdata"))
+	}
 	partitionProps.Vbmeta_partitions = vbmetaPartitions
 
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
@@ -202,6 +205,8 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 			},
 		}
 		fsProps.Base_dir = proptools.StringPtr("odm")
+	case "userdata":
+		fsProps.Base_dir = proptools.StringPtr("data")
 
 	}
 }
