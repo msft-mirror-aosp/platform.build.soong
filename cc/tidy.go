@@ -254,7 +254,7 @@ func (m *tidyPhonySingleton) GenerateBuildActions(ctx android.SingletonContext) 
 
 	// Collect tidy/obj targets from the 'final' modules.
 	ctx.VisitAllModules(func(module android.Module) {
-		if module == ctx.FinalModule(module) {
+		if ctx.IsFinalModule(module) {
 			collectTidyObjModuleTargets(ctx, module, tidyModulesInDirGroup, objModulesInDirGroup)
 		}
 	})
