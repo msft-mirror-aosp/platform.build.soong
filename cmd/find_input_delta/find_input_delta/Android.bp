@@ -2,15 +2,15 @@ package {
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
 
-bootstrap_go_package {
-    name: "soong-cmd-find_input_delta-find_input_delta",
-    pkgPath: "android/soong/cmd/find_input_delta/find_input_delta",
+blueprint_go_binary {
+    name: "find_input_delta",
     deps: [
         "golang-protobuf-encoding-prototext",
         "golang-protobuf-reflect-protoreflect",
         "golang-protobuf-runtime-protoimpl",
-        "soong-cmd-find_input_delta-proto",
         "soong-cmd-find_input_delta-lib",
+        "soong-cmd-find_input_delta-proto",
+        "soong-cmd-find_input_delta-proto_internal",
     ],
     srcs: [
         "main.go",
