@@ -3258,7 +3258,7 @@ func TestImageVariants(t *testing.T) {
 	testDepWithVariant("product")
 }
 
-func TestVendorSdkVersion(t *testing.T) {
+func TestVendorOrProductVariantUsesPlatformSdkVersionAsDefault(t *testing.T) {
 	t.Parallel()
 
 	bp := `
@@ -3266,31 +3266,29 @@ func TestVendorSdkVersion(t *testing.T) {
 			name: "libfoo",
 			srcs: ["libfoo.cc"],
 			vendor_available: true,
+			product_available: true,
 		}
 
 		cc_library {
 			name: "libbar",
 			srcs: ["libbar.cc"],
 			vendor_available: true,
+			product_available: true,
 			min_sdk_version: "29",
 		}
 	`
 
 	ctx := prepareForCcTest.RunTestWithBp(t, bp)
-	testSdkVersionFlag := func(module, version string) {
-		flags := ctx.ModuleForTests(module, "android_vendor_arm64_armv8-a_static").Rule("cc").Args["cFlags"]
-		android.AssertStringDoesContain(t, "min sdk version", flags, "-target aarch64-linux-android"+version)
+	testSdkVersionFlag := func(module, variant, version string) {
+		flags := ctx.ModuleForTests(module, "android_"+variant+"_arm64_armv8-a_static").Rule("cc").Args["cFlags"]
+		android.AssertStringDoesContain(t, "target SDK version", flags, "-target aarch64-linux-android"+version)
 	}
 
-	testSdkVersionFlag("libfoo", "10000")
-	testSdkVersionFlag("libbar", "29")
-
-	ctx = android.GroupFixturePreparers(
-		prepareForCcTest,
-		android.PrepareForTestWithBuildFlag("RELEASE_BOARD_API_LEVEL_FROZEN", "true"),
-	).RunTestWithBp(t, bp)
-	testSdkVersionFlag("libfoo", "30")
-	testSdkVersionFlag("libbar", "29")
+	testSdkVersionFlag("libfoo", "vendor", "30")
+	testSdkVersionFlag("libfoo", "product", "30")
+	// target SDK version can be set explicitly with min_sdk_version
+	testSdkVersionFlag("libbar", "vendor", "29")
+	testSdkVersionFlag("libbar", "product", "29")
 }
 
 func TestClangVerify(t *testing.T) {
