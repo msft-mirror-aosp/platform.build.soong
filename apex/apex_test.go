@@ -10052,61 +10052,6 @@ func TestUpdatableApexEnforcesAppUpdatability(t *testing.T) {
 		RunTestWithBp(t, bp)
 }
 
-func TestTrimmedApex(t *testing.T) {
-	t.Parallel()
-	bp := `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			native_shared_libs: ["libfoo","libbaz"],
-			min_sdk_version: "29",
-			trim_against: "mydcla",
-    }
-		apex {
-			name: "mydcla",
-			key: "myapex.key",
-			native_shared_libs: ["libfoo","libbar"],
-			min_sdk_version: "29",
-			file_contexts: ":myapex-file_contexts",
-			dynamic_common_lib_apex: true,
-		}
-		apex_key {
-			name: "myapex.key",
-		}
-		cc_library {
-			name: "libfoo",
-			shared_libs: ["libc"],
-			apex_available: ["myapex","mydcla"],
-			min_sdk_version: "29",
-		}
-		cc_library {
-			name: "libbar",
-			shared_libs: ["libc"],
-			apex_available: ["myapex","mydcla"],
-			min_sdk_version: "29",
-		}
-		cc_library {
-			name: "libbaz",
-			shared_libs: ["libc"],
-			apex_available: ["myapex","mydcla"],
-			min_sdk_version: "29",
-		}
-		`
-	ctx := testApex(t, bp)
-	module := ctx.ModuleForTests("myapex", "android_common_myapex")
-	apexRule := module.MaybeRule("apexRule")
-	if apexRule.Rule == nil {
-		t.Errorf("Expecting regular apex rule but a non regular apex rule found")
-	}
-
-	ctx = testApex(t, bp, android.FixtureModifyConfig(android.SetTrimmedApexEnabledForTests))
-	trimmedApexRule := ctx.ModuleForTests("myapex", "android_common_myapex").Rule("TrimmedApexRule")
-	libs_to_trim := trimmedApexRule.Args["libs_to_trim"]
-	android.AssertStringDoesContain(t, "missing lib to trim", libs_to_trim, "libfoo")
-	android.AssertStringDoesContain(t, "missing lib to trim", libs_to_trim, "libbar")
-	android.AssertStringDoesNotContain(t, "unexpected libs in the libs to trim", libs_to_trim, "libbaz")
-}
-
 func TestCannedFsConfig(t *testing.T) {
 	t.Parallel()
 	ctx := testApex(t, `

@@ -68,7 +68,6 @@ func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
 	ctx.BottomUp("mark_platform_availability", markPlatformAvailability)
 	ctx.Transition("apex", &apexTransitionMutator{})
 	ctx.BottomUp("apex_directly_in_any", apexDirectlyInAnyMutator).MutatesDependencies()
-	ctx.BottomUp("apex_dcla_deps", apexDCLADepsMutator)
 }
 
 type apexBundleProperties struct {
@@ -725,7 +724,6 @@ var (
 	androidAppTag  = &dependencyTag{name: "androidApp", payload: true}
 	bpfTag         = &dependencyTag{name: "bpf", payload: true}
 	certificateTag = &dependencyTag{name: "certificate"}
-	dclaTag        = &dependencyTag{name: "dcla"}
 	executableTag  = &dependencyTag{name: "executable", payload: true}
 	fsTag          = &dependencyTag{name: "filesystem", payload: true}
 	bcpfTag        = &dependencyTag{name: "bootclasspathFragment", payload: true, sourceOnly: true, memberType: java.BootclasspathFragmentSdkMemberType}
@@ -942,33 +940,6 @@ func (a *apexBundle) OverridablePropertiesDepsMutator(ctx android.BottomUpMutato
 	}
 }
 
-func apexDCLADepsMutator(mctx android.BottomUpMutatorContext) {
-	if !mctx.Config().ApexTrimEnabled() {
-		return
-	}
-	if a, ok := mctx.Module().(*apexBundle); ok && a.overridableProperties.Trim_against != nil {
-		commonVariation := mctx.Config().AndroidCommonTarget.Variations()
-		mctx.AddFarVariationDependencies(commonVariation, dclaTag, String(a.overridableProperties.Trim_against))
-	} else if o, ok := mctx.Module().(*OverrideApex); ok {
-		for _, p := range o.GetProperties() {
-			properties, ok := p.(*overridableProperties)
-			if !ok {
-				continue
-			}
-			if properties.Trim_against != nil {
-				commonVariation := mctx.Config().AndroidCommonTarget.Variations()
-				mctx.AddFarVariationDependencies(commonVariation, dclaTag, String(properties.Trim_against))
-			}
-		}
-	}
-}
-
-type DCLAInfo struct {
-	ProvidedLibs []string
-}
-
-var DCLAInfoProvider = blueprint.NewMutatorProvider[DCLAInfo]("apex_info")
-
 var _ ApexInfoMutator = (*apexBundle)(nil)
 
 func (a *apexBundle) ApexVariationName() string {
@@ -1077,12 +1048,6 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		child.(android.ApexModule).BuildForApex(apexInfo) // leave a mark!
 		return true
 	})
-
-	if a.dynamic_common_lib_apex() {
-		android.SetProvider(mctx, DCLAInfoProvider, DCLAInfo{
-			ProvidedLibs: a.properties.Native_shared_libs.GetOrDefault(mctx, nil),
-		})
-	}
 }
 
 type ApexInfoMutator interface {
@@ -1391,19 +1356,6 @@ func (a *apexBundle) testOnlyShouldForceCompression() bool {
 // See the dynamic_common_lib_apex property
 func (a *apexBundle) dynamic_common_lib_apex() bool {
 	return proptools.BoolDefault(a.properties.Dynamic_common_lib_apex, false)
-}
-
-// See the list of libs to trim
-func (a *apexBundle) libs_to_trim(ctx android.ModuleContext) []string {
-	dclaModules := ctx.GetDirectDepsWithTag(dclaTag)
-	if len(dclaModules) > 1 {
-		panic(fmt.Errorf("expected exactly at most one dcla dependency, got %d", len(dclaModules)))
-	}
-	if len(dclaModules) > 0 {
-		DCLAInfo, _ := android.OtherModuleProvider(ctx, dclaModules[0], DCLAInfoProvider)
-		return DCLAInfo.ProvidedLibs
-	}
-	return []string{}
 }
 
 // These functions are interfacing with cc/sanitizer.go. The entire APEX (along with all of its
