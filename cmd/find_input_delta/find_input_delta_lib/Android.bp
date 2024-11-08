@@ -24,6 +24,7 @@ bootstrap_go_package {
         "golang-protobuf-reflect-protoreflect",
         "golang-protobuf-runtime-protoimpl",
         "soong-cmd-find_input_delta-proto",
+        "soong-cmd-find_input_delta-proto_internal",
         "blueprint-pathtools",
     ],
     srcs: [
