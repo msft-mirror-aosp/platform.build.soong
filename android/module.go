@@ -2036,7 +2036,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		ctx.GetMissingDependencies()
 	}
 
-	if m == ctx.FinalModule().(Module).base() {
+	if ctx.IsFinalModule(m.module) {
 		m.generateModuleTarget(ctx)
 		if ctx.Failed() {
 			return
