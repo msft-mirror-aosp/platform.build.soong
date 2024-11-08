@@ -833,7 +833,7 @@ func UpdateDirectlyInAnyApex(mctx BottomUpMutatorContext, am ApexModule) {
 
 	// If this is the FinalModule (last visited module) copy
 	// AnyVariantDirectlyInAnyApex to all the other variants
-	if am == mctx.FinalModule().(ApexModule) {
+	if mctx.IsFinalModule(am) {
 		mctx.VisitAllModuleVariants(func(variant Module) {
 			variant.(ApexModule).apexModuleBase().ApexProperties.AnyVariantDirectlyInAnyApex =
 				base.ApexProperties.AnyVariantDirectlyInAnyApex
