@@ -130,6 +130,9 @@ func (f *filesystemCreator) createDeviceModule(
 	if android.InList("odm", generatedPartitionTypes) {
 		partitionProps.Odm_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "odm"))
 	}
+	if android.InList("userdata", f.properties.Generated_partition_types) {
+		partitionProps.Userdata_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "userdata"))
+	}
 	partitionProps.Vbmeta_partitions = vbmetaPartitions
 
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
@@ -202,6 +205,8 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 			},
 		}
 		fsProps.Base_dir = proptools.StringPtr("odm")
+	case "userdata":
+		fsProps.Base_dir = proptools.StringPtr("data")
 
 	}
 }
@@ -435,18 +440,13 @@ func (f *filesystemCreator) createDiffTest(ctx android.ModuleContext, partitionT
 		ctx.ModuleErrorf("Expected module %s to provide FileysystemInfo", partitionModuleName)
 	}
 	makeFileList := android.PathForArbitraryOutput(ctx, fmt.Sprintf("target/product/%s/obj/PACKAGING/%s_intermediates/file_list.txt", ctx.Config().DeviceName(), partitionType))
-	// For now, don't allowlist anything. The test will fail, but that's fine in the current
-	// early stages where we're just figuring out what we need
-	emptyAllowlistFile := android.PathForModuleOut(ctx, fmt.Sprintf("allowlist_%s.txt", partitionModuleName))
-	android.WriteFileRule(ctx, emptyAllowlistFile, "")
 	diffTestResultFile := android.PathForModuleOut(ctx, fmt.Sprintf("diff_test_%s.txt", partitionModuleName))
 
 	builder := android.NewRuleBuilder(pctx, ctx)
 	builder.Command().BuiltTool("file_list_diff").
 		Input(makeFileList).
 		Input(filesystemInfo.FileListFile).
-		Text(partitionModuleName).
-		FlagWithInput("--allowlists ", emptyAllowlistFile)
+		Text(partitionModuleName)
 	builder.Command().Text("touch").Output(diffTestResultFile)
 	builder.Build(partitionModuleName+" diff test", partitionModuleName+" diff test")
 	return diffTestResultFile

@@ -59,20 +59,20 @@ func createVbmetaPartitions(ctx android.LoadHookContext, generatedPartitionTypes
 			continue
 		}
 		if len(props.Key) == 0 {
-			ctx.ModuleErrorf("No key found for chained avb partition %s", chainedName)
+			ctx.ModuleErrorf("No key found for chained avb partition %q", chainedName)
 			continue
 		}
 		if len(props.Algorithm) == 0 {
-			ctx.ModuleErrorf("No algorithm found for chained avb partition %s", chainedName)
+			ctx.ModuleErrorf("No algorithm found for chained avb partition %q", chainedName)
 			continue
 		}
 		if len(props.RollbackIndex) == 0 {
-			ctx.ModuleErrorf("No rollback index found for chained avb partition %s", chainedName)
+			ctx.ModuleErrorf("No rollback index found for chained avb partition %q", chainedName)
 			continue
 		}
 		ril, err := strconv.ParseInt(props.RollbackIndexLocation, 10, 32)
 		if err != nil {
-			ctx.ModuleErrorf("Rollback index location must be an int, got %s", props.RollbackIndexLocation)
+			ctx.ModuleErrorf("Rollback index location must be an int, got %q", props.RollbackIndexLocation)
 			continue
 		}
 		// The default is to use the PlatformSecurityPatch, and a lot of product config files
@@ -82,7 +82,7 @@ func createVbmetaPartitions(ctx android.LoadHookContext, generatedPartitionTypes
 		if props.RollbackIndex != ctx.Config().PlatformSecurityPatch() {
 			i, err := strconv.ParseInt(props.RollbackIndex, 10, 32)
 			if err != nil {
-				ctx.ModuleErrorf("Rollback index must be an int, got %s", props.RollbackIndex)
+				ctx.ModuleErrorf("Rollback index must be an int, got %q", props.RollbackIndex)
 				continue
 			}
 			rollbackIndex = &i
@@ -132,12 +132,22 @@ func createVbmetaPartitions(ctx android.LoadHookContext, generatedPartitionTypes
 	vbmetaModuleName := generatedModuleName(ctx.Config(), "vbmeta")
 
 	var algorithm *string
-	if len(partitionVars.BoardAvbAlgorithm) > 0 {
+	var ri *int64
+	var key *string
+	if len(partitionVars.BoardAvbKeyPath) == 0 {
+		// Match make's defaults: https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/Makefile;l=4568;drc=5b55f926830963c02ab1d2d91e46442f04ba3af0
+		key = proptools.StringPtr("external/avb/test/data/testkey_rsa4096.pem")
+		algorithm = proptools.StringPtr("SHA256_RSA4096")
+	} else {
+		key = proptools.StringPtr(partitionVars.BoardAvbKeyPath)
 		algorithm = proptools.StringPtr(partitionVars.BoardAvbAlgorithm)
 	}
-	ril, err := strconv.ParseInt(partitionVars.BoardAvbRollbackIndex, 10, 32)
-	if err != nil {
-		ctx.ModuleErrorf("Rollback index location must be an int, got %s", partitionVars.BoardAvbRollbackIndex)
+	if len(partitionVars.BoardAvbRollbackIndex) > 0 {
+		parsedRi, err := strconv.ParseInt(partitionVars.BoardAvbRollbackIndex, 10, 32)
+		if err != nil {
+			ctx.ModuleErrorf("Rollback index location must be an int, got %q", partitionVars.BoardAvbRollbackIndex)
+		}
+		ri = &parsedRi
 	}
 
 	var partitionModules []string
@@ -153,12 +163,12 @@ func createVbmetaPartitions(ctx android.LoadHookContext, generatedPartitionTypes
 		filesystem.VbmetaFactory,
 		".", // Create in the root directory for now so its easy to get the key
 		&filesystem.VbmetaProperties{
-			Stem:                    proptools.StringPtr("vbmeta.img"),
-			Algorithm:               algorithm,
-			Private_key:             proptools.StringPtr(partitionVars.BoardAvbKeyPath),
-			Rollback_index_location: &ril,
-			Chained_partitions:      chainedPartitions,
-			Partitions:              proptools.NewSimpleConfigurable(partitionModules),
+			Stem:               proptools.StringPtr("vbmeta.img"),
+			Algorithm:          algorithm,
+			Private_key:        key,
+			Rollback_index:     ri,
+			Chained_partitions: chainedPartitions,
+			Partitions:         proptools.NewSimpleConfigurable(partitionModules),
 		}, &struct {
 			Name *string
 		}{

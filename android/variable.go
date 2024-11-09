@@ -339,17 +339,19 @@ type ProductVariables struct {
 	HWASanIncludePaths []string `json:",omitempty"`
 	HWASanExcludePaths []string `json:",omitempty"`
 
-	VendorPath           *string `json:",omitempty"`
-	VendorDlkmPath       *string `json:",omitempty"`
-	BuildingVendorImage  *bool   `json:",omitempty"`
-	OdmPath              *string `json:",omitempty"`
-	BuildingOdmImage     *bool   `json:",omitempty"`
-	OdmDlkmPath          *string `json:",omitempty"`
-	ProductPath          *string `json:",omitempty"`
-	BuildingProductImage *bool   `json:",omitempty"`
-	SystemExtPath        *string `json:",omitempty"`
-	SystemDlkmPath       *string `json:",omitempty"`
-	OemPath              *string `json:",omitempty"`
+	VendorPath            *string `json:",omitempty"`
+	VendorDlkmPath        *string `json:",omitempty"`
+	BuildingVendorImage   *bool   `json:",omitempty"`
+	OdmPath               *string `json:",omitempty"`
+	BuildingOdmImage      *bool   `json:",omitempty"`
+	OdmDlkmPath           *string `json:",omitempty"`
+	ProductPath           *string `json:",omitempty"`
+	BuildingProductImage  *bool   `json:",omitempty"`
+	SystemExtPath         *string `json:",omitempty"`
+	SystemDlkmPath        *string `json:",omitempty"`
+	OemPath               *string `json:",omitempty"`
+	UserdataPath          *string `json:",omitempty"`
+	BuildingUserdataImage *bool   `json:",omitempty"`
 
 	ClangTidy  *bool   `json:",omitempty"`
 	TidyChecks *string `json:",omitempty"`
@@ -407,7 +409,6 @@ type ProductVariables struct {
 
 	Ndk_abis *bool `json:",omitempty"`
 
-	TrimmedApex                  *bool `json:",omitempty"`
 	ForceApexSymlinkOptimization *bool `json:",omitempty"`
 	CompressedApex               *bool `json:",omitempty"`
 	Aml_abis                     *bool `json:",omitempty"`
@@ -679,7 +680,6 @@ func (v *ProductVariables) SetDefaultConfig() {
 		Malloc_zero_contents:         boolPtr(true),
 		Malloc_pattern_fill_contents: boolPtr(false),
 		Safestack:                    boolPtr(false),
-		TrimmedApex:                  boolPtr(false),
 		Build_from_text_stub:         boolPtr(false),
 
 		BootJars:     ConfiguredJarList{apexes: []string{}, jars: []string{}},
