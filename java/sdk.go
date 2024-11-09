@@ -65,8 +65,6 @@ func defaultJavaLanguageVersion(ctx android.EarlyModuleContext, s android.SdkSpe
 		return JAVA_VERSION_9
 	} else if sdk.FinalOrFutureInt() <= 33 {
 		return JAVA_VERSION_11
-	} else if sdk.FinalOrFutureInt() <= 35 {
-		return JAVA_VERSION_17
 	} else if ctx.Config().TargetsJava21() {
 		// Build flag that controls whether Java 21 is used as the
 		// default target version, or Java 17.
