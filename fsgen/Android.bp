@@ -10,14 +10,18 @@ bootstrap_go_package {
         "soong",
         "soong-android",
         "soong-filesystem",
+        "soong-kernel",
     ],
     srcs: [
         "filesystem_creator.go",
+        "fsgen_mutators.go",
+        "prebuilt_etc_modules_gen.go",
     ],
     testSrcs: [
         "filesystem_creator_test.go",
     ],
     pluginFor: ["soong_build"],
+    visibility: ["//visibility:public"],
 }
 
 soong_filesystem_creator {

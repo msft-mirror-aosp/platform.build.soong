@@ -106,6 +106,18 @@ func (m ModuleProxy) InstallInSystemExt() bool {
 	panic("method is not implemented on ModuleProxy")
 }
 
+func (m ModuleProxy) InstallInSystemDlkm() bool {
+	panic("method is not implemented on ModuleProxy")
+}
+
+func (m ModuleProxy) InstallInVendorDlkm() bool {
+	panic("method is not implemented on ModuleProxy")
+}
+
+func (m ModuleProxy) InstallInOdmDlkm() bool {
+	panic("method is not implemented on ModuleProxy")
+}
+
 func (m ModuleProxy) InstallForceOS() (*OsType, *ArchType) {
 	panic("method is not implemented on ModuleProxy")
 }
@@ -119,6 +131,10 @@ func (m ModuleProxy) HideFromMake() {
 }
 
 func (m ModuleProxy) IsHideFromMake() bool {
+	panic("method is not implemented on ModuleProxy")
+}
+
+func (m ModuleProxy) SkipInstall() {
 	panic("method is not implemented on ModuleProxy")
 }
 
