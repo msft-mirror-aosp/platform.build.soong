@@ -230,8 +230,8 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 	}
 
 	if partitionType == "vendor" || partitionType == "product" {
-		fsProps.Linkerconfig.Gen_linker_config = proptools.BoolPtr(true)
-		fsProps.Linkerconfig.Linker_config_srcs = f.createLinkerConfigSourceFilegroups(ctx, partitionType)
+		fsProps.Linker_config.Gen_linker_config = proptools.BoolPtr(true)
+		fsProps.Linker_config.Linker_config_srcs = f.createLinkerConfigSourceFilegroups(ctx, partitionType)
 	}
 
 	if android.InList(partitionType, dlkmPartitions) {
