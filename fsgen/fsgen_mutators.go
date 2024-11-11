@@ -99,6 +99,13 @@ func generatedPartitions(ctx android.LoadHookContext) []string {
 	if ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.BuildingSystemDlkmImage {
 		generatedPartitions = append(generatedPartitions, "system_dlkm")
 	}
+	if ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.BuildingVendorDlkmImage {
+		generatedPartitions = append(generatedPartitions, "vendor_dlkm")
+	}
+	if ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.BuildingOdmDlkmImage {
+		generatedPartitions = append(generatedPartitions, "odm_dlkm")
+	}
+
 	return generatedPartitions
 }
 
@@ -153,6 +160,16 @@ func createFsGenState(ctx android.LoadHookContext, generatedPrebuiltEtcModuleNam
 					"fs_config_files_system_dlkm": defaultDepCandidateProps(ctx.Config()),
 					// build props are automatically added to `ALL_DEFAULT_INSTALLED_MODULES`
 					"system_dlkm-build.prop": defaultDepCandidateProps(ctx.Config()),
+				},
+				"vendor_dlkm": {
+					"fs_config_dirs_vendor_dlkm":  defaultDepCandidateProps(ctx.Config()),
+					"fs_config_files_vendor_dlkm": defaultDepCandidateProps(ctx.Config()),
+					"vendor_dlkm-build.prop":      defaultDepCandidateProps(ctx.Config()),
+				},
+				"odm_dlkm": {
+					"fs_config_dirs_odm_dlkm":  defaultDepCandidateProps(ctx.Config()),
+					"fs_config_files_odm_dlkm": defaultDepCandidateProps(ctx.Config()),
+					"odm_dlkm-build.prop":      defaultDepCandidateProps(ctx.Config()),
 				},
 			},
 			fsDepsMutex:               sync.Mutex{},
