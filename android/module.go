@@ -1932,9 +1932,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 
 	if m.Enabled(ctx) {
 		// ensure all direct android.Module deps are enabled
-		ctx.VisitDirectDeps(func(m Module) {
-			ctx.validateAndroidModule(m, ctx.OtherModuleDependencyTag(m), ctx.baseModuleContext.strictVisitDeps)
-		})
+		ctx.VisitDirectDepsProxy(func(m ModuleProxy) {})
 
 		if m.Device() {
 			// Handle any init.rc and vintf fragment files requested by the module.  All files installed by this
