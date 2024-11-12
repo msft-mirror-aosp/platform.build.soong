@@ -17,6 +17,7 @@ package fsgen
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 
 	"android/soong/android"
@@ -327,12 +328,21 @@ func removeOverriddenDeps(mctx android.BottomUpMutatorContext) {
 
 var HighPriorityDeps = []string{}
 
+func isHighPriorityDep(depName string) bool {
+	for _, highPriorityDeps := range HighPriorityDeps {
+		if strings.HasPrefix(depName, highPriorityDeps) {
+			return true
+		}
+	}
+	return false
+}
+
 func generateDepStruct(deps map[string]*depCandidateProps) *packagingPropsStruct {
 	depsStruct := packagingPropsStruct{}
 	for depName, depProps := range deps {
 		bitness := getBitness(depProps.Arch)
 		fullyQualifiedDepName := fullyQualifiedModuleName(depName, depProps.Namespace)
-		if android.InList(depName, HighPriorityDeps) {
+		if isHighPriorityDep(depName) {
 			depsStruct.High_priority_deps = append(depsStruct.High_priority_deps, fullyQualifiedDepName)
 		} else if android.InList("32", bitness) && android.InList("64", bitness) {
 			// If both 32 and 64 bit variants are enabled for this module

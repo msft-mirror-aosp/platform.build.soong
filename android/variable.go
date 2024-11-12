@@ -636,7 +636,7 @@ type PartitionVariables struct {
 	BoardInfoFiles      []string `json:",omitempty"`
 	BootLoaderBoardName string   `json:",omitempty"`
 
-	ProductCopyFiles map[string]string `json:",omitempty"`
+	ProductCopyFiles []string `json:",omitempty"`
 
 	BuildingSystemDlkmImage   bool     `json:",omitempty"`
 	SystemKernelModules       []string `json:",omitempty"`
