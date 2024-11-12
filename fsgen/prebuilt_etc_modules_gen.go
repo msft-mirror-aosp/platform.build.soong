@@ -194,6 +194,7 @@ var (
 		"res":             etc.PrebuiltResFactory,
 		"rfs":             etc.PrebuiltRfsFactory,
 		"tts":             etc.PrebuiltVoicepackFactory,
+		"tvconfig":        etc.PrebuiltTvConfigFactory,
 		"tvservice":       etc.PrebuiltTvServiceFactory,
 		"usr/share":       etc.PrebuiltUserShareFactory,
 		"usr/hyphen-data": etc.PrebuiltUserHyphenDataFactory,
