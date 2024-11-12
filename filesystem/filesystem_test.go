@@ -156,11 +156,15 @@ func TestFileSystemFillsLinkerConfigWithStubLibs(t *testing.T) {
 	result := fixture.RunTestWithBp(t, `
 		android_system_image {
 			name: "myfilesystem",
+			base_dir: "system",
 			deps: [
 				"libfoo",
 				"libbar",
 			],
-			linker_config_src: "linker.config.json",
+			linkerconfig: {
+				gen_linker_config: true,
+				linker_config_srcs: ["linker.config.json"],
+			},
 		}
 
 		cc_library {
@@ -176,7 +180,7 @@ func TestFileSystemFillsLinkerConfigWithStubLibs(t *testing.T) {
 	`)
 
 	module := result.ModuleForTests("myfilesystem", "android_common")
-	output := module.Output("system/etc/linker.config.pb")
+	output := module.Output("out/soong/.intermediates/myfilesystem/android_common/root/system/etc/linker.config.pb")
 
 	android.AssertStringDoesContain(t, "linker.config.pb should have libfoo",
 		output.RuleParams.Command, "libfoo.so")
@@ -223,7 +227,10 @@ func TestFileSystemGathersItemsOnlyInSystemPartition(t *testing.T) {
 					deps: ["foo"],
 				},
 			},
-			linker_config_src: "linker.config.json",
+			linkerconfig: {
+				gen_linker_config: true,
+				linker_config_srcs: ["linker.config.json"],
+			},
 		}
 		component {
 			name: "foo",
@@ -318,7 +325,10 @@ func TestFileSystemWithCoverageVariants(t *testing.T) {
 			deps: [
 				"libfoo",
 			],
-			linker_config_src: "linker.config.json",
+			linkerconfig: {
+				gen_linker_config: true,
+				linker_config_srcs: ["linker.config.json"],
+			},
 		}
 
 		cc_library {
@@ -700,8 +710,8 @@ android_filesystem {
     name: "myfilesystem",
     deps: ["libfoo_has_no_stubs", "libfoo_has_stubs"],
     linkerconfig: {
-	    gen_linker_config: true,
-	    linker_config_srcs: ["linker.config.json"],
+        gen_linker_config: true,
+        linker_config_srcs: ["linker.config.json"],
     },
     partition_type: "vendor",
 }
