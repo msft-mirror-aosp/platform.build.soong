@@ -292,10 +292,14 @@ func (f *filesystem) partitionName() string {
 func (f *filesystem) FilterPackagingSpec(ps android.PackagingSpec) bool {
 	// Filesystem module respects the installation semantic. A PackagingSpec from a module with
 	// IsSkipInstall() is skipped.
-	if proptools.Bool(f.properties.Is_auto_generated) { // TODO (spandandas): Remove this.
-		return !ps.SkipInstall() && (ps.Partition() == f.PartitionType())
+	if ps.SkipInstall() {
+		return false
 	}
-	return !ps.SkipInstall()
+	if proptools.Bool(f.properties.Is_auto_generated) { // TODO (spandandas): Remove this.
+		pt := f.PartitionType()
+		return pt == "ramdisk" || ps.Partition() == pt
+	}
+	return true
 }
 
 var pctx = android.NewPackageContext("android/soong/filesystem")
@@ -664,6 +668,7 @@ var validPartitions = []string{
 	"vendor_dlkm",
 	"odm_dlkm",
 	"system_dlkm",
+	"ramdisk",
 }
 
 func (f *filesystem) addMakeBuiltFiles(ctx android.ModuleContext, builder *android.RuleBuilder, rootDir android.Path) {
