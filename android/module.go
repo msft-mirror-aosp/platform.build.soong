@@ -1382,6 +1382,8 @@ func (m *ModuleBase) PartitionTag(config DeviceConfig) string {
 		if config.SystemExtPath() == "system_ext" {
 			partition = "system_ext"
 		}
+	} else if m.InstallInRamdisk() {
+		partition = "ramdisk"
 	}
 	return partition
 }
