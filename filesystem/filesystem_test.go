@@ -161,7 +161,7 @@ func TestFileSystemFillsLinkerConfigWithStubLibs(t *testing.T) {
 				"libfoo",
 				"libbar",
 			],
-			linkerconfig: {
+			linker_config: {
 				gen_linker_config: true,
 				linker_config_srcs: ["linker.config.json"],
 			},
@@ -227,7 +227,7 @@ func TestFileSystemGathersItemsOnlyInSystemPartition(t *testing.T) {
 					deps: ["foo"],
 				},
 			},
-			linkerconfig: {
+			linker_config: {
 				gen_linker_config: true,
 				linker_config_srcs: ["linker.config.json"],
 			},
@@ -325,7 +325,7 @@ func TestFileSystemWithCoverageVariants(t *testing.T) {
 			deps: [
 				"libfoo",
 			],
-			linkerconfig: {
+			linker_config: {
 				gen_linker_config: true,
 				linker_config_srcs: ["linker.config.json"],
 			},
@@ -709,7 +709,7 @@ func TestInstallLinkerConfigFile(t *testing.T) {
 android_filesystem {
     name: "myfilesystem",
     deps: ["libfoo_has_no_stubs", "libfoo_has_stubs"],
-    linkerconfig: {
+    linker_config: {
         gen_linker_config: true,
         linker_config_srcs: ["linker.config.json"],
     },

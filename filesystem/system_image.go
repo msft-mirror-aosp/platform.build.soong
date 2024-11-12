@@ -42,13 +42,13 @@ func (s systemImage) FsProps() FilesystemProperties {
 }
 
 func (s *systemImage) BuildLinkerConfigFile(ctx android.ModuleContext, builder *android.RuleBuilder, rebasedDir android.OutputPath) {
-	if !proptools.Bool(s.filesystem.properties.Linkerconfig.Gen_linker_config) {
+	if !proptools.Bool(s.filesystem.properties.Linker_config.Gen_linker_config) {
 		return
 	}
 
 	provideModules, requireModules := s.getLibsForLinkerConfig(ctx)
 	output := rebasedDir.Join(ctx, "etc", "linker.config.pb")
-	linkerconfig.BuildLinkerConfig(ctx, builder, android.PathsForModuleSrc(ctx, s.filesystem.properties.Linkerconfig.Linker_config_srcs), provideModules, requireModules, output)
+	linkerconfig.BuildLinkerConfig(ctx, builder, android.PathsForModuleSrc(ctx, s.filesystem.properties.Linker_config.Linker_config_srcs), provideModules, requireModules, output)
 
 	s.appendToEntry(ctx, output)
 }

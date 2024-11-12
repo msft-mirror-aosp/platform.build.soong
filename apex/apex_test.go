@@ -10186,7 +10186,7 @@ func TestFileSystemShouldSkipApexLibraries(t *testing.T) {
 			deps: [
 				"libfoo",
 			],
-			linkerconfig: {
+			linker_config: {
 				gen_linker_config: true,
 				linker_config_srcs: ["linker.config.json"],
 			},
