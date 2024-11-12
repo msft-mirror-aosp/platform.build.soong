@@ -99,6 +99,9 @@ func (fa *FlagArtifact) GenerateFlagDeclarationArtifact() *rc_proto.FlagDeclarat
 	if namespace := fa.FlagDeclaration.GetNamespace(); namespace != "" {
 		ret.Namespace = proto.String(namespace)
 	}
+	if bugs := fa.FlagDeclaration.GetBugs(); bugs != nil {
+		ret.Bugs = bugs
+	}
 	if description := fa.FlagDeclaration.GetDescription(); description != "" {
 		ret.Description = proto.String(description)
 	}
