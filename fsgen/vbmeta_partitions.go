@@ -156,6 +156,10 @@ func createVbmetaPartitions(ctx android.LoadHookContext, generatedPartitionTypes
 			// Already handled by a chained vbmeta partition
 			continue
 		}
+		if partitionType == "ramdisk" {
+			// ramdisk is never signed with avb information
+			continue
+		}
 		partitionModules = append(partitionModules, generatedModuleNameForPartition(ctx.Config(), partitionType))
 	}
 
