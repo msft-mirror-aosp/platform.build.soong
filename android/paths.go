@@ -2613,3 +2613,19 @@ func IsThirdPartyPath(path string) bool {
 	}
 	return false
 }
+
+// ToRelativeSourcePath converts absolute source path to the path relative to the source root.
+// This throws an error if the input path is outside of the source root and cannot be converted
+// to the relative path.
+// This should be rarely used given that the source path is relative in Soong.
+func ToRelativeSourcePath(ctx PathContext, path string) string {
+	ret := path
+	if filepath.IsAbs(path) {
+		relPath, err := filepath.Rel(absSrcDir, path)
+		if err != nil || strings.HasPrefix(relPath, "..") {
+			ReportPathErrorf(ctx, "%s is outside of the source root", path)
+		}
+		ret = relPath
+	}
+	return ret
+}

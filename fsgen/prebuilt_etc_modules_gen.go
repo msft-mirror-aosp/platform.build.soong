@@ -100,10 +100,15 @@ func uniqueExistingProductCopyFileMap(ctx android.LoadHookContext) map[string][]
 			ctx.ModuleErrorf("PRODUCT_COPY_FILES must follow the format \"src:dest\", got: %s", copyFilePair)
 		}
 		src, dest := srcDestList[0], srcDestList[1]
+
+		// Some downstream branches use absolute path as entries in PRODUCT_COPY_FILES.
+		// Convert them to relative path from top and check if they do not escape the tree root.
+		relSrc := android.ToRelativeSourcePath(ctx, src)
+
 		if _, ok := seen[dest]; !ok {
-			if optionalPath := android.ExistentPathForSource(ctx, src); optionalPath.Valid() {
+			if optionalPath := android.ExistentPathForSource(ctx, relSrc); optionalPath.Valid() {
 				seen[dest] = true
-				filtered[src] = append(filtered[src], dest)
+				filtered[relSrc] = append(filtered[relSrc], dest)
 			}
 		}
 	}
