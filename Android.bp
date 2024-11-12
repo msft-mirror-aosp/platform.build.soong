@@ -175,6 +175,7 @@ build_prop {
     // Currently, only microdroid, Ravenwood, and cf system image can refer to system-build.prop
     visibility: [
         "//build/make/target/product/generic",
+        "//build/make/target/product/gsi",
         "//packages/modules/Virtualization/build/microdroid",
         "//frameworks/base/ravenwood",
     ],
@@ -186,7 +187,7 @@ build_prop {
     system_ext_specific: true,
     product_config: ":product_config",
     relative_install_path: "etc", // system_ext/etc/build.prop
-    visibility: ["//visibility:private"],
+    visibility: ["//build/make/target/product/gsi"],
 }
 
 build_prop {
@@ -195,7 +196,7 @@ build_prop {
     product_specific: true,
     product_config: ":product_config",
     relative_install_path: "etc", // product/etc/build.prop
-    visibility: ["//visibility:private"],
+    visibility: ["//build/make/target/product/gsi"],
 }
 
 build_prop {
