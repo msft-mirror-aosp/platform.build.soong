@@ -301,13 +301,24 @@ func (f *filesystem) FilterPackagingSpec(ps android.PackagingSpec) bool {
 	}
 	if proptools.Bool(f.properties.Is_auto_generated) { // TODO (spandandas): Remove this.
 		pt := f.PartitionType()
-		return pt == "ramdisk" || ps.Partition() == pt
+		return ps.Partition() == pt || strings.HasPrefix(ps.Partition(), pt+"/")
 	}
 	return true
 }
 
 func (f *filesystem) ModifyPackagingSpec(ps *android.PackagingSpec) {
-	// do nothing by default
+	// Sometimes, android.modulePartition() returns a path with >1 path components.
+	// This makes the partition field of packagingSpecs have multiple components, like
+	// "system/product". Right now, the filesystem module doesn't look at the partition field
+	// when deciding what path to install the file under, only the RelPathInPackage field, so
+	// we move the later path components from partition to relPathInPackage. This should probably
+	// be revisited in the future.
+	prefix := f.PartitionType() + "/"
+	if strings.HasPrefix(ps.Partition(), prefix) {
+		subPartition := strings.TrimPrefix(ps.Partition(), prefix)
+		ps.SetPartition(f.PartitionType())
+		ps.SetRelPathInPackage(filepath.Join(subPartition, ps.RelPathInPackage()))
+	}
 }
 
 var pctx = android.NewPackageContext("android/soong/filesystem")
