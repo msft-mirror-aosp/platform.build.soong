@@ -153,7 +153,7 @@ type FilesystemProperties struct {
 
 	F2fs F2fsProperties
 
-	Linkerconfig LinkerConfigProperties
+	Linker_config LinkerConfigProperties
 
 	// Determines if the module is auto-generated from Soong or not. If the module is
 	// auto-generated, its deps are exempted from visibility enforcement.
@@ -726,13 +726,13 @@ func (f *filesystem) buildEventLogtagsFile(ctx android.ModuleContext, builder *a
 }
 
 func (f *filesystem) BuildLinkerConfigFile(ctx android.ModuleContext, builder *android.RuleBuilder, rebasedDir android.OutputPath) {
-	if !proptools.Bool(f.properties.Linkerconfig.Gen_linker_config) {
+	if !proptools.Bool(f.properties.Linker_config.Gen_linker_config) {
 		return
 	}
 
 	provideModules, _ := f.getLibsForLinkerConfig(ctx)
 	output := rebasedDir.Join(ctx, "etc", "linker.config.pb")
-	linkerconfig.BuildLinkerConfig(ctx, builder, android.PathsForModuleSrc(ctx, f.properties.Linkerconfig.Linker_config_srcs), provideModules, nil, output)
+	linkerconfig.BuildLinkerConfig(ctx, builder, android.PathsForModuleSrc(ctx, f.properties.Linker_config.Linker_config_srcs), provideModules, nil, output)
 
 	f.appendToEntry(ctx, output)
 }
