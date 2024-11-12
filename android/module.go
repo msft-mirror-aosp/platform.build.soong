@@ -81,6 +81,9 @@ type Module interface {
 	InstallInProduct() bool
 	InstallInVendor() bool
 	InstallInSystemExt() bool
+	InstallInSystemDlkm() bool
+	InstallInVendorDlkm() bool
+	InstallInOdmDlkm() bool
 	InstallForceOS() (*OsType, *ArchType)
 	PartitionTag(DeviceConfig) string
 	HideFromMake()
@@ -385,6 +388,15 @@ type commonProperties struct {
 
 	// Whether this module is installed to debug ramdisk
 	Debug_ramdisk *bool
+
+	// Install to partition system_dlkm when set to true.
+	System_dlkm_specific *bool
+
+	// Install to partition vendor_dlkm when set to true.
+	Vendor_dlkm_specific *bool
+
+	// Install to partition odm_dlkm when set to true.
+	Odm_dlkm_specific *bool
 
 	// Whether this module is built for non-native architectures (also known as native bridge binary)
 	Native_bridge_supported *bool `android:"arch_variant"`
@@ -1370,6 +1382,8 @@ func (m *ModuleBase) PartitionTag(config DeviceConfig) string {
 		if config.SystemExtPath() == "system_ext" {
 			partition = "system_ext"
 		}
+	} else if m.InstallInRamdisk() {
+		partition = "ramdisk"
 	}
 	return partition
 }
@@ -1533,6 +1547,18 @@ func (m *ModuleBase) InstallInSystemExt() bool {
 
 func (m *ModuleBase) InstallInRoot() bool {
 	return false
+}
+
+func (m *ModuleBase) InstallInSystemDlkm() bool {
+	return Bool(m.commonProperties.System_dlkm_specific)
+}
+
+func (m *ModuleBase) InstallInVendorDlkm() bool {
+	return Bool(m.commonProperties.Vendor_dlkm_specific)
+}
+
+func (m *ModuleBase) InstallInOdmDlkm() bool {
+	return Bool(m.commonProperties.Odm_dlkm_specific)
 }
 
 func (m *ModuleBase) InstallForceOS() (*OsType, *ArchType) {
@@ -2012,7 +2038,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		ctx.GetMissingDependencies()
 	}
 
-	if m == ctx.FinalModule().(Module).base() {
+	if ctx.IsFinalModule(m.module) {
 		m.generateModuleTarget(ctx)
 		if ctx.Failed() {
 			return

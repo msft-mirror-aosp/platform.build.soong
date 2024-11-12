@@ -15,10 +15,12 @@
 package fsgen
 
 import (
-	"android/soong/android"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
+
+	"android/soong/android"
 
 	"github.com/google/blueprint/proptools"
 )
@@ -79,7 +81,7 @@ func defaultDepCandidateProps(config android.Config) *depCandidateProps {
 }
 
 func generatedPartitions(ctx android.LoadHookContext) []string {
-	generatedPartitions := []string{"system"}
+	generatedPartitions := []string{"system", "ramdisk"}
 	if ctx.DeviceConfig().SystemExtPath() == "system_ext" {
 		generatedPartitions = append(generatedPartitions, "system_ext")
 	}
@@ -92,9 +94,19 @@ func generatedPartitions(ctx android.LoadHookContext) []string {
 	if ctx.DeviceConfig().BuildingOdmImage() && ctx.DeviceConfig().OdmPath() == "odm" {
 		generatedPartitions = append(generatedPartitions, "odm")
 	}
+	if ctx.DeviceConfig().BuildingUserdataImage() && ctx.DeviceConfig().UserdataPath() == "data" {
+		generatedPartitions = append(generatedPartitions, "userdata")
+	}
 	if ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.BuildingSystemDlkmImage {
 		generatedPartitions = append(generatedPartitions, "system_dlkm")
 	}
+	if ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.BuildingVendorDlkmImage {
+		generatedPartitions = append(generatedPartitions, "vendor_dlkm")
+	}
+	if ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.BuildingOdmDlkmImage {
+		generatedPartitions = append(generatedPartitions, "odm_dlkm")
+	}
+
 	return generatedPartitions
 }
 
@@ -113,7 +125,6 @@ func createFsGenState(ctx android.LoadHookContext, generatedPrebuiltEtcModuleNam
 					"dex_bootjars":                              defaultDepCandidateProps(ctx.Config()),
 					"framework_compatibility_matrix.device.xml": defaultDepCandidateProps(ctx.Config()),
 					"init.environ.rc-soong":                     defaultDepCandidateProps(ctx.Config()),
-					"libclang_rt.asan":                          defaultDepCandidateProps(ctx.Config()),
 					"libcompiler_rt":                            defaultDepCandidateProps(ctx.Config()),
 					"libdmabufheap":                             defaultDepCandidateProps(ctx.Config()),
 					"libgsi":                                    defaultDepCandidateProps(ctx.Config()),
@@ -143,9 +154,26 @@ func createFsGenState(ctx android.LoadHookContext, generatedPrebuiltEtcModuleNam
 					"com.android.vndk.v33": defaultDepCandidateProps(ctx.Config()),
 					"com.android.vndk.v34": defaultDepCandidateProps(ctx.Config()),
 				},
-				"system_dlkm": {},
+				"userdata": {},
+				"system_dlkm": {
+					// these are phony required deps of the phony fs_config_dirs_nonsystem
+					"fs_config_dirs_system_dlkm":  defaultDepCandidateProps(ctx.Config()),
+					"fs_config_files_system_dlkm": defaultDepCandidateProps(ctx.Config()),
+					// build props are automatically added to `ALL_DEFAULT_INSTALLED_MODULES`
+					"system_dlkm-build.prop": defaultDepCandidateProps(ctx.Config()),
+				},
+				"vendor_dlkm": {
+					"fs_config_dirs_vendor_dlkm":  defaultDepCandidateProps(ctx.Config()),
+					"fs_config_files_vendor_dlkm": defaultDepCandidateProps(ctx.Config()),
+					"vendor_dlkm-build.prop":      defaultDepCandidateProps(ctx.Config()),
+				},
+				"odm_dlkm": {
+					"fs_config_dirs_odm_dlkm":  defaultDepCandidateProps(ctx.Config()),
+					"fs_config_files_odm_dlkm": defaultDepCandidateProps(ctx.Config()),
+					"odm_dlkm-build.prop":      defaultDepCandidateProps(ctx.Config()),
+				},
+				"ramdisk": {},
 			},
-			soongGeneratedPartitions:  generatedPartitions(ctx),
 			fsDepsMutex:               sync.Mutex{},
 			moduleToInstallationProps: map[string]installationProperties{},
 		}
@@ -179,29 +207,31 @@ func appendDepIfAppropriate(mctx android.BottomUpMutatorContext, deps *multilibD
 }
 
 func collectDepsMutator(mctx android.BottomUpMutatorContext) {
+	m := mctx.Module()
+	if m.Target().Os.Class != android.Device {
+		return
+	}
 	fsGenState := mctx.Config().Get(fsGenStateOnceKey).(*FsGenState)
 
-	m := mctx.Module()
-	if m.Target().Os.Class == android.Device && slices.Contains(fsGenState.depCandidates, mctx.ModuleName()) {
+	fsGenState.fsDepsMutex.Lock()
+	defer fsGenState.fsDepsMutex.Unlock()
+
+	if slices.Contains(fsGenState.depCandidates, mctx.ModuleName()) {
 		installPartition := m.PartitionTag(mctx.DeviceConfig())
-		fsGenState.fsDepsMutex.Lock()
 		// Only add the module as dependency when:
 		// - its enabled
 		// - its namespace is included in PRODUCT_SOONG_NAMESPACES
 		if m.Enabled(mctx) && m.ExportedToMake() {
 			appendDepIfAppropriate(mctx, fsGenState.fsDeps[installPartition], installPartition)
 		}
-		fsGenState.fsDepsMutex.Unlock()
 	}
 	// store the map of module to (required,overrides) even if the module is not in PRODUCT_PACKAGES.
 	// the module might be installed transitively.
-	if m.Target().Os.Class == android.Device && m.Enabled(mctx) && m.ExportedToMake() {
-		fsGenState.fsDepsMutex.Lock()
+	if m.Enabled(mctx) && m.ExportedToMake() {
 		fsGenState.moduleToInstallationProps[m.Name()] = installationProperties{
 			Required:  m.RequiredModuleNames(mctx),
 			Overrides: m.Overrides(),
 		}
-		fsGenState.fsDepsMutex.Unlock()
 	}
 }
 
@@ -298,12 +328,21 @@ func removeOverriddenDeps(mctx android.BottomUpMutatorContext) {
 
 var HighPriorityDeps = []string{}
 
+func isHighPriorityDep(depName string) bool {
+	for _, highPriorityDeps := range HighPriorityDeps {
+		if strings.HasPrefix(depName, highPriorityDeps) {
+			return true
+		}
+	}
+	return false
+}
+
 func generateDepStruct(deps map[string]*depCandidateProps) *packagingPropsStruct {
 	depsStruct := packagingPropsStruct{}
 	for depName, depProps := range deps {
 		bitness := getBitness(depProps.Arch)
 		fullyQualifiedDepName := fullyQualifiedModuleName(depName, depProps.Namespace)
-		if android.InList(depName, HighPriorityDeps) {
+		if isHighPriorityDep(depName) {
 			depsStruct.High_priority_deps = append(depsStruct.High_priority_deps, fullyQualifiedDepName)
 		} else if android.InList("32", bitness) && android.InList("64", bitness) {
 			// If both 32 and 64 bit variants are enabled for this module

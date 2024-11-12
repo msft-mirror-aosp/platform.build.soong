@@ -81,7 +81,7 @@ type SingletonContext interface {
 	VisitAllModuleVariantProxies(module Module, visit func(proxy ModuleProxy))
 
 	PrimaryModule(module Module) Module
-	FinalModule(module Module) Module
+	IsFinalModule(module Module) bool
 
 	AddNinjaFileDeps(deps ...string)
 
@@ -273,8 +273,8 @@ func (s *singletonContextAdaptor) PrimaryModule(module Module) Module {
 	return s.SingletonContext.PrimaryModule(module).(Module)
 }
 
-func (s *singletonContextAdaptor) FinalModule(module Module) Module {
-	return s.SingletonContext.FinalModule(module).(Module)
+func (s *singletonContextAdaptor) IsFinalModule(module Module) bool {
+	return s.SingletonContext.IsFinalModule(module)
 }
 
 func (s *singletonContextAdaptor) ModuleVariantsFromName(referer Module, name string) []Module {
