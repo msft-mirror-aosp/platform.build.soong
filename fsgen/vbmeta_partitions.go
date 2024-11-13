@@ -51,7 +51,7 @@ func createVbmetaPartitions(ctx android.LoadHookContext, generatedPartitionTypes
 
 	var result []vbmetaModuleInfo
 
-	var chainedPartitions []filesystem.ChainedPartitionProperties
+	var chainedPartitions []string
 	var partitionTypesHandledByChainedPartitions []string
 	for chainedName, props := range partitionVars.ChainedVbmetaPartitions {
 		chainedName = "vbmeta_" + chainedName
@@ -117,11 +117,7 @@ func createVbmetaPartitions(ctx android.LoadHookContext, generatedPartitionTypes
 			},
 		).HideFromMake()
 
-		chainedPartitions = append(chainedPartitions, filesystem.ChainedPartitionProperties{
-			Name:                    &chainedName,
-			Rollback_index_location: &ril,
-			Private_key:             &props.Key,
-		})
+		chainedPartitions = append(chainedPartitions, name)
 
 		result = append(result, vbmetaModuleInfo{
 			moduleName:    name,
@@ -154,6 +150,10 @@ func createVbmetaPartitions(ctx android.LoadHookContext, generatedPartitionTypes
 	for _, partitionType := range generatedPartitionTypes {
 		if slices.Contains(partitionTypesHandledByChainedPartitions, partitionType) {
 			// Already handled by a chained vbmeta partition
+			continue
+		}
+		if partitionType == "ramdisk" {
+			// ramdisk is never signed with avb information
 			continue
 		}
 		partitionModules = append(partitionModules, generatedModuleNameForPartition(ctx.Config(), partitionType))

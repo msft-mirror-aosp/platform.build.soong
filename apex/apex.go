@@ -105,11 +105,10 @@ type apexBundleProperties struct {
 	Rros []string
 
 	// List of bootclasspath fragments that are embedded inside this APEX bundle.
-	Bootclasspath_fragments []string
+	Bootclasspath_fragments proptools.Configurable[[]string]
 
 	// List of systemserverclasspath fragments that are embedded inside this APEX bundle.
-	Systemserverclasspath_fragments        proptools.Configurable[[]string]
-	ResolvedSystemserverclasspathFragments []string `blueprint:"mutated"`
+	Systemserverclasspath_fragments proptools.Configurable[[]string]
 
 	// List of java libraries that are embedded inside this APEX bundle.
 	Java_libs []string
@@ -884,13 +883,11 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 		}
 	}
 
-	a.properties.ResolvedSystemserverclasspathFragments = a.properties.Systemserverclasspath_fragments.GetOrDefault(ctx, nil)
-
 	// Common-arch dependencies come next
 	commonVariation := ctx.Config().AndroidCommonTarget.Variations()
 	ctx.AddFarVariationDependencies(commonVariation, rroTag, a.properties.Rros...)
-	ctx.AddFarVariationDependencies(commonVariation, bcpfTag, a.properties.Bootclasspath_fragments...)
-	ctx.AddFarVariationDependencies(commonVariation, sscpfTag, a.properties.ResolvedSystemserverclasspathFragments...)
+	ctx.AddFarVariationDependencies(commonVariation, bcpfTag, a.properties.Bootclasspath_fragments.GetOrDefault(ctx, nil)...)
+	ctx.AddFarVariationDependencies(commonVariation, sscpfTag, a.properties.Systemserverclasspath_fragments.GetOrDefault(ctx, nil)...)
 	ctx.AddFarVariationDependencies(commonVariation, javaLibTag, a.properties.Java_libs...)
 	ctx.AddFarVariationDependencies(commonVariation, fsTag, a.properties.Filesystems...)
 	ctx.AddFarVariationDependencies(commonVariation, compatConfigTag, a.properties.Compat_configs...)
@@ -2764,8 +2761,8 @@ func isStaticExecutableAllowed(apex string, exec string) bool {
 // Collect information for opening IDE project files in java/jdeps.go.
 func (a *apexBundle) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
 	dpInfo.Deps = append(dpInfo.Deps, a.properties.Java_libs...)
-	dpInfo.Deps = append(dpInfo.Deps, a.properties.Bootclasspath_fragments...)
-	dpInfo.Deps = append(dpInfo.Deps, a.properties.ResolvedSystemserverclasspathFragments...)
+	dpInfo.Deps = append(dpInfo.Deps, a.properties.Bootclasspath_fragments.GetOrDefault(ctx, nil)...)
+	dpInfo.Deps = append(dpInfo.Deps, a.properties.Systemserverclasspath_fragments.GetOrDefault(ctx, nil)...)
 }
 
 func init() {
