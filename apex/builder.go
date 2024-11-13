@@ -196,7 +196,7 @@ var (
 		Command: `diff --unchanged-group-format='' \` +
 			`--changed-group-format='%<' \` +
 			`${image_content_file} ${allowed_files_file} || (` +
-			`echo -e "New unexpected files were added to ${apex_module_name}." ` +
+			`echo "New unexpected files were added to ${apex_module_name}." ` +
 			` "To fix the build run following command:" && ` +
 			`echo "system/apex/tools/update_allowed_list.sh ${allowed_files_file} ${image_content_file}" && ` +
 			`exit 1); touch ${out}`,
