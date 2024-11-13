@@ -63,14 +63,11 @@ func RegisterPreDepsMutators(ctx android.RegisterMutatorsContext) {
 func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
 	ctx.TopDown("apex_info", apexInfoMutator)
 	ctx.BottomUp("apex_unique", apexUniqueVariationsMutator)
-	ctx.BottomUp("apex_test_for_deps", apexTestForDepsMutator)
-	ctx.BottomUp("apex_test_for", apexTestForMutator)
 	// Run mark_platform_availability before the apexMutator as the apexMutator needs to know whether
 	// it should create a platform variant.
 	ctx.BottomUp("mark_platform_availability", markPlatformAvailability)
 	ctx.Transition("apex", &apexTransitionMutator{})
 	ctx.BottomUp("apex_directly_in_any", apexDirectlyInAnyMutator).MutatesDependencies()
-	ctx.BottomUp("apex_dcla_deps", apexDCLADepsMutator)
 }
 
 type apexBundleProperties struct {
@@ -108,11 +105,10 @@ type apexBundleProperties struct {
 	Rros []string
 
 	// List of bootclasspath fragments that are embedded inside this APEX bundle.
-	Bootclasspath_fragments []string
+	Bootclasspath_fragments proptools.Configurable[[]string]
 
 	// List of systemserverclasspath fragments that are embedded inside this APEX bundle.
-	Systemserverclasspath_fragments        proptools.Configurable[[]string]
-	ResolvedSystemserverclasspathFragments []string `blueprint:"mutated"`
+	Systemserverclasspath_fragments proptools.Configurable[[]string]
 
 	// List of java libraries that are embedded inside this APEX bundle.
 	Java_libs []string
@@ -734,7 +730,6 @@ var (
 	androidAppTag  = &dependencyTag{name: "androidApp", payload: true}
 	bpfTag         = &dependencyTag{name: "bpf", payload: true}
 	certificateTag = &dependencyTag{name: "certificate"}
-	dclaTag        = &dependencyTag{name: "dcla"}
 	executableTag  = &dependencyTag{name: "executable", payload: true}
 	fsTag          = &dependencyTag{name: "filesystem", payload: true}
 	bcpfTag        = &dependencyTag{name: "bootclasspathFragment", payload: true, sourceOnly: true, memberType: java.BootclasspathFragmentSdkMemberType}
@@ -747,7 +742,6 @@ var (
 	prebuiltTag     = &dependencyTag{name: "prebuilt", payload: true}
 	rroTag          = &dependencyTag{name: "rro", payload: true}
 	sharedLibTag    = &dependencyTag{name: "sharedLib", payload: true}
-	testForTag      = &dependencyTag{name: "test for"}
 	testTag         = &dependencyTag{name: "test", payload: true}
 	shBinaryTag     = &dependencyTag{name: "shBinary", payload: true}
 )
@@ -896,13 +890,11 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 		}
 	}
 
-	a.properties.ResolvedSystemserverclasspathFragments = a.properties.Systemserverclasspath_fragments.GetOrDefault(ctx, nil)
-
 	// Common-arch dependencies come next
 	commonVariation := ctx.Config().AndroidCommonTarget.Variations()
 	ctx.AddFarVariationDependencies(commonVariation, rroTag, a.properties.Rros...)
-	ctx.AddFarVariationDependencies(commonVariation, bcpfTag, a.properties.Bootclasspath_fragments...)
-	ctx.AddFarVariationDependencies(commonVariation, sscpfTag, a.properties.ResolvedSystemserverclasspathFragments...)
+	ctx.AddFarVariationDependencies(commonVariation, bcpfTag, a.properties.Bootclasspath_fragments.GetOrDefault(ctx, nil)...)
+	ctx.AddFarVariationDependencies(commonVariation, sscpfTag, a.properties.Systemserverclasspath_fragments.GetOrDefault(ctx, nil)...)
 	ctx.AddFarVariationDependencies(commonVariation, javaLibTag, a.properties.Java_libs...)
 	ctx.AddFarVariationDependencies(commonVariation, fsTag, a.properties.Filesystems...)
 	ctx.AddFarVariationDependencies(commonVariation, compatConfigTag, a.properties.Compat_configs...)
@@ -951,33 +943,6 @@ func (a *apexBundle) OverridablePropertiesDepsMutator(ctx android.BottomUpMutato
 		// PRODUCT_DEFAULT_DEV_CERTIFICATE
 	}
 }
-
-func apexDCLADepsMutator(mctx android.BottomUpMutatorContext) {
-	if !mctx.Config().ApexTrimEnabled() {
-		return
-	}
-	if a, ok := mctx.Module().(*apexBundle); ok && a.overridableProperties.Trim_against != nil {
-		commonVariation := mctx.Config().AndroidCommonTarget.Variations()
-		mctx.AddFarVariationDependencies(commonVariation, dclaTag, String(a.overridableProperties.Trim_against))
-	} else if o, ok := mctx.Module().(*OverrideApex); ok {
-		for _, p := range o.GetProperties() {
-			properties, ok := p.(*overridableProperties)
-			if !ok {
-				continue
-			}
-			if properties.Trim_against != nil {
-				commonVariation := mctx.Config().AndroidCommonTarget.Variations()
-				mctx.AddFarVariationDependencies(commonVariation, dclaTag, String(properties.Trim_against))
-			}
-		}
-	}
-}
-
-type DCLAInfo struct {
-	ProvidedLibs []string
-}
-
-var DCLAInfoProvider = blueprint.NewMutatorProvider[DCLAInfo]("apex_info")
 
 var _ ApexInfoMutator = (*apexBundle)(nil)
 
@@ -1087,12 +1052,6 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		child.(android.ApexModule).BuildForApex(apexInfo) // leave a mark!
 		return true
 	})
-
-	if a.dynamic_common_lib_apex() {
-		android.SetProvider(mctx, DCLAInfoProvider, DCLAInfo{
-			ProvidedLibs: a.properties.Native_shared_libs.GetOrDefault(mctx, nil),
-		})
-	}
 }
 
 type ApexInfoMutator interface {
@@ -1182,40 +1141,6 @@ func apexUniqueVariationsMutator(mctx android.BottomUpMutatorContext) {
 	}
 	if am, ok := mctx.Module().(android.ApexModule); ok {
 		android.UpdateUniqueApexVariationsForDeps(mctx, am)
-	}
-}
-
-// apexTestForDepsMutator checks if this module is a test for an apex. If so, add a dependency on
-// the apex in order to retrieve its contents later.
-// TODO(jiyong): move this to android/apex.go?
-func apexTestForDepsMutator(mctx android.BottomUpMutatorContext) {
-	if !mctx.Module().Enabled(mctx) {
-		return
-	}
-	if am, ok := mctx.Module().(android.ApexModule); ok {
-		if testFor := am.TestFor(); len(testFor) > 0 {
-			mctx.AddFarVariationDependencies([]blueprint.Variation{
-				{Mutator: "os", Variation: am.Target().OsVariation()},
-				{"arch", "common"},
-			}, testForTag, testFor...)
-		}
-	}
-}
-
-// TODO(jiyong): move this to android/apex.go?
-func apexTestForMutator(mctx android.BottomUpMutatorContext) {
-	if !mctx.Module().Enabled(mctx) {
-		return
-	}
-	if _, ok := mctx.Module().(android.ApexModule); ok {
-		var contents []*android.ApexContents
-		for _, testFor := range mctx.GetDirectDepsWithTag(testForTag) {
-			abInfo, _ := android.OtherModuleProvider(mctx, testFor, android.ApexBundleInfoProvider)
-			contents = append(contents, abInfo.Contents)
-		}
-		android.SetProvider(mctx, android.ApexTestForInfoProvider, android.ApexTestForInfo{
-			ApexContents: contents,
-		})
 	}
 }
 
@@ -1440,19 +1365,6 @@ func (a *apexBundle) testOnlyShouldForceCompression() bool {
 // See the dynamic_common_lib_apex property
 func (a *apexBundle) dynamic_common_lib_apex() bool {
 	return proptools.BoolDefault(a.properties.Dynamic_common_lib_apex, false)
-}
-
-// See the list of libs to trim
-func (a *apexBundle) libs_to_trim(ctx android.ModuleContext) []string {
-	dclaModules := ctx.GetDirectDepsWithTag(dclaTag)
-	if len(dclaModules) > 1 {
-		panic(fmt.Errorf("expected exactly at most one dcla dependency, got %d", len(dclaModules)))
-	}
-	if len(dclaModules) > 0 {
-		DCLAInfo, _ := android.OtherModuleProvider(ctx, dclaModules[0], DCLAInfoProvider)
-		return DCLAInfo.ProvidedLibs
-	}
-	return []string{}
 }
 
 // These functions are interfacing with cc/sanitizer.go. The entire APEX (along with all of its
@@ -2861,8 +2773,8 @@ func isStaticExecutableAllowed(apex string, exec string) bool {
 // Collect information for opening IDE project files in java/jdeps.go.
 func (a *apexBundle) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
 	dpInfo.Deps = append(dpInfo.Deps, a.properties.Java_libs...)
-	dpInfo.Deps = append(dpInfo.Deps, a.properties.Bootclasspath_fragments...)
-	dpInfo.Deps = append(dpInfo.Deps, a.properties.ResolvedSystemserverclasspathFragments...)
+	dpInfo.Deps = append(dpInfo.Deps, a.properties.Bootclasspath_fragments.GetOrDefault(ctx, nil)...)
+	dpInfo.Deps = append(dpInfo.Deps, a.properties.Systemserverclasspath_fragments.GetOrDefault(ctx, nil)...)
 }
 
 func init() {
@@ -2939,10 +2851,6 @@ func rBcpPackages() map[string][]string {
 			"android.net",
 		},
 	}
-}
-
-func (a *apexBundle) IsTestApex() bool {
-	return a.testApex
 }
 
 // verifyNativeImplementationLibs compares the list of transitive implementation libraries used to link native

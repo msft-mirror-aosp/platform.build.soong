@@ -1599,6 +1599,17 @@ func (c *deviceConfig) OemPath() string {
 	return "oem"
 }
 
+func (c *deviceConfig) UserdataPath() string {
+	if c.config.productVariables.UserdataPath != nil {
+		return *c.config.productVariables.UserdataPath
+	}
+	return "data"
+}
+
+func (c *deviceConfig) BuildingUserdataImage() bool {
+	return proptools.Bool(c.config.productVariables.BuildingUserdataImage)
+}
+
 func (c *deviceConfig) BtConfigIncludeDir() string {
 	return String(c.config.productVariables.BtConfigIncludeDir)
 }
@@ -1821,10 +1832,6 @@ func (c *config) ForceApexSymlinkOptimization() bool {
 
 func (c *config) ApexCompressionEnabled() bool {
 	return Bool(c.productVariables.CompressedApex) && !c.UnbundledBuildApps()
-}
-
-func (c *config) ApexTrimEnabled() bool {
-	return Bool(c.productVariables.TrimmedApex)
 }
 
 func (c *config) UseSoongSystemImage() bool {
