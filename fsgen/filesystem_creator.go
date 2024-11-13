@@ -62,7 +62,8 @@ func filesystemCreatorFactory() android.Module {
 	module.AddProperties(&module.properties)
 	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
 		generatedPrebuiltEtcModuleNames := createPrebuiltEtcModules(ctx)
-		createFsGenState(ctx, generatedPrebuiltEtcModuleNames)
+		avbpubkeyGenerated := createAvbpubkeyModule(ctx)
+		createFsGenState(ctx, generatedPrebuiltEtcModuleNames, avbpubkeyGenerated)
 		module.createInternalModules(ctx)
 	})
 
