@@ -18,6 +18,8 @@ import (
 	"android/soong/android"
 	"android/soong/linkerconfig"
 
+	"strings"
+
 	"github.com/google/blueprint/proptools"
 )
 
@@ -58,5 +60,6 @@ func (s *systemImage) BuildLinkerConfigFile(ctx android.ModuleContext, builder *
 // for symbol lookup by imitating "activated" paths.
 func (s *systemImage) FilterPackagingSpec(ps android.PackagingSpec) bool {
 	return !ps.SkipInstall() &&
-		(ps.Partition() == "system" || ps.Partition() == "root")
+		(ps.Partition() == "system" || ps.Partition() == "root" ||
+			strings.HasPrefix(ps.Partition(), "system/"))
 }

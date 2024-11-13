@@ -67,6 +67,10 @@ type filesystemBuilder interface {
 	BuildLinkerConfigFile(ctx android.ModuleContext, builder *android.RuleBuilder, rebasedDir android.OutputPath)
 	// Function that filters PackagingSpec in PackagingBase.GatherPackagingSpecs()
 	FilterPackagingSpec(spec android.PackagingSpec) bool
+	// Function that modifies PackagingSpec in PackagingBase.GatherPackagingSpecs() to customize.
+	// For example, GSI system.img contains system_ext and product artifacts and their
+	// relPathInPackage need to be rebased to system/system_ext and system/system_product.
+	ModifyPackagingSpec(spec *android.PackagingSpec)
 }
 
 var _ filesystemBuilder = (*filesystem)(nil)
@@ -297,9 +301,24 @@ func (f *filesystem) FilterPackagingSpec(ps android.PackagingSpec) bool {
 	}
 	if proptools.Bool(f.properties.Is_auto_generated) { // TODO (spandandas): Remove this.
 		pt := f.PartitionType()
-		return pt == "ramdisk" || ps.Partition() == pt
+		return ps.Partition() == pt || strings.HasPrefix(ps.Partition(), pt+"/")
 	}
 	return true
+}
+
+func (f *filesystem) ModifyPackagingSpec(ps *android.PackagingSpec) {
+	// Sometimes, android.modulePartition() returns a path with >1 path components.
+	// This makes the partition field of packagingSpecs have multiple components, like
+	// "system/product". Right now, the filesystem module doesn't look at the partition field
+	// when deciding what path to install the file under, only the RelPathInPackage field, so
+	// we move the later path components from partition to relPathInPackage. This should probably
+	// be revisited in the future.
+	prefix := f.PartitionType() + "/"
+	if strings.HasPrefix(ps.Partition(), prefix) {
+		subPartition := strings.TrimPrefix(ps.Partition(), prefix)
+		ps.SetPartition(f.PartitionType())
+		ps.SetRelPathInPackage(filepath.Join(subPartition, ps.RelPathInPackage()))
+	}
 }
 
 var pctx = android.NewPackageContext("android/soong/filesystem")
@@ -792,7 +811,7 @@ func (f *filesystem) SignedOutputPath() android.Path {
 // Note that "apex" module installs its contents to "apex"(fake partition) as well
 // for symbol lookup by imitating "activated" paths.
 func (f *filesystem) gatherFilteredPackagingSpecs(ctx android.ModuleContext) map[string]android.PackagingSpec {
-	specs := f.PackagingBase.GatherPackagingSpecsWithFilter(ctx, f.filesystemBuilder.FilterPackagingSpec)
+	specs := f.PackagingBase.GatherPackagingSpecsWithFilterAndModifier(ctx, f.filesystemBuilder.FilterPackagingSpec, f.filesystemBuilder.ModifyPackagingSpec)
 	return specs
 }
 
@@ -818,13 +837,7 @@ type filesystemDefaults struct {
 	android.ModuleBase
 	android.DefaultsModuleBase
 
-	properties filesystemDefaultsProperties
-}
-
-type filesystemDefaultsProperties struct {
-	// Identifies which partition this is for //visibility:any_system_image (and others) visibility
-	// checks, and will be used in the future for API surface checks.
-	Partition_type *string
+	properties FilesystemProperties
 }
 
 // android_filesystem_defaults is a default module for android_filesystem and android_system_image
