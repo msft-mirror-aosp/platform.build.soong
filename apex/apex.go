@@ -2625,7 +2625,7 @@ func (a *apexBundle) checkUpdatable(ctx android.ModuleContext) {
 
 // checkClasspathFragments enforces that all classpath fragments in deps generate classpaths.proto config.
 func (a *apexBundle) checkClasspathFragments(ctx android.ModuleContext) {
-	ctx.VisitDirectDeps(func(module android.Module) {
+	ctx.VisitDirectDepsProxy(func(module android.ModuleProxy) {
 		if tag := ctx.OtherModuleDependencyTag(module); tag == bcpfTag || tag == sscpfTag {
 			info, _ := android.OtherModuleProvider(ctx, module, java.ClasspathFragmentProtoContentInfoProvider)
 			if !info.ClasspathFragmentProtoGenerated {
