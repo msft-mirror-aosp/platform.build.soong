@@ -230,8 +230,8 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 	}
 
 	if partitionType == "vendor" || partitionType == "product" {
-		fsProps.Linkerconfig.Gen_linker_config = proptools.BoolPtr(true)
-		fsProps.Linkerconfig.Linker_config_srcs = f.createLinkerConfigSourceFilegroups(ctx, partitionType)
+		fsProps.Linker_config.Gen_linker_config = proptools.BoolPtr(true)
+		fsProps.Linker_config.Linker_config_srcs = f.createLinkerConfigSourceFilegroups(ctx, partitionType)
 	}
 
 	if android.InList(partitionType, dlkmPartitions) {
@@ -267,6 +267,7 @@ func (f *filesystemCreator) createPrebuiltKernelModules(ctx android.LoadHookCont
 		Vendor_dlkm_specific *bool
 		Odm_dlkm_specific    *bool
 		Load_by_default      *bool
+		Blocklist_file       *string
 	}{
 		Name: proptools.StringPtr(name),
 	}
@@ -279,15 +280,24 @@ func (f *filesystemCreator) createPrebuiltKernelModules(ctx android.LoadHookCont
 			// https://source.corp.google.com/h/googleplex-android/platform/build/+/ef55daac9954896161b26db4f3ef1781b5a5694c:core/Makefile;l=695-700;drc=549fe2a5162548bd8b47867d35f907eb22332023;bpv=1;bpt=0
 			props.Load_by_default = proptools.BoolPtr(false)
 		}
+		if blocklistFile := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.SystemKernelBlocklistFile; blocklistFile != "" {
+			props.Blocklist_file = proptools.StringPtr(blocklistFile)
+		}
 	case "vendor_dlkm":
 		props.Srcs = ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.VendorKernelModules
 		if len(ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.SystemKernelModules) > 0 {
 			props.System_deps = []string{":" + generatedModuleName(ctx.Config(), "system_dlkm-kernel-modules") + "{.modules}"}
 		}
 		props.Vendor_dlkm_specific = proptools.BoolPtr(true)
+		if blocklistFile := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.VendorKernelBlocklistFile; blocklistFile != "" {
+			props.Blocklist_file = proptools.StringPtr(blocklistFile)
+		}
 	case "odm_dlkm":
 		props.Srcs = ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.OdmKernelModules
 		props.Odm_dlkm_specific = proptools.BoolPtr(true)
+		if blocklistFile := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.OdmKernelBlocklistFile; blocklistFile != "" {
+			props.Blocklist_file = proptools.StringPtr(blocklistFile)
+		}
 	default:
 		ctx.ModuleErrorf("DLKM is not supported for %s\n", partitionType)
 	}
@@ -411,13 +421,20 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	fsProps := &filesystem.FilesystemProperties{}
 
 	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
-	specificPartitionVars := partitionVars.PartitionQualifiedVariables[partitionType]
-
-	// BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE
-	fsType := specificPartitionVars.BoardFileSystemType
+	var specificPartitionVars android.PartitionQualifiedVariablesType
+	var boardAvbEnable bool
+	var fsType string
+	if strings.Contains(partitionType, "ramdisk") {
+		fsType = "compressed_cpio"
+	} else {
+		specificPartitionVars = partitionVars.PartitionQualifiedVariables[partitionType]
+		boardAvbEnable = partitionVars.BoardAvbEnable
+		fsType = specificPartitionVars.BoardFileSystemType
+	}
 	if fsType == "" {
 		fsType = "ext4" //default
 	}
+
 	fsProps.Type = proptools.StringPtr(fsType)
 	if filesystem.GetFsTypeFromString(ctx, *fsProps.Type).IsUnknown() {
 		// Currently the android_filesystem module type only supports a handful of FS types like ext4, erofs
@@ -429,7 +446,7 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	fsProps.Unchecked_module = proptools.BoolPtr(true)
 
 	// BOARD_AVB_ENABLE
-	fsProps.Use_avb = proptools.BoolPtr(partitionVars.BoardAvbEnable)
+	fsProps.Use_avb = proptools.BoolPtr(boardAvbEnable)
 	// BOARD_AVB_KEY_PATH
 	fsProps.Avb_private_key = proptools.StringPtr(specificPartitionVars.BoardAvbKeyPath)
 	// BOARD_AVB_ALGORITHM

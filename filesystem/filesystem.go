@@ -67,6 +67,10 @@ type filesystemBuilder interface {
 	BuildLinkerConfigFile(ctx android.ModuleContext, builder *android.RuleBuilder, rebasedDir android.OutputPath)
 	// Function that filters PackagingSpec in PackagingBase.GatherPackagingSpecs()
 	FilterPackagingSpec(spec android.PackagingSpec) bool
+	// Function that modifies PackagingSpec in PackagingBase.GatherPackagingSpecs() to customize.
+	// For example, GSI system.img contains system_ext and product artifacts and their
+	// relPathInPackage need to be rebased to system/system_ext and system/system_product.
+	ModifyPackagingSpec(spec *android.PackagingSpec)
 }
 
 var _ filesystemBuilder = (*filesystem)(nil)
@@ -153,7 +157,7 @@ type FilesystemProperties struct {
 
 	F2fs F2fsProperties
 
-	Linkerconfig LinkerConfigProperties
+	Linker_config LinkerConfigProperties
 
 	// Determines if the module is auto-generated from Soong or not. If the module is
 	// auto-generated, its deps are exempted from visibility enforcement.
@@ -292,10 +296,18 @@ func (f *filesystem) partitionName() string {
 func (f *filesystem) FilterPackagingSpec(ps android.PackagingSpec) bool {
 	// Filesystem module respects the installation semantic. A PackagingSpec from a module with
 	// IsSkipInstall() is skipped.
-	if proptools.Bool(f.properties.Is_auto_generated) { // TODO (spandandas): Remove this.
-		return !ps.SkipInstall() && (ps.Partition() == f.PartitionType())
+	if ps.SkipInstall() {
+		return false
 	}
-	return !ps.SkipInstall()
+	if proptools.Bool(f.properties.Is_auto_generated) { // TODO (spandandas): Remove this.
+		pt := f.PartitionType()
+		return pt == "ramdisk" || ps.Partition() == pt
+	}
+	return true
+}
+
+func (f *filesystem) ModifyPackagingSpec(ps *android.PackagingSpec) {
+	// do nothing by default
 }
 
 var pctx = android.NewPackageContext("android/soong/filesystem")
@@ -664,6 +676,7 @@ var validPartitions = []string{
 	"vendor_dlkm",
 	"odm_dlkm",
 	"system_dlkm",
+	"ramdisk",
 }
 
 func (f *filesystem) addMakeBuiltFiles(ctx android.ModuleContext, builder *android.RuleBuilder, rootDir android.Path) {
@@ -721,13 +734,13 @@ func (f *filesystem) buildEventLogtagsFile(ctx android.ModuleContext, builder *a
 }
 
 func (f *filesystem) BuildLinkerConfigFile(ctx android.ModuleContext, builder *android.RuleBuilder, rebasedDir android.OutputPath) {
-	if !proptools.Bool(f.properties.Linkerconfig.Gen_linker_config) {
+	if !proptools.Bool(f.properties.Linker_config.Gen_linker_config) {
 		return
 	}
 
 	provideModules, _ := f.getLibsForLinkerConfig(ctx)
 	output := rebasedDir.Join(ctx, "etc", "linker.config.pb")
-	linkerconfig.BuildLinkerConfig(ctx, builder, android.PathsForModuleSrc(ctx, f.properties.Linkerconfig.Linker_config_srcs), provideModules, nil, output)
+	linkerconfig.BuildLinkerConfig(ctx, builder, android.PathsForModuleSrc(ctx, f.properties.Linker_config.Linker_config_srcs), provideModules, nil, output)
 
 	f.appendToEntry(ctx, output)
 }
@@ -787,7 +800,7 @@ func (f *filesystem) SignedOutputPath() android.Path {
 // Note that "apex" module installs its contents to "apex"(fake partition) as well
 // for symbol lookup by imitating "activated" paths.
 func (f *filesystem) gatherFilteredPackagingSpecs(ctx android.ModuleContext) map[string]android.PackagingSpec {
-	specs := f.PackagingBase.GatherPackagingSpecsWithFilter(ctx, f.filesystemBuilder.FilterPackagingSpec)
+	specs := f.PackagingBase.GatherPackagingSpecsWithFilterAndModifier(ctx, f.filesystemBuilder.FilterPackagingSpec, f.filesystemBuilder.ModifyPackagingSpec)
 	return specs
 }
 
@@ -813,13 +826,7 @@ type filesystemDefaults struct {
 	android.ModuleBase
 	android.DefaultsModuleBase
 
-	properties filesystemDefaultsProperties
-}
-
-type filesystemDefaultsProperties struct {
-	// Identifies which partition this is for //visibility:any_system_image (and others) visibility
-	// checks, and will be used in the future for API surface checks.
-	Partition_type *string
+	properties FilesystemProperties
 }
 
 // android_filesystem_defaults is a default module for android_filesystem and android_system_image
