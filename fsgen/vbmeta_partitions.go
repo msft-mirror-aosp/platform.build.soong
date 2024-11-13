@@ -53,7 +53,8 @@ func createVbmetaPartitions(ctx android.LoadHookContext, generatedPartitionTypes
 
 	var chainedPartitions []string
 	var partitionTypesHandledByChainedPartitions []string
-	for chainedName, props := range partitionVars.ChainedVbmetaPartitions {
+	for _, chainedName := range android.SortedKeys(partitionVars.ChainedVbmetaPartitions) {
+		props := partitionVars.ChainedVbmetaPartitions[chainedName]
 		chainedName = "vbmeta_" + chainedName
 		if len(props.Partitions) == 0 {
 			continue
