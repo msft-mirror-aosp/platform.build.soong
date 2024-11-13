@@ -410,11 +410,6 @@ type BaseProperties struct {
 	// variant to have a ".sdk" suffix.
 	SdkAndPlatformVariantVisibleToMake bool `blueprint:"mutated"`
 
-	// List of APEXes that this module has private access to for testing purpose. The module
-	// can depend on libraries that are not exported by the APEXes and use private symbols
-	// from the exported libraries.
-	Test_for []string `android:"arch_variant"`
-
 	Target struct {
 		Platform struct {
 			// List of modules required by the core variant.
@@ -965,7 +960,6 @@ func (c *Module) AddJSONData(d *map[string]interface{}) {
 		"IsLlndk":                c.IsLlndk(),
 		"IsVendorPublicLibrary":  c.IsVendorPublicLibrary(),
 		"ApexSdkVersion":         c.apexSdkVersion,
-		"TestFor":                c.TestFor(),
 		"AidlSrcs":               c.hasAidl,
 		"LexSrcs":                c.hasLex,
 		"ProtoSrcs":              c.hasProto,
@@ -1566,12 +1560,11 @@ func (ctx *moduleContextImpl) minSdkVersion() string {
 	}
 
 	if ctx.ctx.Device() {
-		config := ctx.ctx.Config()
-		if ctx.inVendor() {
-			// If building for vendor with final API, then use the latest _stable_ API as "current".
-			if config.VendorApiLevelFrozen() && (ver == "" || ver == "current") {
-				ver = config.PlatformSdkVersion().String()
-			}
+		// When building for vendor/product, use the latest _stable_ API as "current".
+		// This is passed to clang/aidl compilers so that compiled/generated code works
+		// with the system.
+		if (ctx.inVendor() || ctx.inProduct()) && (ver == "" || ver == "current") {
+			ver = ctx.ctx.Config().PlatformSdkVersion().String()
 		}
 	}
 
@@ -3361,10 +3354,6 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 func ShouldUseStubForApex(ctx android.ModuleContext, dep android.Module) bool {
 	depName := ctx.OtherModuleName(dep)
-	thisModule, ok := ctx.Module().(android.ApexModule)
-	if !ok {
-		panic(fmt.Errorf("Not an APEX module: %q", ctx.ModuleName()))
-	}
 
 	inVendorOrProduct := false
 	bootstrap := false
@@ -3394,34 +3383,6 @@ func ShouldUseStubForApex(ctx android.ModuleContext, dep android.Module) bool {
 		isNotInPlatform := dep.(android.ApexModule).NotInPlatform()
 
 		useStubs = isNotInPlatform && !bootstrap
-
-		if useStubs {
-			// Another exception: if this module is a test for an APEX, then
-			// it is linked with the non-stub variant of a module in the APEX
-			// as if this is part of the APEX.
-			testFor, _ := android.ModuleProvider(ctx, android.ApexTestForInfoProvider)
-			for _, apexContents := range testFor.ApexContents {
-				if apexContents.DirectlyInApex(depName) {
-					useStubs = false
-					break
-				}
-			}
-		}
-		if useStubs {
-			// Yet another exception: If this module and the dependency are
-			// available to the same APEXes then skip stubs between their
-			// platform variants. This complements the test_for case above,
-			// which avoids the stubs on a direct APEX library dependency, by
-			// avoiding stubs for indirect test dependencies as well.
-			//
-			// TODO(b/183882457): This doesn't work if the two libraries have
-			// only partially overlapping apex_available. For that test_for
-			// modules would need to be split into APEX variants and resolved
-			// separately for each APEX they have access to.
-			if android.AvailableToSameApexes(thisModule, dep.(android.ApexModule)) {
-				useStubs = false
-			}
-		}
 	} else {
 		// If building for APEX, use stubs when the parent is in any APEX that
 		// the child is not in.
@@ -3720,10 +3681,6 @@ func (c *Module) AvailableFor(what string) bool {
 	} else {
 		return c.ApexModuleBase.AvailableFor(what)
 	}
-}
-
-func (c *Module) TestFor() []string {
-	return c.Properties.Test_for
 }
 
 func (c *Module) EverInstallable() bool {

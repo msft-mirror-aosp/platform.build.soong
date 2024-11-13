@@ -80,6 +80,7 @@ func RegisterPrebuiltEtcBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("prebuilt_bt_firmware", PrebuiltBtFirmwareFactory)
 	ctx.RegisterModuleType("prebuilt_tvservice", PrebuiltTvServiceFactory)
 	ctx.RegisterModuleType("prebuilt_optee", PrebuiltOpteeFactory)
+	ctx.RegisterModuleType("prebuilt_tvconfig", PrebuiltTvConfigFactory)
 
 	ctx.RegisterModuleType("prebuilt_defaults", defaultsFactory)
 
@@ -87,7 +88,7 @@ func RegisterPrebuiltEtcBuildComponents(ctx android.RegistrationContext) {
 
 var PrepareForTestWithPrebuiltEtc = android.FixtureRegisterWithContext(RegisterPrebuiltEtcBuildComponents)
 
-type prebuiltEtcProperties struct {
+type PrebuiltEtcProperties struct {
 	// Source file of this prebuilt. Can reference a genrule type module with the ":module" syntax.
 	// Mutually exclusive with srcs.
 	Src proptools.Configurable[string] `android:"path,arch_variant,replace_instead_of_append"`
@@ -174,7 +175,7 @@ type PrebuiltEtc struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
 
-	properties prebuiltEtcProperties
+	properties PrebuiltEtcProperties
 
 	// rootProperties is used to return the value of the InstallInRoot() method. Currently, only
 	// prebuilt_avb and prebuilt_root modules use this.
@@ -606,7 +607,7 @@ func DefaultsFactory(props ...interface{}) android.Module {
 
 	module.AddProperties(props...)
 	module.AddProperties(
-		&prebuiltEtcProperties{},
+		&PrebuiltEtcProperties{},
 		&prebuiltSubdirProperties{},
 	)
 
@@ -956,6 +957,16 @@ func PrebuiltTvServiceFactory() android.Module {
 func PrebuiltOpteeFactory() android.Module {
 	module := &PrebuiltEtc{}
 	InitPrebuiltEtcModule(module, "optee")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_tvconfig installs files in <partition>/tvconfig directory.
+func PrebuiltTvConfigFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "tvconfig")
 	// This module is device-only
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)

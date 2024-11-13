@@ -156,11 +156,15 @@ func TestFileSystemFillsLinkerConfigWithStubLibs(t *testing.T) {
 	result := fixture.RunTestWithBp(t, `
 		android_system_image {
 			name: "myfilesystem",
+			base_dir: "system",
 			deps: [
 				"libfoo",
 				"libbar",
 			],
-			linker_config_src: "linker.config.json",
+			linker_config: {
+				gen_linker_config: true,
+				linker_config_srcs: ["linker.config.json"],
+			},
 		}
 
 		cc_library {
@@ -176,7 +180,7 @@ func TestFileSystemFillsLinkerConfigWithStubLibs(t *testing.T) {
 	`)
 
 	module := result.ModuleForTests("myfilesystem", "android_common")
-	output := module.Output("system/etc/linker.config.pb")
+	output := module.Output("out/soong/.intermediates/myfilesystem/android_common/root/system/etc/linker.config.pb")
 
 	android.AssertStringDoesContain(t, "linker.config.pb should have libfoo",
 		output.RuleParams.Command, "libfoo.so")
@@ -223,7 +227,10 @@ func TestFileSystemGathersItemsOnlyInSystemPartition(t *testing.T) {
 					deps: ["foo"],
 				},
 			},
-			linker_config_src: "linker.config.json",
+			linker_config: {
+				gen_linker_config: true,
+				linker_config_srcs: ["linker.config.json"],
+			},
 		}
 		component {
 			name: "foo",
@@ -318,7 +325,10 @@ func TestFileSystemWithCoverageVariants(t *testing.T) {
 			deps: [
 				"libfoo",
 			],
-			linker_config_src: "linker.config.json",
+			linker_config: {
+				gen_linker_config: true,
+				linker_config_srcs: ["linker.config.json"],
+			},
 		}
 
 		cc_library {
@@ -585,6 +595,35 @@ func TestErofsPartition(t *testing.T) {
 	android.AssertStringDoesContain(t, "erofs fs type sparse", buildImageConfig, "erofs_sparse_flag=-s")
 }
 
+func TestF2fsPartition(t *testing.T) {
+	result := fixture.RunTestWithBp(t, `
+		android_filesystem {
+			name: "f2fs_partition",
+			type: "f2fs",
+		}
+	`)
+
+	partition := result.ModuleForTests("f2fs_partition", "android_common")
+	buildImageConfig := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("prop"))
+	android.AssertStringDoesContain(t, "f2fs fs type", buildImageConfig, "fs_type=f2fs")
+	android.AssertStringDoesContain(t, "f2fs fs type sparse", buildImageConfig, "f2fs_sparse_flag=-S")
+}
+
+func TestFsTypesPropertyError(t *testing.T) {
+	fixture.ExtendWithErrorHandler(android.FixtureExpectsOneErrorPattern(
+		"erofs: erofs is non-empty, but FS type is f2fs\n. Please delete erofs properties if this partition should use f2fs\n")).
+		RunTestWithBp(t, `
+		android_filesystem {
+			name: "f2fs_partition",
+			type: "f2fs",
+			erofs: {
+				compressor: "lz4hc,9",
+				compress_hints: "compress_hints.txt",
+			},
+		}
+	`)
+}
+
 // If a system_ext/ module depends on system/ module, the dependency should *not*
 // be installed in system_ext/
 func TestDoNotPackageCrossPartitionDependencies(t *testing.T) {
@@ -670,9 +709,9 @@ func TestInstallLinkerConfigFile(t *testing.T) {
 android_filesystem {
     name: "myfilesystem",
     deps: ["libfoo_has_no_stubs", "libfoo_has_stubs"],
-    linkerconfig: {
-	    gen_linker_config: true,
-	    linker_config_srcs: ["linker.config.json"],
+    linker_config: {
+        gen_linker_config: true,
+        linker_config_srcs: ["linker.config.json"],
     },
     partition_type: "vendor",
 }
