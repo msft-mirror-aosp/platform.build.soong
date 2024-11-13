@@ -279,7 +279,8 @@ func createPrebuiltEtcModulesInDirectory(ctx android.LoadHookContext, partition,
 
 	for fileIndex := range maxLen {
 		srcTuple := []srcBaseFileInstallBaseFileTuple{}
-		for _, groupedDestFile := range groupedDestFiles {
+		for _, srcFile := range android.SortedKeys(groupedDestFiles) {
+			groupedDestFile := groupedDestFiles[srcFile]
 			if len(groupedDestFile) > fileIndex {
 				srcTuple = append(srcTuple, groupedDestFile[fileIndex])
 			}
