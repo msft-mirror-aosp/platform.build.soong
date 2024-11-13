@@ -15,6 +15,10 @@
 package android
 
 var ContainerDependencyViolationAllowlist = map[string][]string{
+	"adservices-service-core": {
+		"gson", // apex [com.android.adservices, com.android.extservices] -> apex [com.android.virt]
+	},
+
 	"android.car-module.impl": {
 		"modules-utils-preconditions", // apex [com.android.car.framework] -> apex [com.android.adservices, com.android.appsearch, com.android.cellbroadcast, com.android.extservices, com.android.ondevicepersonalization, com.android.tethering, com.android.uwb, com.android.wifi, test_com.android.cellbroadcast, test_com.android.wifi]
 	},
@@ -44,6 +48,11 @@ var ContainerDependencyViolationAllowlist = map[string][]string{
 		"modules-utils-os",                    // apex [com.android.car.framework] -> apex [com.android.permission, test_com.android.permission]
 		"modules-utils-preconditions",         // apex [com.android.car.framework] -> apex [com.android.adservices, com.android.appsearch, com.android.cellbroadcast, com.android.extservices, com.android.ondevicepersonalization, com.android.tethering, com.android.uwb, com.android.wifi, test_com.android.cellbroadcast, test_com.android.wifi]
 		"modules-utils-shell-command-handler", // apex [com.android.car.framework] -> apex [com.android.adservices, com.android.art, com.android.art.debug, com.android.art.testing, com.android.btservices, com.android.configinfrastructure, com.android.mediaprovider, com.android.nfcservices, com.android.permission, com.android.scheduling, com.android.tethering, com.android.uwb, com.android.wifi, test_com.android.mediaprovider, test_com.android.permission, test_com.android.wifi, test_imgdiag_com.android.art, test_jitzygote_com.android.art]
+	},
+
+	"cellbroadcastreceiver_aconfig_flags_lib": {
+		"ext",       // apex [com.android.cellbroadcast, test_com.android.cellbroadcast] -> system
+		"framework", // apex [com.android.cellbroadcast, test_com.android.cellbroadcast] -> system
 	},
 
 	"connectivity-net-module-utils-bpf": {
@@ -158,6 +167,10 @@ var ContainerDependencyViolationAllowlist = map[string][]string{
 	},
 
 	"CtsAppFgsTestCases": {
+		"framework", // cts -> unstable
+	},
+
+	"CtsAppFunctionTestCases": {
 		"framework", // cts -> unstable
 	},
 
@@ -701,6 +714,10 @@ var ContainerDependencyViolationAllowlist = map[string][]string{
 		"framework", // cts -> unstable
 	},
 
+	"CtsTvInputTestCases": {
+		"framework", // cts -> unstable
+	},
+
 	"CtsTvTunerTestCases": {
 		"framework", // cts -> unstable
 	},
@@ -822,6 +839,10 @@ var ContainerDependencyViolationAllowlist = map[string][]string{
 		"app-compat-annotations", // apex [com.android.btservices] -> system
 	},
 
+	"framework-configinfrastructure.impl": {
+		"configinfra_framework_flags_java_lib", // apex [com.android.configinfrastructure] -> system
+	},
+
 	"framework-connectivity-t.impl": {
 		"app-compat-annotations",            // apex [com.android.tethering] -> system
 		"framework-connectivity-pre-jarjar", // apex [com.android.tethering] -> system
@@ -832,6 +853,7 @@ var ContainerDependencyViolationAllowlist = map[string][]string{
 	},
 
 	"framework-ondevicepersonalization.impl": {
+		"app-compat-annotations",            // apex [com.android.ondevicepersonalization] -> system
 		"ondevicepersonalization_flags_lib", // apex [com.android.ondevicepersonalization] -> system
 	},
 
