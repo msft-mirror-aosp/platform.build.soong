@@ -2071,8 +2071,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			af := apexFileForNativeLibrary(ctx, ch, vctx.handleSpecialLibs)
 			af.transitiveDep = true
 
-			abInfo, _ := android.ModuleProvider(ctx, android.ApexBundleInfoProvider)
-			if !abInfo.Contents.DirectlyInApex(depName) && (ch.IsStubs() || ch.HasStubsVariants()) {
+			if ch.IsStubs() || ch.HasStubsVariants() {
 				// If the dependency is a stubs lib, don't include it in this APEX,
 				// but make sure that the lib is installed on the device.
 				// In case no APEX is having the lib, the lib is installed to the system
@@ -2576,7 +2575,10 @@ func (a *apexBundle) checkStaticLinkingToStubLibraries(ctx android.ModuleContext
 		return
 	}
 
-	abInfo, _ := android.ModuleProvider(ctx, android.ApexBundleInfoProvider)
+	librariesDirectlyInApex := make(map[string]bool)
+	ctx.VisitDirectDepsProxyWithTag(sharedLibTag, func(dep android.ModuleProxy) {
+		librariesDirectlyInApex[ctx.OtherModuleName(dep)] = true
+	})
 
 	a.WalkPayloadDeps(ctx, func(ctx android.BaseModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
 		if ccm, ok := to.(*cc.Module); ok {
@@ -2602,7 +2604,7 @@ func (a *apexBundle) checkStaticLinkingToStubLibraries(ctx android.ModuleContext
 				return false
 			}
 
-			isStubLibraryFromOtherApex := ccm.HasStubsVariants() && !abInfo.Contents.DirectlyInApex(toName)
+			isStubLibraryFromOtherApex := ccm.HasStubsVariants() && !librariesDirectlyInApex[toName]
 			if isStubLibraryFromOtherApex && !externalDep {
 				ctx.ModuleErrorf("%q required by %q is a native library providing stub. "+
 					"It shouldn't be included in this APEX via static linking. Dependency path: %s", to.String(), fromName, ctx.GetPathString(false))
