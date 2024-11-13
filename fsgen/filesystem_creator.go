@@ -230,8 +230,8 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 	}
 
 	if partitionType == "vendor" || partitionType == "product" {
-		fsProps.Linkerconfig.Gen_linker_config = proptools.BoolPtr(true)
-		fsProps.Linkerconfig.Linker_config_srcs = f.createLinkerConfigSourceFilegroups(ctx, partitionType)
+		fsProps.Linker_config.Gen_linker_config = proptools.BoolPtr(true)
+		fsProps.Linker_config.Linker_config_srcs = f.createLinkerConfigSourceFilegroups(ctx, partitionType)
 	}
 
 	if android.InList(partitionType, dlkmPartitions) {
@@ -421,13 +421,20 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	fsProps := &filesystem.FilesystemProperties{}
 
 	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
-	specificPartitionVars := partitionVars.PartitionQualifiedVariables[partitionType]
-
-	// BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE
-	fsType := specificPartitionVars.BoardFileSystemType
+	var specificPartitionVars android.PartitionQualifiedVariablesType
+	var boardAvbEnable bool
+	var fsType string
+	if strings.Contains(partitionType, "ramdisk") {
+		fsType = "compressed_cpio"
+	} else {
+		specificPartitionVars = partitionVars.PartitionQualifiedVariables[partitionType]
+		boardAvbEnable = partitionVars.BoardAvbEnable
+		fsType = specificPartitionVars.BoardFileSystemType
+	}
 	if fsType == "" {
 		fsType = "ext4" //default
 	}
+
 	fsProps.Type = proptools.StringPtr(fsType)
 	if filesystem.GetFsTypeFromString(ctx, *fsProps.Type).IsUnknown() {
 		// Currently the android_filesystem module type only supports a handful of FS types like ext4, erofs
@@ -439,7 +446,7 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	fsProps.Unchecked_module = proptools.BoolPtr(true)
 
 	// BOARD_AVB_ENABLE
-	fsProps.Use_avb = proptools.BoolPtr(partitionVars.BoardAvbEnable)
+	fsProps.Use_avb = proptools.BoolPtr(boardAvbEnable)
 	// BOARD_AVB_KEY_PATH
 	fsProps.Avb_private_key = proptools.StringPtr(specificPartitionVars.BoardAvbKeyPath)
 	// BOARD_AVB_ALGORITHM

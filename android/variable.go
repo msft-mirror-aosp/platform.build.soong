@@ -607,10 +607,20 @@ type PartitionVariables struct {
 	BoardExt4ShareDupBlocks        string `json:",omitempty"`
 	BoardFlashLogicalBlockSize     string `json:",omitempty"`
 	BoardFlashEraseBlockSize       string `json:",omitempty"`
-	BoardUsesRecoveryAsBoot        bool   `json:",omitempty"`
 	ProductUseDynamicPartitionSize bool   `json:",omitempty"`
 	CopyImagesForTargetFilesZip    bool   `json:",omitempty"`
 
+	// Boot image stuff
+	ProductBuildBootImage           bool   `json:",omitempty"`
+	ProductBuildInitBootImage       bool   `json:",omitempty"`
+	BoardUsesRecoveryAsBoot         bool   `json:",omitempty"`
+	BoardPrebuiltBootimage          string `json:",omitempty"`
+	BoardPrebuiltInitBootimage      string `json:",omitempty"`
+	BoardBootimagePartitionSize     string `json:",omitempty"`
+	BoardInitBootimagePartitionSize string `json:",omitempty"`
+	BoardBootHeaderVersion          string `json:",omitempty"`
+
+	// Avb (android verified boot) stuff
 	BoardAvbEnable          bool                                `json:",omitempty"`
 	BoardAvbAlgorithm       string                              `json:",omitempty"`
 	BoardAvbKeyPath         string                              `json:",omitempty"`
@@ -626,7 +636,7 @@ type PartitionVariables struct {
 	BoardInfoFiles      []string `json:",omitempty"`
 	BootLoaderBoardName string   `json:",omitempty"`
 
-	ProductCopyFiles map[string]string `json:",omitempty"`
+	ProductCopyFiles []string `json:",omitempty"`
 
 	BuildingSystemDlkmImage   bool     `json:",omitempty"`
 	SystemKernelModules       []string `json:",omitempty"`
