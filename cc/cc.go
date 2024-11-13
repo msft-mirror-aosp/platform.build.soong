@@ -53,6 +53,13 @@ type CcObjectInfo struct {
 
 var CcObjectInfoProvider = blueprint.NewProvider[CcObjectInfo]()
 
+type LinkableInfo struct {
+	// StaticExecutable returns true if this is a binary module with "static_executable: true".
+	StaticExecutable bool
+}
+
+var LinkableInfoKey = blueprint.NewProvider[LinkableInfo]()
+
 func init() {
 	RegisterCCBuildComponents(android.InitRegistrationContext)
 
@@ -2118,6 +2125,10 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	if len(ccObjectInfo.kytheFiles)+len(ccObjectInfo.objFiles)+len(ccObjectInfo.tidyFiles) > 0 {
 		android.SetProvider(ctx, CcObjectInfoProvider, ccObjectInfo)
 	}
+
+	android.SetProvider(ctx, LinkableInfoKey, LinkableInfo{
+		StaticExecutable: c.StaticExecutable(),
+	})
 
 	c.setOutputFiles(ctx)
 

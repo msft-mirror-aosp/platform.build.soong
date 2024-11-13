@@ -2732,12 +2732,12 @@ func (a *apexBundle) checkApexAvailability(ctx android.ModuleContext) {
 
 // checkStaticExecutable ensures that executables in an APEX are not static.
 func (a *apexBundle) checkStaticExecutables(ctx android.ModuleContext) {
-	ctx.VisitDirectDeps(func(module android.Module) {
+	ctx.VisitDirectDepsProxy(func(module android.ModuleProxy) {
 		if ctx.OtherModuleDependencyTag(module) != executableTag {
 			return
 		}
 
-		if l, ok := module.(cc.LinkableInterface); ok && l.StaticExecutable() {
+		if android.OtherModuleProviderOrDefault(ctx, module, cc.LinkableInfoKey).StaticExecutable {
 			apex := a.ApexVariationName()
 			exec := ctx.OtherModuleName(module)
 			if isStaticExecutableAllowed(apex, exec) {
