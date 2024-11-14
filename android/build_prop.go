@@ -55,7 +55,7 @@ type buildPropModule struct {
 
 	properties buildPropProperties
 
-	outputFilePath OutputPath
+	outputFilePath Path
 	installPath    InstallPath
 }
 
@@ -128,7 +128,7 @@ func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 		ctx.ModuleErrorf("Android_info cannot be set if build.prop is not installed in vendor partition")
 	}
 
-	p.outputFilePath = PathForModuleOut(ctx, "build.prop").OutputPath
+	outputFilePath := PathForModuleOut(ctx, "build.prop")
 
 	partition := p.partition(ctx.DeviceConfig())
 
@@ -157,7 +157,7 @@ func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 	cmd.FlagWithInput("--product-config=", PathForModuleSrc(ctx, proptools.String(p.properties.Product_config)))
 	cmd.FlagWithArg("--partition=", partition)
 	cmd.FlagForEachInput("--prop-files=", p.propFiles(ctx))
-	cmd.FlagWithOutput("--out=", p.outputFilePath)
+	cmd.FlagWithOutput("--out=", outputFilePath)
 
 	postProcessCmd := rule.Command().BuiltTool("post_process_props")
 	if ctx.DeviceConfig().BuildBrokenDupSysprop() {
@@ -170,17 +170,18 @@ func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 		// still need to pass an empty string to kernel-version-file-for-uffd-gc
 		postProcessCmd.FlagWithArg("--kernel-version-file-for-uffd-gc ", `""`)
 	}
-	postProcessCmd.Text(p.outputFilePath.String())
+	postProcessCmd.Text(outputFilePath.String())
 	postProcessCmd.Flags(p.properties.Block_list)
 
-	rule.Command().Text("echo").Text(proptools.NinjaAndShellEscape("# end of file")).FlagWithArg(">> ", p.outputFilePath.String())
+	rule.Command().Text("echo").Text(proptools.NinjaAndShellEscape("# end of file")).FlagWithArg(">> ", outputFilePath.String())
 
 	rule.Build(ctx.ModuleName(), "generating build.prop")
 
 	p.installPath = PathForModuleInstall(ctx, proptools.String(p.properties.Relative_install_path))
-	ctx.InstallFile(p.installPath, p.stem(), p.outputFilePath)
+	ctx.InstallFile(p.installPath, p.stem(), outputFilePath)
 
-	ctx.SetOutputFiles(Paths{p.outputFilePath}, "")
+	ctx.SetOutputFiles(Paths{outputFilePath}, "")
+	p.outputFilePath = outputFilePath
 }
 
 func (p *buildPropModule) AndroidMkEntries() []AndroidMkEntries {
