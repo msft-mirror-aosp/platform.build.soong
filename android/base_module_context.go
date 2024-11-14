@@ -266,7 +266,7 @@ func (b *baseModuleContext) OtherModuleDir(m blueprint.Module) string {
 	return b.bp.OtherModuleDir(getWrappedModule(m))
 }
 func (b *baseModuleContext) OtherModuleErrorf(m blueprint.Module, fmt string, args ...interface{}) {
-	b.bp.OtherModuleErrorf(m, fmt, args...)
+	b.bp.OtherModuleErrorf(getWrappedModule(m), fmt, args...)
 }
 func (b *baseModuleContext) OtherModuleDependencyTag(m blueprint.Module) blueprint.DependencyTag {
 	return b.bp.OtherModuleDependencyTag(getWrappedModule(m))
