@@ -350,3 +350,28 @@ func createPrebuiltEtcModules(ctx android.LoadHookContext) (ret []string) {
 
 	return ret
 }
+
+func createAvbpubkeyModule(ctx android.LoadHookContext) bool {
+	avbKeyPath := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.BoardAvbKeyPath
+	if avbKeyPath == "" {
+		return false
+	}
+	ctx.CreateModuleInDirectory(
+		etc.AvbpubkeyModuleFactory,
+		".",
+		&struct {
+			Name             *string
+			Product_specific *bool
+			Private_key      *string
+			No_full_install  *bool
+			Visibility       []string
+		}{
+			Name:             proptools.StringPtr("system_other_avbpubkey"),
+			Product_specific: proptools.BoolPtr(true),
+			Private_key:      proptools.StringPtr(avbKeyPath),
+			No_full_install:  proptools.BoolPtr(true),
+			Visibility:       []string{"//visibility:public"},
+		},
+	)
+	return true
+}
