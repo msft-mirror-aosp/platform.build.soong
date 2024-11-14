@@ -259,3 +259,25 @@ func TestCompareInternalState(t *testing.T) {
 		}
 	}
 }
+
+func TestCompareInspectExtsZipRegexp(t *testing.T) {
+	testCases := []struct {
+		Name     string
+		Expected bool
+	}{
+		{Name: ".jar", Expected: true},
+		{Name: ".jar5", Expected: true},
+		{Name: ".apex", Expected: true},
+		{Name: ".apex9", Expected: true},
+		{Name: ".apexx", Expected: false},
+		{Name: ".apk", Expected: true},
+		{Name: ".apk3", Expected: true},
+		{Name: ".go", Expected: false},
+	}
+	for _, tc := range testCases {
+		actual := InspectExtsZipRegexp.Match([]byte(tc.Name))
+		if tc.Expected != actual {
+			t.Errorf("%s: expected %v, actual %v", tc.Name, tc.Expected, actual)
+		}
+	}
+}
