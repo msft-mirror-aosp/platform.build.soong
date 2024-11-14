@@ -211,6 +211,12 @@ type BaseModuleContext interface {
 	// data modified by the current mutator.
 	VisitAllModuleVariants(visit func(Module))
 
+	// VisitAllModuleVariantProxies calls visit for each variant of the current module.  Variants of a module are always
+	// visited in order by mutators and GenerateBuildActions, so the data created by the current mutator can be read
+	// from all variants if the current module is the last one. Otherwise, care must be taken to not access any
+	// data modified by the current mutator.
+	VisitAllModuleVariantProxies(visit func(proxy ModuleProxy))
+
 	// GetTagPath is supposed to be called in visit function passed in WalkDeps()
 	// and returns a top-down dependency tags path from a start module to current child module.
 	// It has one less entry than GetWalkPath() as it contains the dependency tags that
@@ -266,7 +272,7 @@ func (b *baseModuleContext) OtherModuleDir(m blueprint.Module) string {
 	return b.bp.OtherModuleDir(getWrappedModule(m))
 }
 func (b *baseModuleContext) OtherModuleErrorf(m blueprint.Module, fmt string, args ...interface{}) {
-	b.bp.OtherModuleErrorf(m, fmt, args...)
+	b.bp.OtherModuleErrorf(getWrappedModule(m), fmt, args...)
 }
 func (b *baseModuleContext) OtherModuleDependencyTag(m blueprint.Module) blueprint.DependencyTag {
 	return b.bp.OtherModuleDependencyTag(getWrappedModule(m))
@@ -382,7 +388,7 @@ func (b *baseModuleContext) validateAndroidModuleProxy(
 		return &aModule
 	}
 
-	if !OtherModuleProviderOrDefault(b, module, CommonPropertiesProviderKey).Enabled {
+	if !OtherModuleProviderOrDefault(b, module, CommonModuleInfoKey).Enabled {
 		if t, ok := tag.(AllowDisabledModuleDependency); !ok || !t.AllowDisabledModuleDependencyProxy(b, aModule) {
 			if b.Config().AllowMissingDependencies() {
 				b.AddMissingDependencies([]string{b.OtherModuleName(aModule)})
@@ -592,6 +598,10 @@ func (b *baseModuleContext) VisitAllModuleVariants(visit func(Module)) {
 	b.bp.VisitAllModuleVariants(func(module blueprint.Module) {
 		visit(module.(Module))
 	})
+}
+
+func (b *baseModuleContext) VisitAllModuleVariantProxies(visit func(ModuleProxy)) {
+	b.bp.VisitAllModuleVariantProxies(visitProxyAdaptor(visit))
 }
 
 func (b *baseModuleContext) PrimaryModule() Module {
