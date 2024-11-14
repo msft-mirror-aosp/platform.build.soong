@@ -100,10 +100,15 @@ func uniqueExistingProductCopyFileMap(ctx android.LoadHookContext) map[string][]
 			ctx.ModuleErrorf("PRODUCT_COPY_FILES must follow the format \"src:dest\", got: %s", copyFilePair)
 		}
 		src, dest := srcDestList[0], srcDestList[1]
+
+		// Some downstream branches use absolute path as entries in PRODUCT_COPY_FILES.
+		// Convert them to relative path from top and check if they do not escape the tree root.
+		relSrc := android.ToRelativeSourcePath(ctx, src)
+
 		if _, ok := seen[dest]; !ok {
-			if optionalPath := android.ExistentPathForSource(ctx, src); optionalPath.Valid() {
+			if optionalPath := android.ExistentPathForSource(ctx, relSrc); optionalPath.Valid() {
 				seen[dest] = true
-				filtered[src] = append(filtered[src], dest)
+				filtered[relSrc] = append(filtered[relSrc], dest)
 			}
 		}
 	}
@@ -274,7 +279,8 @@ func createPrebuiltEtcModulesInDirectory(ctx android.LoadHookContext, partition,
 
 	for fileIndex := range maxLen {
 		srcTuple := []srcBaseFileInstallBaseFileTuple{}
-		for _, groupedDestFile := range groupedDestFiles {
+		for _, srcFile := range android.SortedKeys(groupedDestFiles) {
+			groupedDestFile := groupedDestFiles[srcFile]
 			if len(groupedDestFile) > fileIndex {
 				srcTuple = append(srcTuple, groupedDestFile[fileIndex])
 			}
@@ -343,4 +349,29 @@ func createPrebuiltEtcModules(ctx android.LoadHookContext) (ret []string) {
 	}
 
 	return ret
+}
+
+func createAvbpubkeyModule(ctx android.LoadHookContext) bool {
+	avbKeyPath := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.BoardAvbKeyPath
+	if avbKeyPath == "" {
+		return false
+	}
+	ctx.CreateModuleInDirectory(
+		etc.AvbpubkeyModuleFactory,
+		".",
+		&struct {
+			Name             *string
+			Product_specific *bool
+			Private_key      *string
+			No_full_install  *bool
+			Visibility       []string
+		}{
+			Name:             proptools.StringPtr("system_other_avbpubkey"),
+			Product_specific: proptools.BoolPtr(true),
+			Private_key:      proptools.StringPtr(avbKeyPath),
+			No_full_install:  proptools.BoolPtr(true),
+			Visibility:       []string{"//visibility:public"},
+		},
+	)
+	return true
 }
