@@ -386,6 +386,7 @@ func generateDepStruct(deps map[string]*depCandidateProps, highPriorityDeps []st
 	depsStruct.Multilib.Prefer32.Deps = android.SortedUniqueStrings(depsStruct.Multilib.Prefer32.Deps)
 	depsStruct.Multilib.Both.Deps = android.SortedUniqueStrings(depsStruct.Multilib.Both.Deps)
 	depsStruct.Multilib.Common.Deps = android.SortedUniqueStrings(depsStruct.Multilib.Common.Deps)
+	depsStruct.High_priority_deps = android.SortedUniqueStrings(depsStruct.High_priority_deps)
 
 	return &depsStruct
 }
