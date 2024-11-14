@@ -480,7 +480,7 @@ func (p *PackagingBase) GatherPackagingSpecsWithFilterAndModifier(ctx ModuleCont
 		return false
 	}
 
-	ctx.VisitDirectDeps(func(child Module) {
+	ctx.VisitDirectDepsProxy(func(child ModuleProxy) {
 		depTag := ctx.OtherModuleDependencyTag(child)
 		if pi, ok := depTag.(PackagingItem); !ok || !pi.IsPackagingItem() {
 			return

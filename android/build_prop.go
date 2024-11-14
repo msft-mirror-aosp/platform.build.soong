@@ -115,19 +115,12 @@ func (p *buildPropModule) partition(config DeviceConfig) string {
 		return "vendor_dlkm"
 	} else if p.InstallInOdmDlkm() {
 		return "odm_dlkm"
+	} else if p.InstallInRamdisk() {
+		// From this hardcoding in make:
+		// https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/sysprop.mk;l=311;drc=274435657e4682e5cee3fffd11fb301ab32a828d
+		return "bootimage"
 	}
 	return "system"
-}
-
-var validPartitions = []string{
-	"system",
-	"system_ext",
-	"product",
-	"odm",
-	"vendor",
-	"system_dlkm",
-	"vendor_dlkm",
-	"odm_dlkm",
 }
 
 func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
@@ -138,10 +131,6 @@ func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 	p.outputFilePath = PathForModuleOut(ctx, "build.prop").OutputPath
 
 	partition := p.partition(ctx.DeviceConfig())
-	if !InList(partition, validPartitions) {
-		ctx.PropertyErrorf("partition", "unsupported partition %q: only %q are supported", partition, validPartitions)
-		return
-	}
 
 	rule := NewRuleBuilder(pctx, ctx)
 
