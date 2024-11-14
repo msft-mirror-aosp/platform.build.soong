@@ -1813,7 +1813,7 @@ func memtagStackMakeVarsProvider(ctx android.MakeVarsContext) {
 type sanitizerLibrariesTxtModule struct {
 	android.ModuleBase
 
-	outputFile android.OutputPath
+	outputFile android.Path
 }
 
 var _ etc.PrebuiltEtcModule = (*sanitizerLibrariesTxtModule)(nil)
@@ -1896,13 +1896,14 @@ func (txt *sanitizerLibrariesTxtModule) getSanitizerLibs(ctx android.ModuleConte
 func (txt *sanitizerLibrariesTxtModule) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	filename := txt.Name()
 
-	txt.outputFile = android.PathForModuleOut(ctx, filename).OutputPath
-	android.WriteFileRule(ctx, txt.outputFile, txt.getSanitizerLibs(ctx))
+	outputFile := android.PathForModuleOut(ctx, filename)
+	android.WriteFileRule(ctx, outputFile, txt.getSanitizerLibs(ctx))
 
 	installPath := android.PathForModuleInstall(ctx, "etc")
-	ctx.InstallFile(installPath, filename, txt.outputFile)
+	ctx.InstallFile(installPath, filename, outputFile)
 
-	ctx.SetOutputFiles(android.Paths{txt.outputFile}, "")
+	ctx.SetOutputFiles(android.Paths{outputFile}, "")
+	txt.outputFile = outputFile
 }
 
 func (txt *sanitizerLibrariesTxtModule) PrepareAndroidMKProviderInfo(config android.Config) *android.AndroidMkProviderInfo {

@@ -52,10 +52,10 @@ type filesystem struct {
 
 	properties FilesystemProperties
 
-	output     android.OutputPath
+	output     android.Path
 	installDir android.InstallPath
 
-	fileListFile android.OutputPath
+	fileListFile android.Path
 
 	// Keeps the entries installed from this filesystem
 	entries []string
@@ -340,19 +340,20 @@ func (f *filesystem) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	ctx.InstallFile(f.installDir, f.installFileName(), f.output)
 	ctx.SetOutputFiles([]android.Path{f.output}, "")
 
-	f.fileListFile = android.PathForModuleOut(ctx, "fileList").OutputPath
-	android.WriteFileRule(ctx, f.fileListFile, f.installedFilesList())
+	fileListFile := android.PathForModuleOut(ctx, "fileList")
+	android.WriteFileRule(ctx, fileListFile, f.installedFilesList())
 
 	android.SetProvider(ctx, FilesystemProvider, FilesystemInfo{
-		FileListFile: f.fileListFile,
+		FileListFile: fileListFile,
 	})
+	f.fileListFile = fileListFile
 
 	if proptools.Bool(f.properties.Unchecked_module) {
 		ctx.UncheckedModule()
 	}
 }
 
-func (f *filesystem) appendToEntry(ctx android.ModuleContext, installedFile android.OutputPath) {
+func (f *filesystem) appendToEntry(ctx android.ModuleContext, installedFile android.Path) {
 	partitionBaseDir := android.PathForModuleOut(ctx, "root", f.partitionName()).String() + "/"
 
 	relPath, inTargetPartition := strings.CutPrefix(installedFile.String(), partitionBaseDir)
@@ -443,7 +444,7 @@ func (f *filesystem) copyFilesToProductOut(ctx android.ModuleContext, builder *a
 	builder.Command().Textf("cp -prf %s/* %s", rebasedDir, installPath)
 }
 
-func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) android.OutputPath {
+func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) android.Path {
 	rootDir := android.PathForModuleOut(ctx, "root").OutputPath
 	rebasedDir := rootDir
 	if f.properties.Base_dir != nil {
@@ -472,7 +473,7 @@ func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) androi
 		FlagWithArg("--out_system=", rootDir.String()+"/system")
 
 	propFile, toolDeps := f.buildPropFile(ctx)
-	output := android.PathForModuleOut(ctx, f.installFileName()).OutputPath
+	output := android.PathForModuleOut(ctx, f.installFileName())
 	builder.Command().BuiltTool("build_image").
 		Text(rootDir.String()). // input directory
 		Input(propFile).
@@ -486,14 +487,14 @@ func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) androi
 	return output
 }
 
-func (f *filesystem) buildFileContexts(ctx android.ModuleContext) android.OutputPath {
+func (f *filesystem) buildFileContexts(ctx android.ModuleContext) android.Path {
 	builder := android.NewRuleBuilder(pctx, ctx)
 	fcBin := android.PathForModuleOut(ctx, "file_contexts.bin")
 	builder.Command().BuiltTool("sefcontext_compile").
 		FlagWithOutput("-o ", fcBin).
 		Input(android.PathForModuleSrc(ctx, proptools.String(f.properties.File_contexts)))
 	builder.Build("build_filesystem_file_contexts", fmt.Sprintf("Creating filesystem file contexts for %s", f.BaseModuleName()))
-	return fcBin.OutputPath
+	return fcBin
 }
 
 // Calculates avb_salt from entry list (sorted) for deterministic output.
@@ -501,7 +502,7 @@ func (f *filesystem) salt() string {
 	return sha1sum(f.entries)
 }
 
-func (f *filesystem) buildPropFile(ctx android.ModuleContext) (propFile android.OutputPath, toolDeps android.Paths) {
+func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, android.Paths) {
 	var deps android.Paths
 	var propFileString strings.Builder
 	addStr := func(name string, value string) {
@@ -597,7 +598,7 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (propFile android.
 	}
 	f.checkFsTypePropertyError(ctx, fst, fsTypeStr(fst))
 
-	propFile = android.PathForModuleOut(ctx, "prop").OutputPath
+	propFile := android.PathForModuleOut(ctx, "prop")
 	android.WriteFileRuleVerbatim(ctx, propFile, propFileString.String())
 	return propFile, deps
 }
@@ -622,7 +623,7 @@ func (f *filesystem) checkFsTypePropertyError(ctx android.ModuleContext, t fsTyp
 	}
 }
 
-func (f *filesystem) buildCpioImage(ctx android.ModuleContext, compressed bool) android.OutputPath {
+func (f *filesystem) buildCpioImage(ctx android.ModuleContext, compressed bool) android.Path {
 	if proptools.Bool(f.properties.Use_avb) {
 		ctx.PropertyErrorf("use_avb", "signing compresed cpio image using avbtool is not supported."+
 			"Consider adding this to bootimg module and signing the entire boot image.")
@@ -654,7 +655,7 @@ func (f *filesystem) buildCpioImage(ctx android.ModuleContext, compressed bool) 
 	f.filesystemBuilder.BuildLinkerConfigFile(ctx, builder, rebasedDir)
 	f.copyFilesToProductOut(ctx, builder, rebasedDir)
 
-	output := android.PathForModuleOut(ctx, f.installFileName()).OutputPath
+	output := android.PathForModuleOut(ctx, f.installFileName())
 	cmd := builder.Command().
 		BuiltTool("mkbootfs").
 		Text(rootDir.String()) // input directory
