@@ -190,6 +190,7 @@ var PrepareForTestWithJacocoInstrumentation = android.GroupFixturePreparers(
 				"//apex_available:anyapex",
 				"//apex_available:platform",
 			],
+			compile_dex: true,
 		}
 	`)),
 )
