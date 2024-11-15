@@ -504,7 +504,7 @@ type apexBundle struct {
 
 	// Text file having the list of individual files that are included in this APEX. Used for
 	// debugging purpose.
-	installedFilesFile android.WritablePath
+	installedFilesFile android.Path
 
 	// List of module names that this APEX is including (to be shown via *-deps-info target).
 	// Used for debugging purpose.

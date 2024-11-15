@@ -44,7 +44,7 @@ type vbmeta struct {
 
 	properties VbmetaProperties
 
-	output     android.OutputPath
+	output     android.Path
 	installDir android.InstallPath
 }
 
@@ -161,8 +161,6 @@ func (v *vbmeta) partitionName() string {
 const vbmetaMaxSize = 64 * 1024
 
 func (v *vbmeta) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	v.output = android.PathForModuleOut(ctx, v.installFileName()).OutputPath
-
 	builder := android.NewRuleBuilder(pctx, ctx)
 	cmd := builder.Command().BuiltTool("avbtool").Text("make_vbmeta_image")
 
@@ -274,18 +272,19 @@ func (v *vbmeta) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		cmd.Implicit(publicKey)
 	}
 
-	cmd.FlagWithOutput("--output ", v.output)
+	output := android.PathForModuleOut(ctx, v.installFileName())
+	cmd.FlagWithOutput("--output ", output)
 
 	// libavb expects to be able to read the maximum vbmeta size, so we must provide a partition
 	// which matches this or the read will fail.
 	builder.Command().Text("truncate").
 		FlagWithArg("-s ", strconv.Itoa(vbmetaMaxSize)).
-		Output(v.output)
+		Output(output)
 
 	builder.Build("vbmeta", fmt.Sprintf("vbmeta %s", ctx.ModuleName()))
 
 	v.installDir = android.PathForModuleInstall(ctx, "etc")
-	ctx.InstallFile(v.installDir, v.installFileName(), v.output)
+	ctx.InstallFile(v.installDir, v.installFileName(), output)
 
 	extractedPublicKey := android.PathForModuleOut(ctx, v.partitionName()+".avbpubkey")
 	ctx.Build(pctx, android.BuildParams{
@@ -300,7 +299,8 @@ func (v *vbmeta) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		PublicKey:             extractedPublicKey,
 	})
 
-	ctx.SetOutputFiles([]android.Path{v.output}, "")
+	ctx.SetOutputFiles([]android.Path{output}, "")
+	v.output = output
 }
 
 // Returns the embedded shell command that prints the rollback index
