@@ -714,10 +714,10 @@ func (j *Module) provideHiddenAPIPropertyInfo(ctx android.ModuleContext) {
 
 // helper method for java modules to set OutputFilesProvider
 func setOutputFiles(ctx android.ModuleContext, m Module) {
-	ctx.SetOutputFiles(append(android.Paths{m.outputFile}, m.extraOutputFiles...), "")
-	ctx.SetOutputFiles(android.Paths{m.outputFile}, android.DefaultDistTag)
-	ctx.SetOutputFiles(android.Paths{m.implementationAndResourcesJar}, ".jar")
-	ctx.SetOutputFiles(android.Paths{m.headerJarFile}, ".hjar")
+	ctx.SetOutputFiles(append(android.PathsIfNonNil(m.outputFile), m.extraOutputFiles...), "")
+	ctx.SetOutputFiles(android.PathsIfNonNil(m.outputFile), android.DefaultDistTag)
+	ctx.SetOutputFiles(android.PathsIfNonNil(m.implementationAndResourcesJar), ".jar")
+	ctx.SetOutputFiles(android.PathsIfNonNil(m.headerJarFile), ".hjar")
 	if m.dexer.proguardDictionary.Valid() {
 		ctx.SetOutputFiles(android.Paths{m.dexer.proguardDictionary.Path()}, ".proguard_map")
 	}
