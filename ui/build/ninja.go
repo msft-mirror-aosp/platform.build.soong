@@ -244,6 +244,9 @@ func runNinjaForBuild(ctx Context, config Config) {
 
 			// SOONG_USE_PARTIAL_COMPILE only determines which half of the rule we execute.
 			"SOONG_USE_PARTIAL_COMPILE",
+
+			// Directory for ExecutionMetrics
+			"SOONG_METRICS_AGGREGATION_DIR",
 		}, config.BuildBrokenNinjaUsesEnvVars()...)...)
 	}
 
@@ -255,6 +258,10 @@ func runNinjaForBuild(ctx Context, config Config) {
 	default:
 		// Only set RUST_BACKTRACE for n2.
 	}
+
+	// Set up the metrics aggregation directory.
+	ctx.ExecutionMetrics.SetDir(filepath.Join(config.OutDir(), "soong", "metrics_aggregation"))
+	cmd.Environment.Set("SOONG_METRICS_AGGREGATION_DIR", ctx.ExecutionMetrics.MetricsAggregationDir)
 
 	// Print the environment variables that Ninja is operating in.
 	ctx.Verboseln("Ninja environment: ")
@@ -300,6 +307,8 @@ func runNinjaForBuild(ctx Context, config Config) {
 		}
 	}()
 
+	ctx.ExecutionMetrics.Start()
+	defer ctx.ExecutionMetrics.Finish(ctx)
 	ctx.Status.Status("Starting ninja...")
 	cmd.RunAndStreamOrFatal()
 }
