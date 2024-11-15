@@ -896,8 +896,8 @@ type ApexModuleDepInfo struct {
 type DepNameToDepInfoMap map[string]ApexModuleDepInfo
 
 type ApexBundleDepsInfo struct {
-	flatListPath OutputPath
-	fullListPath OutputPath
+	flatListPath Path
+	fullListPath Path
 }
 
 type ApexBundleDepsInfoIntf interface {
@@ -934,13 +934,15 @@ func (d *ApexBundleDepsInfo) BuildDepsInfoLists(ctx ModuleContext, minSdkVersion
 		fmt.Fprintf(&flatContent, "%s\n", toName)
 	}
 
-	d.fullListPath = PathForModuleOut(ctx, "depsinfo", "fulllist.txt").OutputPath
-	WriteFileRule(ctx, d.fullListPath, fullContent.String())
+	fullListPath := PathForModuleOut(ctx, "depsinfo", "fulllist.txt")
+	WriteFileRule(ctx, fullListPath, fullContent.String())
+	d.fullListPath = fullListPath
 
-	d.flatListPath = PathForModuleOut(ctx, "depsinfo", "flatlist.txt").OutputPath
-	WriteFileRule(ctx, d.flatListPath, flatContent.String())
+	flatListPath := PathForModuleOut(ctx, "depsinfo", "flatlist.txt")
+	WriteFileRule(ctx, flatListPath, flatContent.String())
+	d.flatListPath = flatListPath
 
-	ctx.Phony(fmt.Sprintf("%s-depsinfo", ctx.ModuleName()), d.fullListPath, d.flatListPath)
+	ctx.Phony(fmt.Sprintf("%s-depsinfo", ctx.ModuleName()), fullListPath, flatListPath)
 }
 
 // Function called while walking an APEX's payload dependencies.
