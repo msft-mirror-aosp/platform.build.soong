@@ -548,7 +548,6 @@ type ModuleContextIntf interface {
 	apexSdkVersion() android.ApiLevel
 	bootstrap() bool
 	nativeCoverage() bool
-	directlyInAnyApex() bool
 	isPreventInstall() bool
 	isCfiAssemblySupportEnabled() bool
 	getSharedFlags() *SharedFlags
@@ -1690,10 +1689,6 @@ func (ctx *moduleContextImpl) bootstrap() bool {
 
 func (ctx *moduleContextImpl) nativeCoverage() bool {
 	return ctx.mod.nativeCoverage()
-}
-
-func (ctx *moduleContextImpl) directlyInAnyApex() bool {
-	return ctx.mod.DirectlyInAnyApex()
 }
 
 func (ctx *moduleContextImpl) isPreventInstall() bool {
