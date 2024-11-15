@@ -428,17 +428,18 @@ type compileDexParams struct {
 // Adds --art-profile to r8/d8 command.
 // r8/d8 will output a generated profile file to match the optimized dex code.
 func (d *dexer) addArtProfile(ctx android.ModuleContext, dexParams *compileDexParams) (flags []string, deps android.Paths, artProfileOutputPath *android.OutputPath) {
-	if dexParams.artProfileInput != nil {
-		artProfileInputPath := android.PathForModuleSrc(ctx, *dexParams.artProfileInput)
-		artProfileOutputPathValue := android.PathForModuleOut(ctx, "profile.prof.txt").OutputPath
-		artProfileOutputPath = &artProfileOutputPathValue
-		flags = []string{
-			"--art-profile",
-			artProfileInputPath.String(),
-			artProfileOutputPath.String(),
-		}
-		deps = append(deps, artProfileInputPath)
+	if dexParams.artProfileInput == nil {
+		return nil, nil, nil
 	}
+	artProfileInputPath := android.PathForModuleSrc(ctx, *dexParams.artProfileInput)
+	artProfileOutputPathValue := android.PathForModuleOut(ctx, "profile.prof.txt").OutputPath
+	artProfileOutputPath = &artProfileOutputPathValue
+	flags = []string{
+		"--art-profile",
+		artProfileInputPath.String(),
+		artProfileOutputPath.String(),
+	}
+	deps = append(deps, artProfileInputPath)
 	return flags, deps, artProfileOutputPath
 
 }
