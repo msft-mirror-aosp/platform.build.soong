@@ -18,7 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"path/filepath"
+	"regexp"
 	"slices"
 
 	fid_proto "android/soong/cmd/find_input_delta/find_input_delta_proto_internal"
@@ -73,15 +73,16 @@ func CreateState(inputs []string, inspect_contents bool, fsys StatReadFileFS) (*
 	return ret, nil
 }
 
+// We ignore any suffix digit caused by sharding.
+var InspectExtsZipRegexp = regexp.MustCompile("\\.(jar|apex|apk)[0-9]*$")
+
 // Inspect the file and extract the state of the elements in the archive.
 // If this is not an archive of some sort, nil is returned.
 func InspectFileContents(name string) ([]*fid_proto.PartialCompileInput, error) {
-	switch filepath.Ext(name) {
-	case ".jar", ".apex", ".apk":
+	if InspectExtsZipRegexp.Match([]byte(name)) {
 		return inspectZipFileContents(name)
-	default:
-		return nil, nil
 	}
+	return nil, nil
 }
 
 func inspectZipFileContents(name string) ([]*fid_proto.PartialCompileInput, error) {
