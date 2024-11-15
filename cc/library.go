@@ -656,7 +656,7 @@ func (library *libraryDecorator) compileModuleLibApiStubs(ctx ModuleContext, fla
 	// However, having this distinction helps guard accidental
 	// promotion or demotion of API and also helps the API review process b/191371676
 	var flag string
-	if ctx.Module().(android.ApexModule).NotInPlatform() {
+	if ctx.notInPlatform() {
 		flag = "--apex"
 	} else {
 		flag = "--systemapi"
@@ -1750,21 +1750,17 @@ func (library *libraryDecorator) installSymlinkToRuntimeApex(ctx ModuleContext, 
 
 func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 	if library.shared() {
-		if library.hasStubsVariants() && !ctx.Host() && ctx.directlyInAnyApex() {
+		translatedArch := ctx.Target().NativeBridge == android.NativeBridgeEnabled
+		if library.hasStubsVariants() && !ctx.Host() && !ctx.isSdkVariant() &&
+			InstallToBootstrap(ctx.baseModuleName(), ctx.Config()) && !library.buildStubs() &&
+			!translatedArch && !ctx.inRamdisk() && !ctx.inVendorRamdisk() && !ctx.inRecovery() {
 			// Bionic libraries (e.g. libc.so) is installed to the bootstrap subdirectory.
 			// The original path becomes a symlink to the corresponding file in the
 			// runtime APEX.
-			translatedArch := ctx.Target().NativeBridge == android.NativeBridgeEnabled
-			if InstallToBootstrap(ctx.baseModuleName(), ctx.Config()) && !library.buildStubs() &&
-				!translatedArch && !ctx.inRamdisk() && !ctx.inVendorRamdisk() && !ctx.inRecovery() {
-				if ctx.Device() {
-					library.installSymlinkToRuntimeApex(ctx, file)
-				}
-				library.baseInstaller.subDir = "bootstrap"
+			if ctx.Device() {
+				library.installSymlinkToRuntimeApex(ctx, file)
 			}
-		} else if ctx.directlyInAnyApex() && ctx.IsLlndk() && !isBionic(ctx.baseModuleName()) {
-			// Skip installing LLNDK (non-bionic) libraries moved to APEX.
-			ctx.Module().HideFromMake()
+			library.baseInstaller.subDir = "bootstrap"
 		}
 
 		library.baseInstaller.install(ctx, file)
