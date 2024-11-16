@@ -218,7 +218,6 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 				Name:   proptools.StringPtr("system/lib/modules"),
 			},
 		}
-		fsProps.Base_dir = proptools.StringPtr("system")
 	case "system_ext":
 		fsProps.Fsverity.Inputs = []string{
 			"framework/*",
@@ -240,7 +239,6 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 				Name:   proptools.StringPtr("vendor/lib/modules"),
 			},
 		}
-		fsProps.Base_dir = proptools.StringPtr("vendor")
 	case "odm":
 		fsProps.Symlinks = []filesystem.SymlinkDefinition{
 			filesystem.SymlinkDefinition{
@@ -248,7 +246,6 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 				Name:   proptools.StringPtr("odm/lib/modules"),
 			},
 		}
-		fsProps.Base_dir = proptools.StringPtr("odm")
 	case "userdata":
 		fsProps.Base_dir = proptools.StringPtr("data")
 
