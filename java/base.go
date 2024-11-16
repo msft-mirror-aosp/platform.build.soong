@@ -1735,7 +1735,22 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	completeStaticLibsImplementationJarsToCombine := completeStaticLibsImplementationJars
 
-	if j.shouldInstrument(ctx) {
+	// Enable dex compilation for the APEX variants, unless it is disabled explicitly
+	compileDex := Bool(j.dexProperties.Compile_dex)
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
+	if j.DirectlyInAnyApex() && !apexInfo.IsForPlatform() {
+		if j.dexProperties.Compile_dex == nil {
+			compileDex = true
+		}
+		if j.deviceProperties.Hostdex == nil {
+			j.deviceProperties.Hostdex = proptools.BoolPtr(true)
+		}
+	}
+	if Bool(j.properties.Installable) {
+		compileDex = true
+	}
+
+	if j.shouldInstrument(ctx) && (!ctx.Device() || compileDex) {
 		instrumentedOutputFile := j.instrument(ctx, flags, outputFile, jarName, specs)
 		completeStaticLibsImplementationJarsToCombine = depset.New(depset.PREORDER, android.Paths{instrumentedOutputFile}, nil)
 		outputFile = instrumentedOutputFile
@@ -1764,19 +1779,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	j.implementationAndResourcesJar = outputFile
 
-	// Enable dex compilation for the APEX variants, unless it is disabled explicitly
-	compileDex := j.dexProperties.Compile_dex
-	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
-	if j.DirectlyInAnyApex() && !apexInfo.IsForPlatform() {
-		if compileDex == nil {
-			compileDex = proptools.BoolPtr(true)
-		}
-		if j.deviceProperties.Hostdex == nil {
-			j.deviceProperties.Hostdex = proptools.BoolPtr(true)
-		}
-	}
-
-	if ctx.Device() && (Bool(j.properties.Installable) || Bool(compileDex)) {
+	if ctx.Device() && compileDex {
 		if j.hasCode(ctx) {
 			if j.shouldInstrumentStatic(ctx) {
 				j.dexer.extraProguardFlagsFiles = append(j.dexer.extraProguardFlagsFiles,

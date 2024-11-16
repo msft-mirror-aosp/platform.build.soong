@@ -47,6 +47,12 @@ func TestFileSystemCreatorSystemImageProps(t *testing.T) {
 		}),
 		android.FixtureMergeMockFs(android.MockFS{
 			"external/avb/test/data/testkey_rsa4096.pem": nil,
+			"external/avb/test/Android.bp": []byte(`
+			filegroup {
+				name: "avb_testkey_rsa4096",
+				srcs: ["data/testkey_rsa4096.pem"],
+			}
+			`),
 			"build/soong/fsgen/Android.bp": []byte(`
 			soong_filesystem_creator {
 				name: "foo",
@@ -66,8 +72,8 @@ func TestFileSystemCreatorSystemImageProps(t *testing.T) {
 	)
 	android.AssertStringEquals(
 		t,
-		"Property expected to match the product variable 'BOARD_AVB_KEY_PATH'",
-		"external/avb/test/data/testkey_rsa4096.pem",
+		"Property the avb_private_key property to be set to the existing filegroup",
+		":avb_testkey_rsa4096",
 		proptools.String(fooSystem.FsProps().Avb_private_key),
 	)
 	android.AssertStringEquals(
