@@ -831,6 +831,11 @@ func (m *moduleContext) ModuleInfoJSON() *ModuleInfoJSON {
 }
 
 func (m *moduleContext) SetOutputFiles(outputFiles Paths, tag string) {
+	for _, outputFile := range outputFiles {
+		if outputFile == nil {
+			panic("outputfiles cannot be nil")
+		}
+	}
 	if tag == "" {
 		if len(m.outputFiles.DefaultOutputFiles) > 0 {
 			m.ModuleErrorf("Module %s default OutputFiles cannot be overwritten", m.ModuleName())
