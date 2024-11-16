@@ -26,19 +26,19 @@ import (
 )
 
 func init() {
-	android.RegisterModuleType("bootimg", bootimgFactory)
+	android.RegisterModuleType("bootimg", BootimgFactory)
 }
 
 type bootimg struct {
 	android.ModuleBase
 
-	properties bootimgProperties
+	properties BootimgProperties
 
 	output     android.Path
 	installDir android.InstallPath
 }
 
-type bootimgProperties struct {
+type BootimgProperties struct {
 	// Set the name of the output. Defaults to <module_name>.img.
 	Stem *string
 
@@ -82,7 +82,7 @@ type bootimgProperties struct {
 }
 
 // bootimg is the image for the boot partition. It consists of header, kernel, ramdisk, and dtb.
-func bootimgFactory() android.Module {
+func BootimgFactory() android.Module {
 	module := &bootimg{}
 	module.AddProperties(&module.properties)
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
