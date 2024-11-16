@@ -1504,9 +1504,6 @@ func sanitizerRuntimeMutator(mctx android.BottomUpMutatorContext) {
 
 		if Bool(sanProps.Memtag_globals) {
 			sanitizers = append(sanitizers, "memtag-globals")
-			// TODO(mitchp): For now, enable memtag-heap with memtag-globals because the linker
-			// isn't new enough (https://reviews.llvm.org/differential/changeset/?ref=4243566).
-			sanitizers = append(sanitizers, "memtag-heap")
 		}
 
 		if Bool(sanProps.Fuzzer) {
