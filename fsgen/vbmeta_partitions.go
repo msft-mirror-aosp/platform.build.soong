@@ -19,6 +19,7 @@ import (
 	"android/soong/filesystem"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/google/blueprint/proptools"
 )
@@ -153,8 +154,10 @@ func createVbmetaPartitions(ctx android.LoadHookContext, generatedPartitionTypes
 			// Already handled by a chained vbmeta partition
 			continue
 		}
-		if partitionType == "ramdisk" {
+		if strings.Contains(partitionType, "ramdisk") || strings.Contains(partitionType, "boot") {
 			// ramdisk is never signed with avb information
+			// boot partitions just have the avb footer, and don't have a corresponding vbmeta
+			// partition.
 			continue
 		}
 		partitionModules = append(partitionModules, generatedModuleNameForPartition(ctx.Config(), partitionType))
