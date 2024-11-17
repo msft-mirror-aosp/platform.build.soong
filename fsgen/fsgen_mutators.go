@@ -84,36 +84,6 @@ func defaultDepCandidateProps(config android.Config) *depCandidateProps {
 	}
 }
 
-func generatedPartitions(ctx android.LoadHookContext) []string {
-	generatedPartitions := []string{"system", "ramdisk"}
-	if ctx.DeviceConfig().SystemExtPath() == "system_ext" {
-		generatedPartitions = append(generatedPartitions, "system_ext")
-	}
-	if ctx.DeviceConfig().BuildingVendorImage() && ctx.DeviceConfig().VendorPath() == "vendor" {
-		generatedPartitions = append(generatedPartitions, "vendor")
-	}
-	if ctx.DeviceConfig().BuildingProductImage() && ctx.DeviceConfig().ProductPath() == "product" {
-		generatedPartitions = append(generatedPartitions, "product")
-	}
-	if ctx.DeviceConfig().BuildingOdmImage() && ctx.DeviceConfig().OdmPath() == "odm" {
-		generatedPartitions = append(generatedPartitions, "odm")
-	}
-	if ctx.DeviceConfig().BuildingUserdataImage() && ctx.DeviceConfig().UserdataPath() == "data" {
-		generatedPartitions = append(generatedPartitions, "userdata")
-	}
-	if ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.BuildingSystemDlkmImage {
-		generatedPartitions = append(generatedPartitions, "system_dlkm")
-	}
-	if ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.BuildingVendorDlkmImage {
-		generatedPartitions = append(generatedPartitions, "vendor_dlkm")
-	}
-	if ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.BuildingOdmDlkmImage {
-		generatedPartitions = append(generatedPartitions, "odm_dlkm")
-	}
-
-	return generatedPartitions
-}
-
 func createFsGenState(ctx android.LoadHookContext, generatedPrebuiltEtcModuleNames []string, avbpubkeyGenerated bool) *FsGenState {
 	return ctx.Config().Once(fsGenStateOnceKey, func() interface{} {
 		partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
