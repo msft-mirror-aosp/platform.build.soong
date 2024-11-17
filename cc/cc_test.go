@@ -1008,7 +1008,7 @@ func TestLlndkLibrary(t *testing.T) {
 	android.AssertArrayString(t, "variants for llndk stubs", expected, actual)
 
 	params := result.ModuleForTests("libllndk", "android_vendor_arm_armv7-a-neon_shared").Description("generate stub")
-	android.AssertSame(t, "use Vendor API level for default stubs", "202404", params.Args["apiLevel"])
+	android.AssertSame(t, "use Vendor API level for default stubs", "999999", params.Args["apiLevel"])
 
 	checkExportedIncludeDirs := func(module, variant string, expectedSystemDirs []string, expectedDirs ...string) {
 		t.Helper()
@@ -1502,111 +1502,6 @@ func TestVersionedStubs(t *testing.T) {
 	libFoo1VersioningMacro := "-D__LIBFOO_API__=1"
 	if !strings.Contains(cFlags, libFoo1VersioningMacro) {
 		t.Errorf("%q is not found in %q", libFoo1VersioningMacro, cFlags)
-	}
-}
-
-func TestStubsForLibraryInMultipleApexes(t *testing.T) {
-	t.Parallel()
-	ctx := testCc(t, `
-		cc_library_shared {
-			name: "libFoo",
-			srcs: ["foo.c"],
-			stubs: {
-				symbol_file: "foo.map.txt",
-				versions: ["current"],
-			},
-			apex_available: ["bar", "a1"],
-		}
-
-		cc_library_shared {
-			name: "libBar",
-			srcs: ["bar.c"],
-			shared_libs: ["libFoo"],
-			apex_available: ["a1"],
-		}
-
-		cc_library_shared {
-			name: "libA1",
-			srcs: ["a1.c"],
-			shared_libs: ["libFoo"],
-			apex_available: ["a1"],
-		}
-
-		cc_library_shared {
-			name: "libBarA1",
-			srcs: ["bara1.c"],
-			shared_libs: ["libFoo"],
-			apex_available: ["bar", "a1"],
-		}
-
-		cc_library_shared {
-			name: "libAnyApex",
-			srcs: ["anyApex.c"],
-			shared_libs: ["libFoo"],
-			apex_available: ["//apex_available:anyapex"],
-		}
-
-		cc_library_shared {
-			name: "libBaz",
-			srcs: ["baz.c"],
-			shared_libs: ["libFoo"],
-			apex_available: ["baz"],
-		}
-
-		cc_library_shared {
-			name: "libQux",
-			srcs: ["qux.c"],
-			shared_libs: ["libFoo"],
-			apex_available: ["qux", "bar"],
-		}`)
-
-	variants := ctx.ModuleVariantsForTests("libFoo")
-	expectedVariants := []string{
-		"android_arm64_armv8-a_shared",
-		"android_arm64_armv8-a_shared_current",
-		"android_arm_armv7-a-neon_shared",
-		"android_arm_armv7-a-neon_shared_current",
-	}
-	variantsMismatch := false
-	if len(variants) != len(expectedVariants) {
-		variantsMismatch = true
-	} else {
-		for _, v := range expectedVariants {
-			if !inList(v, variants) {
-				variantsMismatch = false
-			}
-		}
-	}
-	if variantsMismatch {
-		t.Errorf("variants of libFoo expected:\n")
-		for _, v := range expectedVariants {
-			t.Errorf("%q\n", v)
-		}
-		t.Errorf(", but got:\n")
-		for _, v := range variants {
-			t.Errorf("%q\n", v)
-		}
-	}
-
-	linkAgainstFoo := []string{"libBarA1"}
-	linkAgainstFooStubs := []string{"libBar", "libA1", "libBaz", "libQux", "libAnyApex"}
-
-	libFooPath := "libFoo/android_arm64_armv8-a_shared/libFoo.so"
-	for _, lib := range linkAgainstFoo {
-		libLinkRule := ctx.ModuleForTests(lib, "android_arm64_armv8-a_shared").Rule("ld")
-		libFlags := libLinkRule.Args["libFlags"]
-		if !strings.Contains(libFlags, libFooPath) {
-			t.Errorf("%q: %q is not found in %q", lib, libFooPath, libFlags)
-		}
-	}
-
-	libFooStubPath := "libFoo/android_arm64_armv8-a_shared_current/libFoo.so"
-	for _, lib := range linkAgainstFooStubs {
-		libLinkRule := ctx.ModuleForTests(lib, "android_arm64_armv8-a_shared").Rule("ld")
-		libFlags := libLinkRule.Args["libFlags"]
-		if !strings.Contains(libFlags, libFooStubPath) {
-			t.Errorf("%q: %q is not found in %q", lib, libFooStubPath, libFlags)
-		}
 	}
 }
 
@@ -3258,7 +3153,7 @@ func TestImageVariants(t *testing.T) {
 	testDepWithVariant("product")
 }
 
-func TestVendorSdkVersion(t *testing.T) {
+func TestVendorOrProductVariantUsesPlatformSdkVersionAsDefault(t *testing.T) {
 	t.Parallel()
 
 	bp := `
@@ -3266,31 +3161,29 @@ func TestVendorSdkVersion(t *testing.T) {
 			name: "libfoo",
 			srcs: ["libfoo.cc"],
 			vendor_available: true,
+			product_available: true,
 		}
 
 		cc_library {
 			name: "libbar",
 			srcs: ["libbar.cc"],
 			vendor_available: true,
+			product_available: true,
 			min_sdk_version: "29",
 		}
 	`
 
 	ctx := prepareForCcTest.RunTestWithBp(t, bp)
-	testSdkVersionFlag := func(module, version string) {
-		flags := ctx.ModuleForTests(module, "android_vendor_arm64_armv8-a_static").Rule("cc").Args["cFlags"]
-		android.AssertStringDoesContain(t, "min sdk version", flags, "-target aarch64-linux-android"+version)
+	testSdkVersionFlag := func(module, variant, version string) {
+		flags := ctx.ModuleForTests(module, "android_"+variant+"_arm64_armv8-a_static").Rule("cc").Args["cFlags"]
+		android.AssertStringDoesContain(t, "target SDK version", flags, "-target aarch64-linux-android"+version)
 	}
 
-	testSdkVersionFlag("libfoo", "10000")
-	testSdkVersionFlag("libbar", "29")
-
-	ctx = android.GroupFixturePreparers(
-		prepareForCcTest,
-		android.PrepareForTestWithBuildFlag("RELEASE_BOARD_API_LEVEL_FROZEN", "true"),
-	).RunTestWithBp(t, bp)
-	testSdkVersionFlag("libfoo", "30")
-	testSdkVersionFlag("libbar", "29")
+	testSdkVersionFlag("libfoo", "vendor", "30")
+	testSdkVersionFlag("libfoo", "product", "30")
+	// target SDK version can be set explicitly with min_sdk_version
+	testSdkVersionFlag("libbar", "vendor", "29")
+	testSdkVersionFlag("libbar", "product", "29")
 }
 
 func TestClangVerify(t *testing.T) {

@@ -929,7 +929,7 @@ func TestApexWithStubs(t *testing.T) {
 		cc_library {
 			name: "mylib",
 			srcs: ["mylib.cpp"],
-			shared_libs: ["mylib2", "mylib3", "my_prebuilt_platform_lib", "my_prebuilt_platform_stub_only_lib"],
+			shared_libs: ["mylib2", "mylib3#impl", "my_prebuilt_platform_lib", "my_prebuilt_platform_stub_only_lib"],
 			system_shared_libs: [],
 			stl: "none",
 			apex_available: [ "myapex" ],
@@ -1025,7 +1025,7 @@ func TestApexWithStubs(t *testing.T) {
 	// ... and not linking to the non-stub (impl) variant of mylib2
 	ensureNotContains(t, mylibLdFlags, "mylib2/android_arm64_armv8-a_shared/mylib2.so")
 
-	// Ensure that mylib is linking with the non-stub (impl) of mylib3 (because mylib3 is in the same apex)
+	// Ensure that mylib is linking with the non-stub (impl) of mylib3 (because the dependency is added with mylib3#impl)
 	ensureContains(t, mylibLdFlags, "mylib3/android_arm64_armv8-a_shared_apex10000/mylib3.so")
 	// .. and not linking to the stubs variant of mylib3
 	ensureNotContains(t, mylibLdFlags, "mylib3/android_arm64_armv8-a_shared_12/mylib3.so")
@@ -1201,7 +1201,7 @@ func TestApexWithStubsWithMinSdkVersion(t *testing.T) {
 		cc_library {
 			name: "mylib",
 			srcs: ["mylib.cpp"],
-			shared_libs: ["mylib2", "mylib3"],
+			shared_libs: ["mylib2", "mylib3#impl"],
 			system_shared_libs: [],
 			stl: "none",
 			apex_available: [ "myapex" ],
@@ -1264,7 +1264,7 @@ func TestApexWithStubsWithMinSdkVersion(t *testing.T) {
 	// ... and not linking to the non-stub (impl) variant of mylib2
 	ensureNotContains(t, mylibLdFlags, "mylib2/android_arm64_armv8-a_shared/mylib2.so")
 
-	// Ensure that mylib is linking with the non-stub (impl) of mylib3 (because mylib3 is in the same apex)
+	// Ensure that mylib is linking with the non-stub (impl) of mylib3 (because the dependency is added with mylib3#impl)
 	ensureContains(t, mylibLdFlags, "mylib3/android_arm64_armv8-a_shared_apex29/mylib3.so")
 	// .. and not linking to the stubs variant of mylib3
 	ensureNotContains(t, mylibLdFlags, "mylib3/android_arm64_armv8-a_shared_29/mylib3.so")
@@ -1797,8 +1797,8 @@ func TestApexWithSystemLibsStubs(t *testing.T) {
 		cc_library {
 			name: "mylib",
 			srcs: ["mylib.cpp"],
-			system_shared_libs: ["libc", "libm"],
-			shared_libs: ["libdl#27"],
+			system_shared_libs: ["libc"],
+			shared_libs: ["libdl#27", "libm#impl"],
 			stl: "none",
 			apex_available: [ "myapex" ],
 		}
@@ -2962,8 +2962,7 @@ func TestApexMinSdkVersion_OkayEvenWhenDepIsNewer_IfItSatisfiesApexMinSdkVersion
 			private_key: "testkey.pem",
 		}
 
-		// mylib in myapex will link to mylib2#current
-		// mylib in otherapex will link to mylib2(non-stub) in otherapex as well
+		// mylib will link to mylib2#current
 		cc_library {
 			name: "mylib",
 			srcs: ["mylib.cpp"],
@@ -2997,7 +2996,7 @@ func TestApexMinSdkVersion_OkayEvenWhenDepIsNewer_IfItSatisfiesApexMinSdkVersion
 		ensureContains(t, libFlags, "android_arm64_armv8-a_"+to_variant+"/"+to+".so")
 	}
 	expectLink("mylib", "shared_apex29", "mylib2", "shared_current")
-	expectLink("mylib", "shared_apex30", "mylib2", "shared_apex30")
+	expectLink("mylib", "shared_apex30", "mylib2", "shared_current")
 }
 
 func TestApexMinSdkVersion_WorksWithSdkCodename(t *testing.T) {
@@ -8713,196 +8712,6 @@ func TestApexPermittedPackagesRules(t *testing.T) {
 	}
 }
 
-func TestTestFor(t *testing.T) {
-	t.Parallel()
-	ctx := testApex(t, `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			native_shared_libs: ["mylib", "myprivlib"],
-			updatable: false,
-		}
-
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-
-		cc_library {
-			name: "mylib",
-			srcs: ["mylib.cpp"],
-			system_shared_libs: [],
-			stl: "none",
-			stubs: {
-				versions: ["1"],
-			},
-			apex_available: ["myapex"],
-		}
-
-		cc_library {
-			name: "myprivlib",
-			srcs: ["mylib.cpp"],
-			system_shared_libs: [],
-			stl: "none",
-			apex_available: ["myapex"],
-		}
-
-
-		cc_test {
-			name: "mytest",
-			gtest: false,
-			srcs: ["mylib.cpp"],
-			system_shared_libs: [],
-			stl: "none",
-			shared_libs: ["mylib", "myprivlib", "mytestlib"],
-			test_for: ["myapex"]
-		}
-
-		cc_library {
-			name: "mytestlib",
-			srcs: ["mylib.cpp"],
-			system_shared_libs: [],
-			shared_libs: ["mylib", "myprivlib"],
-			stl: "none",
-			test_for: ["myapex"],
-		}
-
-		cc_benchmark {
-			name: "mybench",
-			srcs: ["mylib.cpp"],
-			system_shared_libs: [],
-			shared_libs: ["mylib", "myprivlib"],
-			stl: "none",
-			test_for: ["myapex"],
-		}
-	`)
-
-	ensureLinkedLibIs := func(mod, variant, linkedLib, expectedVariant string) {
-		ldFlags := strings.Split(ctx.ModuleForTests(mod, variant).Rule("ld").Args["libFlags"], " ")
-		mylibLdFlags := android.FilterListPred(ldFlags, func(s string) bool { return strings.HasPrefix(s, linkedLib) })
-		android.AssertArrayString(t, "unexpected "+linkedLib+" link library for "+mod, []string{linkedLib + expectedVariant}, mylibLdFlags)
-	}
-
-	// These modules are tests for the apex, therefore are linked to the
-	// actual implementation of mylib instead of its stub.
-	ensureLinkedLibIs("mytest", "android_arm64_armv8-a", "out/soong/.intermediates/mylib/", "android_arm64_armv8-a_shared/mylib.so")
-	ensureLinkedLibIs("mytestlib", "android_arm64_armv8-a_shared", "out/soong/.intermediates/mylib/", "android_arm64_armv8-a_shared/mylib.so")
-	ensureLinkedLibIs("mybench", "android_arm64_armv8-a", "out/soong/.intermediates/mylib/", "android_arm64_armv8-a_shared/mylib.so")
-}
-
-func TestIndirectTestFor(t *testing.T) {
-	t.Parallel()
-	ctx := testApex(t, `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			native_shared_libs: ["mylib", "myprivlib"],
-			updatable: false,
-		}
-
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-
-		cc_library {
-			name: "mylib",
-			srcs: ["mylib.cpp"],
-			system_shared_libs: [],
-			stl: "none",
-			stubs: {
-				versions: ["1"],
-			},
-			apex_available: ["myapex"],
-		}
-
-		cc_library {
-			name: "myprivlib",
-			srcs: ["mylib.cpp"],
-			system_shared_libs: [],
-			stl: "none",
-			shared_libs: ["mylib"],
-			apex_available: ["myapex"],
-		}
-
-		cc_library {
-			name: "mytestlib",
-			srcs: ["mylib.cpp"],
-			system_shared_libs: [],
-			shared_libs: ["myprivlib"],
-			stl: "none",
-			test_for: ["myapex"],
-		}
-	`)
-
-	ensureLinkedLibIs := func(mod, variant, linkedLib, expectedVariant string) {
-		ldFlags := strings.Split(ctx.ModuleForTests(mod, variant).Rule("ld").Args["libFlags"], " ")
-		mylibLdFlags := android.FilterListPred(ldFlags, func(s string) bool { return strings.HasPrefix(s, linkedLib) })
-		android.AssertArrayString(t, "unexpected "+linkedLib+" link library for "+mod, []string{linkedLib + expectedVariant}, mylibLdFlags)
-	}
-
-	// The platform variant of mytestlib links to the platform variant of the
-	// internal myprivlib.
-	ensureLinkedLibIs("mytestlib", "android_arm64_armv8-a_shared", "out/soong/.intermediates/myprivlib/", "android_arm64_armv8-a_shared/myprivlib.so")
-
-	// The platform variant of myprivlib links to the platform variant of mylib
-	// and bypasses its stubs.
-	ensureLinkedLibIs("myprivlib", "android_arm64_armv8-a_shared", "out/soong/.intermediates/mylib/", "android_arm64_armv8-a_shared/mylib.so")
-}
-
-func TestTestForForLibInOtherApex(t *testing.T) {
-	t.Parallel()
-	// This case is only allowed for known overlapping APEXes, i.e. the ART APEXes.
-	_ = testApex(t, `
-		apex {
-			name: "com.android.art",
-			key: "myapex.key",
-			native_shared_libs: ["libnativebridge"],
-			updatable: false,
-		}
-
-		apex {
-			name: "com.android.art.debug",
-			key: "myapex.key",
-			native_shared_libs: ["libnativebridge", "libnativebrdige_test"],
-			updatable: false,
-		}
-
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-
-		cc_library {
-			name: "libnativebridge",
-			srcs: ["libnativebridge.cpp"],
-			system_shared_libs: [],
-			stl: "none",
-			stubs: {
-				versions: ["1"],
-			},
-			apex_available: ["com.android.art", "com.android.art.debug"],
-		}
-
-		cc_library {
-			name: "libnativebrdige_test",
-			srcs: ["mylib.cpp"],
-			system_shared_libs: [],
-			shared_libs: ["libnativebridge"],
-			stl: "none",
-			apex_available: ["com.android.art.debug"],
-			test_for: ["com.android.art"],
-		}
-	`,
-		android.MockFS{
-			"system/sepolicy/apex/com.android.art-file_contexts":       nil,
-			"system/sepolicy/apex/com.android.art.debug-file_contexts": nil,
-		}.AddToFixture())
-}
-
 // TODO(jungjw): Move this to proptools
 func intPtr(i int) *int {
 	return &i
@@ -10243,61 +10052,6 @@ func TestUpdatableApexEnforcesAppUpdatability(t *testing.T) {
 		RunTestWithBp(t, bp)
 }
 
-func TestTrimmedApex(t *testing.T) {
-	t.Parallel()
-	bp := `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			native_shared_libs: ["libfoo","libbaz"],
-			min_sdk_version: "29",
-			trim_against: "mydcla",
-    }
-		apex {
-			name: "mydcla",
-			key: "myapex.key",
-			native_shared_libs: ["libfoo","libbar"],
-			min_sdk_version: "29",
-			file_contexts: ":myapex-file_contexts",
-			dynamic_common_lib_apex: true,
-		}
-		apex_key {
-			name: "myapex.key",
-		}
-		cc_library {
-			name: "libfoo",
-			shared_libs: ["libc"],
-			apex_available: ["myapex","mydcla"],
-			min_sdk_version: "29",
-		}
-		cc_library {
-			name: "libbar",
-			shared_libs: ["libc"],
-			apex_available: ["myapex","mydcla"],
-			min_sdk_version: "29",
-		}
-		cc_library {
-			name: "libbaz",
-			shared_libs: ["libc"],
-			apex_available: ["myapex","mydcla"],
-			min_sdk_version: "29",
-		}
-		`
-	ctx := testApex(t, bp)
-	module := ctx.ModuleForTests("myapex", "android_common_myapex")
-	apexRule := module.MaybeRule("apexRule")
-	if apexRule.Rule == nil {
-		t.Errorf("Expecting regular apex rule but a non regular apex rule found")
-	}
-
-	ctx = testApex(t, bp, android.FixtureModifyConfig(android.SetTrimmedApexEnabledForTests))
-	trimmedApexRule := ctx.ModuleForTests("myapex", "android_common_myapex").Rule("TrimmedApexRule")
-	libs_to_trim := trimmedApexRule.Args["libs_to_trim"]
-	android.AssertStringDoesContain(t, "missing lib to trim", libs_to_trim, "libfoo")
-	android.AssertStringDoesContain(t, "missing lib to trim", libs_to_trim, "libbar")
-	android.AssertStringDoesNotContain(t, "unexpected libs in the libs to trim", libs_to_trim, "libbaz")
-}
-
 func TestCannedFsConfig(t *testing.T) {
 	t.Parallel()
 	ctx := testApex(t, `
@@ -10432,7 +10186,10 @@ func TestFileSystemShouldSkipApexLibraries(t *testing.T) {
 			deps: [
 				"libfoo",
 			],
-			linker_config_src: "linker.config.json",
+			linker_config: {
+				gen_linker_config: true,
+				linker_config_srcs: ["linker.config.json"],
+			},
 		}
 
 		cc_library {

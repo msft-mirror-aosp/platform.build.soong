@@ -165,6 +165,10 @@ func (p *PackagingSpec) Partition() string {
 	return p.partition
 }
 
+func (p *PackagingSpec) SetPartition(partition string) {
+	p.partition = partition
+}
+
 func (p *PackagingSpec) SkipInstall() bool {
 	return p.skipInstall
 }
@@ -186,6 +190,7 @@ type PackageModule interface {
 	// GatherPackagingSpecs gathers PackagingSpecs of transitive dependencies.
 	GatherPackagingSpecs(ctx ModuleContext) map[string]PackagingSpec
 	GatherPackagingSpecsWithFilter(ctx ModuleContext, filter func(PackagingSpec) bool) map[string]PackagingSpec
+	GatherPackagingSpecsWithFilterAndModifier(ctx ModuleContext, filter func(PackagingSpec) bool, modifier func(*PackagingSpec)) map[string]PackagingSpec
 
 	// CopyDepsToZip zips the built artifacts of the dependencies into the given zip file and
 	// returns zip entries in it. This is expected to be called in GenerateAndroidBuildActions,
@@ -444,7 +449,8 @@ func (p *PackagingBase) AddDeps(ctx BottomUpMutatorContext, depTag blueprint.Dep
 	}
 }
 
-func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter func(PackagingSpec) bool) map[string]PackagingSpec {
+// See PackageModule.GatherPackagingSpecs
+func (p *PackagingBase) GatherPackagingSpecsWithFilterAndModifier(ctx ModuleContext, filter func(PackagingSpec) bool, modifier func(*PackagingSpec)) map[string]PackagingSpec {
 	// packaging specs gathered from the dep that are not high priorities.
 	var regularPriorities []PackagingSpec
 
@@ -474,7 +480,7 @@ func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter
 		return false
 	}
 
-	ctx.VisitDirectDeps(func(child Module) {
+	ctx.VisitDirectDepsProxy(func(child ModuleProxy) {
 		depTag := ctx.OtherModuleDependencyTag(child)
 		if pi, ok := depTag.(PackagingItem); !ok || !pi.IsPackagingItem() {
 			return
@@ -489,6 +495,10 @@ func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter
 				if !filter(ps) {
 					continue
 				}
+			}
+
+			if modifier != nil {
+				modifier(&ps)
 			}
 
 			if _, ok := depTag.(highPriorityDepTag); ok {
@@ -549,6 +559,11 @@ func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter
 	}
 
 	return m
+}
+
+// See PackageModule.GatherPackagingSpecs
+func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter func(PackagingSpec) bool) map[string]PackagingSpec {
+	return p.GatherPackagingSpecsWithFilterAndModifier(ctx, filter, nil)
 }
 
 // See PackageModule.GatherPackagingSpecs

@@ -43,7 +43,6 @@ func init() {
 	pctx.Import("android/soong/java")
 	pctx.HostBinToolVariable("apexer", "apexer")
 	pctx.HostBinToolVariable("apexer_with_DCLA_preprocessing", "apexer_with_DCLA_preprocessing")
-	pctx.HostBinToolVariable("apexer_with_trim_preprocessing", "apexer_with_trim_preprocessing")
 
 	// ART minimal builds (using the master-art manifest) do not have the "frameworks/base"
 	// projects, and hence cannot build 'aapt2'. Use the SDK prebuilt instead.
@@ -173,34 +172,6 @@ var (
 	}, "tool_path", "image_dir", "copy_commands", "file_contexts", "canned_fs_config", "key",
 		"opt_flags", "manifest", "is_DCLA")
 
-	TrimmedApexRule = pctx.StaticRule("TrimmedApexRule", blueprint.RuleParams{
-		Command: `rm -rf ${image_dir} && mkdir -p ${image_dir} && ` +
-			`(. ${out}.copy_commands) && ` +
-			`APEXER_TOOL_PATH=${tool_path} ` +
-			`${apexer_with_trim_preprocessing} ` +
-			`--apexer ${apexer} ` +
-			`--canned_fs_config ${canned_fs_config} ` +
-			`--manifest ${manifest} ` +
-			`--libs_to_trim ${libs_to_trim} ` +
-			`${image_dir} ` +
-			`${out} ` +
-			`-- ` +
-			`--include_build_info ` +
-			`--force ` +
-			`--payload_type image ` +
-			`--key ${key} ` +
-			`--file_contexts ${file_contexts} ` +
-			`${opt_flags} `,
-		CommandDeps: []string{"${apexer_with_trim_preprocessing}", "${apexer}", "${avbtool}", "${e2fsdroid}",
-			"${merge_zips}", "${mke2fs}", "${resize2fs}", "${sefcontext_compile}", "${make_f2fs}",
-			"${sload_f2fs}", "${make_erofs}", "${soong_zip}", "${zipalign}", "${aapt2}",
-			"prebuilts/sdk/current/public/android.jar"},
-		Rspfile:        "${out}.copy_commands",
-		RspfileContent: "${copy_commands}",
-		Description:    "APEX ${image_dir} => ${out}",
-	}, "tool_path", "image_dir", "copy_commands", "file_contexts", "canned_fs_config", "key",
-		"opt_flags", "manifest", "libs_to_trim")
-
 	apexProtoConvertRule = pctx.AndroidStaticRule("apexProtoConvertRule",
 		blueprint.RuleParams{
 			Command:     `${aapt2} convert --output-format proto $in -o $out`,
@@ -225,7 +196,7 @@ var (
 		Command: `diff --unchanged-group-format='' \` +
 			`--changed-group-format='%<' \` +
 			`${image_content_file} ${allowed_files_file} || (` +
-			`echo -e "New unexpected files were added to ${apex_module_name}." ` +
+			`echo "New unexpected files were added to ${apex_module_name}." ` +
 			` "To fix the build run following command:" && ` +
 			`echo "system/apex/tools/update_allowed_list.sh ${allowed_files_file} ${image_content_file}" && ` +
 			`exit 1); touch ${out}`,
@@ -426,8 +397,10 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Output
 	} else {
 		if m, t := android.SrcIsModuleWithTag(*a.properties.File_contexts); m != "" {
 			isFileContextsModule = true
-			otherModule := android.GetModuleFromPathDep(ctx, m, t)
-			fileContextsDir = ctx.OtherModuleDir(otherModule)
+			otherModule := android.GetModuleProxyFromPathDep(ctx, m, t)
+			if otherModule != nil {
+				fileContextsDir = ctx.OtherModuleDir(*otherModule)
+			}
 		}
 		fileContexts = android.PathForModuleSrc(ctx, *a.properties.File_contexts)
 	}
@@ -829,24 +802,6 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 				"canned_fs_config": cannedFsConfig.String(),
 				"key":              a.privateKeyFile.String(),
 				"opt_flags":        strings.Join(optFlags, " "),
-			},
-		})
-	} else if ctx.Config().ApexTrimEnabled() && len(a.libs_to_trim(ctx)) > 0 {
-		ctx.Build(pctx, android.BuildParams{
-			Rule:        TrimmedApexRule,
-			Implicits:   implicitInputs,
-			Output:      unsignedOutputFile,
-			Description: "apex",
-			Args: map[string]string{
-				"tool_path":        outHostBinDir + ":" + prebuiltSdkToolsBinDir,
-				"image_dir":        imageDir.String(),
-				"copy_commands":    strings.Join(copyCommands, " && "),
-				"manifest":         a.manifestPbOut.String(),
-				"file_contexts":    fileContexts.String(),
-				"canned_fs_config": cannedFsConfig.String(),
-				"key":              a.privateKeyFile.String(),
-				"opt_flags":        strings.Join(optFlags, " "),
-				"libs_to_trim":     strings.Join(a.libs_to_trim(ctx), ","),
 			},
 		})
 	} else {

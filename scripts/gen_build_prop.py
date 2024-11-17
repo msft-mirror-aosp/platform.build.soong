@@ -608,6 +608,8 @@ def main():
         build_product_prop(args)
       case "vendor":
         build_vendor_prop(args)
+      case "system_dlkm" | "vendor_dlkm" | "odm_dlkm" | "bootimage":
+        build_prop(args, gen_build_info=False, gen_common_build_props=True, variables=[])
       case _:
         sys.exit(f"not supported partition {args.partition}")
 

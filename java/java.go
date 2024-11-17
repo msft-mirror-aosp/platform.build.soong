@@ -226,9 +226,9 @@ var (
 
 	// Rule for generating device binary default wrapper
 	deviceBinaryWrapper = pctx.StaticRule("deviceBinaryWrapper", blueprint.RuleParams{
-		Command: `echo -e '#!/system/bin/sh\n` +
+		Command: `printf '#!/system/bin/sh\n` +
 			`export CLASSPATH=/system/framework/$jar_name\n` +
-			`exec app_process /$partition/bin $main_class "$$@"'> ${out}`,
+			`exec app_process /$partition/bin $main_class "$$@"\n'> ${out}`,
 		Description: "Generating device binary wrapper ${jar_name}",
 	}, "jar_name", "partition", "main_class")
 )
@@ -1557,14 +1557,16 @@ func (j *TestHost) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	j.Test.generateAndroidBuildActionsWithConfig(ctx, configs)
 	android.SetProvider(ctx, tradefed.BaseTestProviderKey, tradefed.BaseTestProviderData{
-		InstalledFiles:      j.data,
-		OutputFile:          j.outputFile,
-		TestConfig:          j.testConfig,
-		RequiredModuleNames: j.RequiredModuleNames(ctx),
-		TestSuites:          j.testProperties.Test_suites,
-		IsHost:              true,
-		LocalSdkVersion:     j.sdkVersion.String(),
-		IsUnitTest:          Bool(j.testProperties.Test_options.Unit_test),
+		TestcaseRelDataFiles: testcaseRel(j.data),
+		OutputFile:           j.outputFile,
+		TestConfig:           j.testConfig,
+		RequiredModuleNames:  j.RequiredModuleNames(ctx),
+		TestSuites:           j.testProperties.Test_suites,
+		IsHost:               true,
+		LocalSdkVersion:      j.sdkVersion.String(),
+		IsUnitTest:           Bool(j.testProperties.Test_options.Unit_test),
+		MkInclude:            "$(BUILD_SYSTEM)/soong_java_prebuilt.mk",
+		MkAppClass:           "JAVA_LIBRARIES",
 	})
 }
 
