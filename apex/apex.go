@@ -992,25 +992,7 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		return true
 	}
 
-	// Records whether a certain module is included in this apexBundle via direct dependency or
-	// inndirect dependency.
-	contents := make(map[string]android.ApexMembership)
-	mctx.WalkDeps(func(child, parent android.Module) bool {
-		if !continueApexDepsWalk(child, parent) {
-			return false
-		}
-		// If the parent is apexBundle, this child is directly depended.
-		_, directDep := parent.(*apexBundle)
-		depName := mctx.OtherModuleName(child)
-		contents[depName] = contents[depName].Add(directDep)
-		return true
-	})
-
-	// The membership information is saved for later access
-	apexContents := android.NewApexContents(contents)
-	android.SetProvider(mctx, android.ApexBundleInfoProvider, android.ApexBundleInfo{
-		Contents: apexContents,
-	})
+	android.SetProvider(mctx, android.ApexBundleInfoProvider, android.ApexBundleInfo{})
 
 	minSdkVersion := a.minSdkVersion(mctx)
 	// When min_sdk_version is not set, the apex is built against FutureApiLevel.
@@ -1039,7 +1021,6 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		UsePlatformApis:   a.UsePlatformApis(),
 		InApexVariants:    []string{apexVariationName},
 		InApexModules:     []string{a.Name()}, // could be com.mycompany.android.foo
-		ApexContents:      []*android.ApexContents{apexContents},
 		TestApexes:        testApexes,
 		BaseApexName:      mctx.ModuleName(),
 		ApexAvailableName: proptools.String(a.properties.Apex_available_name),
