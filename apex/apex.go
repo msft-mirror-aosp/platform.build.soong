@@ -2082,7 +2082,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 				//
 				// Skip the dependency in unbundled builds where the device image is not
 				// being built.
-				if ch.IsStubsImplementationRequired() && !am.DirectlyInAnyApex() && !ctx.Config().UnbundledBuild() {
+				if ch.IsStubsImplementationRequired() && !am.NotInPlatform() && !ctx.Config().UnbundledBuild() {
 					// we need a module name for Make
 					name := ch.ImplementationModuleNameForMake(ctx) + ch.Properties.SubName
 					if !android.InList(name, a.makeModulesToInstall) {
