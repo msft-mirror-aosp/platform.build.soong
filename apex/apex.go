@@ -67,7 +67,6 @@ func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
 	// it should create a platform variant.
 	ctx.BottomUp("mark_platform_availability", markPlatformAvailability)
 	ctx.Transition("apex", &apexTransitionMutator{})
-	ctx.BottomUp("apex_directly_in_any", apexDirectlyInAnyMutator).MutatesDependencies()
 }
 
 type apexBundleProperties struct {
@@ -1242,14 +1241,6 @@ func apexModuleTypeRequiresVariant(module ApexInfoMutator) bool {
 	return true
 }
 
-// See android.UpdateDirectlyInAnyApex
-// TODO(jiyong): move this to android/apex.go?
-func apexDirectlyInAnyMutator(mctx android.BottomUpMutatorContext) {
-	if am, ok := mctx.Module().(android.ApexModule); ok {
-		android.UpdateDirectlyInAnyApex(mctx, am)
-	}
-}
-
 const (
 	// File extensions of an APEX for different packaging methods
 	imageApexSuffix  = ".apex"
@@ -2179,8 +2170,6 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			ctx.PropertyErrorf("systemserverclasspath_fragments",
 				"systemserverclasspath_fragment content %q of type %q is not supported", depName, ctx.OtherModuleType(child))
 		}
-	} else if _, ok := depTag.(android.CopyDirectlyInAnyApexTag); ok {
-		// nothing
 	} else if depTag == android.DarwinUniversalVariantTag {
 		// nothing
 	} else if depTag == android.RequiredDepTag {

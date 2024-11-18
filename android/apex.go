@@ -220,10 +220,6 @@ type ApexModule interface {
 	// this after apex.apexMutator is run.
 	InAnyApex() bool
 
-	// Returns true if this module is directly in any APEX. Call this AFTER apex.apexMutator is
-	// run.
-	DirectlyInAnyApex() bool
-
 	// NotInPlatform returns true if the module is not available to the platform due to
 	// apex_available being set and not containing "//apex_available:platform".
 	NotInPlatform() bool
@@ -285,9 +281,6 @@ type ApexProperties struct {
 	// See ApexModule.InAnyApex()
 	InAnyApex bool `blueprint:"mutated"`
 
-	// See ApexModule.DirectlyInAnyApex()
-	DirectlyInAnyApex bool `blueprint:"mutated"`
-
 	// See ApexModule.NotAvailableForPlatform()
 	NotAvailableForPlatform bool `blueprint:"mutated"`
 
@@ -322,16 +315,6 @@ type AlwaysRequireApexVariantTag interface {
 
 	// Return true if this tag requires that the target dependency has an apex variant.
 	AlwaysRequireApexVariant() bool
-}
-
-// Marker interface that identifies dependencies that should inherit the DirectlyInAnyApex state
-// from the parent to the child. For example, stubs libraries are marked as DirectlyInAnyApex if
-// their implementation is in an apex.
-type CopyDirectlyInAnyApexTag interface {
-	blueprint.DependencyTag
-
-	// Method that differentiates this interface from others.
-	CopyDirectlyInAnyApex()
 }
 
 // Interface that identifies dependencies to skip Apex dependency check
@@ -408,11 +391,6 @@ func (m *ApexModuleBase) BuildForApex(apex ApexInfo) {
 // Implements ApexModule
 func (m *ApexModuleBase) InAnyApex() bool {
 	return m.ApexProperties.InAnyApex
-}
-
-// Implements ApexModule
-func (m *ApexModuleBase) DirectlyInAnyApex() bool {
-	return m.ApexProperties.DirectlyInAnyApex
 }
 
 // Implements ApexModule
@@ -674,14 +652,7 @@ func MutateApexTransition(ctx BaseModuleContext, variation string) {
 		apexInfos, _ = mergeApexVariations(apexInfos)
 	}
 
-	var inApex ApexMembership
-	for _, a := range apexInfos {
-		for _, apexContents := range a.ApexContents {
-			inApex = inApex.merge(apexContents.contents[ctx.ModuleName()])
-		}
-	}
 	base.ApexProperties.InAnyApex = true
-	base.ApexProperties.DirectlyInAnyApex = inApex == directlyInApex
 
 	if platformVariation && !ctx.Host() && !module.AvailableFor(AvailableToPlatform) && module.NotAvailableForPlatform() {
 		// Do not install the module for platform, but still allow it to output
@@ -769,27 +740,6 @@ func UpdateUniqueApexVariationsForDeps(mctx BottomUpMutatorContext, am ApexModul
 				am.apexModuleBase().ApexProperties.UniqueApexVariationsForDeps = true
 			}
 		}
-	})
-}
-
-// UpdateDirectlyInAnyApex uses the final module to store if any variant of this module is directly
-// in any APEX, and then copies the final value to all the modules. It also copies the
-// DirectlyInAnyApex value to any transitive dependencies with a CopyDirectlyInAnyApexTag
-// dependency tag.
-func UpdateDirectlyInAnyApex(mctx BottomUpMutatorContext, am ApexModule) {
-	base := am.apexModuleBase()
-	// Copy DirectlyInAnyApex and InAnyApex from any transitive dependencies with a
-	// CopyDirectlyInAnyApexTag dependency tag.
-	mctx.WalkDeps(func(child, parent Module) bool {
-		if _, ok := mctx.OtherModuleDependencyTag(child).(CopyDirectlyInAnyApexTag); ok {
-			depBase := child.(ApexModule).apexModuleBase()
-			depBase.apexPropertiesLock.Lock()
-			defer depBase.apexPropertiesLock.Unlock()
-			depBase.ApexProperties.DirectlyInAnyApex = base.ApexProperties.DirectlyInAnyApex
-			depBase.ApexProperties.InAnyApex = base.ApexProperties.InAnyApex
-			return true
-		}
-		return false
 	})
 }
 
