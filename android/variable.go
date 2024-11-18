@@ -612,6 +612,7 @@ type PartitionVariables struct {
 	// Boot image stuff
 	BuildingRamdiskImage            bool   `json:",omitempty"`
 	ProductBuildBootImage           bool   `json:",omitempty"`
+	ProductBuildVendorBootImage     string `json:",omitempty"`
 	ProductBuildInitBootImage       bool   `json:",omitempty"`
 	BoardUsesRecoveryAsBoot         bool   `json:",omitempty"`
 	BoardPrebuiltBootimage          string `json:",omitempty"`
