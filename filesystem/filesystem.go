@@ -162,6 +162,10 @@ type FilesystemProperties struct {
 	// Determines if the module is auto-generated from Soong or not. If the module is
 	// auto-generated, its deps are exempted from visibility enforcement.
 	Is_auto_generated *bool
+
+	// Path to the dev nodes description file. This is only needed for building the ramdisk
+	// partition and should not be explicitly specified.
+	Dev_nodes_description_file *string `android:"path" blueprint:"mutated"`
 }
 
 // Additional properties required to generate erofs FS partitions.
@@ -210,6 +214,10 @@ func initFilesystemModule(module android.DefaultableModule, filesystemModule *fi
 	filesystemModule.PackagingBase.AllowHighPriorityDeps = true
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
+
+	android.AddLoadHook(module, func(ctx android.LoadHookContext) {
+		filesystemModule.setDevNodesDescriptionProp()
+	})
 }
 
 type depTag struct {
@@ -228,6 +236,16 @@ var _ android.ExcludeFromVisibilityEnforcementTag = (*depTagWithVisibilityEnforc
 func (t depTagWithVisibilityEnforcementBypass) ExcludeFromVisibilityEnforcement() {}
 
 var dependencyTagWithVisibilityEnforcementBypass = depTagWithVisibilityEnforcementBypass{}
+
+// ramdiskDevNodesDescription is the name of the filegroup module that provides the file that
+// contains the description of dev nodes added to the CPIO archive for the ramdisk partition.
+const ramdiskDevNodesDescription = "ramdisk_node_list"
+
+func (f *filesystem) setDevNodesDescriptionProp() {
+	if proptools.String(f.properties.Partition_name) == "ramdisk" {
+		f.properties.Dev_nodes_description_file = proptools.StringPtr(":" + ramdiskDevNodesDescription)
+	}
+}
 
 func (f *filesystem) DepsMutator(ctx android.BottomUpMutatorContext) {
 	if proptools.Bool(f.properties.Is_auto_generated) {
@@ -659,6 +677,9 @@ func (f *filesystem) buildCpioImage(ctx android.ModuleContext, compressed bool) 
 	cmd := builder.Command().
 		BuiltTool("mkbootfs").
 		Text(rootDir.String()) // input directory
+	if nodeList := f.properties.Dev_nodes_description_file; nodeList != nil {
+		cmd.FlagWithInput("-n ", android.PathForModuleSrc(ctx, proptools.String(nodeList)))
+	}
 	if compressed {
 		cmd.Text("|").
 			BuiltTool("lz4").
