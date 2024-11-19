@@ -1011,7 +1011,7 @@ func (d *Droidstubs) everythingOptionalCmd(ctx android.ModuleContext, cmd *andro
 			cmd.FlagWithOutput("--update-baseline:api-lint ", updatedBaselineOutput)
 
 			msg += fmt.Sprintf(``+
-				`3. FOR LSC ONLY: You can update the baseline by executing\n` +
+				`3. FOR LSC ONLY: You can update the baseline by executing\n`+
 				`   the following command:\n`+
 				`       (cd $ANDROID_BUILD_TOP && cp \\\n`+
 				`       "%s" \\\n`+
@@ -1374,7 +1374,7 @@ func (d *Droidstubs) setOutputFiles(ctx android.ModuleContext) {
 		for _, stubType := range android.SortedKeys(stubsTypeToPrefix) {
 			tagWithPrefix := stubsTypeToPrefix[stubType] + tag
 			outputFile, err := tagToOutputFileFunc[tag](stubType)
-			if err == nil {
+			if err == nil && outputFile != nil {
 				ctx.SetOutputFiles(android.Paths{outputFile}, tagWithPrefix)
 			}
 		}
