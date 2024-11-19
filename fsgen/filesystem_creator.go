@@ -598,7 +598,9 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 
 	fsProps.Partition_name = proptools.StringPtr(partitionType)
 
-	fsProps.Base_dir = proptools.StringPtr(partitionType)
+	if !strings.Contains(partitionType, "ramdisk") {
+		fsProps.Base_dir = proptools.StringPtr(partitionType)
+	}
 
 	fsProps.Is_auto_generated = proptools.BoolPtr(true)
 
