@@ -1020,7 +1020,6 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		Updatable:         a.Updatable(),
 		UsePlatformApis:   a.UsePlatformApis(),
 		InApexVariants:    []string{apexVariationName},
-		InApexModules:     []string{a.Name()}, // could be com.mycompany.android.foo
 		TestApexes:        testApexes,
 		BaseApexName:      mctx.ModuleName(),
 		ApexAvailableName: proptools.String(a.properties.Apex_available_name),
