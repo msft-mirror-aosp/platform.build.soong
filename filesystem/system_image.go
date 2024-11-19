@@ -63,7 +63,3 @@ func (s *systemImage) FilterPackagingSpec(ps android.PackagingSpec) bool {
 		(ps.Partition() == "system" || ps.Partition() == "root" ||
 			strings.HasPrefix(ps.Partition(), "system/"))
 }
-
-func (s *systemImage) ShouldUseVintfFragmentModuleOnly() bool {
-	return true
-}
