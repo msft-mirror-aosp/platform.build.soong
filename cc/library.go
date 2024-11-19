@@ -740,6 +740,7 @@ type versionedInterface interface {
 	hasLLNDKStubs() bool
 	hasLLNDKHeaders() bool
 	hasVendorPublicLibrary() bool
+	isLLNDKMovedToApex() bool
 }
 
 var _ libraryInterface = (*libraryDecorator)(nil)
@@ -1842,6 +1843,11 @@ func (library *libraryDecorator) hasLLNDKStubs() bool {
 // hasLLNDKStubs returns true if this cc_library module has a variant that will build LLNDK stubs.
 func (library *libraryDecorator) hasLLNDKHeaders() bool {
 	return Bool(library.Properties.Llndk.Llndk_headers)
+}
+
+// isLLNDKMovedToApex returns true if this cc_library module sets the llndk.moved_to_apex property.
+func (library *libraryDecorator) isLLNDKMovedToApex() bool {
+	return Bool(library.Properties.Llndk.Moved_to_apex)
 }
 
 // hasVendorPublicLibrary returns true if this cc_library module has a variant that will build
