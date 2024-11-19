@@ -195,7 +195,7 @@ func (f *filesystemCreator) createDeviceModule(
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
 }
 
-func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitionType string) {
+func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitionVars android.PartitionVariables, partitionType string) {
 	switch partitionType {
 	case "system":
 		fsProps.Build_logtags = proptools.BoolPtr(true)
@@ -261,7 +261,28 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 		}
 	case "userdata":
 		fsProps.Base_dir = proptools.StringPtr("data")
-
+	case "ramdisk":
+		// Following the logic in https://cs.android.com/android/platform/superproject/main/+/c3c5063df32748a8806ce5da5dd0db158eab9ad9:build/make/core/Makefile;l=1307
+		fsProps.Dirs = android.NewSimpleConfigurable([]string{
+			"debug_ramdisk",
+			"dev",
+			"metadata",
+			"mnt",
+			"proc",
+			"second_stage_resources",
+			"sys",
+		})
+		if partitionVars.BoardUsesGenericKernelImage {
+			fsProps.Dirs.AppendSimpleValue([]string{
+				"first_stage_ramdisk/debug_ramdisk",
+				"first_stage_ramdisk/dev",
+				"first_stage_ramdisk/metadata",
+				"first_stage_ramdisk/mnt",
+				"first_stage_ramdisk/proc",
+				"first_stage_ramdisk/second_stage_resources",
+				"first_stage_ramdisk/sys",
+			})
+		}
 	}
 }
 
@@ -581,7 +602,7 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 
 	fsProps.Is_auto_generated = proptools.BoolPtr(true)
 
-	partitionSpecificFsProps(fsProps, partitionType)
+	partitionSpecificFsProps(fsProps, partitionVars, partitionType)
 
 	// system_image properties that are not set:
 	// - filesystemProperties.Avb_hash_algorithm
