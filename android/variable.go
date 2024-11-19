@@ -408,9 +408,10 @@ type ProductVariables struct {
 
 	Ndk_abis *bool `json:",omitempty"`
 
-	ForceApexSymlinkOptimization *bool `json:",omitempty"`
-	CompressedApex               *bool `json:",omitempty"`
-	Aml_abis                     *bool `json:",omitempty"`
+	ForceApexSymlinkOptimization *bool   `json:",omitempty"`
+	CompressedApex               *bool   `json:",omitempty"`
+	DefaultApexPayloadType       *string `json:",omitempty"`
+	Aml_abis                     *bool   `json:",omitempty"`
 
 	DexpreoptGlobalConfig *string `json:",omitempty"`
 
