@@ -48,7 +48,8 @@ type filesystemCreatorProps struct {
 	Vbmeta_module_names    []string `blueprint:"mutated"`
 	Vbmeta_partition_names []string `blueprint:"mutated"`
 
-	Boot_image string `blueprint:"mutated" android:"path_device_first"`
+	Boot_image        string `blueprint:"mutated" android:"path_device_first"`
+	Vendor_boot_image string `blueprint:"mutated" android:"path_device_first"`
 }
 
 type filesystemCreator struct {
@@ -74,6 +75,7 @@ func filesystemCreatorFactory() android.Module {
 }
 
 func generatedPartitions(ctx android.LoadHookContext) []string {
+	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
 	generatedPartitions := []string{"system"}
 	if ctx.DeviceConfig().SystemExtPath() == "system_ext" {
 		generatedPartitions = append(generatedPartitions, "system_ext")
@@ -90,17 +92,20 @@ func generatedPartitions(ctx android.LoadHookContext) []string {
 	if ctx.DeviceConfig().BuildingUserdataImage() && ctx.DeviceConfig().UserdataPath() == "data" {
 		generatedPartitions = append(generatedPartitions, "userdata")
 	}
-	if ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.BuildingSystemDlkmImage {
+	if partitionVars.BuildingSystemDlkmImage {
 		generatedPartitions = append(generatedPartitions, "system_dlkm")
 	}
-	if ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.BuildingVendorDlkmImage {
+	if partitionVars.BuildingVendorDlkmImage {
 		generatedPartitions = append(generatedPartitions, "vendor_dlkm")
 	}
-	if ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.BuildingOdmDlkmImage {
+	if partitionVars.BuildingOdmDlkmImage {
 		generatedPartitions = append(generatedPartitions, "odm_dlkm")
 	}
-	if ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.BuildingRamdiskImage {
+	if partitionVars.BuildingRamdiskImage {
 		generatedPartitions = append(generatedPartitions, "ramdisk")
+	}
+	if buildingVendorBootImage(partitionVars) {
+		generatedPartitions = append(generatedPartitions, "vendor_ramdisk")
 	}
 	return generatedPartitions
 }
@@ -117,11 +122,19 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 		}
 	}
 
-	if buildingBootImage(ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse) {
+	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
+	if buildingBootImage(partitionVars) {
 		if createBootImage(ctx) {
 			f.properties.Boot_image = ":" + generatedModuleNameForPartition(ctx.Config(), "boot")
 		} else {
 			f.properties.Unsupported_partition_types = append(f.properties.Unsupported_partition_types, "boot")
+		}
+	}
+	if buildingVendorBootImage(partitionVars) {
+		if createVendorBootImage(ctx) {
+			f.properties.Vendor_boot_image = ":" + generatedModuleNameForPartition(ctx.Config(), "vendor_boot")
+		} else {
+			f.properties.Unsupported_partition_types = append(f.properties.Unsupported_partition_types, "vendor_boot")
 		}
 	}
 
@@ -698,6 +711,14 @@ func (f *filesystemCreator) GenerateAndroidBuildActions(ctx android.ModuleContex
 		createDiffTest(ctx, diffTestFile, soongBootImg, makeBootImage)
 		diffTestFiles = append(diffTestFiles, diffTestFile)
 		ctx.Phony("soong_generated_boot_filesystem_test", diffTestFile)
+	}
+	if f.properties.Vendor_boot_image != "" {
+		diffTestFile := android.PathForModuleOut(ctx, "vendor_boot_diff_test.txt")
+		soongBootImg := android.PathForModuleSrc(ctx, f.properties.Boot_image)
+		makeBootImage := android.PathForArbitraryOutput(ctx, fmt.Sprintf("target/product/%s/vendor_boot.img", ctx.Config().DeviceName()))
+		createDiffTest(ctx, diffTestFile, soongBootImg, makeBootImage)
+		diffTestFiles = append(diffTestFiles, diffTestFile)
+		ctx.Phony("soong_generated_vendor_boot_filesystem_test", diffTestFile)
 	}
 	ctx.Phony("soong_generated_filesystem_tests", diffTestFiles...)
 }
