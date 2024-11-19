@@ -622,6 +622,7 @@ type PartitionVariables struct {
 	BoardInitBootimagePartitionSize string `json:",omitempty"`
 	BoardBootHeaderVersion          string `json:",omitempty"`
 	TargetKernelPath                string `json:",omitempty"`
+	BoardUsesGenericKernelImage     bool   `json:",omitempty"`
 
 	// Avb (android verified boot) stuff
 	BoardAvbEnable          bool                                `json:",omitempty"`
