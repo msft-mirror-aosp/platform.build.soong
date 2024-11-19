@@ -36,6 +36,15 @@ func createBootImage(ctx android.LoadHookContext) bool {
 		},
 	)
 
+	var partitionSize *int64
+	if partitionVariables.BoardBootimagePartitionSize != "" {
+		parsed, err := strconv.ParseInt(partitionVariables.BoardBootimagePartitionSize, 10, 64)
+		if err != nil {
+			panic(fmt.Sprintf("BOARD_BOOTIMAGE_PARTITION_SIZE must be an int, got %s", partitionVariables.BoardBootimagePartitionSize))
+		}
+		partitionSize = &parsed
+	}
+
 	bootImageName := generatedModuleNameForPartition(ctx.Config(), "boot")
 
 	ctx.CreateModule(
@@ -43,6 +52,7 @@ func createBootImage(ctx android.LoadHookContext) bool {
 		&filesystem.BootimgProperties{
 			Kernel_prebuilt: proptools.StringPtr(":" + kernelFilegroupName),
 			Header_version:  proptools.StringPtr(partitionVariables.BoardBootHeaderVersion),
+			Partition_size:  partitionSize,
 		},
 		&struct {
 			Name *string
