@@ -42,7 +42,6 @@ func createBootImage(ctx android.LoadHookContext) bool {
 		filesystem.BootimgFactory,
 		&filesystem.BootimgProperties{
 			Kernel_prebuilt: proptools.StringPtr(":" + kernelFilegroupName),
-			Ramdisk_module:  proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "ramdisk")),
 			Header_version:  proptools.StringPtr(partitionVariables.BoardBootHeaderVersion),
 		},
 		&struct {
