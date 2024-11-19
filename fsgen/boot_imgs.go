@@ -61,9 +61,9 @@ func createVendorBootImage(ctx android.LoadHookContext) bool {
 	ctx.CreateModule(
 		filesystem.BootimgFactory,
 		&filesystem.BootimgProperties{
-			Vendor_boot:    proptools.BoolPtr(true),
-			Ramdisk_module: proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "vendor_ramdisk")),
-			Header_version: proptools.StringPtr(partitionVariables.BoardBootHeaderVersion),
+			Boot_image_type: proptools.StringPtr("vendor_boot"),
+			Ramdisk_module:  proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "vendor_ramdisk")),
+			Header_version:  proptools.StringPtr(partitionVariables.BoardBootHeaderVersion),
 		},
 		&struct {
 			Name *string
@@ -82,9 +82,9 @@ func createInitBootImage(ctx android.LoadHookContext) bool {
 	ctx.CreateModule(
 		filesystem.BootimgFactory,
 		&filesystem.BootimgProperties{
-			Init_boot:      proptools.BoolPtr(true),
-			Ramdisk_module: proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "ramdisk")),
-			Header_version: proptools.StringPtr(partitionVariables.BoardBootHeaderVersion),
+			Boot_image_type: proptools.StringPtr("init_boot"),
+			Ramdisk_module:  proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "ramdisk")),
+			Header_version:  proptools.StringPtr(partitionVariables.BoardBootHeaderVersion),
 		},
 		&struct {
 			Name *string
