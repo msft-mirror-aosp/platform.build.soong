@@ -1740,7 +1740,8 @@ func (a *apexBundle) setSystemLibLink(ctx android.ModuleContext) {
 }
 
 func (a *apexBundle) setPayloadFsType(ctx android.ModuleContext) {
-	switch proptools.StringDefault(a.properties.Payload_fs_type, ext4FsType) {
+	defaultFsType := ctx.Config().DefaultApexPayloadType()
+	switch proptools.StringDefault(a.properties.Payload_fs_type, defaultFsType) {
 	case ext4FsType:
 		a.payloadFsType = ext4
 	case f2fsFsType:
