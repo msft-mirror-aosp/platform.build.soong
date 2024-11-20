@@ -15,6 +15,8 @@
 package android
 
 import (
+	"fmt"
+
 	"github.com/google/blueprint/proptools"
 )
 
@@ -55,7 +57,7 @@ type buildPropModule struct {
 
 	properties buildPropProperties
 
-	outputFilePath OutputPath
+	outputFilePath Path
 	installPath    InstallPath
 }
 
@@ -128,7 +130,7 @@ func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 		ctx.ModuleErrorf("Android_info cannot be set if build.prop is not installed in vendor partition")
 	}
 
-	p.outputFilePath = PathForModuleOut(ctx, "build.prop").OutputPath
+	outputFilePath := PathForModuleOut(ctx, "build.prop")
 
 	partition := p.partition(ctx.DeviceConfig())
 
@@ -157,7 +159,7 @@ func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 	cmd.FlagWithInput("--product-config=", PathForModuleSrc(ctx, proptools.String(p.properties.Product_config)))
 	cmd.FlagWithArg("--partition=", partition)
 	cmd.FlagForEachInput("--prop-files=", p.propFiles(ctx))
-	cmd.FlagWithOutput("--out=", p.outputFilePath)
+	cmd.FlagWithOutput("--out=", outputFilePath)
 
 	postProcessCmd := rule.Command().BuiltTool("post_process_props")
 	if ctx.DeviceConfig().BuildBrokenDupSysprop() {
@@ -170,17 +172,35 @@ func (p *buildPropModule) GenerateAndroidBuildActions(ctx ModuleContext) {
 		// still need to pass an empty string to kernel-version-file-for-uffd-gc
 		postProcessCmd.FlagWithArg("--kernel-version-file-for-uffd-gc ", `""`)
 	}
-	postProcessCmd.Text(p.outputFilePath.String())
+	postProcessCmd.Text(outputFilePath.String())
 	postProcessCmd.Flags(p.properties.Block_list)
 
-	rule.Command().Text("echo").Text(proptools.NinjaAndShellEscape("# end of file")).FlagWithArg(">> ", p.outputFilePath.String())
+	for _, footer := range p.properties.Footer_files {
+		path := PathForModuleSrc(ctx, footer)
+		rule.appendText(outputFilePath, "####################################")
+		rule.appendTextf(outputFilePath, "# Adding footer from %v", footer)
+		rule.appendTextf(outputFilePath, "# with path %v", path)
+		rule.appendText(outputFilePath, "####################################")
+		rule.Command().Text("cat").FlagWithInput("", path).FlagWithArg(">> ", outputFilePath.String())
+	}
+
+	rule.appendText(outputFilePath, "# end of file")
 
 	rule.Build(ctx.ModuleName(), "generating build.prop")
 
 	p.installPath = PathForModuleInstall(ctx, proptools.String(p.properties.Relative_install_path))
-	ctx.InstallFile(p.installPath, p.stem(), p.outputFilePath)
+	ctx.InstallFile(p.installPath, p.stem(), outputFilePath)
 
-	ctx.SetOutputFiles(Paths{p.outputFilePath}, "")
+	ctx.SetOutputFiles(Paths{outputFilePath}, "")
+	p.outputFilePath = outputFilePath
+}
+
+func (r *RuleBuilder) appendText(path ModuleOutPath, text string) {
+	r.Command().Text("echo").Text(proptools.NinjaAndShellEscape(text)).FlagWithArg(">> ", path.String())
+}
+
+func (r *RuleBuilder) appendTextf(path ModuleOutPath, format string, a ...any) {
+	r.appendText(path, fmt.Sprintf(format, a...))
 }
 
 func (p *buildPropModule) AndroidMkEntries() []AndroidMkEntries {

@@ -666,7 +666,9 @@ func TestUseSharedVariationOfNativeLib(t *testing.T) {
 
 	partition := result.ModuleForTests("myfilesystem", "android_common")
 	fileList := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("fileList"))
-	android.AssertDeepEquals(t, "cc_library listed in deps", "lib64/libc++.so\nlib64/libc.so\nlib64/libdl.so\nlib64/libfoo.so\nlib64/libm.so\n", fileList)
+	android.AssertDeepEquals(t, "cc_library listed in deps",
+		"lib64/bootstrap/libc.so\nlib64/bootstrap/libdl.so\nlib64/bootstrap/libm.so\nlib64/libc++.so\nlib64/libc.so\nlib64/libdl.so\nlib64/libfoo.so\nlib64/libm.so\n",
+		fileList)
 }
 
 // binfoo1 overrides binbar. transitive deps of binbar should not be installed.
@@ -701,7 +703,9 @@ cc_library {
 
 	partition := result.ModuleForTests("myfilesystem", "android_common")
 	fileList := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("fileList"))
-	android.AssertDeepEquals(t, "Shared library dep of overridden binary should not be installed", fileList, "bin/binfoo1\nlib64/libc++.so\nlib64/libc.so\nlib64/libdl.so\nlib64/libfoo2.so\nlib64/libm.so\n")
+	android.AssertDeepEquals(t, "Shared library dep of overridden binary should not be installed",
+		"bin/binfoo1\nlib64/bootstrap/libc.so\nlib64/bootstrap/libdl.so\nlib64/bootstrap/libm.so\nlib64/libc++.so\nlib64/libc.so\nlib64/libdl.so\nlib64/libfoo2.so\nlib64/libm.so\n",
+		fileList)
 }
 
 func TestInstallLinkerConfigFile(t *testing.T) {
@@ -753,4 +757,29 @@ func TestOverrideModulesInDeps(t *testing.T) {
 	partition := result.ModuleForTests("myfilesystem", "android_common")
 	fileList := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("fileList"))
 	android.AssertStringEquals(t, "filesystem with override app", "app/myoverrideapp/myoverrideapp.apk\n", fileList)
+}
+
+func TestRamdiskPartitionSetsDevNodes(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		fixture,
+		android.FixtureMergeMockFs(android.MockFS{
+			"ramdisk_node_list": nil,
+		}),
+	).RunTestWithBp(t, `
+		android_filesystem {
+			name: "ramdisk_filesystem",
+			partition_name: "ramdisk",
+		}
+		filegroup {
+			name: "ramdisk_node_list",
+			srcs: ["ramdisk_node_list"],
+		}
+	`)
+
+	android.AssertBoolEquals(
+		t,
+		"Generated ramdisk image expected to depend on \"ramdisk_node_list\" module",
+		true,
+		java.CheckModuleHasDependency(t, result.TestContext, "ramdisk_filesystem", "android_common", "ramdisk_node_list"),
+	)
 }

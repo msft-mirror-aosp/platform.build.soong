@@ -172,6 +172,9 @@ build_prop {
     name: "system-build.prop",
     stem: "build.prop",
     product_config: ":product_config",
+    footer_files: [
+        ":applied_backported_fixes",
+    ],
     // Currently, only microdroid, Ravenwood, and cf system image can refer to system-build.prop
     visibility: [
         "//build/make/target/product/generic",
