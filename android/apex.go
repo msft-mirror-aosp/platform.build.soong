@@ -70,11 +70,6 @@ type ApexInfo struct {
 	// prebuilt, the name here doesn't have the `prebuilt_` prefix.
 	InApexModules []string
 
-	// Pointers to the ApexContents struct each of which is for apexBundle modules that this
-	// module is part of. The ApexContents gives information about which modules the apexBundle
-	// has and whether a module became part of the apexBundle via a direct dependency or not.
-	ApexContents []*ApexContents
-
 	// True if this is for a prebuilt_apex.
 	//
 	// If true then this will customize the apex processing to make it suitable for handling
@@ -162,7 +157,6 @@ func (i ApexInfo) Equal(other any) bool {
 
 // ApexBundleInfo contains information about the dependencies of an apex
 type ApexBundleInfo struct {
-	Contents *ApexContents
 }
 
 var ApexBundleInfoProvider = blueprint.NewMutatorProvider[ApexBundleInfo]("apex_info")
@@ -219,10 +213,6 @@ type ApexModule interface {
 	// Returns true if this module is present in any APEX either directly or indirectly. Call
 	// this after apex.apexMutator is run.
 	InAnyApex() bool
-
-	// Returns true if this module is directly in any APEX. Call this AFTER apex.apexMutator is
-	// run.
-	DirectlyInAnyApex() bool
 
 	// NotInPlatform returns true if the module is not available to the platform due to
 	// apex_available being set and not containing "//apex_available:platform".
@@ -285,9 +275,6 @@ type ApexProperties struct {
 	// See ApexModule.InAnyApex()
 	InAnyApex bool `blueprint:"mutated"`
 
-	// See ApexModule.DirectlyInAnyApex()
-	DirectlyInAnyApex bool `blueprint:"mutated"`
-
 	// See ApexModule.NotAvailableForPlatform()
 	NotAvailableForPlatform bool `blueprint:"mutated"`
 
@@ -322,16 +309,6 @@ type AlwaysRequireApexVariantTag interface {
 
 	// Return true if this tag requires that the target dependency has an apex variant.
 	AlwaysRequireApexVariant() bool
-}
-
-// Marker interface that identifies dependencies that should inherit the DirectlyInAnyApex state
-// from the parent to the child. For example, stubs libraries are marked as DirectlyInAnyApex if
-// their implementation is in an apex.
-type CopyDirectlyInAnyApexTag interface {
-	blueprint.DependencyTag
-
-	// Method that differentiates this interface from others.
-	CopyDirectlyInAnyApex()
 }
 
 // Interface that identifies dependencies to skip Apex dependency check
@@ -408,11 +385,6 @@ func (m *ApexModuleBase) BuildForApex(apex ApexInfo) {
 // Implements ApexModule
 func (m *ApexModuleBase) InAnyApex() bool {
 	return m.ApexProperties.InAnyApex
-}
-
-// Implements ApexModule
-func (m *ApexModuleBase) DirectlyInAnyApex() bool {
-	return m.ApexProperties.DirectlyInAnyApex
 }
 
 // Implements ApexModule
@@ -575,7 +547,6 @@ func mergeApexVariations(apexInfos []ApexInfo) (merged []ApexInfo, aliases [][2]
 			// Variants having the same mergedName are deduped
 			merged[index].InApexVariants = append(merged[index].InApexVariants, variantName)
 			merged[index].InApexModules = append(merged[index].InApexModules, apexInfo.InApexModules...)
-			merged[index].ApexContents = append(merged[index].ApexContents, apexInfo.ApexContents...)
 			merged[index].Updatable = merged[index].Updatable || apexInfo.Updatable
 			// Platform APIs is allowed for this module only when all APEXes containing
 			// the module are with `use_platform_apis: true`.
@@ -586,7 +557,6 @@ func mergeApexVariations(apexInfos []ApexInfo) (merged []ApexInfo, aliases [][2]
 			apexInfo.ApexVariationName = mergedName
 			apexInfo.InApexVariants = CopyOf(apexInfo.InApexVariants)
 			apexInfo.InApexModules = CopyOf(apexInfo.InApexModules)
-			apexInfo.ApexContents = append([]*ApexContents(nil), apexInfo.ApexContents...)
 			apexInfo.TestApexes = CopyOf(apexInfo.TestApexes)
 			merged = append(merged, apexInfo)
 		}
@@ -674,14 +644,7 @@ func MutateApexTransition(ctx BaseModuleContext, variation string) {
 		apexInfos, _ = mergeApexVariations(apexInfos)
 	}
 
-	var inApex ApexMembership
-	for _, a := range apexInfos {
-		for _, apexContents := range a.ApexContents {
-			inApex = inApex.merge(apexContents.contents[ctx.ModuleName()])
-		}
-	}
 	base.ApexProperties.InAnyApex = true
-	base.ApexProperties.DirectlyInAnyApex = inApex == directlyInApex
 
 	if platformVariation && !ctx.Host() && !module.AvailableFor(AvailableToPlatform) && module.NotAvailableForPlatform() {
 		// Do not install the module for platform, but still allow it to output
@@ -770,77 +733,6 @@ func UpdateUniqueApexVariationsForDeps(mctx BottomUpMutatorContext, am ApexModul
 			}
 		}
 	})
-}
-
-// UpdateDirectlyInAnyApex uses the final module to store if any variant of this module is directly
-// in any APEX, and then copies the final value to all the modules. It also copies the
-// DirectlyInAnyApex value to any transitive dependencies with a CopyDirectlyInAnyApexTag
-// dependency tag.
-func UpdateDirectlyInAnyApex(mctx BottomUpMutatorContext, am ApexModule) {
-	base := am.apexModuleBase()
-	// Copy DirectlyInAnyApex and InAnyApex from any transitive dependencies with a
-	// CopyDirectlyInAnyApexTag dependency tag.
-	mctx.WalkDeps(func(child, parent Module) bool {
-		if _, ok := mctx.OtherModuleDependencyTag(child).(CopyDirectlyInAnyApexTag); ok {
-			depBase := child.(ApexModule).apexModuleBase()
-			depBase.apexPropertiesLock.Lock()
-			defer depBase.apexPropertiesLock.Unlock()
-			depBase.ApexProperties.DirectlyInAnyApex = base.ApexProperties.DirectlyInAnyApex
-			depBase.ApexProperties.InAnyApex = base.ApexProperties.InAnyApex
-			return true
-		}
-		return false
-	})
-}
-
-// ApexMembership tells how a module became part of an APEX.
-type ApexMembership int
-
-const (
-	notInApex        ApexMembership = 0
-	indirectlyInApex                = iota
-	directlyInApex
-)
-
-// ApexContents gives an information about member modules of an apexBundle.  Each apexBundle has an
-// apexContents, and modules in that apex have a provider containing the apexContents of each
-// apexBundle they are part of.
-type ApexContents struct {
-	// map from a module name to its membership in this apexBundle
-	contents map[string]ApexMembership
-}
-
-// NewApexContents creates and initializes an ApexContents that is suitable
-// for use with an apex module.
-//   - contents is a map from a module name to information about its membership within
-//     the apex.
-func NewApexContents(contents map[string]ApexMembership) *ApexContents {
-	return &ApexContents{
-		contents: contents,
-	}
-}
-
-// Updates an existing membership by adding a new direct (or indirect) membership
-func (i ApexMembership) Add(direct bool) ApexMembership {
-	if direct || i == directlyInApex {
-		return directlyInApex
-	}
-	return indirectlyInApex
-}
-
-// Merges two membership into one. Merging is needed because a module can be a part of an apexBundle
-// in many different paths. For example, it could be dependend on by the apexBundle directly, but at
-// the same time, there might be an indirect dependency to the module. In that case, the more
-// specific dependency (the direct one) is chosen.
-func (i ApexMembership) merge(other ApexMembership) ApexMembership {
-	if other == directlyInApex || i == directlyInApex {
-		return directlyInApex
-	}
-
-	if other == indirectlyInApex || i == indirectlyInApex {
-		return indirectlyInApex
-	}
-	return notInApex
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
