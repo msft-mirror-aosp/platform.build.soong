@@ -60,6 +60,9 @@ type BootimgProperties struct {
 	// https://source.android.com/devices/bootloader/partitions/vendor-boot-partitions
 	Vendor_boot *bool
 
+	// Determines if this image is for the init_boot partition. Default is false.
+	Init_boot *bool
+
 	// Optional kernel commandline arguments
 	Cmdline []string `android:"arch_variant"`
 
@@ -113,7 +116,13 @@ func (b *bootimg) partitionName() string {
 
 func (b *bootimg) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	vendor := proptools.Bool(b.properties.Vendor_boot)
-	unsignedOutput := b.buildBootImage(ctx, vendor)
+	init := proptools.Bool(b.properties.Init_boot)
+
+	if vendor && init {
+		ctx.ModuleErrorf("vendor_boot and init_boot cannot be both set to true")
+	}
+
+	unsignedOutput := b.buildBootImage(ctx, vendor, init)
 
 	output := unsignedOutput
 	if proptools.Bool(b.properties.Use_avb) {
@@ -127,7 +136,7 @@ func (b *bootimg) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	b.output = output
 }
 
-func (b *bootimg) buildBootImage(ctx android.ModuleContext, vendor bool) android.Path {
+func (b *bootimg) buildBootImage(ctx android.ModuleContext, vendor bool, init bool) android.Path {
 	output := android.PathForModuleOut(ctx, "unsigned", b.installFileName())
 
 	builder := android.NewRuleBuilder(pctx, ctx)
@@ -138,7 +147,9 @@ func (b *bootimg) buildBootImage(ctx android.ModuleContext, vendor bool) android
 		ctx.PropertyErrorf("kernel_prebuilt", "vendor_boot partition can't have kernel")
 		return output
 	}
-	if !vendor && kernel == "" {
+
+	buildingBoot := !vendor && !init
+	if buildingBoot && kernel == "" {
 		ctx.PropertyErrorf("kernel_prebuilt", "boot partition must have kernel")
 		return output
 	}
@@ -146,6 +157,7 @@ func (b *bootimg) buildBootImage(ctx android.ModuleContext, vendor bool) android
 		cmd.FlagWithInput("--kernel ", android.PathForModuleSrc(ctx, kernel))
 	}
 
+	// These arguments are passed for boot.img and init_boot.img generation
 	if !vendor {
 		cmd.FlagWithArg("--os_version ", ctx.Config().PlatformVersionLastStable())
 		cmd.FlagWithArg("--os_patch_level ", ctx.Config().PlatformSecurityPatch())
@@ -210,6 +222,7 @@ func (b *bootimg) buildBootImage(ctx android.ModuleContext, vendor bool) android
 		cmd.FlagWithInput("--vendor_bootconfig ", android.PathForModuleSrc(ctx, bootconfig))
 	}
 
+	// Output flag for boot.img and init_boot.img
 	flag := "--output "
 	if vendor {
 		flag = "--vendor_boot "
