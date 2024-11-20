@@ -45,6 +45,11 @@ func createBootImage(ctx android.LoadHookContext) bool {
 		partitionSize = &parsed
 	}
 
+	var securityPatch *string
+	if partitionVariables.BootSecurityPatch != "" {
+		securityPatch = &partitionVariables.BootSecurityPatch
+	}
+
 	bootImageName := generatedModuleNameForPartition(ctx.Config(), "boot")
 
 	ctx.CreateModule(
@@ -53,6 +58,8 @@ func createBootImage(ctx android.LoadHookContext) bool {
 			Kernel_prebuilt: proptools.StringPtr(":" + kernelFilegroupName),
 			Header_version:  proptools.StringPtr(partitionVariables.BoardBootHeaderVersion),
 			Partition_size:  partitionSize,
+			Use_avb:         &partitionVariables.BoardAvbEnable,
+			Security_patch:  securityPatch,
 		},
 		&struct {
 			Name *string
@@ -74,6 +81,7 @@ func createVendorBootImage(ctx android.LoadHookContext) bool {
 			Boot_image_type: proptools.StringPtr("vendor_boot"),
 			Ramdisk_module:  proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "vendor_ramdisk")),
 			Header_version:  proptools.StringPtr(partitionVariables.BoardBootHeaderVersion),
+			Use_avb:         &partitionVariables.BoardAvbEnable,
 		},
 		&struct {
 			Name *string
@@ -89,12 +97,21 @@ func createInitBootImage(ctx android.LoadHookContext) bool {
 
 	bootImageName := generatedModuleNameForPartition(ctx.Config(), "init_boot")
 
+	var securityPatch *string
+	if partitionVariables.InitBootSecurityPatch != "" {
+		securityPatch = &partitionVariables.InitBootSecurityPatch
+	} else if partitionVariables.BootSecurityPatch != "" {
+		securityPatch = &partitionVariables.BootSecurityPatch
+	}
+
 	ctx.CreateModule(
 		filesystem.BootimgFactory,
 		&filesystem.BootimgProperties{
 			Boot_image_type: proptools.StringPtr("init_boot"),
 			Ramdisk_module:  proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "ramdisk")),
 			Header_version:  proptools.StringPtr(partitionVariables.BoardBootHeaderVersion),
+			Use_avb:         &partitionVariables.BoardAvbEnable,
+			Security_patch:  securityPatch,
 		},
 		&struct {
 			Name *string
