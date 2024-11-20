@@ -73,6 +73,10 @@ type BootimgProperties struct {
 	// and `header_version` is greater than or equal to 4.
 	Bootconfig *string `android:"arch_variant,path"`
 
+	// The size of the partition on the device. It will be a build error if this built partition
+	// image exceeds this size.
+	Partition_size *int64
+
 	// When set to true, sign the image with avbtool. Default is false.
 	Use_avb *bool
 
@@ -259,6 +263,10 @@ func (b *bootimg) buildBootImage(ctx android.ModuleContext) android.Path {
 		flag = "--vendor_boot "
 	}
 	cmd.FlagWithOutput(flag, output)
+
+	if b.properties.Partition_size != nil {
+		assertMaxImageSize(builder, output, *b.properties.Partition_size, proptools.Bool(b.properties.Use_avb))
+	}
 
 	builder.Build("build_bootimg", fmt.Sprintf("Creating %s", b.BaseModuleName()))
 	return output
