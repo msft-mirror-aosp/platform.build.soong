@@ -61,6 +61,11 @@ func createBootImage(ctx android.LoadHookContext, dtbImg dtbImg) bool {
 		dtbPrebuilt = proptools.StringPtr(":" + dtbImg.name)
 	}
 
+	var cmdline []string
+	if !buildingVendorBootImage(partitionVariables) {
+		cmdline = partitionVariables.InternalKernelCmdline
+	}
+
 	ctx.CreateModule(
 		filesystem.BootimgFactory,
 		&filesystem.BootimgProperties{
@@ -74,6 +79,7 @@ func createBootImage(ctx android.LoadHookContext, dtbImg dtbImg) bool {
 			Avb_algorithm:      avbInfo.avbAlgorithm,
 			Security_patch:     securityPatch,
 			Dtb_prebuilt:       dtbPrebuilt,
+			Cmdline:            cmdline,
 		},
 		&struct {
 			Name *string
@@ -96,6 +102,8 @@ func createVendorBootImage(ctx android.LoadHookContext, dtbImg dtbImg) bool {
 		dtbPrebuilt = proptools.StringPtr(":" + dtbImg.name)
 	}
 
+	cmdline := partitionVariables.InternalKernelCmdline
+
 	ctx.CreateModule(
 		filesystem.BootimgFactory,
 		&filesystem.BootimgProperties{
@@ -108,6 +116,7 @@ func createVendorBootImage(ctx android.LoadHookContext, dtbImg dtbImg) bool {
 			Avb_rollback_index: avbInfo.avbRollbackIndex,
 			Avb_algorithm:      avbInfo.avbAlgorithm,
 			Dtb_prebuilt:       dtbPrebuilt,
+			Cmdline:            cmdline,
 		},
 		&struct {
 			Name *string
