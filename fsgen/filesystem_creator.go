@@ -314,9 +314,11 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 		return false
 	}
 
-	if partitionType == "vendor" || partitionType == "product" {
+	if partitionType == "vendor" || partitionType == "product" || partitionType == "system" {
 		fsProps.Linker_config.Gen_linker_config = proptools.BoolPtr(true)
-		fsProps.Linker_config.Linker_config_srcs = f.createLinkerConfigSourceFilegroups(ctx, partitionType)
+		if partitionType != "system" {
+			fsProps.Linker_config.Linker_config_srcs = f.createLinkerConfigSourceFilegroups(ctx, partitionType)
+		}
 	}
 
 	if android.InList(partitionType, dlkmPartitions) {
