@@ -1880,7 +1880,7 @@ var (
 // Returns true if a stub library could be installed in multiple apexes
 func (c *Module) stubLibraryMultipleApexViolation(ctx android.ModuleContext) bool {
 	// If this is not an apex variant, no check necessary
-	if !c.InAnyApex() {
+	if info, ok := android.ModuleProvider(ctx, android.ApexInfoProvider); !ok || info.IsForPlatform() {
 		return false
 	}
 	// If this is not a stub library, no check necessary
