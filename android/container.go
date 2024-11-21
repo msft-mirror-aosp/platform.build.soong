@@ -382,7 +382,7 @@ func (c *ContainersInfo) BelongingContainers() []*container {
 
 func (c *ContainersInfo) ApexNames() (ret []string) {
 	for _, apex := range c.belongingApexes {
-		ret = append(ret, apex.InApexModules...)
+		ret = append(ret, apex.InApexVariants...)
 	}
 	slices.Sort(ret)
 	return ret
