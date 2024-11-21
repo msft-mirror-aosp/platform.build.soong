@@ -926,3 +926,26 @@ func (f *filesystem) getLibsForLinkerConfig(ctx android.ModuleContext) ([]androi
 
 	return provideModules, requireModules
 }
+
+// Checks that the given file doesn't exceed the given size, and will also print a warning
+// if it's nearing the maximum size. Equivalent to assert-max-image-size in make:
+// https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/definitions.mk;l=3455;drc=993c4de29a02a6accd60ceaaee153307e1a18d10
+func assertMaxImageSize(builder *android.RuleBuilder, image android.Path, maxSize int64, addAvbLater bool) {
+	if addAvbLater {
+		// The value 69632 is derived from MAX_VBMETA_SIZE + MAX_FOOTER_SIZE in avbtool.
+		// Logic copied from make:
+		// https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/Makefile;l=228;drc=a6a0007ef24e16c0b79f439beac4a118416717e6
+		maxSize -= 69632
+	}
+	cmd := builder.Command()
+	cmd.Textf(`file="%s"; maxsize="%d";`+
+		`total=$(stat -c "%%s" "$file" | tr -d '\n');`+
+		`if [ "$total" -gt "$maxsize" ]; then `+
+		`  echo "error: $file too large ($total > $maxsize)";`+
+		`  false;`+
+		`elif [ "$total" -gt $((maxsize - 32768)) ]; then `+
+		`  echo "WARNING: $file approaching size limit ($total now; limit $maxsize)";`+
+		`fi`,
+		image, maxSize)
+	cmd.Implicit(image)
+}
