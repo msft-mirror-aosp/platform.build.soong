@@ -26,19 +26,21 @@ import (
 )
 
 func init() {
-	android.RegisterModuleType("bootimg", bootimgFactory)
+	android.RegisterModuleType("bootimg", BootimgFactory)
 }
 
 type bootimg struct {
 	android.ModuleBase
 
-	properties bootimgProperties
+	properties BootimgProperties
 
-	output     android.OutputPath
+	output     android.Path
 	installDir android.InstallPath
+
+	bootImageType bootImageType
 }
 
-type bootimgProperties struct {
+type BootimgProperties struct {
 	// Set the name of the output. Defaults to <module_name>.img.
 	Stem *string
 
@@ -56,9 +58,13 @@ type bootimgProperties struct {
 	// https://source.android.com/devices/bootloader/boot-image-header
 	Header_version *string
 
-	// Determines if this image is for the vendor_boot partition. Default is false. Refer to
-	// https://source.android.com/devices/bootloader/partitions/vendor-boot-partitions
-	Vendor_boot *bool
+	// Determines the specific type of boot image this module is building. Can be boot,
+	// vendor_boot or init_boot. Defaults to boot.
+	// Refer to https://source.android.com/devices/bootloader/partitions/vendor-boot-partitions
+	// for vendor_boot.
+	// Refer to https://source.android.com/docs/core/architecture/partitions/generic-boot for
+	// init_boot.
+	Boot_image_type *string
 
 	// Optional kernel commandline arguments
 	Cmdline []string `android:"arch_variant"`
@@ -66,6 +72,10 @@ type bootimgProperties struct {
 	// File that contains bootconfig parameters. This can be set only when `vendor_boot` is true
 	// and `header_version` is greater than or equal to 4.
 	Bootconfig *string `android:"arch_variant,path"`
+
+	// The size of the partition on the device. It will be a build error if this built partition
+	// image exceeds this size.
+	Partition_size *int64
 
 	// When set to true, sign the image with avbtool. Default is false.
 	Use_avb *bool
@@ -81,8 +91,43 @@ type bootimgProperties struct {
 	Avb_algorithm *string
 }
 
+type bootImageType int
+
+const (
+	unsupported bootImageType = iota
+	boot
+	vendorBoot
+	initBoot
+)
+
+func toBootImageType(ctx android.ModuleContext, bootImageType string) bootImageType {
+	switch bootImageType {
+	case "boot":
+		return boot
+	case "vendor_boot":
+		return vendorBoot
+	case "init_boot":
+		return initBoot
+	default:
+		ctx.ModuleErrorf("Unknown boot_image_type %s. Must be one of \"boot\", \"vendor_boot\", or \"init_boot\"", bootImageType)
+	}
+	return unsupported
+}
+
+func (b bootImageType) isBoot() bool {
+	return b == boot
+}
+
+func (b bootImageType) isVendorBoot() bool {
+	return b == vendorBoot
+}
+
+func (b bootImageType) isInitBoot() bool {
+	return b == initBoot
+}
+
 // bootimg is the image for the boot partition. It consists of header, kernel, ramdisk, and dtb.
-func bootimgFactory() android.Module {
+func BootimgFactory() android.Module {
 	module := &bootimg{}
 	module.AddProperties(&module.properties)
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
@@ -112,38 +157,45 @@ func (b *bootimg) partitionName() string {
 }
 
 func (b *bootimg) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	vendor := proptools.Bool(b.properties.Vendor_boot)
-	unsignedOutput := b.buildBootImage(ctx, vendor)
+	b.bootImageType = toBootImageType(ctx, proptools.StringDefault(b.properties.Boot_image_type, "boot"))
+	unsignedOutput := b.buildBootImage(ctx)
 
+	output := unsignedOutput
 	if proptools.Bool(b.properties.Use_avb) {
-		b.output = b.signImage(ctx, unsignedOutput)
-	} else {
-		b.output = unsignedOutput
+		output = b.signImage(ctx, unsignedOutput)
 	}
 
 	b.installDir = android.PathForModuleInstall(ctx, "etc")
-	ctx.InstallFile(b.installDir, b.installFileName(), b.output)
+	ctx.InstallFile(b.installDir, b.installFileName(), output)
 
-	ctx.SetOutputFiles([]android.Path{b.output}, "")
+	ctx.SetOutputFiles([]android.Path{output}, "")
+	b.output = output
 }
 
-func (b *bootimg) buildBootImage(ctx android.ModuleContext, vendor bool) android.OutputPath {
-	output := android.PathForModuleOut(ctx, "unsigned", b.installFileName()).OutputPath
+func (b *bootimg) buildBootImage(ctx android.ModuleContext) android.Path {
+	output := android.PathForModuleOut(ctx, "unsigned", b.installFileName())
 
 	builder := android.NewRuleBuilder(pctx, ctx)
 	cmd := builder.Command().BuiltTool("mkbootimg")
 
 	kernel := proptools.String(b.properties.Kernel_prebuilt)
-	if vendor && kernel != "" {
+	if b.bootImageType.isVendorBoot() && kernel != "" {
 		ctx.PropertyErrorf("kernel_prebuilt", "vendor_boot partition can't have kernel")
 		return output
 	}
-	if !vendor && kernel == "" {
+
+	if b.bootImageType.isBoot() && kernel == "" {
 		ctx.PropertyErrorf("kernel_prebuilt", "boot partition must have kernel")
 		return output
 	}
 	if kernel != "" {
 		cmd.FlagWithInput("--kernel ", android.PathForModuleSrc(ctx, kernel))
+	}
+
+	// These arguments are passed for boot.img and init_boot.img generation
+	if b.bootImageType.isBoot() || b.bootImageType.isInitBoot() {
+		cmd.FlagWithArg("--os_version ", ctx.Config().PlatformVersionLastStable())
+		cmd.FlagWithArg("--os_patch_level ", ctx.Config().PlatformSecurityPatch())
 	}
 
 	dtbName := proptools.String(b.properties.Dtb_prebuilt)
@@ -155,7 +207,7 @@ func (b *bootimg) buildBootImage(ctx android.ModuleContext, vendor bool) android
 	cmdline := strings.Join(b.properties.Cmdline, " ")
 	if cmdline != "" {
 		flag := "--cmdline "
-		if vendor {
+		if b.bootImageType.isVendorBoot() {
 			flag = "--vendor_cmdline "
 		}
 		cmd.FlagWithArg(flag, proptools.ShellEscapeIncludingSpaces(cmdline))
@@ -182,7 +234,7 @@ func (b *bootimg) buildBootImage(ctx android.ModuleContext, vendor bool) android
 		ramdisk := ctx.GetDirectDepWithTag(ramdiskName, bootimgRamdiskDep)
 		if filesystem, ok := ramdisk.(*filesystem); ok {
 			flag := "--ramdisk "
-			if vendor {
+			if b.bootImageType.isVendorBoot() {
 				flag = "--vendor_ramdisk "
 			}
 			cmd.FlagWithInput(flag, filesystem.OutputPath())
@@ -194,7 +246,7 @@ func (b *bootimg) buildBootImage(ctx android.ModuleContext, vendor bool) android
 
 	bootconfig := proptools.String(b.properties.Bootconfig)
 	if bootconfig != "" {
-		if !vendor {
+		if !b.bootImageType.isVendorBoot() {
 			ctx.PropertyErrorf("bootconfig", "requires vendor_boot: true")
 			return output
 		}
@@ -205,20 +257,25 @@ func (b *bootimg) buildBootImage(ctx android.ModuleContext, vendor bool) android
 		cmd.FlagWithInput("--vendor_bootconfig ", android.PathForModuleSrc(ctx, bootconfig))
 	}
 
+	// Output flag for boot.img and init_boot.img
 	flag := "--output "
-	if vendor {
+	if b.bootImageType.isVendorBoot() {
 		flag = "--vendor_boot "
 	}
 	cmd.FlagWithOutput(flag, output)
+
+	if b.properties.Partition_size != nil {
+		assertMaxImageSize(builder, output, *b.properties.Partition_size, proptools.Bool(b.properties.Use_avb))
+	}
 
 	builder.Build("build_bootimg", fmt.Sprintf("Creating %s", b.BaseModuleName()))
 	return output
 }
 
-func (b *bootimg) signImage(ctx android.ModuleContext, unsignedImage android.OutputPath) android.OutputPath {
+func (b *bootimg) signImage(ctx android.ModuleContext, unsignedImage android.Path) android.Path {
 	propFile, toolDeps := b.buildPropFile(ctx)
 
-	output := android.PathForModuleOut(ctx, b.installFileName()).OutputPath
+	output := android.PathForModuleOut(ctx, b.installFileName())
 	builder := android.NewRuleBuilder(pctx, ctx)
 	builder.Command().Text("cp").Input(unsignedImage).Output(output)
 	builder.Command().BuiltTool("verity_utils").
@@ -239,7 +296,7 @@ func (b *bootimg) salt() string {
 	return sha1sum(input)
 }
 
-func (b *bootimg) buildPropFile(ctx android.ModuleContext) (propFile android.OutputPath, toolDeps android.Paths) {
+func (b *bootimg) buildPropFile(ctx android.ModuleContext) (android.Path, android.Paths) {
 	var sb strings.Builder
 	var deps android.Paths
 	addStr := func(name string, value string) {
@@ -261,7 +318,7 @@ func (b *bootimg) buildPropFile(ctx android.ModuleContext) (propFile android.Out
 	addStr("partition_name", partitionName)
 	addStr("avb_salt", b.salt())
 
-	propFile = android.PathForModuleOut(ctx, "prop").OutputPath
+	propFile := android.PathForModuleOut(ctx, "prop")
 	android.WriteFileRule(ctx, propFile, sb.String())
 	return propFile, deps
 }

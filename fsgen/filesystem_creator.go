@@ -47,6 +47,10 @@ type filesystemCreatorProps struct {
 
 	Vbmeta_module_names    []string `blueprint:"mutated"`
 	Vbmeta_partition_names []string `blueprint:"mutated"`
+
+	Boot_image        string `blueprint:"mutated" android:"path_device_first"`
+	Vendor_boot_image string `blueprint:"mutated" android:"path_device_first"`
+	Init_boot_image   string `blueprint:"mutated" android:"path_device_first"`
 }
 
 type filesystemCreator struct {
@@ -64,10 +68,47 @@ func filesystemCreatorFactory() android.Module {
 		generatedPrebuiltEtcModuleNames := createPrebuiltEtcModules(ctx)
 		avbpubkeyGenerated := createAvbpubkeyModule(ctx)
 		createFsGenState(ctx, generatedPrebuiltEtcModuleNames, avbpubkeyGenerated)
+		module.createAvbKeyFilegroups(ctx)
 		module.createInternalModules(ctx)
 	})
 
 	return module
+}
+
+func generatedPartitions(ctx android.LoadHookContext) []string {
+	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
+	generatedPartitions := []string{"system"}
+	if ctx.DeviceConfig().SystemExtPath() == "system_ext" {
+		generatedPartitions = append(generatedPartitions, "system_ext")
+	}
+	if ctx.DeviceConfig().BuildingVendorImage() && ctx.DeviceConfig().VendorPath() == "vendor" {
+		generatedPartitions = append(generatedPartitions, "vendor")
+	}
+	if ctx.DeviceConfig().BuildingProductImage() && ctx.DeviceConfig().ProductPath() == "product" {
+		generatedPartitions = append(generatedPartitions, "product")
+	}
+	if ctx.DeviceConfig().BuildingOdmImage() && ctx.DeviceConfig().OdmPath() == "odm" {
+		generatedPartitions = append(generatedPartitions, "odm")
+	}
+	if ctx.DeviceConfig().BuildingUserdataImage() && ctx.DeviceConfig().UserdataPath() == "data" {
+		generatedPartitions = append(generatedPartitions, "userdata")
+	}
+	if partitionVars.BuildingSystemDlkmImage {
+		generatedPartitions = append(generatedPartitions, "system_dlkm")
+	}
+	if partitionVars.BuildingVendorDlkmImage {
+		generatedPartitions = append(generatedPartitions, "vendor_dlkm")
+	}
+	if partitionVars.BuildingOdmDlkmImage {
+		generatedPartitions = append(generatedPartitions, "odm_dlkm")
+	}
+	if partitionVars.BuildingRamdiskImage {
+		generatedPartitions = append(generatedPartitions, "ramdisk")
+	}
+	if buildingVendorBootImage(partitionVars) {
+		generatedPartitions = append(generatedPartitions, "vendor_ramdisk")
+	}
+	return generatedPartitions
 }
 
 func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
@@ -79,6 +120,29 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 			finalSoongGeneratedPartitions = append(finalSoongGeneratedPartitions, partitionType)
 		} else {
 			f.properties.Unsupported_partition_types = append(f.properties.Unsupported_partition_types, partitionType)
+		}
+	}
+
+	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
+	if buildingBootImage(partitionVars) {
+		if createBootImage(ctx) {
+			f.properties.Boot_image = ":" + generatedModuleNameForPartition(ctx.Config(), "boot")
+		} else {
+			f.properties.Unsupported_partition_types = append(f.properties.Unsupported_partition_types, "boot")
+		}
+	}
+	if buildingVendorBootImage(partitionVars) {
+		if createVendorBootImage(ctx) {
+			f.properties.Vendor_boot_image = ":" + generatedModuleNameForPartition(ctx.Config(), "vendor_boot")
+		} else {
+			f.properties.Unsupported_partition_types = append(f.properties.Unsupported_partition_types, "vendor_boot")
+		}
+	}
+	if buildingInitBootImage(partitionVars) {
+		if createInitBootImage(ctx) {
+			f.properties.Init_boot_image = ":" + generatedModuleNameForPartition(ctx.Config(), "init_boot")
+		} else {
+			f.properties.Unsupported_partition_types = append(f.properties.Unsupported_partition_types, "init_boot")
 		}
 	}
 
@@ -139,13 +203,13 @@ func (f *filesystemCreator) createDeviceModule(
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
 }
 
-func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitionType string) {
+func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitionVars android.PartitionVariables, partitionType string) {
 	switch partitionType {
 	case "system":
 		fsProps.Build_logtags = proptools.BoolPtr(true)
 		// https://source.corp.google.com/h/googleplex-android/platform/build//639d79f5012a6542ab1f733b0697db45761ab0f3:core/packaging/flags.mk;l=21;drc=5ba8a8b77507f93aa48cc61c5ba3f31a4d0cbf37;bpv=1;bpt=0
 		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
-		// Identical to that of the generic_system_image
+		// Identical to that of the aosp_shared_system_image
 		fsProps.Fsverity.Inputs = []string{
 			"etc/boot-image.prof",
 			"etc/dirty-image-objects",
@@ -175,7 +239,6 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 				Name:   proptools.StringPtr("system/lib/modules"),
 			},
 		}
-		fsProps.Base_dir = proptools.StringPtr("system")
 	case "system_ext":
 		fsProps.Fsverity.Inputs = []string{
 			"framework/*",
@@ -197,7 +260,6 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 				Name:   proptools.StringPtr("vendor/lib/modules"),
 			},
 		}
-		fsProps.Base_dir = proptools.StringPtr("vendor")
 	case "odm":
 		fsProps.Symlinks = []filesystem.SymlinkDefinition{
 			filesystem.SymlinkDefinition{
@@ -205,10 +267,30 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 				Name:   proptools.StringPtr("odm/lib/modules"),
 			},
 		}
-		fsProps.Base_dir = proptools.StringPtr("odm")
 	case "userdata":
 		fsProps.Base_dir = proptools.StringPtr("data")
-
+	case "ramdisk":
+		// Following the logic in https://cs.android.com/android/platform/superproject/main/+/c3c5063df32748a8806ce5da5dd0db158eab9ad9:build/make/core/Makefile;l=1307
+		fsProps.Dirs = android.NewSimpleConfigurable([]string{
+			"debug_ramdisk",
+			"dev",
+			"metadata",
+			"mnt",
+			"proc",
+			"second_stage_resources",
+			"sys",
+		})
+		if partitionVars.BoardUsesGenericKernelImage {
+			fsProps.Dirs.AppendSimpleValue([]string{
+				"first_stage_ramdisk/debug_ramdisk",
+				"first_stage_ramdisk/dev",
+				"first_stage_ramdisk/metadata",
+				"first_stage_ramdisk/mnt",
+				"first_stage_ramdisk/proc",
+				"first_stage_ramdisk/second_stage_resources",
+				"first_stage_ramdisk/sys",
+			})
+		}
 	}
 }
 
@@ -254,6 +336,51 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 	return true
 }
 
+// Creates filegroups for the files specified in BOARD_(partition_)AVB_KEY_PATH
+func (f *filesystemCreator) createAvbKeyFilegroups(ctx android.LoadHookContext) {
+	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
+	var files []string
+
+	if len(partitionVars.BoardAvbKeyPath) > 0 {
+		files = append(files, partitionVars.BoardAvbKeyPath)
+	}
+	for _, partition := range android.SortedKeys(partitionVars.PartitionQualifiedVariables) {
+		specificPartitionVars := partitionVars.PartitionQualifiedVariables[partition]
+		if len(specificPartitionVars.BoardAvbKeyPath) > 0 {
+			files = append(files, specificPartitionVars.BoardAvbKeyPath)
+		}
+	}
+
+	fsGenState := ctx.Config().Get(fsGenStateOnceKey).(*FsGenState)
+	for _, file := range files {
+		if _, ok := fsGenState.avbKeyFilegroups[file]; ok {
+			continue
+		}
+		if file == "external/avb/test/data/testkey_rsa4096.pem" {
+			// There already exists a checked-in filegroup for this commonly-used key, just use that
+			fsGenState.avbKeyFilegroups[file] = "avb_testkey_rsa4096"
+			continue
+		}
+		dir := filepath.Dir(file)
+		base := filepath.Base(file)
+		name := fmt.Sprintf("avb_key_%x", strings.ReplaceAll(file, "/", "_"))
+		ctx.CreateModuleInDirectory(
+			android.FileGroupFactory,
+			dir,
+			&struct {
+				Name       *string
+				Srcs       []string
+				Visibility []string
+			}{
+				Name:       proptools.StringPtr(name),
+				Srcs:       []string{base},
+				Visibility: []string{"//visibility:public"},
+			},
+		)
+		fsGenState.avbKeyFilegroups[file] = name
+	}
+}
+
 // createPrebuiltKernelModules creates `prebuilt_kernel_modules`. These modules will be added to deps of the
 // autogenerated *_dlkm filsystem modules. Each _dlkm partition should have a single prebuilt_kernel_modules dependency.
 // This ensures that the depmod artifacts (modules.* installed in /lib/modules/) are generated with a complete view.
@@ -274,7 +401,7 @@ func (f *filesystemCreator) createPrebuiltKernelModules(ctx android.LoadHookCont
 	}
 	switch partitionType {
 	case "system_dlkm":
-		props.Srcs = ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.SystemKernelModules
+		props.Srcs = android.ExistentPathsForSources(ctx, ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.SystemKernelModules).Strings()
 		props.System_dlkm_specific = proptools.BoolPtr(true)
 		if len(ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.SystemKernelLoadModules) == 0 {
 			// Create empty modules.load file for system
@@ -285,7 +412,7 @@ func (f *filesystemCreator) createPrebuiltKernelModules(ctx android.LoadHookCont
 			props.Blocklist_file = proptools.StringPtr(blocklistFile)
 		}
 	case "vendor_dlkm":
-		props.Srcs = ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.VendorKernelModules
+		props.Srcs = android.ExistentPathsForSources(ctx, ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.VendorKernelModules).Strings()
 		if len(ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.SystemKernelModules) > 0 {
 			props.System_deps = []string{":" + generatedModuleName(ctx.Config(), "system_dlkm-kernel-modules") + "{.modules}"}
 		}
@@ -294,7 +421,7 @@ func (f *filesystemCreator) createPrebuiltKernelModules(ctx android.LoadHookCont
 			props.Blocklist_file = proptools.StringPtr(blocklistFile)
 		}
 	case "odm_dlkm":
-		props.Srcs = ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.OdmKernelModules
+		props.Srcs = android.ExistentPathsForSources(ctx, ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.OdmKernelModules).Strings()
 		props.Odm_dlkm_specific = proptools.BoolPtr(true)
 		if blocklistFile := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.OdmKernelBlocklistFile; blocklistFile != "" {
 			props.Blocklist_file = proptools.StringPtr(blocklistFile)
@@ -419,21 +546,41 @@ func generateBaseProps(namePtr *string) *filesystemBaseProperty {
 }
 
 func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*filesystem.FilesystemProperties, bool) {
+	fsGenState := ctx.Config().Get(fsGenStateOnceKey).(*FsGenState)
 	fsProps := &filesystem.FilesystemProperties{}
 
 	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
-	var specificPartitionVars android.PartitionQualifiedVariablesType
 	var boardAvbEnable bool
+	var boardAvbKeyPath string
+	var boardAvbAlgorithm string
+	var boardAvbRollbackIndex string
 	var fsType string
 	if strings.Contains(partitionType, "ramdisk") {
 		fsType = "compressed_cpio"
 	} else {
-		specificPartitionVars = partitionVars.PartitionQualifiedVariables[partitionType]
-		boardAvbEnable = partitionVars.BoardAvbEnable
+		specificPartitionVars := partitionVars.PartitionQualifiedVariables[partitionType]
 		fsType = specificPartitionVars.BoardFileSystemType
+		boardAvbEnable = partitionVars.BoardAvbEnable
+		boardAvbKeyPath = specificPartitionVars.BoardAvbKeyPath
+		boardAvbAlgorithm = specificPartitionVars.BoardAvbAlgorithm
+		boardAvbRollbackIndex = specificPartitionVars.BoardAvbRollbackIndex
+		if boardAvbEnable {
+			if boardAvbKeyPath == "" {
+				boardAvbKeyPath = partitionVars.BoardAvbKeyPath
+			}
+			if boardAvbAlgorithm == "" {
+				boardAvbAlgorithm = partitionVars.BoardAvbAlgorithm
+			}
+			if boardAvbRollbackIndex == "" {
+				boardAvbRollbackIndex = partitionVars.BoardAvbRollbackIndex
+			}
+		}
+		if fsType == "" {
+			fsType = "ext4" //default
+		}
 	}
-	if fsType == "" {
-		fsType = "ext4" //default
+	if boardAvbKeyPath != "" {
+		boardAvbKeyPath = ":" + fsGenState.avbKeyFilegroups[boardAvbKeyPath]
 	}
 
 	fsProps.Type = proptools.StringPtr(fsType)
@@ -449,21 +596,23 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	// BOARD_AVB_ENABLE
 	fsProps.Use_avb = proptools.BoolPtr(boardAvbEnable)
 	// BOARD_AVB_KEY_PATH
-	fsProps.Avb_private_key = proptools.StringPtr(specificPartitionVars.BoardAvbKeyPath)
+	fsProps.Avb_private_key = proptools.StringPtr(boardAvbKeyPath)
 	// BOARD_AVB_ALGORITHM
-	fsProps.Avb_algorithm = proptools.StringPtr(specificPartitionVars.BoardAvbAlgorithm)
+	fsProps.Avb_algorithm = proptools.StringPtr(boardAvbAlgorithm)
 	// BOARD_AVB_SYSTEM_ROLLBACK_INDEX
-	if rollbackIndex, err := strconv.ParseInt(specificPartitionVars.BoardAvbRollbackIndex, 10, 64); err == nil {
+	if rollbackIndex, err := strconv.ParseInt(boardAvbRollbackIndex, 10, 64); err == nil {
 		fsProps.Rollback_index = proptools.Int64Ptr(rollbackIndex)
 	}
 
 	fsProps.Partition_name = proptools.StringPtr(partitionType)
 
-	fsProps.Base_dir = proptools.StringPtr(partitionType)
+	if !strings.Contains(partitionType, "ramdisk") {
+		fsProps.Base_dir = proptools.StringPtr(partitionType)
+	}
 
 	fsProps.Is_auto_generated = proptools.BoolPtr(true)
 
-	partitionSpecificFsProps(fsProps, partitionType)
+	partitionSpecificFsProps(fsProps, partitionVars, partitionType)
 
 	// system_image properties that are not set:
 	// - filesystemProperties.Avb_hash_algorithm
@@ -480,7 +629,7 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	return fsProps, true
 }
 
-func (f *filesystemCreator) createDiffTest(ctx android.ModuleContext, partitionType string) android.Path {
+func (f *filesystemCreator) createFileListDiffTest(ctx android.ModuleContext, partitionType string) android.Path {
 	partitionModuleName := generatedModuleNameForPartition(ctx.Config(), partitionType)
 	systemImage := ctx.GetDirectDepWithTag(partitionModuleName, generatedFilesystemDepTag)
 	filesystemInfo, ok := android.OtherModuleProvider(ctx, systemImage, filesystem.FilesystemProvider)
@@ -525,13 +674,17 @@ func createVbmetaDiff(ctx android.ModuleContext, vbmetaModuleName string, vbmeta
 	makeVbmetaFile := android.PathForArbitraryOutput(ctx, fmt.Sprintf("target/product/%s/%s.img", ctx.Config().DeviceName(), vbmetaPartitionName))
 
 	diffTestResultFile := android.PathForModuleOut(ctx, fmt.Sprintf("diff_test_%s.txt", vbmetaModuleName))
+	createDiffTest(ctx, diffTestResultFile, soongVbMetaFile, makeVbmetaFile)
+	return diffTestResultFile
+}
+
+func createDiffTest(ctx android.ModuleContext, diffTestResultFile android.WritablePath, file1 android.Path, file2 android.Path) {
 	builder := android.NewRuleBuilder(pctx, ctx)
 	builder.Command().Text("diff").
-		Input(soongVbMetaFile).
-		Input(makeVbmetaFile)
+		Input(file1).
+		Input(file2)
 	builder.Command().Text("touch").Output(diffTestResultFile)
-	builder.Build(vbmetaModuleName+" diff test", vbmetaModuleName+" diff test")
-	return diffTestResultFile
+	builder.Build("diff test "+diffTestResultFile.String(), "diff test")
 }
 
 type systemImageDepTagType struct {
@@ -568,7 +721,7 @@ func (f *filesystemCreator) GenerateAndroidBuildActions(ctx android.ModuleContex
 
 	var diffTestFiles []android.Path
 	for _, partitionType := range f.properties.Generated_partition_types {
-		diffTestFile := f.createDiffTest(ctx, partitionType)
+		diffTestFile := f.createFileListDiffTest(ctx, partitionType)
 		diffTestFiles = append(diffTestFiles, diffTestFile)
 		ctx.Phony(fmt.Sprintf("soong_generated_%s_filesystem_test", partitionType), diffTestFile)
 	}
@@ -582,6 +735,30 @@ func (f *filesystemCreator) GenerateAndroidBuildActions(ctx android.ModuleContex
 		diffTestFiles = append(diffTestFiles, diffTestFile)
 		ctx.Phony(fmt.Sprintf("soong_generated_%s_filesystem_test", f.properties.Vbmeta_partition_names[i]), diffTestFile)
 	}
+	if f.properties.Boot_image != "" {
+		diffTestFile := android.PathForModuleOut(ctx, "boot_diff_test.txt")
+		soongBootImg := android.PathForModuleSrc(ctx, f.properties.Boot_image)
+		makeBootImage := android.PathForArbitraryOutput(ctx, fmt.Sprintf("target/product/%s/boot.img", ctx.Config().DeviceName()))
+		createDiffTest(ctx, diffTestFile, soongBootImg, makeBootImage)
+		diffTestFiles = append(diffTestFiles, diffTestFile)
+		ctx.Phony("soong_generated_boot_filesystem_test", diffTestFile)
+	}
+	if f.properties.Vendor_boot_image != "" {
+		diffTestFile := android.PathForModuleOut(ctx, "vendor_boot_diff_test.txt")
+		soongBootImg := android.PathForModuleSrc(ctx, f.properties.Vendor_boot_image)
+		makeBootImage := android.PathForArbitraryOutput(ctx, fmt.Sprintf("target/product/%s/vendor_boot.img", ctx.Config().DeviceName()))
+		createDiffTest(ctx, diffTestFile, soongBootImg, makeBootImage)
+		diffTestFiles = append(diffTestFiles, diffTestFile)
+		ctx.Phony("soong_generated_vendor_boot_filesystem_test", diffTestFile)
+	}
+	if f.properties.Init_boot_image != "" {
+		diffTestFile := android.PathForModuleOut(ctx, "init_boot_diff_test.txt")
+		soongBootImg := android.PathForModuleSrc(ctx, f.properties.Init_boot_image)
+		makeBootImage := android.PathForArbitraryOutput(ctx, fmt.Sprintf("target/product/%s/init_boot.img", ctx.Config().DeviceName()))
+		createDiffTest(ctx, diffTestFile, soongBootImg, makeBootImage)
+		diffTestFiles = append(diffTestFiles, diffTestFile)
+		ctx.Phony("soong_generated_init_boot_filesystem_test", diffTestFile)
+	}
 	ctx.Phony("soong_generated_filesystem_tests", diffTestFiles...)
 }
 
@@ -592,8 +769,10 @@ func generateBpContent(ctx android.EarlyModuleContext, partitionType string) str
 	}
 
 	baseProps := generateBaseProps(proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), partitionType)))
-	deps := ctx.Config().Get(fsGenStateOnceKey).(*FsGenState).fsDeps[partitionType]
-	depProps := generateDepStruct(*deps)
+	fsGenState := ctx.Config().Get(fsGenStateOnceKey).(*FsGenState)
+	deps := fsGenState.fsDeps[partitionType]
+	highPriorityDeps := fsGenState.generatedPrebuiltEtcModuleNames
+	depProps := generateDepStruct(*deps, highPriorityDeps)
 
 	result, err := proptools.RepackProperties([]interface{}{baseProps, fsProps, depProps})
 	if err != nil {

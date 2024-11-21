@@ -1643,25 +1643,27 @@ func (m *ModuleBase) generateVariantTarget(ctx *moduleContext) {
 func (m *ModuleBase) generateModuleTarget(ctx *moduleContext) {
 	var allInstalledFiles InstallPaths
 	var allCheckbuildTargets Paths
-	ctx.VisitAllModuleVariants(func(module Module) {
-		a := module.base()
+	ctx.VisitAllModuleVariantProxies(func(module ModuleProxy) {
 		var checkbuildTarget Path
 		var uncheckedModule bool
-		if a == m {
+		var skipAndroidMkProcessing bool
+		if ctx.EqualModules(m.module, module) {
 			allInstalledFiles = append(allInstalledFiles, ctx.installFiles...)
 			checkbuildTarget = ctx.checkbuildTarget
 			uncheckedModule = ctx.uncheckedModule
+			skipAndroidMkProcessing = shouldSkipAndroidMkProcessing(ctx, m)
 		} else {
 			info := OtherModuleProviderOrDefault(ctx, module, InstallFilesProvider)
 			allInstalledFiles = append(allInstalledFiles, info.InstallFiles...)
 			checkbuildTarget = info.CheckbuildTarget
 			uncheckedModule = info.UncheckedModule
+			skipAndroidMkProcessing = OtherModuleProviderOrDefault(ctx, module, CommonModuleInfoKey).SkipAndroidMkProcessing
 		}
 		// A module's -checkbuild phony targets should
 		// not be created if the module is not exported to make.
 		// Those could depend on the build target and fail to compile
 		// for the current build target.
-		if (!ctx.Config().KatiEnabled() || !shouldSkipAndroidMkProcessing(ctx, a)) && !uncheckedModule && checkbuildTarget != nil {
+		if (!ctx.Config().KatiEnabled() || !skipAndroidMkProcessing) && !uncheckedModule && checkbuildTarget != nil {
 			allCheckbuildTargets = append(allCheckbuildTargets, checkbuildTarget)
 		}
 	})
@@ -1850,15 +1852,16 @@ type FinalModuleBuildTargetsInfo struct {
 
 var FinalModuleBuildTargetsProvider = blueprint.NewProvider[FinalModuleBuildTargetsInfo]()
 
-type CommonPropertiesProviderData struct {
+type CommonModuleInfo struct {
 	Enabled bool
 	// Whether the module has been replaced by a prebuilt
 	ReplacedByPrebuilt bool
 	// The Target of artifacts that this module variant is responsible for creating.
-	CompileTarget Target
+	CompileTarget           Target
+	SkipAndroidMkProcessing bool
 }
 
-var CommonPropertiesProviderKey = blueprint.NewProvider[CommonPropertiesProviderData]()
+var CommonModuleInfoKey = blueprint.NewProvider[CommonModuleInfo]()
 
 type PrebuiltModuleProviderData struct {
 	// Empty for now
@@ -2120,16 +2123,17 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	}
 	buildComplianceMetadataProvider(ctx, m)
 
-	commonData := CommonPropertiesProviderData{
-		ReplacedByPrebuilt: m.commonProperties.ReplacedByPrebuilt,
-		CompileTarget:      m.commonProperties.CompileTarget,
+	commonData := CommonModuleInfo{
+		ReplacedByPrebuilt:      m.commonProperties.ReplacedByPrebuilt,
+		CompileTarget:           m.commonProperties.CompileTarget,
+		SkipAndroidMkProcessing: shouldSkipAndroidMkProcessing(ctx, m),
 	}
 	if m.commonProperties.ForcedDisabled {
 		commonData.Enabled = false
 	} else {
 		commonData.Enabled = m.commonProperties.Enabled.GetOrDefault(m.ConfigurableEvaluator(ctx), !m.Os().DefaultDisabled)
 	}
-	SetProvider(ctx, CommonPropertiesProviderKey, commonData)
+	SetProvider(ctx, CommonModuleInfoKey, commonData)
 	if p, ok := m.module.(PrebuiltInterface); ok && p.Prebuilt() != nil {
 		SetProvider(ctx, PrebuiltModuleProviderKey, PrebuiltModuleProviderData{})
 	}
@@ -2138,7 +2142,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			HostToolPath: h.HostToolPath()})
 	}
 
-	if p, ok := m.module.(AndroidMkProviderInfoProducer); ok && !shouldSkipAndroidMkProcessing(ctx, m) {
+	if p, ok := m.module.(AndroidMkProviderInfoProducer); ok && !commonData.SkipAndroidMkProcessing {
 		SetProvider(ctx, AndroidMkInfoProvider, p.PrepareAndroidMKProviderInfo(ctx.Config()))
 	}
 }

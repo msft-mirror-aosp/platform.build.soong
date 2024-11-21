@@ -409,9 +409,10 @@ type ProductVariables struct {
 
 	Ndk_abis *bool `json:",omitempty"`
 
-	ForceApexSymlinkOptimization *bool `json:",omitempty"`
-	CompressedApex               *bool `json:",omitempty"`
-	Aml_abis                     *bool `json:",omitempty"`
+	ForceApexSymlinkOptimization *bool   `json:",omitempty"`
+	CompressedApex               *bool   `json:",omitempty"`
+	DefaultApexPayloadType       *string `json:",omitempty"`
+	Aml_abis                     *bool   `json:",omitempty"`
 
 	DexpreoptGlobalConfig *string `json:",omitempty"`
 
@@ -611,7 +612,9 @@ type PartitionVariables struct {
 	CopyImagesForTargetFilesZip    bool   `json:",omitempty"`
 
 	// Boot image stuff
+	BuildingRamdiskImage            bool   `json:",omitempty"`
 	ProductBuildBootImage           bool   `json:",omitempty"`
+	ProductBuildVendorBootImage     string `json:",omitempty"`
 	ProductBuildInitBootImage       bool   `json:",omitempty"`
 	BoardUsesRecoveryAsBoot         bool   `json:",omitempty"`
 	BoardPrebuiltBootimage          string `json:",omitempty"`
@@ -619,6 +622,8 @@ type PartitionVariables struct {
 	BoardBootimagePartitionSize     string `json:",omitempty"`
 	BoardInitBootimagePartitionSize string `json:",omitempty"`
 	BoardBootHeaderVersion          string `json:",omitempty"`
+	TargetKernelPath                string `json:",omitempty"`
+	BoardUsesGenericKernelImage     bool   `json:",omitempty"`
 
 	// Avb (android verified boot) stuff
 	BoardAvbEnable          bool                                `json:",omitempty"`
