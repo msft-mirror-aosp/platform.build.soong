@@ -566,10 +566,16 @@ func (library *libraryDecorator) getHeaderAbiCheckerProperties(m *Module) header
 
 func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) Objects {
 	if ctx.IsLlndk() {
-		futureVendorApiLevel := android.ApiLevelOrPanic(ctx, "999999")
+		// Get the matching SDK version for the vendor API level.
+		version, err := android.GetSdkVersionForVendorApiLevel(ctx.Config().VendorApiLevel())
+		if err != nil {
+			panic(err)
+		}
+
+		// This is the vendor variant of an LLNDK library, build the LLNDK stubs.
 		nativeAbiResult := parseNativeAbiDefinition(ctx,
 			String(library.Properties.Llndk.Symbol_file),
-			futureVendorApiLevel, "--llndk")
+			nativeClampedApiLevel(ctx, version), "--llndk")
 		objs := compileStubLibrary(ctx, flags, nativeAbiResult.stubSrc)
 		if !Bool(library.Properties.Llndk.Unversioned) {
 			library.versionScriptPath = android.OptionalPathForPath(
@@ -1285,15 +1291,14 @@ func (library *libraryDecorator) llndkIncludeDirsForAbiCheck(ctx ModuleContext, 
 func (library *libraryDecorator) linkLlndkSAbiDumpFiles(ctx ModuleContext,
 	deps PathDeps, sAbiDumpFiles android.Paths, soFile android.Path, libFileName string,
 	excludeSymbolVersions, excludeSymbolTags []string,
-	vendorApiLevel string) android.Path {
-	// NDK symbols in version 34 are LLNDK symbols. Those in version 35 are not.
+	sdkVersionForVendorApiLevel string) android.Path {
 	return transformDumpToLinkedDump(ctx,
 		sAbiDumpFiles, soFile, libFileName+".llndk",
 		library.llndkIncludeDirsForAbiCheck(ctx, deps),
 		android.OptionalPathForModuleSrc(ctx, library.Properties.Llndk.Symbol_file),
 		append([]string{"*_PLATFORM", "*_PRIVATE"}, excludeSymbolVersions...),
 		append([]string{"platform-only"}, excludeSymbolTags...),
-		[]string{"llndk=" + vendorApiLevel}, "34", true /* isLlndk */)
+		[]string{"llndk"}, sdkVersionForVendorApiLevel)
 }
 
 func (library *libraryDecorator) linkApexSAbiDumpFiles(ctx ModuleContext,
@@ -1306,7 +1311,7 @@ func (library *libraryDecorator) linkApexSAbiDumpFiles(ctx ModuleContext,
 		android.OptionalPathForModuleSrc(ctx, library.Properties.Stubs.Symbol_file),
 		append([]string{"*_PLATFORM", "*_PRIVATE"}, excludeSymbolVersions...),
 		append([]string{"platform-only"}, excludeSymbolTags...),
-		[]string{"apex", "systemapi"}, sdkVersion, false /* isLlndk */)
+		[]string{"apex", "systemapi"}, sdkVersion)
 }
 
 func getRefAbiDumpFile(ctx android.ModuleInstallPathContext,
@@ -1444,7 +1449,7 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, deps PathD
 			android.OptionalPathForModuleSrc(ctx, library.symbolFileForAbiCheck(ctx)),
 			headerAbiChecker.Exclude_symbol_versions,
 			headerAbiChecker.Exclude_symbol_tags,
-			[]string{} /* includeSymbolTags */, currSdkVersion, false /* isLlndk */)
+			[]string{} /* includeSymbolTags */, currSdkVersion)
 
 		var llndkDump, apexVariantDump android.Path
 		tags := classifySourceAbiDump(ctx.Module().(*Module))
@@ -1452,12 +1457,17 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, deps PathD
 		for _, tag := range tags {
 			if tag == llndkLsdumpTag && currVendorVersion != "" {
 				if llndkDump == nil {
+					sdkVersion, err := android.GetSdkVersionForVendorApiLevel(currVendorVersion)
+					if err != nil {
+						ctx.ModuleErrorf("Cannot create %s llndk dump: %s", fileName, err)
+						return
+					}
 					// TODO(b/323447559): Evaluate if replacing sAbiDumpFiles with implDump is faster
 					llndkDump = library.linkLlndkSAbiDumpFiles(ctx,
 						deps, objs.sAbiDumpFiles, soFile, fileName,
 						headerAbiChecker.Exclude_symbol_versions,
 						headerAbiChecker.Exclude_symbol_tags,
-						currVendorVersion)
+						nativeClampedApiLevel(ctx, sdkVersion).String())
 				}
 				addLsdumpPath(ctx.Config(), string(tag)+":"+llndkDump.String())
 			} else if tag == apexLsdumpTag {

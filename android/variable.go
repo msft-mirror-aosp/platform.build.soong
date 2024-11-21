@@ -610,6 +610,8 @@ type PartitionVariables struct {
 	ProductUseDynamicPartitionSize bool   `json:",omitempty"`
 	CopyImagesForTargetFilesZip    bool   `json:",omitempty"`
 
+	VendorSecurityPatch string `json:",omitempty"`
+
 	// Boot image stuff
 	BuildingRamdiskImage            bool   `json:",omitempty"`
 	ProductBuildBootImage           bool   `json:",omitempty"`
@@ -623,6 +625,9 @@ type PartitionVariables struct {
 	BoardBootHeaderVersion          string `json:",omitempty"`
 	TargetKernelPath                string `json:",omitempty"`
 	BoardUsesGenericKernelImage     bool   `json:",omitempty"`
+	BootSecurityPatch               string `json:",omitempty"`
+	InitBootSecurityPatch           string `json:",omitempty"`
+	BoardIncludeDtbInBootimg        bool   `json:",omitempty"`
 
 	// Avb (android verified boot) stuff
 	BoardAvbEnable          bool                                `json:",omitempty"`
