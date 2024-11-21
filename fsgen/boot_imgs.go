@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/google/blueprint/proptools"
 )
 
-func createBootImage(ctx android.LoadHookContext) bool {
+func createBootImage(ctx android.LoadHookContext, dtbImg dtbImg) bool {
 	partitionVariables := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
 
 	if partitionVariables.TargetKernelPath == "" {
@@ -55,6 +56,11 @@ func createBootImage(ctx android.LoadHookContext) bool {
 
 	bootImageName := generatedModuleNameForPartition(ctx.Config(), "boot")
 
+	var dtbPrebuilt *string
+	if dtbImg.include && dtbImg.imgType == "boot" {
+		dtbPrebuilt = proptools.StringPtr(":" + dtbImg.name)
+	}
+
 	ctx.CreateModule(
 		filesystem.BootimgFactory,
 		&filesystem.BootimgProperties{
@@ -67,6 +73,7 @@ func createBootImage(ctx android.LoadHookContext) bool {
 			Avb_rollback_index: avbInfo.avbRollbackIndex,
 			Avb_algorithm:      avbInfo.avbAlgorithm,
 			Security_patch:     securityPatch,
+			Dtb_prebuilt:       dtbPrebuilt,
 		},
 		&struct {
 			Name *string
@@ -77,12 +84,17 @@ func createBootImage(ctx android.LoadHookContext) bool {
 	return true
 }
 
-func createVendorBootImage(ctx android.LoadHookContext) bool {
+func createVendorBootImage(ctx android.LoadHookContext, dtbImg dtbImg) bool {
 	partitionVariables := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
 
 	bootImageName := generatedModuleNameForPartition(ctx.Config(), "vendor_boot")
 
 	avbInfo := getAvbInfo(ctx.Config(), "vendor_boot")
+
+	var dtbPrebuilt *string
+	if dtbImg.include && dtbImg.imgType == "vendor_boot" {
+		dtbPrebuilt = proptools.StringPtr(":" + dtbImg.name)
+	}
 
 	ctx.CreateModule(
 		filesystem.BootimgFactory,
@@ -95,6 +107,7 @@ func createVendorBootImage(ctx android.LoadHookContext) bool {
 			Avb_private_key:    avbInfo.avbkeyFilegroup,
 			Avb_rollback_index: avbInfo.avbRollbackIndex,
 			Avb_algorithm:      avbInfo.avbAlgorithm,
+			Dtb_prebuilt:       dtbPrebuilt,
 		},
 		&struct {
 			Name *string
@@ -216,4 +229,48 @@ func boardBootHeaderVersion(partitionVars android.PartitionVariables) (int, bool
 		panic(fmt.Sprintf("BOARD_BOOT_HEADER_VERSION must be an int, got: %q", partitionVars.BoardBootHeaderVersion))
 	}
 	return int(v), true
+}
+
+type dtbImg struct {
+	// whether to include the dtb image in boot image
+	include bool
+
+	// name of the generated dtb image filegroup name
+	name string
+
+	// type of the boot image that the dtb image argument should be specified
+	imgType string
+}
+
+func createDtbImgFilegroup(ctx android.LoadHookContext) dtbImg {
+	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
+	if !partitionVars.BoardIncludeDtbInBootimg {
+		return dtbImg{include: false}
+	}
+	for _, copyFilePair := range partitionVars.ProductCopyFiles {
+		srcDestList := strings.Split(copyFilePair, ":")
+		if len(srcDestList) < 2 {
+			ctx.ModuleErrorf("PRODUCT_COPY_FILES must follow the format \"src:dest\", got: %s", copyFilePair)
+		}
+		if srcDestList[1] == "dtb.img" {
+			moduleName := generatedModuleName(ctx.Config(), "dtb_img_filegroup")
+			ctx.CreateModuleInDirectory(
+				android.FileGroupFactory,
+				filepath.Dir(srcDestList[0]),
+				&struct {
+					Name *string
+					Srcs []string
+				}{
+					Name: proptools.StringPtr(moduleName),
+					Srcs: []string{filepath.Base(srcDestList[1])},
+				},
+			)
+			imgType := "vendor_boot"
+			if !buildingVendorBootImage(partitionVars) {
+				imgType = "boot"
+			}
+			return dtbImg{include: true, name: moduleName, imgType: imgType}
+		}
+	}
+	return dtbImg{include: false}
 }
