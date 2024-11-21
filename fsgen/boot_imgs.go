@@ -36,14 +36,23 @@ func createBootImage(ctx android.LoadHookContext) bool {
 		},
 	)
 
+	var partitionSize *int64
+	if partitionVariables.BoardBootimagePartitionSize != "" {
+		parsed, err := strconv.ParseInt(partitionVariables.BoardBootimagePartitionSize, 10, 64)
+		if err != nil {
+			panic(fmt.Sprintf("BOARD_BOOTIMAGE_PARTITION_SIZE must be an int, got %s", partitionVariables.BoardBootimagePartitionSize))
+		}
+		partitionSize = &parsed
+	}
+
 	bootImageName := generatedModuleNameForPartition(ctx.Config(), "boot")
 
 	ctx.CreateModule(
 		filesystem.BootimgFactory,
 		&filesystem.BootimgProperties{
 			Kernel_prebuilt: proptools.StringPtr(":" + kernelFilegroupName),
-			Ramdisk_module:  proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "ramdisk")),
 			Header_version:  proptools.StringPtr(partitionVariables.BoardBootHeaderVersion),
+			Partition_size:  partitionSize,
 		},
 		&struct {
 			Name *string
@@ -62,9 +71,30 @@ func createVendorBootImage(ctx android.LoadHookContext) bool {
 	ctx.CreateModule(
 		filesystem.BootimgFactory,
 		&filesystem.BootimgProperties{
-			Vendor_boot:    proptools.BoolPtr(true),
-			Ramdisk_module: proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "vendor_ramdisk")),
-			Header_version: proptools.StringPtr(partitionVariables.BoardBootHeaderVersion),
+			Boot_image_type: proptools.StringPtr("vendor_boot"),
+			Ramdisk_module:  proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "vendor_ramdisk")),
+			Header_version:  proptools.StringPtr(partitionVariables.BoardBootHeaderVersion),
+		},
+		&struct {
+			Name *string
+		}{
+			Name: proptools.StringPtr(bootImageName),
+		},
+	)
+	return true
+}
+
+func createInitBootImage(ctx android.LoadHookContext) bool {
+	partitionVariables := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
+
+	bootImageName := generatedModuleNameForPartition(ctx.Config(), "init_boot")
+
+	ctx.CreateModule(
+		filesystem.BootimgFactory,
+		&filesystem.BootimgProperties{
+			Boot_image_type: proptools.StringPtr("init_boot"),
+			Ramdisk_module:  proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "ramdisk")),
+			Header_version:  proptools.StringPtr(partitionVariables.BoardBootHeaderVersion),
 		},
 		&struct {
 			Name *string
@@ -110,6 +140,23 @@ func buildingVendorBootImage(partitionVars android.PartitionVariables) bool {
 		}
 	}
 
+	return false
+}
+
+// Derived from: https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/board_config.mk;l=480;drc=5b55f926830963c02ab1d2d91e46442f04ba3af0
+func buildingInitBootImage(partitionVars android.PartitionVariables) bool {
+	if !partitionVars.ProductBuildInitBootImage {
+		if partitionVars.BoardUsesRecoveryAsBoot || len(partitionVars.BoardPrebuiltInitBootimage) > 0 {
+			return false
+		} else if len(partitionVars.BoardInitBootimagePartitionSize) > 0 {
+			return true
+		}
+	} else {
+		if partitionVars.BoardUsesRecoveryAsBoot {
+			panic("PRODUCT_BUILD_INIT_BOOT_IMAGE is true, but so is BOARD_USES_RECOVERY_AS_BOOT. Use only one option.")
+		}
+		return true
+	}
 	return false
 }
 
