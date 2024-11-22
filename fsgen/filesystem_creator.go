@@ -124,15 +124,17 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 	}
 
 	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
+	dtbImg := createDtbImgFilegroup(ctx)
+
 	if buildingBootImage(partitionVars) {
-		if createBootImage(ctx) {
+		if createBootImage(ctx, dtbImg) {
 			f.properties.Boot_image = ":" + generatedModuleNameForPartition(ctx.Config(), "boot")
 		} else {
 			f.properties.Unsupported_partition_types = append(f.properties.Unsupported_partition_types, "boot")
 		}
 	}
 	if buildingVendorBootImage(partitionVars) {
-		if createVendorBootImage(ctx) {
+		if createVendorBootImage(ctx, dtbImg) {
 			f.properties.Vendor_boot_image = ":" + generatedModuleNameForPartition(ctx.Config(), "vendor_boot")
 		} else {
 			f.properties.Unsupported_partition_types = append(f.properties.Unsupported_partition_types, "vendor_boot")
@@ -312,9 +314,11 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 		return false
 	}
 
-	if partitionType == "vendor" || partitionType == "product" {
+	if partitionType == "vendor" || partitionType == "product" || partitionType == "system" {
 		fsProps.Linker_config.Gen_linker_config = proptools.BoolPtr(true)
-		fsProps.Linker_config.Linker_config_srcs = f.createLinkerConfigSourceFilegroups(ctx, partitionType)
+		if partitionType != "system" {
+			fsProps.Linker_config.Linker_config_srcs = f.createLinkerConfigSourceFilegroups(ctx, partitionType)
+		}
 	}
 
 	if android.InList(partitionType, dlkmPartitions) {
@@ -546,41 +550,20 @@ func generateBaseProps(namePtr *string) *filesystemBaseProperty {
 }
 
 func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*filesystem.FilesystemProperties, bool) {
-	fsGenState := ctx.Config().Get(fsGenStateOnceKey).(*FsGenState)
 	fsProps := &filesystem.FilesystemProperties{}
 
 	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
-	var boardAvbEnable bool
-	var boardAvbKeyPath string
-	var boardAvbAlgorithm string
-	var boardAvbRollbackIndex string
+	var avbInfo avbInfo
 	var fsType string
 	if strings.Contains(partitionType, "ramdisk") {
 		fsType = "compressed_cpio"
 	} else {
 		specificPartitionVars := partitionVars.PartitionQualifiedVariables[partitionType]
 		fsType = specificPartitionVars.BoardFileSystemType
-		boardAvbEnable = partitionVars.BoardAvbEnable
-		boardAvbKeyPath = specificPartitionVars.BoardAvbKeyPath
-		boardAvbAlgorithm = specificPartitionVars.BoardAvbAlgorithm
-		boardAvbRollbackIndex = specificPartitionVars.BoardAvbRollbackIndex
-		if boardAvbEnable {
-			if boardAvbKeyPath == "" {
-				boardAvbKeyPath = partitionVars.BoardAvbKeyPath
-			}
-			if boardAvbAlgorithm == "" {
-				boardAvbAlgorithm = partitionVars.BoardAvbAlgorithm
-			}
-			if boardAvbRollbackIndex == "" {
-				boardAvbRollbackIndex = partitionVars.BoardAvbRollbackIndex
-			}
-		}
+		avbInfo = getAvbInfo(ctx.Config(), partitionType)
 		if fsType == "" {
 			fsType = "ext4" //default
 		}
-	}
-	if boardAvbKeyPath != "" {
-		boardAvbKeyPath = ":" + fsGenState.avbKeyFilegroups[boardAvbKeyPath]
 	}
 
 	fsProps.Type = proptools.StringPtr(fsType)
@@ -594,15 +577,13 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	fsProps.Unchecked_module = proptools.BoolPtr(true)
 
 	// BOARD_AVB_ENABLE
-	fsProps.Use_avb = proptools.BoolPtr(boardAvbEnable)
+	fsProps.Use_avb = avbInfo.avbEnable
 	// BOARD_AVB_KEY_PATH
-	fsProps.Avb_private_key = proptools.StringPtr(boardAvbKeyPath)
+	fsProps.Avb_private_key = avbInfo.avbkeyFilegroup
 	// BOARD_AVB_ALGORITHM
-	fsProps.Avb_algorithm = proptools.StringPtr(boardAvbAlgorithm)
+	fsProps.Avb_algorithm = avbInfo.avbAlgorithm
 	// BOARD_AVB_SYSTEM_ROLLBACK_INDEX
-	if rollbackIndex, err := strconv.ParseInt(boardAvbRollbackIndex, 10, 64); err == nil {
-		fsProps.Rollback_index = proptools.Int64Ptr(rollbackIndex)
-	}
+	fsProps.Rollback_index = avbInfo.avbRollbackIndex
 
 	fsProps.Partition_name = proptools.StringPtr(partitionType)
 
@@ -627,6 +608,55 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	// - systemImageProperties.Linker_config_src
 
 	return fsProps, true
+}
+
+type avbInfo struct {
+	avbEnable        *bool
+	avbKeyPath       *string
+	avbkeyFilegroup  *string
+	avbAlgorithm     *string
+	avbRollbackIndex *int64
+	avbMode          *string
+}
+
+func getAvbInfo(config android.Config, partitionType string) avbInfo {
+	partitionVars := config.ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
+	specificPartitionVars := partitionVars.PartitionQualifiedVariables[partitionType]
+	var result avbInfo
+	boardAvbEnable := partitionVars.BoardAvbEnable
+	if boardAvbEnable {
+		result.avbEnable = proptools.BoolPtr(true)
+		if specificPartitionVars.BoardAvbKeyPath != "" {
+			result.avbKeyPath = proptools.StringPtr(specificPartitionVars.BoardAvbKeyPath)
+		} else if partitionVars.BoardAvbKeyPath != "" {
+			result.avbKeyPath = proptools.StringPtr(partitionVars.BoardAvbKeyPath)
+		}
+		if specificPartitionVars.BoardAvbAlgorithm != "" {
+			result.avbAlgorithm = proptools.StringPtr(specificPartitionVars.BoardAvbAlgorithm)
+		} else if partitionVars.BoardAvbAlgorithm != "" {
+			result.avbAlgorithm = proptools.StringPtr(partitionVars.BoardAvbAlgorithm)
+		}
+		if specificPartitionVars.BoardAvbRollbackIndex != "" {
+			parsed, err := strconv.ParseInt(specificPartitionVars.BoardAvbRollbackIndex, 10, 64)
+			if err != nil {
+				panic(fmt.Sprintf("Rollback index must be an int, got %s", specificPartitionVars.BoardAvbRollbackIndex))
+			}
+			result.avbRollbackIndex = &parsed
+		} else if partitionVars.BoardAvbRollbackIndex != "" {
+			parsed, err := strconv.ParseInt(partitionVars.BoardAvbRollbackIndex, 10, 64)
+			if err != nil {
+				panic(fmt.Sprintf("Rollback index must be an int, got %s", partitionVars.BoardAvbRollbackIndex))
+			}
+			result.avbRollbackIndex = &parsed
+		}
+		result.avbMode = proptools.StringPtr("make_legacy")
+	}
+	if result.avbKeyPath != nil {
+		fsGenState := config.Get(fsGenStateOnceKey).(*FsGenState)
+		filegroup := fsGenState.avbKeyFilegroups[*result.avbKeyPath]
+		result.avbkeyFilegroup = proptools.StringPtr(":" + filegroup)
+	}
+	return result
 }
 
 func (f *filesystemCreator) createFileListDiffTest(ctx android.ModuleContext, partitionType string) android.Path {
