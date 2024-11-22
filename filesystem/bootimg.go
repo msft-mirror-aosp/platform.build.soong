@@ -80,6 +80,12 @@ type BootimgProperties struct {
 	// When set to true, sign the image with avbtool. Default is false.
 	Use_avb *bool
 
+	// This can either be "default", or "make_legacy". "make_legacy" will sign the boot image
+	// like how build/make/core/Makefile does, to get bit-for-bit backwards compatibility. But
+	// we may want to reconsider if it's necessary to have two modes in the future. The default
+	// is "default"
+	Avb_mode *string
+
 	// Name of the partition stored in vbmeta desc. Defaults to the name of this module.
 	Partition_name *string
 
@@ -89,6 +95,13 @@ type BootimgProperties struct {
 
 	// Hash and signing algorithm for avbtool. Default is SHA256_RSA4096.
 	Avb_algorithm *string
+
+	// The index used to prevent rollback of the image on device.
+	Avb_rollback_index *int64
+
+	// The security patch passed to as the com.android.build.<type>.security_patch avb property.
+	// Replacement for the make variables BOOT_SECURITY_PATCH / INIT_BOOT_SECURITY_PATCH.
+	Security_patch *string
 }
 
 type bootImageType int
@@ -112,6 +125,19 @@ func toBootImageType(ctx android.ModuleContext, bootImageType string) bootImageT
 		ctx.ModuleErrorf("Unknown boot_image_type %s. Must be one of \"boot\", \"vendor_boot\", or \"init_boot\"", bootImageType)
 	}
 	return unsupported
+}
+
+func (b bootImageType) String() string {
+	switch b {
+	case boot:
+		return "boot"
+	case vendorBoot:
+		return "vendor_boot"
+	case initBoot:
+		return "init_boot"
+	default:
+		panic("unknown boot image type")
+	}
 }
 
 func (b bootImageType) isBoot() bool {
@@ -158,11 +184,39 @@ func (b *bootimg) partitionName() string {
 
 func (b *bootimg) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	b.bootImageType = toBootImageType(ctx, proptools.StringDefault(b.properties.Boot_image_type, "boot"))
-	unsignedOutput := b.buildBootImage(ctx)
+	if b.bootImageType == unsupported {
+		return
+	}
+
+	kernelProp := proptools.String(b.properties.Kernel_prebuilt)
+	if b.bootImageType.isVendorBoot() && kernelProp != "" {
+		ctx.PropertyErrorf("kernel_prebuilt", "vendor_boot partition can't have kernel")
+		return
+	}
+	if b.bootImageType.isBoot() && kernelProp == "" {
+		ctx.PropertyErrorf("kernel_prebuilt", "boot partition must have kernel")
+		return
+	}
+	var kernel android.Path
+	if kernelProp != "" {
+		kernel = android.PathForModuleSrc(ctx, kernelProp)
+	}
+
+	unsignedOutput := b.buildBootImage(ctx, kernel)
 
 	output := unsignedOutput
 	if proptools.Bool(b.properties.Use_avb) {
-		output = b.signImage(ctx, unsignedOutput)
+		// This bootimg module supports 2 modes of avb signing. It is not clear to this author
+		// why there are differences, but one of them is to match the behavior of make-built boot
+		// images.
+		switch proptools.StringDefault(b.properties.Avb_mode, "default") {
+		case "default":
+			output = b.signImage(ctx, unsignedOutput)
+		case "make_legacy":
+			output = b.addAvbFooter(ctx, unsignedOutput, kernel)
+		default:
+			ctx.PropertyErrorf("avb_mode", `Unknown value for avb_mode, expected "default" or "make_legacy", got: %q`, *b.properties.Avb_mode)
+		}
 	}
 
 	b.installDir = android.PathForModuleInstall(ctx, "etc")
@@ -172,24 +226,14 @@ func (b *bootimg) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	b.output = output
 }
 
-func (b *bootimg) buildBootImage(ctx android.ModuleContext) android.Path {
+func (b *bootimg) buildBootImage(ctx android.ModuleContext, kernel android.Path) android.Path {
 	output := android.PathForModuleOut(ctx, "unsigned", b.installFileName())
 
 	builder := android.NewRuleBuilder(pctx, ctx)
 	cmd := builder.Command().BuiltTool("mkbootimg")
 
-	kernel := proptools.String(b.properties.Kernel_prebuilt)
-	if b.bootImageType.isVendorBoot() && kernel != "" {
-		ctx.PropertyErrorf("kernel_prebuilt", "vendor_boot partition can't have kernel")
-		return output
-	}
-
-	if b.bootImageType.isBoot() && kernel == "" {
-		ctx.PropertyErrorf("kernel_prebuilt", "boot partition must have kernel")
-		return output
-	}
-	if kernel != "" {
-		cmd.FlagWithInput("--kernel ", android.PathForModuleSrc(ctx, kernel))
+	if kernel != nil {
+		cmd.FlagWithInput("--kernel ", kernel)
 	}
 
 	// These arguments are passed for boot.img and init_boot.img generation
@@ -269,6 +313,58 @@ func (b *bootimg) buildBootImage(ctx android.ModuleContext) android.Path {
 	}
 
 	builder.Build("build_bootimg", fmt.Sprintf("Creating %s", b.BaseModuleName()))
+	return output
+}
+
+func (b *bootimg) addAvbFooter(ctx android.ModuleContext, unsignedImage android.Path, kernel android.Path) android.Path {
+	output := android.PathForModuleOut(ctx, b.installFileName())
+	builder := android.NewRuleBuilder(pctx, ctx)
+	builder.Command().Text("cp").Input(unsignedImage).Output(output)
+	cmd := builder.Command().BuiltTool("avbtool").
+		Text("add_hash_footer").
+		FlagWithInput("--image ", output)
+
+	if b.properties.Partition_size != nil {
+		cmd.FlagWithArg("--partition_size ", strconv.FormatInt(*b.properties.Partition_size, 10))
+	} else {
+		cmd.Flag("--dynamic_partition_size")
+	}
+
+	if kernel != nil {
+		cmd.Textf(`--salt $(sha256sum "%s" | cut -d " " -f 1)`, kernel.String())
+		cmd.Implicit(kernel)
+	}
+
+	cmd.FlagWithArg("--partition_name ", b.bootImageType.String())
+
+	if b.properties.Avb_algorithm != nil {
+		cmd.FlagWithArg("--algorithm ", proptools.NinjaAndShellEscape(*b.properties.Avb_algorithm))
+	}
+
+	if b.properties.Avb_private_key != nil {
+		key := android.PathForModuleSrc(ctx, proptools.String(b.properties.Avb_private_key))
+		cmd.FlagWithInput("--key ", key)
+	}
+
+	if !b.bootImageType.isVendorBoot() {
+		cmd.FlagWithArg("--prop ", proptools.NinjaAndShellEscape(fmt.Sprintf(
+			"com.android.build.%s.os_version:%s", b.bootImageType.String(), ctx.Config().PlatformVersionLastStable())))
+	}
+
+	fingerprintFile := ctx.Config().BuildFingerprintFile(ctx)
+	cmd.FlagWithArg("--prop ", fmt.Sprintf("com.android.build.%s.fingerprint:$(cat %s)", b.bootImageType.String(), fingerprintFile.String()))
+	cmd.OrderOnly(fingerprintFile)
+
+	if b.properties.Security_patch != nil {
+		cmd.FlagWithArg("--prop ", proptools.NinjaAndShellEscape(fmt.Sprintf(
+			"com.android.build.%s.security_patch:%s", b.bootImageType.String(), *b.properties.Security_patch)))
+	}
+
+	if b.properties.Avb_rollback_index != nil {
+		cmd.FlagWithArg("--rollback_index ", strconv.FormatInt(*b.properties.Avb_rollback_index, 10))
+	}
+
+	builder.Build("add_avb_footer", fmt.Sprintf("Adding avb footer to %s", b.BaseModuleName()))
 	return output
 }
 
