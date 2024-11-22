@@ -252,9 +252,6 @@ type ApexProperties struct {
 	// Default is ["//apex_available:platform"].
 	Apex_available []string
 
-	// See ApexModule.InAnyApex()
-	InAnyApex bool `blueprint:"mutated"`
-
 	// See ApexModule.NotAvailableForPlatform()
 	NotAvailableForPlatform bool `blueprint:"mutated"`
 
@@ -351,7 +348,12 @@ func (m *ApexModuleBase) BuildForApex(apex ApexInfo) {
 
 // Implements ApexModule
 func (m *ApexModuleBase) InAnyApex() bool {
-	return m.ApexProperties.InAnyApex
+	for _, apex_name := range m.ApexProperties.Apex_available {
+		if apex_name != AvailableToPlatform {
+			return true
+		}
+	}
+	return false
 }
 
 // Implements ApexModule
@@ -608,8 +610,6 @@ func MutateApexTransition(ctx BaseModuleContext, variation string) {
 	if !module.UniqueApexVariations() && !base.ApexProperties.UniqueApexVariationsForDeps {
 		apexInfos, _ = mergeApexVariations(apexInfos)
 	}
-
-	base.ApexProperties.InAnyApex = true
 
 	if platformVariation && !ctx.Host() && !module.AvailableFor(AvailableToPlatform) && module.NotAvailableForPlatform() {
 		// Do not install the module for platform, but still allow it to output
