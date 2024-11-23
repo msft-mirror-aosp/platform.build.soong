@@ -925,6 +925,7 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		TransitiveStaticLibsHeaderJars: a.transitiveStaticLibsHeaderJars,
 		ImplementationAndResourcesJars: android.PathsIfNonNil(a.classpathFile),
 		ImplementationJars:             android.PathsIfNonNil(a.classpathFile),
+		StubsLinkType:                  Implementation,
 	})
 
 	if proptools.Bool(a.properties.Extract_jni) {
