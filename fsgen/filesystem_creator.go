@@ -124,15 +124,17 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 	}
 
 	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
+	dtbImg := createDtbImgFilegroup(ctx)
+
 	if buildingBootImage(partitionVars) {
-		if createBootImage(ctx) {
+		if createBootImage(ctx, dtbImg) {
 			f.properties.Boot_image = ":" + generatedModuleNameForPartition(ctx.Config(), "boot")
 		} else {
 			f.properties.Unsupported_partition_types = append(f.properties.Unsupported_partition_types, "boot")
 		}
 	}
 	if buildingVendorBootImage(partitionVars) {
-		if createVendorBootImage(ctx) {
+		if createVendorBootImage(ctx, dtbImg) {
 			f.properties.Vendor_boot_image = ":" + generatedModuleNameForPartition(ctx.Config(), "vendor_boot")
 		} else {
 			f.properties.Unsupported_partition_types = append(f.properties.Unsupported_partition_types, "vendor_boot")
@@ -312,9 +314,11 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 		return false
 	}
 
-	if partitionType == "vendor" || partitionType == "product" {
+	if partitionType == "vendor" || partitionType == "product" || partitionType == "system" {
 		fsProps.Linker_config.Gen_linker_config = proptools.BoolPtr(true)
-		fsProps.Linker_config.Linker_config_srcs = f.createLinkerConfigSourceFilegroups(ctx, partitionType)
+		if partitionType != "system" {
+			fsProps.Linker_config.Linker_config_srcs = f.createLinkerConfigSourceFilegroups(ctx, partitionType)
+		}
 	}
 
 	if android.InList(partitionType, dlkmPartitions) {
