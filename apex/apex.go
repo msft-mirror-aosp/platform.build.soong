@@ -67,7 +67,6 @@ func RegisterPostDepsMutators(ctx android.RegisterMutatorsContext) {
 	// it should create a platform variant.
 	ctx.BottomUp("mark_platform_availability", markPlatformAvailability)
 	ctx.Transition("apex", &apexTransitionMutator{})
-	ctx.BottomUp("apex_directly_in_any", apexDirectlyInAnyMutator).MutatesDependencies()
 }
 
 type apexBundleProperties struct {
@@ -511,7 +510,7 @@ type apexBundle struct {
 
 	// Text file having the list of individual files that are included in this APEX. Used for
 	// debugging purpose.
-	installedFilesFile android.WritablePath
+	installedFilesFile android.Path
 
 	// List of module names that this APEX is including (to be shown via *-deps-info target).
 	// Used for debugging purpose.
@@ -993,25 +992,7 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		return true
 	}
 
-	// Records whether a certain module is included in this apexBundle via direct dependency or
-	// inndirect dependency.
-	contents := make(map[string]android.ApexMembership)
-	mctx.WalkDeps(func(child, parent android.Module) bool {
-		if !continueApexDepsWalk(child, parent) {
-			return false
-		}
-		// If the parent is apexBundle, this child is directly depended.
-		_, directDep := parent.(*apexBundle)
-		depName := mctx.OtherModuleName(child)
-		contents[depName] = contents[depName].Add(directDep)
-		return true
-	})
-
-	// The membership information is saved for later access
-	apexContents := android.NewApexContents(contents)
-	android.SetProvider(mctx, android.ApexBundleInfoProvider, android.ApexBundleInfo{
-		Contents: apexContents,
-	})
+	android.SetProvider(mctx, android.ApexBundleInfoProvider, android.ApexBundleInfo{})
 
 	minSdkVersion := a.minSdkVersion(mctx)
 	// When min_sdk_version is not set, the apex is built against FutureApiLevel.
@@ -1040,7 +1021,6 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		UsePlatformApis:   a.UsePlatformApis(),
 		InApexVariants:    []string{apexVariationName},
 		InApexModules:     []string{a.Name()}, // could be com.mycompany.android.foo
-		ApexContents:      []*android.ApexContents{apexContents},
 		TestApexes:        testApexes,
 		BaseApexName:      mctx.ModuleName(),
 		ApexAvailableName: proptools.String(a.properties.Apex_available_name),
@@ -1240,14 +1220,6 @@ func apexModuleTypeRequiresVariant(module ApexInfoMutator) bool {
 	}
 
 	return true
-}
-
-// See android.UpdateDirectlyInAnyApex
-// TODO(jiyong): move this to android/apex.go?
-func apexDirectlyInAnyMutator(mctx android.BottomUpMutatorContext) {
-	if am, ok := mctx.Module().(android.ApexModule); ok {
-		android.UpdateDirectlyInAnyApex(mctx, am)
-	}
 }
 
 const (
@@ -1752,7 +1724,8 @@ func (a *apexBundle) setSystemLibLink(ctx android.ModuleContext) {
 }
 
 func (a *apexBundle) setPayloadFsType(ctx android.ModuleContext) {
-	switch proptools.StringDefault(a.properties.Payload_fs_type, ext4FsType) {
+	defaultFsType := ctx.Config().DefaultApexPayloadType()
+	switch proptools.StringDefault(a.properties.Payload_fs_type, defaultFsType) {
 	case ext4FsType:
 		a.payloadFsType = ext4
 	case f2fsFsType:
@@ -2082,7 +2055,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 				//
 				// Skip the dependency in unbundled builds where the device image is not
 				// being built.
-				if ch.IsStubsImplementationRequired() && !am.DirectlyInAnyApex() && !ctx.Config().UnbundledBuild() {
+				if ch.IsStubsImplementationRequired() && !am.NotInPlatform() && !ctx.Config().UnbundledBuild() {
 					// we need a module name for Make
 					name := ch.ImplementationModuleNameForMake(ctx) + ch.Properties.SubName
 					if !android.InList(name, a.makeModulesToInstall) {
@@ -2179,8 +2152,6 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			ctx.PropertyErrorf("systemserverclasspath_fragments",
 				"systemserverclasspath_fragment content %q of type %q is not supported", depName, ctx.OtherModuleType(child))
 		}
-	} else if _, ok := depTag.(android.CopyDirectlyInAnyApexTag); ok {
-		// nothing
 	} else if depTag == android.DarwinUniversalVariantTag {
 		// nothing
 	} else if depTag == android.RequiredDepTag {

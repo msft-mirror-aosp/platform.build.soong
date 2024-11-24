@@ -578,7 +578,6 @@ func (j *Javadoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	rule.Build("javadoc", "javadoc")
 
-	ctx.SetOutputFiles(android.Paths{j.stubsSrcJar}, "")
 	ctx.SetOutputFiles(android.Paths{j.docZip}, ".docs.zip")
 }
 
