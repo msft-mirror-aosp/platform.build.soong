@@ -3345,17 +3345,17 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	return depPaths
 }
 
-func ShouldUseStubForApex(ctx android.ModuleContext, dep android.Module) bool {
+func ShouldUseStubForApex(ctx android.ModuleContext, parent, dep android.Module) bool {
 	inVendorOrProduct := false
 	bootstrap := false
-	if linkable, ok := ctx.Module().(LinkableInterface); !ok {
-		panic(fmt.Errorf("Not a Linkable module: %q", ctx.ModuleName()))
+	if linkable, ok := parent.(LinkableInterface); !ok {
+		ctx.ModuleErrorf("Not a Linkable module: %q", ctx.ModuleName())
 	} else {
 		inVendorOrProduct = linkable.InVendorOrProduct()
 		bootstrap = linkable.Bootstrap()
 	}
 
-	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
+	apexInfo, _ := android.OtherModuleProvider(ctx, parent, android.ApexInfoProvider)
 
 	useStubs := false
 
@@ -3402,7 +3402,7 @@ func ChooseStubOrImpl(ctx android.ModuleContext, dep android.Module) (SharedLibr
 
 	if !libDepTag.explicitlyVersioned && len(sharedLibraryStubsInfo.SharedStubLibraries) > 0 {
 		// when to use (unspecified) stubs, use the latest one.
-		if ShouldUseStubForApex(ctx, dep) {
+		if ShouldUseStubForApex(ctx, ctx.Module(), dep) {
 			stubs := sharedLibraryStubsInfo.SharedStubLibraries
 			toUse := stubs[len(stubs)-1]
 			sharedLibraryInfo = toUse.SharedLibraryInfo
