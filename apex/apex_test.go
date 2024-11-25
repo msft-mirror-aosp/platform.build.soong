@@ -7101,6 +7101,51 @@ func TestApexAvailable_PrefixMatch(t *testing.T) {
 	`)
 }
 
+func TestApexValidation_TestApexCanSkipInitRcCheck(t *testing.T) {
+	t.Parallel()
+	ctx := testApex(t, `
+		apex_test {
+			name: "myapex",
+			key: "myapex.key",
+			skip_validations: {
+				host_apex_verifier: true,
+			},
+			updatable: false,
+		}
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`)
+
+	validations := ctx.ModuleForTests("myapex", "android_common_myapex").Rule("signapk").Validations.Strings()
+	if android.SuffixInList(validations, "host_apex_verifier.timestamp") {
+		t.Error("should not run host_apex_verifier")
+	}
+}
+
+func TestApexValidation_TestApexCheckInitRc(t *testing.T) {
+	t.Parallel()
+	ctx := testApex(t, `
+		apex_test {
+			name: "myapex",
+			key: "myapex.key",
+			updatable: false,
+		}
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`)
+
+	validations := ctx.ModuleForTests("myapex", "android_common_myapex").Rule("signapk").Validations.Strings()
+	if !android.SuffixInList(validations, "host_apex_verifier.timestamp") {
+		t.Error("should run host_apex_verifier")
+	}
+}
+
 func TestOverrideApex(t *testing.T) {
 	t.Parallel()
 	ctx := testApex(t, `
