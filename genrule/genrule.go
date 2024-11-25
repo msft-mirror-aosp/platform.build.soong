@@ -115,7 +115,7 @@ func (t hostToolDependencyTag) AllowDisabledModuleDependency(target android.Modu
 func (t hostToolDependencyTag) AllowDisabledModuleDependencyProxy(
 	ctx android.OtherModuleProviderContext, target android.ModuleProxy) bool {
 	return android.OtherModuleProviderOrDefault(
-		ctx, target, android.CommonPropertiesProviderKey).ReplacedByPrebuilt
+		ctx, target, android.CommonModuleInfoKey).ReplacedByPrebuilt
 }
 
 var _ android.AllowDisabledModuleDependency = (*hostToolDependencyTag)(nil)
@@ -231,7 +231,7 @@ type generateTask struct {
 
 	// For nsjail tasks
 	useNsjail bool
-	dirSrcs   android.Paths
+	dirSrcs   android.DirectoryPaths
 }
 
 func (g *Module) GeneratedSourceFiles() android.Paths {
@@ -353,7 +353,7 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 				if h, ok := android.OtherModuleProvider(ctx, module, android.HostToolProviderKey); ok {
 					// A HostToolProvider provides the path to a tool, which will be copied
 					// into the sandbox.
-					if !android.OtherModuleProviderOrDefault(ctx, module, android.CommonPropertiesProviderKey).Enabled {
+					if !android.OtherModuleProviderOrDefault(ctx, module, android.CommonModuleInfoKey).Enabled {
 						if ctx.Config().AllowMissingDependencies() {
 							ctx.AddMissingDependencies([]string{tool})
 						} else {
@@ -604,7 +604,8 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 
 		if task.useNsjail {
 			for _, input := range task.dirSrcs {
-				cmd.Implicit(input)
+				cmd.ImplicitDirectory(input)
+				// TODO(b/375551969): remove glob
 				if paths, err := ctx.GlobWithDeps(filepath.Join(input.String(), "**/*"), nil); err == nil {
 					rule.NsjailImplicits(android.PathsForSource(ctx, paths))
 				} else {

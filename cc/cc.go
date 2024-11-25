@@ -19,8 +19,10 @@ package cc
 // is handled in builder.go
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -34,6 +36,29 @@ import (
 	"android/soong/fuzz"
 	"android/soong/genrule"
 )
+
+type CcMakeVarsInfo struct {
+	WarningsAllowed string
+	UsingWnoError   string
+	MissingProfile  string
+}
+
+var CcMakeVarsInfoProvider = blueprint.NewProvider[*CcMakeVarsInfo]()
+
+type CcObjectInfo struct {
+	objFiles   android.Paths
+	tidyFiles  android.Paths
+	kytheFiles android.Paths
+}
+
+var CcObjectInfoProvider = blueprint.NewProvider[CcObjectInfo]()
+
+type LinkableInfo struct {
+	// StaticExecutable returns true if this is a binary module with "static_executable: true".
+	StaticExecutable bool
+}
+
+var LinkableInfoKey = blueprint.NewProvider[LinkableInfo]()
 
 func init() {
 	RegisterCCBuildComponents(android.InitRegistrationContext)
@@ -213,6 +238,9 @@ type PathDeps struct {
 	// LLNDK headers for the ABI checker to check LLNDK implementation library.
 	LlndkIncludeDirs       android.Paths
 	LlndkSystemIncludeDirs android.Paths
+
+	directImplementationDeps     android.Paths
+	transitiveImplementationDeps []depset.DepSet[android.Path]
 }
 
 // LocalOrGlobalFlags contains flags that need to have values set globally by the build system or locally by the module
@@ -313,15 +341,14 @@ type BaseProperties struct {
 	// If true, always create an sdk variant and don't create a platform variant.
 	Sdk_variant_only *bool
 
-	AndroidMkSharedLibs       []string `blueprint:"mutated"`
-	AndroidMkStaticLibs       []string `blueprint:"mutated"`
-	AndroidMkRlibs            []string `blueprint:"mutated"`
-	AndroidMkRuntimeLibs      []string `blueprint:"mutated"`
-	AndroidMkWholeStaticLibs  []string `blueprint:"mutated"`
-	AndroidMkHeaderLibs       []string `blueprint:"mutated"`
-	HideFromMake              bool     `blueprint:"mutated"`
-	PreventInstall            bool     `blueprint:"mutated"`
-	ApexesProvidingSharedLibs []string `blueprint:"mutated"`
+	AndroidMkSharedLibs      []string `blueprint:"mutated"`
+	AndroidMkStaticLibs      []string `blueprint:"mutated"`
+	AndroidMkRlibs           []string `blueprint:"mutated"`
+	AndroidMkRuntimeLibs     []string `blueprint:"mutated"`
+	AndroidMkWholeStaticLibs []string `blueprint:"mutated"`
+	AndroidMkHeaderLibs      []string `blueprint:"mutated"`
+	HideFromMake             bool     `blueprint:"mutated"`
+	PreventInstall           bool     `blueprint:"mutated"`
 
 	// Set by DepsMutator.
 	AndroidMkSystemSharedLibs []string `blueprint:"mutated"`
@@ -388,11 +415,6 @@ type BaseProperties struct {
 	// Set when both SDK and platform variants are exported to Make to trigger renaming the SDK
 	// variant to have a ".sdk" suffix.
 	SdkAndPlatformVariantVisibleToMake bool `blueprint:"mutated"`
-
-	// List of APEXes that this module has private access to for testing purpose. The module
-	// can depend on libraries that are not exported by the APEXes and use private symbols
-	// from the exported libraries.
-	Test_for []string `android:"arch_variant"`
 
 	Target struct {
 		Platform struct {
@@ -525,12 +547,12 @@ type ModuleContextIntf interface {
 	apexSdkVersion() android.ApiLevel
 	bootstrap() bool
 	nativeCoverage() bool
-	directlyInAnyApex() bool
 	isPreventInstall() bool
 	isCfiAssemblySupportEnabled() bool
 	getSharedFlags() *SharedFlags
 	notInPlatform() bool
 	optimizeForSize() bool
+	getOrCreateMakeVarsInfo() *CcMakeVarsInfo
 }
 
 type SharedFlags struct {
@@ -637,10 +659,6 @@ type installer interface {
 	relativeInstallPath() string
 	makeUninstallable(mod *Module)
 	installInRoot() bool
-}
-
-type xref interface {
-	XrefCcFiles() android.Paths
 }
 
 type overridable interface {
@@ -845,9 +863,10 @@ type Module struct {
 	sourceProperties android.SourceProperties
 
 	// initialize before calling Init
-	hod        android.HostOrDeviceSupported
-	multilib   android.Multilib
-	testModule bool
+	hod         android.HostOrDeviceSupported
+	multilib    android.Multilib
+	testModule  bool
+	incremental bool
 
 	// Allowable SdkMemberTypes of this module type.
 	sdkMemberTypes []android.SdkMemberType
@@ -890,12 +909,6 @@ type Module struct {
 	staticAnalogue *StaticLibraryInfo
 
 	makeLinkType string
-	// Kythe (source file indexer) paths for this compilation module
-	kytheFiles android.Paths
-	// Object .o file output paths for this compilation module
-	objFiles android.Paths
-	// Tidy .tidy file output paths for this compilation module
-	tidyFiles android.Paths
 
 	// For apex variants, this is set as apex.min_sdk_version
 	apexSdkVersion android.ApiLevel
@@ -913,7 +926,15 @@ type Module struct {
 	hasSysprop      bool
 	hasWinMsg       bool
 	hasYacc         bool
+
+	makeVarsInfo *CcMakeVarsInfo
 }
+
+func (c *Module) IncrementalSupported() bool {
+	return c.incremental
+}
+
+var _ blueprint.Incremental = (*Module)(nil)
 
 func (c *Module) AddJSONData(d *map[string]interface{}) {
 	c.AndroidModuleBase().AddJSONData(d)
@@ -944,7 +965,6 @@ func (c *Module) AddJSONData(d *map[string]interface{}) {
 		"IsLlndk":                c.IsLlndk(),
 		"IsVendorPublicLibrary":  c.IsVendorPublicLibrary(),
 		"ApexSdkVersion":         c.apexSdkVersion,
-		"TestFor":                c.TestFor(),
 		"AidlSrcs":               c.hasAidl,
 		"LexSrcs":                c.hasLex,
 		"ProtoSrcs":              c.hasProto,
@@ -1455,10 +1475,6 @@ func InstallToBootstrap(name string, config android.Config) bool {
 	return isBionic(name)
 }
 
-func (c *Module) XrefCcFiles() android.Paths {
-	return c.kytheFiles
-}
-
 func (c *Module) isCfiAssemblySupportEnabled() bool {
 	return c.sanitize != nil &&
 		Bool(c.sanitize.Properties.Sanitize.Config.Cfi_assembly_support)
@@ -1549,12 +1565,11 @@ func (ctx *moduleContextImpl) minSdkVersion() string {
 	}
 
 	if ctx.ctx.Device() {
-		config := ctx.ctx.Config()
-		if ctx.inVendor() {
-			// If building for vendor with final API, then use the latest _stable_ API as "current".
-			if config.VendorApiLevelFrozen() && (ver == "" || ver == "current") {
-				ver = config.PlatformSdkVersion().String()
-			}
+		// When building for vendor/product, use the latest _stable_ API as "current".
+		// This is passed to clang/aidl compilers so that compiled/generated code works
+		// with the system.
+		if (ctx.inVendor() || ctx.inProduct()) && (ver == "" || ver == "current") {
+			ver = ctx.ctx.Config().PlatformSdkVersion().String()
 		}
 	}
 
@@ -1675,10 +1690,6 @@ func (ctx *moduleContextImpl) nativeCoverage() bool {
 	return ctx.mod.nativeCoverage()
 }
 
-func (ctx *moduleContextImpl) directlyInAnyApex() bool {
-	return ctx.mod.DirectlyInAnyApex()
-}
-
 func (ctx *moduleContextImpl) isPreventInstall() bool {
 	return ctx.mod.Properties.PreventInstall
 }
@@ -1698,6 +1709,13 @@ func (ctx *moduleContextImpl) isCfiAssemblySupportEnabled() bool {
 
 func (ctx *moduleContextImpl) notInPlatform() bool {
 	return ctx.mod.NotInPlatform()
+}
+
+func (ctx *moduleContextImpl) getOrCreateMakeVarsInfo() *CcMakeVarsInfo {
+	if ctx.mod.makeVarsInfo == nil {
+		ctx.mod.makeVarsInfo = &CcMakeVarsInfo{}
+	}
+	return ctx.mod.makeVarsInfo
 }
 
 func newBaseModule(hod android.HostOrDeviceSupported, multilib android.Multilib) *Module {
@@ -1861,7 +1879,7 @@ var (
 // Returns true if a stub library could be installed in multiple apexes
 func (c *Module) stubLibraryMultipleApexViolation(ctx android.ModuleContext) bool {
 	// If this is not an apex variant, no check necessary
-	if !c.InAnyApex() {
+	if info, ok := android.ModuleProvider(ctx, android.ApexInfoProvider); !ok || info.IsForPlatform() {
 		return false
 	}
 	// If this is not a stub library, no check necessary
@@ -2023,9 +2041,6 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		if ctx.Failed() {
 			return
 		}
-		c.kytheFiles = objs.kytheFiles
-		c.objFiles = objs.objFiles
-		c.tidyFiles = objs.tidyFiles
 	}
 
 	if c.linker != nil {
@@ -2036,6 +2051,10 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		c.outputFile = android.OptionalPathForPath(outputFile)
 
 		c.maybeUnhideFromMake()
+
+		android.SetProvider(ctx, ImplementationDepInfoProvider, &ImplementationDepInfo{
+			ImplementationDeps: depset.New(depset.PREORDER, deps.directImplementationDeps, deps.transitiveImplementationDeps),
+		})
 	}
 
 	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: deps.GeneratedSources.Strings()})
@@ -2090,7 +2109,32 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		c.hasYacc = b.hasSrcExt(ctx, ".y") || b.hasSrcExt(ctx, ".yy")
 	}
 
+	ccObjectInfo := CcObjectInfo{
+		kytheFiles: objs.kytheFiles,
+	}
+	if !ctx.Config().KatiEnabled() || !android.ShouldSkipAndroidMkProcessing(ctx, c) {
+		ccObjectInfo.objFiles = objs.objFiles
+		ccObjectInfo.tidyFiles = objs.tidyFiles
+	}
+	if len(ccObjectInfo.kytheFiles)+len(ccObjectInfo.objFiles)+len(ccObjectInfo.tidyFiles) > 0 {
+		android.SetProvider(ctx, CcObjectInfoProvider, ccObjectInfo)
+	}
+
+	android.SetProvider(ctx, LinkableInfoKey, LinkableInfo{
+		StaticExecutable: c.StaticExecutable(),
+	})
+
 	c.setOutputFiles(ctx)
+
+	if c.makeVarsInfo != nil {
+		android.SetProvider(ctx, CcMakeVarsInfoProvider, c.makeVarsInfo)
+	}
+}
+
+func setOutputFilesIfNotEmpty(ctx ModuleContext, files android.Paths, tag string) {
+	if len(files) > 0 {
+		ctx.SetOutputFiles(files, tag)
+	}
 }
 
 func (c *Module) setOutputFiles(ctx ModuleContext) {
@@ -2255,6 +2299,10 @@ func (c *Module) deps(ctx DepsContext) Deps {
 	deps.RuntimeLibs = android.LastUniqueStrings(deps.RuntimeLibs)
 	deps.LlndkHeaderLibs = android.LastUniqueStrings(deps.LlndkHeaderLibs)
 
+	if err := checkConflictingExplicitVersions(deps.SharedLibs); err != nil {
+		ctx.PropertyErrorf("shared_libs", "%s", err.Error())
+	}
+
 	for _, lib := range deps.ReexportSharedLibHeaders {
 		if !inList(lib, deps.SharedLibs) {
 			ctx.PropertyErrorf("export_shared_lib_headers", "Shared library not in shared_libs: '%s'", lib)
@@ -2280,6 +2328,26 @@ func (c *Module) deps(ctx DepsContext) Deps {
 	}
 
 	return deps
+}
+
+func checkConflictingExplicitVersions(libs []string) error {
+	withoutVersion := func(s string) string {
+		name, _ := StubsLibNameAndVersion(s)
+		return name
+	}
+	var errs []error
+	for i, lib := range libs {
+		libName := withoutVersion(lib)
+		libsToCompare := libs[i+1:]
+		j := slices.IndexFunc(libsToCompare, func(s string) bool {
+			return withoutVersion(s) == libName
+		})
+		if j >= 0 {
+			errs = append(errs, fmt.Errorf("duplicate shared libraries with different explicit versions: %q and %q",
+				lib, libsToCompare[j]))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (c *Module) beginMutator(actx android.BottomUpMutatorContext) {
@@ -2343,6 +2411,9 @@ func AddSharedLibDependenciesWithVersions(ctx android.BottomUpMutatorContext, mo
 
 	if version != "" && canBeOrLinkAgainstVersionVariants(mod) {
 		// Version is explicitly specified. i.e. libFoo#30
+		if version == "impl" {
+			version = ""
+		}
 		variations = append(variations, blueprint.Variation{Mutator: "version", Variation: version})
 		if tag, ok := depTag.(libraryDependencyTag); ok {
 			tag.explicitlyVersioned = true
@@ -3041,6 +3112,13 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				linkFile = android.OptionalPathForPath(sharedLibraryInfo.SharedLibrary)
 				depFile = sharedLibraryInfo.TableOfContents
 
+				if !sharedLibraryInfo.IsStubs {
+					depPaths.directImplementationDeps = append(depPaths.directImplementationDeps, android.OutputFileForModule(ctx, dep, ""))
+					if info, ok := android.OtherModuleProvider(ctx, dep, ImplementationDepInfoProvider); ok {
+						depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
+					}
+				}
+
 				ptr = &depPaths.SharedLibs
 				switch libDepTag.Order {
 				case earlyLibraryDependency:
@@ -3206,18 +3284,6 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				c.Properties.AndroidMkHeaderLibs = append(
 					c.Properties.AndroidMkHeaderLibs, makeLibName)
 			case libDepTag.shared():
-				if lib := moduleLibraryInterface(dep); lib != nil {
-					if lib.buildStubs() && dep.(android.ApexModule).InAnyApex() {
-						// Add the dependency to the APEX(es) providing the library so that
-						// m <module> can trigger building the APEXes as well.
-						depApexInfo, _ := android.OtherModuleProvider(ctx, dep, android.ApexInfoProvider)
-						for _, an := range depApexInfo.InApexVariants {
-							c.Properties.ApexesProvidingSharedLibs = append(
-								c.Properties.ApexesProvidingSharedLibs, an)
-						}
-					}
-				}
-
 				// Note: the order of libs in this list is not important because
 				// they merely serve as Make dependencies and do not affect this lib itself.
 				c.Properties.AndroidMkSharedLibs = append(
@@ -3280,12 +3346,6 @@ func (c *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 }
 
 func ShouldUseStubForApex(ctx android.ModuleContext, dep android.Module) bool {
-	depName := ctx.OtherModuleName(dep)
-	thisModule, ok := ctx.Module().(android.ApexModule)
-	if !ok {
-		panic(fmt.Errorf("Not an APEX module: %q", ctx.ModuleName()))
-	}
-
 	inVendorOrProduct := false
 	bootstrap := false
 	if linkable, ok := ctx.Module().(LinkableInterface); !ok {
@@ -3314,38 +3374,9 @@ func ShouldUseStubForApex(ctx android.ModuleContext, dep android.Module) bool {
 		isNotInPlatform := dep.(android.ApexModule).NotInPlatform()
 
 		useStubs = isNotInPlatform && !bootstrap
-
-		if useStubs {
-			// Another exception: if this module is a test for an APEX, then
-			// it is linked with the non-stub variant of a module in the APEX
-			// as if this is part of the APEX.
-			testFor, _ := android.ModuleProvider(ctx, android.ApexTestForInfoProvider)
-			for _, apexContents := range testFor.ApexContents {
-				if apexContents.DirectlyInApex(depName) {
-					useStubs = false
-					break
-				}
-			}
-		}
-		if useStubs {
-			// Yet another exception: If this module and the dependency are
-			// available to the same APEXes then skip stubs between their
-			// platform variants. This complements the test_for case above,
-			// which avoids the stubs on a direct APEX library dependency, by
-			// avoiding stubs for indirect test dependencies as well.
-			//
-			// TODO(b/183882457): This doesn't work if the two libraries have
-			// only partially overlapping apex_available. For that test_for
-			// modules would need to be split into APEX variants and resolved
-			// separately for each APEX they have access to.
-			if android.AvailableToSameApexes(thisModule, dep.(android.ApexModule)) {
-				useStubs = false
-			}
-		}
 	} else {
-		// If building for APEX, use stubs when the parent is in any APEX that
-		// the child is not in.
-		useStubs = !android.DirectlyInAllApexes(apexInfo, depName)
+		// If building for APEX, always use stubs (can be bypassed by depending on <dep>#impl)
+		useStubs = true
 	}
 
 	return useStubs
@@ -3642,10 +3673,6 @@ func (c *Module) AvailableFor(what string) bool {
 	}
 }
 
-func (c *Module) TestFor() []string {
-	return c.Properties.Test_for
-}
-
 func (c *Module) EverInstallable() bool {
 	return c.installer != nil &&
 		// Check to see whether the module is actually ever installable.
@@ -3929,9 +3956,10 @@ type kytheExtractAllSingleton struct {
 
 func (ks *kytheExtractAllSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 	var xrefTargets android.Paths
-	ctx.VisitAllModules(func(module android.Module) {
-		if ccModule, ok := module.(xref); ok {
-			xrefTargets = append(xrefTargets, ccModule.XrefCcFiles()...)
+	ctx.VisitAllModuleProxies(func(module android.ModuleProxy) {
+		files := android.OtherModuleProviderOrDefault(ctx, module, CcObjectInfoProvider).kytheFiles
+		if len(files) > 0 {
+			xrefTargets = append(xrefTargets, files...)
 		}
 	})
 	// TODO(asmundak): Perhaps emit a rule to output a warning if there were no xrefTargets

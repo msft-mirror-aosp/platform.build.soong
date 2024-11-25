@@ -88,7 +88,7 @@ type AndroidAppImport struct {
 
 	hideApexVariantFromMake bool
 
-	provenanceMetaDataFile android.OutputPath
+	provenanceMetaDataFile android.Path
 }
 
 type AndroidAppImportProperties struct {
@@ -97,7 +97,7 @@ type AndroidAppImportProperties struct {
 
 	// The name of a certificate in the default certificate directory or an android_app_certificate
 	// module name in the form ":module". Should be empty if presigned or default_dev_cert is set.
-	Certificate *string
+	Certificate proptools.Configurable[string] `android:"replace_instead_of_append"`
 
 	// Names of extra android_app_certificate modules to sign the apk with in the form ":module".
 	Additional_certificates []string
@@ -240,7 +240,7 @@ func disablePrebuiltsWithoutApkMutator(ctx android.BottomUpMutatorContext) {
 }
 
 func (a *AndroidAppImport) DepsMutator(ctx android.BottomUpMutatorContext) {
-	cert := android.SrcIsModule(String(a.properties.Certificate))
+	cert := android.SrcIsModule(a.properties.Certificate.GetOrDefault(ctx, ""))
 	if cert != "" {
 		ctx.AddDependency(ctx.Module(), certificateTag, cert)
 	}
@@ -259,7 +259,7 @@ func (a *AndroidAppImport) DepsMutator(ctx android.BottomUpMutatorContext) {
 }
 
 func (a *AndroidAppImport) uncompressEmbeddedJniLibs(
-	ctx android.ModuleContext, inputPath android.Path, outputPath android.OutputPath) {
+	ctx android.ModuleContext, inputPath android.Path, outputPath android.WritablePath) {
 	// Test apps don't need their JNI libraries stored uncompressed. As a matter of fact, messing
 	// with them may invalidate pre-existing signature data.
 	if ctx.InstallInTestcases() && (Bool(a.properties.Presigned) || Bool(a.properties.Preprocessed)) {
@@ -323,7 +323,7 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 	}
 
 	numCertPropsSet := 0
-	if String(a.properties.Certificate) != "" {
+	if a.properties.Certificate.GetOrDefault(ctx, "") != "" {
 		numCertPropsSet++
 	}
 	if Bool(a.properties.Presigned) {
@@ -345,7 +345,7 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 
 	// Uncompress JNI libraries in the apk
 	jnisUncompressed := android.PathForModuleOut(ctx, "jnis-uncompressed", ctx.ModuleName()+".apk")
-	a.uncompressEmbeddedJniLibs(ctx, srcApk, jnisUncompressed.OutputPath)
+	a.uncompressEmbeddedJniLibs(ctx, srcApk, jnisUncompressed)
 
 	var pathFragments []string
 	relInstallPath := String(a.properties.Relative_install_path)
@@ -406,7 +406,7 @@ func (a *AndroidAppImport) generateAndroidBuildActions(ctx android.ModuleContext
 		// If the certificate property is empty at this point, default_dev_cert must be set to true.
 		// Which makes processMainCert's behavior for the empty cert string WAI.
 		_, _, certificates := collectAppDeps(ctx, a, false, false)
-		a.certificate, certificates = processMainCert(a.ModuleBase, String(a.properties.Certificate), certificates, ctx)
+		a.certificate, certificates = processMainCert(a.ModuleBase, a.properties.Certificate.GetOrDefault(ctx, ""), certificates, ctx)
 		signed := android.PathForModuleOut(ctx, "signed", apkFilename)
 		var lineageFile android.Path
 		if lineage := String(a.properties.Lineage); lineage != "" {
@@ -493,7 +493,7 @@ func (a *AndroidAppImport) Certificate() Certificate {
 	return a.certificate
 }
 
-func (a *AndroidAppImport) ProvenanceMetaDataFile() android.OutputPath {
+func (a *AndroidAppImport) ProvenanceMetaDataFile() android.Path {
 	return a.provenanceMetaDataFile
 }
 
