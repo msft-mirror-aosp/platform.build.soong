@@ -9049,6 +9049,33 @@ func TestCompressedApex(t *testing.T) {
 	ensureContains(t, androidMk, "LOCAL_MODULE_STEM := myapex.capex\n")
 }
 
+func TestCompressedApexIsDisabledWhenUsingErofs(t *testing.T) {
+	t.Parallel()
+	ctx := testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			compressible: true,
+			updatable: false,
+			payload_fs_type: "erofs",
+		}
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`,
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.CompressedApex = proptools.BoolPtr(true)
+		}),
+	)
+
+	compressRule := ctx.ModuleForTests("myapex", "android_common_myapex").MaybeRule("compressRule")
+	if compressRule.Rule != nil {
+		t.Error("erofs apex should not be compressed")
+	}
+}
+
 func TestApexSet_ShouldRespectCompressedApexFlag(t *testing.T) {
 	t.Parallel()
 	for _, compressionEnabled := range []bool{true, false} {
