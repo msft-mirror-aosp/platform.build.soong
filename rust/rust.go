@@ -454,6 +454,9 @@ type PathDeps struct {
 	// Paths to generated source files
 	SrcDeps          android.Paths
 	srcProviderFiles android.Paths
+
+	directImplementationDeps     android.Paths
+	transitiveImplementationDeps []depset.DepSet[android.Path]
 }
 
 type RustLibraries []RustLibrary
@@ -991,8 +994,16 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 
 		}
 
+		android.SetProvider(ctx, cc.ImplementationDepInfoProvider, &cc.ImplementationDepInfo{
+			ImplementationDeps: depset.New(depset.PREORDER, deps.directImplementationDeps, deps.transitiveImplementationDeps),
+		})
+
 		ctx.Phony("rust", ctx.RustModule().OutputFile().Path())
 	}
+
+	android.SetProvider(ctx, cc.LinkableInfoKey, cc.LinkableInfo{
+		StaticExecutable: mod.StaticExecutable(),
+	})
 
 	mod.setOutputFiles(ctx)
 
@@ -1244,6 +1255,11 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				mod.Properties.AndroidMkDylibs = append(mod.Properties.AndroidMkDylibs, makeLibName)
 				mod.Properties.SnapshotDylibs = append(mod.Properties.SnapshotDylibs, cc.BaseLibName(depName))
 
+				depPaths.directImplementationDeps = append(depPaths.directImplementationDeps, android.OutputFileForModule(ctx, dep, ""))
+				if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
+					depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
+				}
+
 			case depTag == rlibDepTag:
 				rlib, ok := rustDep.compiler.(libraryInterface)
 				if !ok || !rlib.rlib() {
@@ -1258,6 +1274,11 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				exportedInfo, _ := android.OtherModuleProvider(ctx, dep, cc.FlagExporterInfoProvider)
 				depPaths.depIncludePaths = append(depPaths.depIncludePaths, exportedInfo.IncludeDirs...)
 				depPaths.exportedLinkDirs = append(depPaths.exportedLinkDirs, linkPathFromFilePath(rustDep.OutputFile().Path()))
+
+				// rlibs are not installed, so don't add the output file to directImplementationDeps
+				if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
+					depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
+				}
 
 			case depTag == procMacroDepTag:
 				directProcMacroDeps = append(directProcMacroDeps, rustDep)
@@ -1390,6 +1411,13 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				// of the dependency depending on the context (e.g. if this
 				// dependency crosses the APEX boundaries).
 				sharedLibraryInfo, exportedInfo := cc.ChooseStubOrImpl(ctx, dep)
+
+				if !sharedLibraryInfo.IsStubs {
+					depPaths.directImplementationDeps = append(depPaths.directImplementationDeps, android.OutputFileForModule(ctx, dep, ""))
+					if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
+						depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
+					}
+				}
 
 				// Re-get linkObject as ChooseStubOrImpl actually tells us which
 				// object (either from stub or non-stub) to use.
