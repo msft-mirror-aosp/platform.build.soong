@@ -1384,6 +1384,8 @@ func (m *ModuleBase) PartitionTag(config DeviceConfig) string {
 		}
 	} else if m.InstallInRamdisk() {
 		partition = "ramdisk"
+	} else if m.InstallInVendorRamdisk() {
+		partition = "vendor_ramdisk"
 	}
 	return partition
 }
