@@ -55,7 +55,7 @@ func init() {
 	AddNeverAllowRules(createJavaDeviceForHostRules()...)
 	AddNeverAllowRules(createCcSdkVariantRules()...)
 	AddNeverAllowRules(createUncompressDexRules()...)
-	AddNeverAllowRules(createInitFirstStageRules()...)
+	AddNeverAllowRules(createInstallInRootAllowingRules()...)
 	AddNeverAllowRules(createProhibitFrameworkAccessRules()...)
 	AddNeverAllowRules(createCcStubsRule())
 	AddNeverAllowRules(createProhibitHeaderOnlyRule())
@@ -235,15 +235,16 @@ func createUncompressDexRules() []Rule {
 	}
 }
 
-func createInitFirstStageRules() []Rule {
+func createInstallInRootAllowingRules() []Rule {
 	return []Rule{
 		NeverAllow().
 			Without("name", "init_first_stage_defaults").
 			Without("name", "init_first_stage").
 			Without("name", "init_first_stage.microdroid").
+			Without("name", "librecovery_ui_ext").
 			With("install_in_root", "true").
 			NotModuleType("prebuilt_root").
-			Because("install_in_root is only for init_first_stage."),
+			Because("install_in_root is only for init_first_stage or librecovery_ui_ext."),
 	}
 }
 
