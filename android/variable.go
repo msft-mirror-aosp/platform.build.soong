@@ -629,6 +629,8 @@ type PartitionVariables struct {
 	InitBootSecurityPatch           string   `json:",omitempty"`
 	BoardIncludeDtbInBootimg        bool     `json:",omitempty"`
 	InternalKernelCmdline           []string `json:",omitempty"`
+	InternalBootconfig              []string `json:",omitempty"`
+	InternalBootconfigFile          string   `json:",omitempty"`
 
 	// Avb (android verified boot) stuff
 	BoardAvbEnable          bool                                `json:",omitempty"`
