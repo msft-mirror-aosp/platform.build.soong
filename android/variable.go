@@ -660,6 +660,10 @@ type PartitionVariables struct {
 	BuildingOdmDlkmImage      bool     `json:",omitempty"`
 	OdmKernelModules          []string `json:",omitempty"`
 	OdmKernelBlocklistFile    string   `json:",omitempty"`
+
+	VendorRamdiskKernelModules       []string `json:",omitempty"`
+	VendorRamdiskKernelBlocklistFile string   `json:",omitempty"`
+	VendorRamdiskKernelLoadModules   []string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {

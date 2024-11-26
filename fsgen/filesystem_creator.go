@@ -321,7 +321,7 @@ func (f *filesystemCreator) createPartition(ctx android.LoadHookContext, partiti
 		}
 	}
 
-	if android.InList(partitionType, dlkmPartitions) {
+	if android.InList(partitionType, append(dlkmPartitions, "vendor_ramdisk")) {
 		f.createPrebuiltKernelModules(ctx, partitionType)
 	}
 
@@ -398,6 +398,7 @@ func (f *filesystemCreator) createPrebuiltKernelModules(ctx android.LoadHookCont
 		System_dlkm_specific *bool
 		Vendor_dlkm_specific *bool
 		Odm_dlkm_specific    *bool
+		Vendor_ramdisk       *bool
 		Load_by_default      *bool
 		Blocklist_file       *string
 	}{
@@ -428,6 +429,12 @@ func (f *filesystemCreator) createPrebuiltKernelModules(ctx android.LoadHookCont
 		props.Srcs = android.ExistentPathsForSources(ctx, ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.OdmKernelModules).Strings()
 		props.Odm_dlkm_specific = proptools.BoolPtr(true)
 		if blocklistFile := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.OdmKernelBlocklistFile; blocklistFile != "" {
+			props.Blocklist_file = proptools.StringPtr(blocklistFile)
+		}
+	case "vendor_ramdisk":
+		props.Srcs = android.ExistentPathsForSources(ctx, ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.VendorRamdiskKernelModules).Strings()
+		props.Vendor_ramdisk = proptools.BoolPtr(true)
+		if blocklistFile := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.VendorRamdiskKernelBlocklistFile; blocklistFile != "" {
 			props.Blocklist_file = proptools.StringPtr(blocklistFile)
 		}
 	default:
