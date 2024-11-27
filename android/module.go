@@ -1384,6 +1384,8 @@ func (m *ModuleBase) PartitionTag(config DeviceConfig) string {
 		}
 	} else if m.InstallInRamdisk() {
 		partition = "ramdisk"
+	} else if m.InstallInVendorRamdisk() {
+		partition = "vendor_ramdisk"
 	}
 	return partition
 }
@@ -2450,6 +2452,8 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 					return proptools.ConfigurableValueString(v)
 				case "bool":
 					return proptools.ConfigurableValueBool(v == "true")
+				case "string_list":
+					return proptools.ConfigurableValueStringList(strings.Split(v, " "))
 				default:
 					panic("unhandled soong config variable type: " + ty)
 				}

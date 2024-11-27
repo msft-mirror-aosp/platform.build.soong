@@ -80,6 +80,12 @@ type BootimgProperties struct {
 	// When set to true, sign the image with avbtool. Default is false.
 	Use_avb *bool
 
+	// This can either be "default", or "make_legacy". "make_legacy" will sign the boot image
+	// like how build/make/core/Makefile does, to get bit-for-bit backwards compatibility. But
+	// we may want to reconsider if it's necessary to have two modes in the future. The default
+	// is "default"
+	Avb_mode *string
+
 	// Name of the partition stored in vbmeta desc. Defaults to the name of this module.
 	Partition_name *string
 
@@ -89,6 +95,9 @@ type BootimgProperties struct {
 
 	// Hash and signing algorithm for avbtool. Default is SHA256_RSA4096.
 	Avb_algorithm *string
+
+	// The index used to prevent rollback of the image on device.
+	Avb_rollback_index *int64
 
 	// The security patch passed to as the com.android.build.<type>.security_patch avb property.
 	// Replacement for the make variables BOOT_SECURITY_PATCH / INIT_BOOT_SECURITY_PATCH.
@@ -197,16 +206,16 @@ func (b *bootimg) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	output := unsignedOutput
 	if proptools.Bool(b.properties.Use_avb) {
-		// This bootimg module supports 2 modes of avb signing, it picks between them based on
-		// if the private key is specified or not. If there is a key, it does a signing process
-		// similar to how the regular partitions (system, product, vendor, etc) are signed.
-		// If the key is not provided, it will just add an avb footer to the image. The avb
-		// footer only signing is how the make-built init_boot, boot, and vendor_boot images are
-		// built.
-		if proptools.String(b.properties.Avb_private_key) != "" {
+		// This bootimg module supports 2 modes of avb signing. It is not clear to this author
+		// why there are differences, but one of them is to match the behavior of make-built boot
+		// images.
+		switch proptools.StringDefault(b.properties.Avb_mode, "default") {
+		case "default":
 			output = b.signImage(ctx, unsignedOutput)
-		} else {
+		case "make_legacy":
 			output = b.addAvbFooter(ctx, unsignedOutput, kernel)
+		default:
+			ctx.PropertyErrorf("avb_mode", `Unknown value for avb_mode, expected "default" or "make_legacy", got: %q`, *b.properties.Avb_mode)
 		}
 	}
 
@@ -321,12 +330,29 @@ func (b *bootimg) addAvbFooter(ctx android.ModuleContext, unsignedImage android.
 		cmd.Flag("--dynamic_partition_size")
 	}
 
+	// If you don't provide a salt, avbtool will use random bytes for the salt.
+	// This is bad for determinism (cached builds and diff tests are affected), so instead,
+	// we try to provide a salt. The requirements for a salt are not very clear, one aspect of it
+	// is that if it's unpredictable, attackers trying to change the contents of a partition need
+	// to find a new hash collision every release, because the salt changed.
 	if kernel != nil {
 		cmd.Textf(`--salt $(sha256sum "%s" | cut -d " " -f 1)`, kernel.String())
 		cmd.Implicit(kernel)
+	} else {
+		cmd.Textf(`--salt $(sha256sum "%s" "%s" | cut -d " " -f 1 | tr -d '\n')`, ctx.Config().BuildNumberFile(ctx), ctx.Config().Getenv("BUILD_DATETIME_FILE"))
+		cmd.OrderOnly(ctx.Config().BuildNumberFile(ctx))
 	}
 
 	cmd.FlagWithArg("--partition_name ", b.bootImageType.String())
+
+	if b.properties.Avb_algorithm != nil {
+		cmd.FlagWithArg("--algorithm ", proptools.NinjaAndShellEscape(*b.properties.Avb_algorithm))
+	}
+
+	if b.properties.Avb_private_key != nil {
+		key := android.PathForModuleSrc(ctx, proptools.String(b.properties.Avb_private_key))
+		cmd.FlagWithInput("--key ", key)
+	}
 
 	if !b.bootImageType.isVendorBoot() {
 		cmd.FlagWithArg("--prop ", proptools.NinjaAndShellEscape(fmt.Sprintf(
@@ -334,12 +360,16 @@ func (b *bootimg) addAvbFooter(ctx android.ModuleContext, unsignedImage android.
 	}
 
 	fingerprintFile := ctx.Config().BuildFingerprintFile(ctx)
-	cmd.FlagWithArg("--prop ", fmt.Sprintf("com.android.build.%s.fingerprint:%s", b.bootImageType.String(), fingerprintFile.String()))
+	cmd.FlagWithArg("--prop ", fmt.Sprintf("com.android.build.%s.fingerprint:$(cat %s)", b.bootImageType.String(), fingerprintFile.String()))
 	cmd.OrderOnly(fingerprintFile)
 
 	if b.properties.Security_patch != nil {
 		cmd.FlagWithArg("--prop ", proptools.NinjaAndShellEscape(fmt.Sprintf(
 			"com.android.build.%s.security_patch:%s", b.bootImageType.String(), *b.properties.Security_patch)))
+	}
+
+	if b.properties.Avb_rollback_index != nil {
+		cmd.FlagWithArg("--rollback_index ", strconv.FormatInt(*b.properties.Avb_rollback_index, 10))
 	}
 
 	builder.Build("add_avb_footer", fmt.Sprintf("Adding avb footer to %s", b.BaseModuleName()))

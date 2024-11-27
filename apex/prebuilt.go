@@ -356,7 +356,6 @@ func (p *prebuiltCommon) apexInfoMutator(mctx android.TopDownMutatorContext) {
 	apexInfo := android.ApexInfo{
 		ApexVariationName: apexVariationName,
 		InApexVariants:    []string{apexVariationName},
-		InApexModules:     []string{p.BaseModuleName()}, // BaseModuleName() to avoid the prebuilt_ prefix.
 		ForPrebuiltApex:   true,
 	}
 

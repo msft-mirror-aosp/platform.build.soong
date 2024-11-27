@@ -428,7 +428,7 @@ func gatherRequiredDepsForTest() string {
 		"stub-annotations",
 
 		"aconfig-annotations-lib",
-		"aconfig_storage_reader_java",
+		"aconfig_storage_stub",
 		"unsupportedappusage",
 	}
 
