@@ -20,9 +20,9 @@ import (
 	"strings"
 
 	"android/soong/bloaty"
-	"android/soong/testing"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
@@ -179,7 +179,7 @@ type Module struct {
 	// For apex variants, this is set as apex.min_sdk_version
 	apexSdkVersion android.ApiLevel
 
-	transitiveAndroidMkSharedLibs *android.DepSet[string]
+	transitiveAndroidMkSharedLibs depset.DepSet[string]
 }
 
 func (mod *Module) Header() bool {
@@ -454,6 +454,9 @@ type PathDeps struct {
 	// Paths to generated source files
 	SrcDeps          android.Paths
 	srcProviderFiles android.Paths
+
+	directImplementationDeps     android.Paths
+	transitiveImplementationDeps []depset.DepSet[android.Path]
 }
 
 type RustLibraries []RustLibrary
@@ -974,6 +977,7 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 			// side dependencies. In particular, proc-macros need to be captured in the
 			// host snapshot.
 			mod.HideFromMake()
+			mod.SkipInstall()
 		} else if !mod.installable(apexInfo) {
 			mod.SkipInstall()
 		}
@@ -990,11 +994,16 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 
 		}
 
+		android.SetProvider(ctx, cc.ImplementationDepInfoProvider, &cc.ImplementationDepInfo{
+			ImplementationDeps: depset.New(depset.PREORDER, deps.directImplementationDeps, deps.transitiveImplementationDeps),
+		})
+
 		ctx.Phony("rust", ctx.RustModule().OutputFile().Path())
 	}
-	if mod.testModule {
-		android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
-	}
+
+	android.SetProvider(ctx, cc.LinkableInfoKey, cc.LinkableInfo{
+		StaticExecutable: mod.StaticExecutable(),
+	})
 
 	mod.setOutputFiles(ctx)
 
@@ -1217,7 +1226,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 	skipModuleList := map[string]bool{}
 
-	var transitiveAndroidMkSharedLibs []*android.DepSet[string]
+	var transitiveAndroidMkSharedLibs []depset.DepSet[string]
 	var directAndroidMkSharedLibs []string
 
 	ctx.VisitDirectDeps(func(dep android.Module) {
@@ -1246,6 +1255,11 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				mod.Properties.AndroidMkDylibs = append(mod.Properties.AndroidMkDylibs, makeLibName)
 				mod.Properties.SnapshotDylibs = append(mod.Properties.SnapshotDylibs, cc.BaseLibName(depName))
 
+				depPaths.directImplementationDeps = append(depPaths.directImplementationDeps, android.OutputFileForModule(ctx, dep, ""))
+				if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
+					depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
+				}
+
 			case depTag == rlibDepTag:
 				rlib, ok := rustDep.compiler.(libraryInterface)
 				if !ok || !rlib.rlib() {
@@ -1260,6 +1274,11 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				exportedInfo, _ := android.OtherModuleProvider(ctx, dep, cc.FlagExporterInfoProvider)
 				depPaths.depIncludePaths = append(depPaths.depIncludePaths, exportedInfo.IncludeDirs...)
 				depPaths.exportedLinkDirs = append(depPaths.exportedLinkDirs, linkPathFromFilePath(rustDep.OutputFile().Path()))
+
+				// rlibs are not installed, so don't add the output file to directImplementationDeps
+				if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
+					depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
+				}
 
 			case depTag == procMacroDepTag:
 				directProcMacroDeps = append(directProcMacroDeps, rustDep)
@@ -1393,6 +1412,13 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				// dependency crosses the APEX boundaries).
 				sharedLibraryInfo, exportedInfo := cc.ChooseStubOrImpl(ctx, dep)
 
+				if !sharedLibraryInfo.IsStubs {
+					depPaths.directImplementationDeps = append(depPaths.directImplementationDeps, android.OutputFileForModule(ctx, dep, ""))
+					if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
+						depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
+					}
+				}
+
 				// Re-get linkObject as ChooseStubOrImpl actually tells us which
 				// object (either from stub or non-stub) to use.
 				linkObject = android.OptionalPathForPath(sharedLibraryInfo.SharedLibrary)
@@ -1453,7 +1479,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		}
 	})
 
-	mod.transitiveAndroidMkSharedLibs = android.NewDepSet[string](android.PREORDER, directAndroidMkSharedLibs, transitiveAndroidMkSharedLibs)
+	mod.transitiveAndroidMkSharedLibs = depset.New[string](depset.PREORDER, directAndroidMkSharedLibs, transitiveAndroidMkSharedLibs)
 
 	var rlibDepFiles RustLibraries
 	aliases := mod.compiler.Aliases()

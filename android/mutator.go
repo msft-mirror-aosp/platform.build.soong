@@ -70,7 +70,7 @@ type RegisterMutatorsContext interface {
 	TopDown(name string, m TopDownMutator) MutatorHandle
 	BottomUp(name string, m BottomUpMutator) MutatorHandle
 	BottomUpBlueprint(name string, m blueprint.BottomUpMutator) MutatorHandle
-	Transition(name string, m TransitionMutator)
+	Transition(name string, m TransitionMutator) TransitionMutatorHandle
 }
 
 type RegisterMutatorFunc func(RegisterMutatorsContext)
@@ -151,6 +151,7 @@ var preArch = []RegisterMutatorFunc{
 
 func registerArchMutator(ctx RegisterMutatorsContext) {
 	ctx.Transition("os", &osTransitionMutator{})
+	ctx.BottomUp("image_begin", imageMutatorBeginMutator)
 	ctx.Transition("image", &imageTransitionMutator{})
 	ctx.Transition("arch", &archTransitionMutator{})
 }
@@ -339,6 +340,7 @@ func (x *registerMutatorsContext) BottomUpBlueprint(name string, m blueprint.Bot
 type IncomingTransitionContext interface {
 	ArchModuleContext
 	ModuleProviderContext
+	ModuleErrorContext
 
 	// Module returns the target of the dependency edge for which the transition
 	// is being computed
@@ -539,6 +541,14 @@ func (c *incomingTransitionContextImpl) provider(provider blueprint.AnyProviderK
 	return c.bp.Provider(provider)
 }
 
+func (c *incomingTransitionContextImpl) ModuleErrorf(fmt string, args ...interface{}) {
+	c.bp.ModuleErrorf(fmt, args)
+}
+
+func (c *incomingTransitionContextImpl) PropertyErrorf(property, fmt string, args ...interface{}) {
+	c.bp.PropertyErrorf(property, fmt, args)
+}
+
 func (a *androidTransitionMutator) IncomingTransition(bpctx blueprint.IncomingTransitionContext, incomingVariation string) string {
 	if m, ok := bpctx.Module().(Module); ok {
 		ctx := incomingTransitionContextPool.Get().(*incomingTransitionContextImpl)
@@ -569,7 +579,7 @@ func (a *androidTransitionMutator) Mutate(ctx blueprint.BottomUpMutatorContext, 
 	}
 }
 
-func (x *registerMutatorsContext) Transition(name string, m TransitionMutator) {
+func (x *registerMutatorsContext) Transition(name string, m TransitionMutator) TransitionMutatorHandle {
 	atm := &androidTransitionMutator{
 		finalPhase: x.finalPhase,
 		mutator:    m,
@@ -577,8 +587,10 @@ func (x *registerMutatorsContext) Transition(name string, m TransitionMutator) {
 	}
 	mutator := &mutator{
 		name:              name,
-		transitionMutator: atm}
+		transitionMutator: atm,
+	}
 	x.mutators = append(x.mutators, mutator)
+	return mutator
 }
 
 func (x *registerMutatorsContext) mutatorName(name string) string {
@@ -615,7 +627,10 @@ func (mutator *mutator) register(ctx *Context) {
 	} else if mutator.topDownMutator != nil {
 		handle = blueprintCtx.RegisterTopDownMutator(mutator.name, mutator.topDownMutator)
 	} else if mutator.transitionMutator != nil {
-		blueprintCtx.RegisterTransitionMutator(mutator.name, mutator.transitionMutator)
+		handle := blueprintCtx.RegisterTransitionMutator(mutator.name, mutator.transitionMutator)
+		if mutator.neverFar {
+			handle.NeverFar()
+		}
 	}
 
 	// Forward booleans set on the MutatorHandle to the blueprint.MutatorHandle.
@@ -671,6 +686,14 @@ type MutatorHandle interface {
 	MutatesGlobalState() MutatorHandle
 }
 
+type TransitionMutatorHandle interface {
+	// NeverFar causes the variations created by this mutator to never be ignored when adding
+	// far variation dependencies. Normally, far variation dependencies ignore all the variants
+	// of the source module, and only use the variants explicitly requested by the
+	// AddFarVariationDependencies call.
+	NeverFar() MutatorHandle
+}
+
 func (mutator *mutator) Parallel() MutatorHandle {
 	return mutator
 }
@@ -702,6 +725,11 @@ func (mutator *mutator) MutatesDependencies() MutatorHandle {
 
 func (mutator *mutator) MutatesGlobalState() MutatorHandle {
 	mutator.mutatesGlobalState = true
+	return mutator
+}
+
+func (mutator *mutator) NeverFar() MutatorHandle {
+	mutator.neverFar = true
 	return mutator
 }
 

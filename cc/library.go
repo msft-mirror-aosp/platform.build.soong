@@ -27,6 +27,7 @@ import (
 	"android/soong/android"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
 	"github.com/google/blueprint/pathtools"
 	"github.com/google/blueprint/proptools"
 )
@@ -565,16 +566,16 @@ func (library *libraryDecorator) getHeaderAbiCheckerProperties(m *Module) header
 
 func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps PathDeps) Objects {
 	if ctx.IsLlndk() {
-		vendorApiLevel := ctx.Config().VendorApiLevel()
-		if vendorApiLevel == "" {
-			// TODO(b/321892570): Some tests relying on old fixtures which
-			// doesn't set vendorApiLevel. Needs to fix them.
-			vendorApiLevel = ctx.Config().PlatformSdkVersion().String()
+		// Get the matching SDK version for the vendor API level.
+		version, err := android.GetSdkVersionForVendorApiLevel(ctx.Config().VendorApiLevel())
+		if err != nil {
+			panic(err)
 		}
+
 		// This is the vendor variant of an LLNDK library, build the LLNDK stubs.
 		nativeAbiResult := parseNativeAbiDefinition(ctx,
 			String(library.Properties.Llndk.Symbol_file),
-			android.ApiLevelOrPanic(ctx, vendorApiLevel), "--llndk")
+			nativeClampedApiLevel(ctx, version), "--llndk")
 		objs := compileStubLibrary(ctx, flags, nativeAbiResult.stubSrc)
 		if !Bool(library.Properties.Llndk.Unversioned) {
 			library.versionScriptPath = android.OptionalPathForPath(
@@ -661,7 +662,7 @@ func (library *libraryDecorator) compileModuleLibApiStubs(ctx ModuleContext, fla
 	// However, having this distinction helps guard accidental
 	// promotion or demotion of API and also helps the API review process b/191371676
 	var flag string
-	if ctx.Module().(android.ApexModule).NotInPlatform() {
+	if ctx.notInPlatform() {
 		flag = "--apex"
 	} else {
 		flag = "--systemapi"
@@ -745,6 +746,7 @@ type versionedInterface interface {
 	hasLLNDKStubs() bool
 	hasLLNDKHeaders() bool
 	hasVendorPublicLibrary() bool
+	isLLNDKMovedToApex() bool
 }
 
 var _ libraryInterface = (*libraryDecorator)(nil)
@@ -1017,7 +1019,7 @@ func (library *libraryDecorator) linkStatic(ctx ModuleContext,
 			Objects:                      library.objects,
 			WholeStaticLibsFromPrebuilts: library.wholeStaticLibsFromPrebuilts,
 
-			TransitiveStaticLibrariesForOrdering: android.NewDepSetBuilder[android.Path](android.TOPOLOGICAL).
+			TransitiveStaticLibrariesForOrdering: depset.NewBuilder[android.Path](depset.TOPOLOGICAL).
 				Direct(outputFile).
 				Transitive(deps.TranstiveStaticLibrariesForOrdering).
 				Build(),
@@ -1182,7 +1184,7 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 	library.coverageOutputFile = transformCoverageFilesToZip(ctx, objs, library.getLibName(ctx))
 	library.linkSAbiDumpFiles(ctx, deps, objs, fileName, unstrippedOutputFile)
 
-	var transitiveStaticLibrariesForOrdering *android.DepSet[android.Path]
+	var transitiveStaticLibrariesForOrdering depset.DepSet[android.Path]
 	if static := ctx.GetDirectDepsWithTag(staticVariantTag); len(static) > 0 {
 		s, _ := android.OtherModuleProvider(ctx, static[0], StaticLibraryInfoProvider)
 		transitiveStaticLibrariesForOrdering = s.TransitiveStaticLibrariesForOrdering
@@ -1193,6 +1195,7 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 		SharedLibrary:                        unstrippedOutputFile,
 		TransitiveStaticLibrariesForOrdering: transitiveStaticLibrariesForOrdering,
 		Target:                               ctx.Target(),
+		IsStubs:                              library.buildStubs(),
 	})
 
 	addStubDependencyProviders(ctx)
@@ -1288,15 +1291,14 @@ func (library *libraryDecorator) llndkIncludeDirsForAbiCheck(ctx ModuleContext, 
 func (library *libraryDecorator) linkLlndkSAbiDumpFiles(ctx ModuleContext,
 	deps PathDeps, sAbiDumpFiles android.Paths, soFile android.Path, libFileName string,
 	excludeSymbolVersions, excludeSymbolTags []string,
-	vendorApiLevel string) android.Path {
-	// NDK symbols in version 34 are LLNDK symbols. Those in version 35 are not.
+	sdkVersionForVendorApiLevel string) android.Path {
 	return transformDumpToLinkedDump(ctx,
 		sAbiDumpFiles, soFile, libFileName+".llndk",
 		library.llndkIncludeDirsForAbiCheck(ctx, deps),
 		android.OptionalPathForModuleSrc(ctx, library.Properties.Llndk.Symbol_file),
 		append([]string{"*_PLATFORM", "*_PRIVATE"}, excludeSymbolVersions...),
 		append([]string{"platform-only"}, excludeSymbolTags...),
-		[]string{"llndk=" + vendorApiLevel}, "34", true /* isLlndk */)
+		[]string{"llndk"}, sdkVersionForVendorApiLevel)
 }
 
 func (library *libraryDecorator) linkApexSAbiDumpFiles(ctx ModuleContext,
@@ -1309,7 +1311,7 @@ func (library *libraryDecorator) linkApexSAbiDumpFiles(ctx ModuleContext,
 		android.OptionalPathForModuleSrc(ctx, library.Properties.Stubs.Symbol_file),
 		append([]string{"*_PLATFORM", "*_PRIVATE"}, excludeSymbolVersions...),
 		append([]string{"platform-only"}, excludeSymbolTags...),
-		[]string{"apex", "systemapi"}, sdkVersion, false /* isLlndk */)
+		[]string{"apex", "systemapi"}, sdkVersion)
 }
 
 func getRefAbiDumpFile(ctx android.ModuleInstallPathContext,
@@ -1447,7 +1449,7 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, deps PathD
 			android.OptionalPathForModuleSrc(ctx, library.symbolFileForAbiCheck(ctx)),
 			headerAbiChecker.Exclude_symbol_versions,
 			headerAbiChecker.Exclude_symbol_tags,
-			[]string{} /* includeSymbolTags */, currSdkVersion, false /* isLlndk */)
+			[]string{} /* includeSymbolTags */, currSdkVersion)
 
 		var llndkDump, apexVariantDump android.Path
 		tags := classifySourceAbiDump(ctx.Module().(*Module))
@@ -1455,14 +1457,19 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, deps PathD
 		for _, tag := range tags {
 			if tag == llndkLsdumpTag && currVendorVersion != "" {
 				if llndkDump == nil {
+					sdkVersion, err := android.GetSdkVersionForVendorApiLevel(currVendorVersion)
+					if err != nil {
+						ctx.ModuleErrorf("Cannot create %s llndk dump: %s", fileName, err)
+						return
+					}
 					// TODO(b/323447559): Evaluate if replacing sAbiDumpFiles with implDump is faster
 					llndkDump = library.linkLlndkSAbiDumpFiles(ctx,
 						deps, objs.sAbiDumpFiles, soFile, fileName,
 						headerAbiChecker.Exclude_symbol_versions,
 						headerAbiChecker.Exclude_symbol_tags,
-						currVendorVersion)
+						nativeClampedApiLevel(ctx, sdkVersion).String())
 				}
-				addLsdumpPath(string(tag) + ":" + llndkDump.String())
+				addLsdumpPath(ctx.Config(), string(tag)+":"+llndkDump.String())
 			} else if tag == apexLsdumpTag {
 				if apexVariantDump == nil {
 					apexVariantDump = library.linkApexSAbiDumpFiles(ctx,
@@ -1471,12 +1478,12 @@ func (library *libraryDecorator) linkSAbiDumpFiles(ctx ModuleContext, deps PathD
 						headerAbiChecker.Exclude_symbol_tags,
 						currSdkVersion)
 				}
-				addLsdumpPath(string(tag) + ":" + apexVariantDump.String())
+				addLsdumpPath(ctx.Config(), string(tag)+":"+apexVariantDump.String())
 			} else {
 				if tag.dirName() == "" {
 					optInTags = append(optInTags, tag)
 				}
-				addLsdumpPath(string(tag) + ":" + implDump.String())
+				addLsdumpPath(ctx.Config(), string(tag)+":"+implDump.String())
 			}
 		}
 
@@ -1754,21 +1761,17 @@ func (library *libraryDecorator) installSymlinkToRuntimeApex(ctx ModuleContext, 
 
 func (library *libraryDecorator) install(ctx ModuleContext, file android.Path) {
 	if library.shared() {
-		if library.hasStubsVariants() && !ctx.Host() && ctx.directlyInAnyApex() {
+		translatedArch := ctx.Target().NativeBridge == android.NativeBridgeEnabled
+		if library.hasStubsVariants() && !ctx.Host() && !ctx.isSdkVariant() &&
+			InstallToBootstrap(ctx.baseModuleName(), ctx.Config()) && !library.buildStubs() &&
+			!translatedArch && !ctx.inRamdisk() && !ctx.inVendorRamdisk() && !ctx.inRecovery() {
 			// Bionic libraries (e.g. libc.so) is installed to the bootstrap subdirectory.
 			// The original path becomes a symlink to the corresponding file in the
 			// runtime APEX.
-			translatedArch := ctx.Target().NativeBridge == android.NativeBridgeEnabled
-			if InstallToBootstrap(ctx.baseModuleName(), ctx.Config()) && !library.buildStubs() &&
-				!translatedArch && !ctx.inRamdisk() && !ctx.inVendorRamdisk() && !ctx.inRecovery() {
-				if ctx.Device() {
-					library.installSymlinkToRuntimeApex(ctx, file)
-				}
-				library.baseInstaller.subDir = "bootstrap"
+			if ctx.Device() {
+				library.installSymlinkToRuntimeApex(ctx, file)
 			}
-		} else if ctx.directlyInAnyApex() && ctx.IsLlndk() && !isBionic(ctx.baseModuleName()) {
-			// Skip installing LLNDK (non-bionic) libraries moved to APEX.
-			ctx.Module().HideFromMake()
+			library.baseInstaller.subDir = "bootstrap"
 		}
 
 		library.baseInstaller.install(ctx, file)
@@ -1850,6 +1853,11 @@ func (library *libraryDecorator) hasLLNDKStubs() bool {
 // hasLLNDKStubs returns true if this cc_library module has a variant that will build LLNDK stubs.
 func (library *libraryDecorator) hasLLNDKHeaders() bool {
 	return Bool(library.Properties.Llndk.Llndk_headers)
+}
+
+// isLLNDKMovedToApex returns true if this cc_library module sets the llndk.moved_to_apex property.
+func (library *libraryDecorator) isLLNDKMovedToApex() bool {
+	return Bool(library.Properties.Llndk.Moved_to_apex)
 }
 
 // hasVendorPublicLibrary returns true if this cc_library module has a variant that will build

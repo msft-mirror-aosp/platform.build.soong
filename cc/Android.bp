@@ -7,6 +7,7 @@ bootstrap_go_package {
     pkgPath: "android/soong/cc",
     deps: [
         "blueprint",
+        "blueprint-depset",
         "blueprint-pathtools",
         "soong",
         "soong-aconfig",
@@ -16,7 +17,6 @@ bootstrap_go_package {
         "soong-etc",
         "soong-fuzz",
         "soong-genrule",
-        "soong-testing",
         "soong-tradefed",
     ],
     srcs: [
@@ -121,4 +121,32 @@ bootstrap_go_package {
     pluginFor: ["soong_build"],
     // Used by plugins
     visibility: ["//visibility:public"],
+}
+
+phony {
+    name: "llndk_libs",
+    required: [
+        "libEGL",
+        "libGLESv1_CM",
+        "libGLESv2",
+        "libGLESv3",
+        "libRS",
+        "libandroid_net",
+        "libapexsupport",
+        "libbinder_ndk",
+        "libc",
+        "libcgrouprc",
+        "libclang_rt.asan",
+        "libdl",
+        "libft2",
+        "liblog",
+        "libm",
+        "libmediandk",
+        "libnativewindow",
+        "libselinux",
+        "libsync",
+        "libvendorsupport",
+        "libvndksupport",
+        "libvulkan",
+    ],
 }

@@ -252,14 +252,11 @@ func (d *dexer) dexCommonFlags(ctx android.ModuleContext,
 	if err != nil {
 		ctx.PropertyErrorf("min_sdk_version", "%s", err)
 	}
-	if !Bool(d.dexProperties.No_dex_container) && effectiveVersion.FinalOrFutureInt() >= 36 {
+	if !Bool(d.dexProperties.No_dex_container) && effectiveVersion.FinalOrFutureInt() >= 36 && ctx.Config().UseDexV41() {
 		// W is 36, but we have not bumped the SDK version yet, so check for both.
 		if ctx.Config().PlatformSdkVersion().FinalInt() >= 36 ||
-			ctx.Config().PlatformSdkCodename() == "Wear" {
-			// TODO(b/329465418): Skip this module since it causes issue with app DRM
-			if ctx.ModuleName() != "framework-minus-apex" {
-				flags = append([]string{"-JDcom.android.tools.r8.dexContainerExperiment"}, flags...)
-			}
+			ctx.Config().PlatformSdkCodename() == "Baklava" {
+			flags = append([]string{"-JDcom.android.tools.r8.dexContainerExperiment"}, flags...)
 		}
 	}
 
@@ -295,7 +292,7 @@ func (d *dexer) d8Flags(ctx android.ModuleContext, dexParams *compileDexParams) 
 	return d8Flags, d8Deps, artProfileOutput
 }
 
-func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams) (r8Flags []string, r8Deps android.Paths, artProfileOutput *android.OutputPath) {
+func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams, debugMode bool) (r8Flags []string, r8Deps android.Paths, artProfileOutput *android.OutputPath) {
 	flags := dexParams.flags
 	opt := d.dexProperties.Optimize
 
@@ -324,20 +321,16 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams) 
 	r8Deps = append(r8Deps, flags.dexClasspath...)
 
 	transitiveStaticLibsLookupMap := map[android.Path]bool{}
-	if d.transitiveStaticLibsHeaderJarsForR8 != nil {
-		for _, jar := range d.transitiveStaticLibsHeaderJarsForR8.ToList() {
-			transitiveStaticLibsLookupMap[jar] = true
-		}
+	for _, jar := range d.transitiveStaticLibsHeaderJarsForR8.ToList() {
+		transitiveStaticLibsLookupMap[jar] = true
 	}
 	transitiveHeaderJars := android.Paths{}
-	if d.transitiveLibsHeaderJarsForR8 != nil {
-		for _, jar := range d.transitiveLibsHeaderJarsForR8.ToList() {
-			if _, ok := transitiveStaticLibsLookupMap[jar]; ok {
-				// don't include a lib if it is already packaged in the current JAR as a static lib
-				continue
-			}
-			transitiveHeaderJars = append(transitiveHeaderJars, jar)
+	for _, jar := range d.transitiveLibsHeaderJarsForR8.ToList() {
+		if _, ok := transitiveStaticLibsLookupMap[jar]; ok {
+			// don't include a lib if it is already packaged in the current JAR as a static lib
+			continue
 		}
+		transitiveHeaderJars = append(transitiveHeaderJars, jar)
 	}
 	transitiveClasspath := classpath(transitiveHeaderJars)
 	r8Flags = append(r8Flags, transitiveClasspath.FormJavaClassPath("-libraryjars"))
@@ -367,7 +360,9 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams) 
 		r8Flags = append(r8Flags, "--force-proguard-compatibility")
 	}
 
-	if Bool(opt.Optimize) || Bool(opt.Obfuscate) {
+	// Avoid unnecessary stack frame noise by only injecting source map ids for non-debug
+	// optimized or obfuscated targets.
+	if (Bool(opt.Optimize) || Bool(opt.Obfuscate)) && !debugMode {
 		// TODO(b/213833843): Allow configuration of the prefix via a build variable.
 		var sourceFilePrefix = "go/retraceme "
 		var sourceFileTemplate = "\"" + sourceFilePrefix + "%MAP_ID\""
@@ -432,17 +427,18 @@ type compileDexParams struct {
 // Adds --art-profile to r8/d8 command.
 // r8/d8 will output a generated profile file to match the optimized dex code.
 func (d *dexer) addArtProfile(ctx android.ModuleContext, dexParams *compileDexParams) (flags []string, deps android.Paths, artProfileOutputPath *android.OutputPath) {
-	if dexParams.artProfileInput != nil {
-		artProfileInputPath := android.PathForModuleSrc(ctx, *dexParams.artProfileInput)
-		artProfileOutputPathValue := android.PathForModuleOut(ctx, "profile.prof.txt").OutputPath
-		artProfileOutputPath = &artProfileOutputPathValue
-		flags = []string{
-			"--art-profile",
-			artProfileInputPath.String(),
-			artProfileOutputPath.String(),
-		}
-		deps = append(deps, artProfileInputPath)
+	if dexParams.artProfileInput == nil {
+		return nil, nil, nil
 	}
+	artProfileInputPath := android.PathForModuleSrc(ctx, *dexParams.artProfileInput)
+	artProfileOutputPathValue := android.PathForModuleOut(ctx, "profile.prof.txt").OutputPath
+	artProfileOutputPath = &artProfileOutputPathValue
+	flags = []string{
+		"--art-profile",
+		artProfileInputPath.String(),
+		artProfileOutputPath.String(),
+	}
+	deps = append(deps, artProfileInputPath)
 	return flags, deps, artProfileOutputPath
 
 }
@@ -486,7 +482,8 @@ func (d *dexer) compileDex(ctx android.ModuleContext, dexParams *compileDexParam
 			proguardUsageZip,
 			proguardConfiguration,
 		}
-		r8Flags, r8Deps, r8ArtProfileOutputPath := d.r8Flags(ctx, dexParams)
+		debugMode := android.InList("--debug", commonFlags)
+		r8Flags, r8Deps, r8ArtProfileOutputPath := d.r8Flags(ctx, dexParams, debugMode)
 		rule := r8
 		args := map[string]string{
 			"r8Flags":        strings.Join(append(commonFlags, r8Flags...), " "),

@@ -285,6 +285,10 @@ func (c Config) ReleaseCreateAconfigStorageFile() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_CREATE_ACONFIG_STORAGE_FILE")
 }
 
+func (c Config) ReleaseUseSystemFeatureBuildFlags() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_USE_SYSTEM_FEATURE_BUILD_FLAGS")
+}
+
 // A DeviceConfig object represents the configuration for a particular device
 // being built. For now there will only be one of these, but in the future there
 // may be multiple devices being built.
@@ -413,18 +417,21 @@ type jsonConfigurable interface {
 // To add a new feature to the list, add the field in the struct
 // `partialCompileFlags` above, and then add the name of the field in the
 // switch statement below.
-func (c *config) parsePartialCompileFlags() (partialCompileFlags, error) {
-	defaultFlags := partialCompileFlags{
-		// Set any opt-out flags here.  Opt-in flags are off by default.
-		enabled: false,
+var defaultPartialCompileFlags = partialCompileFlags{
+	// Set any opt-out flags here.  Opt-in flags are off by default.
+	enabled: false,
+}
+
+func (c *config) parsePartialCompileFlags(isEngBuild bool) (partialCompileFlags, error) {
+	if !isEngBuild {
+		return partialCompileFlags{}, nil
 	}
 	value := c.Getenv("SOONG_PARTIAL_COMPILE")
-
 	if value == "" {
-		return defaultFlags, nil
+		return defaultPartialCompileFlags, nil
 	}
 
-	ret := defaultFlags
+	ret := defaultPartialCompileFlags
 	tokens := strings.Split(strings.ToLower(value), ",")
 	makeVal := func(state string, defaultValue bool) bool {
 		switch state {
@@ -455,17 +462,17 @@ func (c *config) parsePartialCompileFlags() (partialCompileFlags, error) {
 		}
 		switch tok {
 		case "true":
-			ret = defaultFlags
+			ret = defaultPartialCompileFlags
 			ret.enabled = true
 		case "false":
 			// Set everything to false.
 			ret = partialCompileFlags{}
 		case "enabled":
-			ret.enabled = makeVal(state, defaultFlags.enabled)
+			ret.enabled = makeVal(state, defaultPartialCompileFlags.enabled)
 		case "use_d8":
-			ret.use_d8 = makeVal(state, defaultFlags.use_d8)
+			ret.use_d8 = makeVal(state, defaultPartialCompileFlags.use_d8)
 		default:
-			return partialCompileFlags{}, fmt.Errorf("Unknown SOONG_PARTIAL_COMPILE value: %v", value)
+			return partialCompileFlags{}, fmt.Errorf("Unknown SOONG_PARTIAL_COMPILE value: %v", tok)
 		}
 	}
 	return ret, nil
@@ -616,6 +623,8 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 
 		buildFromSourceStub: cmdArgs.BuildFromSourceStub,
 	}
+	variant, ok := os.LookupEnv("TARGET_BUILD_VARIANT")
+	isEngBuild := !ok || variant == "eng"
 
 	config.deviceConfig = &deviceConfig{
 		config: config,
@@ -657,7 +666,7 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		return Config{}, err
 	}
 
-	config.partialCompileFlags, err = config.parsePartialCompileFlags()
+	config.partialCompileFlags, err = config.parsePartialCompileFlags(isEngBuild)
 	if err != nil {
 		return Config{}, err
 	}
@@ -862,7 +871,7 @@ func (c *config) IsEnvFalse(key string) bool {
 }
 
 func (c *config) TargetsJava21() bool {
-	return c.IsEnvTrue("EXPERIMENTAL_TARGET_JAVA_VERSION_21")
+	return c.productVariables.GetBuildFlagBool("RELEASE_TARGET_JAVA_21")
 }
 
 // EnvDeps returns the environment variables this build depends on. The first
@@ -1517,6 +1526,13 @@ func (c *deviceConfig) VendorPath() string {
 	return "vendor"
 }
 
+func (c *deviceConfig) VendorDlkmPath() string {
+	if c.config.productVariables.VendorDlkmPath != nil {
+		return *c.config.productVariables.VendorDlkmPath
+	}
+	return "vendor_dlkm"
+}
+
 func (c *deviceConfig) BuildingVendorImage() bool {
 	return proptools.Bool(c.config.productVariables.BuildingVendorImage)
 }
@@ -1544,6 +1560,17 @@ func (c *deviceConfig) OdmPath() string {
 	return "odm"
 }
 
+func (c *deviceConfig) BuildingOdmImage() bool {
+	return proptools.Bool(c.config.productVariables.BuildingOdmImage)
+}
+
+func (c *deviceConfig) OdmDlkmPath() string {
+	if c.config.productVariables.OdmDlkmPath != nil {
+		return *c.config.productVariables.OdmDlkmPath
+	}
+	return "odm_dlkm"
+}
+
 func (c *deviceConfig) ProductPath() string {
 	if c.config.productVariables.ProductPath != nil {
 		return *c.config.productVariables.ProductPath
@@ -1560,6 +1587,31 @@ func (c *deviceConfig) SystemExtPath() string {
 		return *c.config.productVariables.SystemExtPath
 	}
 	return "system_ext"
+}
+
+func (c *deviceConfig) SystemDlkmPath() string {
+	if c.config.productVariables.SystemDlkmPath != nil {
+		return *c.config.productVariables.SystemDlkmPath
+	}
+	return "system_dlkm"
+}
+
+func (c *deviceConfig) OemPath() string {
+	if c.config.productVariables.OemPath != nil {
+		return *c.config.productVariables.OemPath
+	}
+	return "oem"
+}
+
+func (c *deviceConfig) UserdataPath() string {
+	if c.config.productVariables.UserdataPath != nil {
+		return *c.config.productVariables.UserdataPath
+	}
+	return "data"
+}
+
+func (c *deviceConfig) BuildingUserdataImage() bool {
+	return proptools.Bool(c.config.productVariables.BuildingUserdataImage)
 }
 
 func (c *deviceConfig) BtConfigIncludeDir() string {
@@ -1786,8 +1838,8 @@ func (c *config) ApexCompressionEnabled() bool {
 	return Bool(c.productVariables.CompressedApex) && !c.UnbundledBuildApps()
 }
 
-func (c *config) ApexTrimEnabled() bool {
-	return Bool(c.productVariables.TrimmedApex)
+func (c *config) DefaultApexPayloadType() string {
+	return StringDefault(c.productVariables.DefaultApexPayloadType, "ext4")
 }
 
 func (c *config) UseSoongSystemImage() bool {
@@ -2096,6 +2148,10 @@ func (c *config) UseTransitiveJarsInClasspath() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_USE_TRANSITIVE_JARS_IN_CLASSPATH")
 }
 
+func (c *config) UseDexV41() bool {
+	return c.productVariables.GetBuildFlagBool("RELEASE_USE_DEX_V41")
+}
+
 var (
 	mainlineApexContributionBuildFlagsToApexNames = map[string]string{
 		"RELEASE_APEX_CONTRIBUTIONS_ADBD":                    "com.android.adbd",
@@ -2195,6 +2251,10 @@ func (c *config) OdmPropFiles(ctx PathContext) Paths {
 	return PathsForSource(ctx, c.productVariables.OdmPropFiles)
 }
 
+func (c *config) VendorPropFiles(ctx PathContext) Paths {
+	return PathsForSource(ctx, c.productVariables.VendorPropFiles)
+}
+
 func (c *config) ExtraAllowedDepsTxt() string {
 	return String(c.productVariables.ExtraAllowedDepsTxt)
 }
@@ -2224,4 +2284,28 @@ func (c *config) BoardAvbSystemAddHashtreeFooterArgs() []string {
 // If false, all these files will be installed in /system partition.
 func (c Config) InstallApexSystemServerDexpreoptSamePartition() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_INSTALL_APEX_SYSTEMSERVER_DEXPREOPT_SAME_PARTITION")
+}
+
+func (c *config) DeviceMatrixFile() []string {
+	return c.productVariables.DeviceMatrixFile
+}
+
+func (c *config) ProductManifestFiles() []string {
+	return c.productVariables.ProductManifestFiles
+}
+
+func (c *config) SystemManifestFile() []string {
+	return c.productVariables.SystemManifestFile
+}
+
+func (c *config) SystemExtManifestFiles() []string {
+	return c.productVariables.SystemExtManifestFiles
+}
+
+func (c *config) DeviceManifestFiles() []string {
+	return c.productVariables.DeviceManifestFiles
+}
+
+func (c *config) OdmManifestFiles() []string {
+	return c.productVariables.OdmManifestFiles
 }

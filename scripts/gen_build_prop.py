@@ -113,6 +113,7 @@ def generate_common_build_props(args):
   print("####################################")
 
   config = args.config
+  build_flags = config["BuildFlags"]
   partition = args.partition
 
   if partition == "system":
@@ -164,6 +165,7 @@ def generate_common_build_props(args):
   print(f"ro.{partition}.build.version.release={config['Platform_version_last_stable']}")
   print(f"ro.{partition}.build.version.release_or_codename={config['Platform_version_name']}")
   print(f"ro.{partition}.build.version.sdk={config['Platform_sdk_version']}")
+  print(f"ro.{partition}.build.version.sdk_minor={build_flags['RELEASE_PLATFORM_SDK_MINOR_VERSION']}")
 
 def generate_build_info(args):
   print()
@@ -430,7 +432,9 @@ def append_additional_vendor_props(args):
   # Build system set BOARD_API_LEVEL to show the api level of the vendor API surface.
   # This must not be altered outside of build system.
   if config["VendorApiLevel"]:
-    props.append(f"ro.board.api_level={config['VendorApiLevel']}")
+    props.append(f"ro.board.api_level?={config['VendorApiLevel']}")
+    if config["VendorApiLevelPropOverride"]:
+      props.append(f"ro.board.api_level={config['VendorApiLevelPropOverride']}")
 
   # RELEASE_BOARD_API_LEVEL_FROZEN is true when the vendor API surface is frozen.
   if build_flags["RELEASE_BOARD_API_LEVEL_FROZEN"]:
@@ -523,7 +527,6 @@ def build_system_ext_prop(args):
 
   build_prop(args, gen_build_info=False, gen_common_build_props=True, variables=variables)
 
-'''
 def build_vendor_prop(args):
   config = args.config
 
@@ -540,7 +543,6 @@ def build_vendor_prop(args):
     ]
 
   build_prop(args, gen_build_info=False, gen_common_build_props=True, variables=variables)
-'''
 
 def build_product_prop(args):
   config = args.config
@@ -607,8 +609,10 @@ def main():
         build_odm_prop(args)
       case "product":
         build_product_prop(args)
-      # case "vendor":  # NOT IMPLEMENTED
-      #  build_vendor_prop(args)
+      case "vendor":
+        build_vendor_prop(args)
+      case "system_dlkm" | "vendor_dlkm" | "odm_dlkm" | "bootimage":
+        build_prop(args, gen_build_info=False, gen_common_build_props=True, variables=[])
       case _:
         sys.exit(f"not supported partition {args.partition}")
 

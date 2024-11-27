@@ -252,7 +252,7 @@ func (b *bindgenDecorator) GenerateSource(ctx ModuleContext, deps PathDeps) andr
 
 	// Module defined clang flags and include paths
 	cflags = append(cflags, esc(cflagsProp)...)
-	for _, include := range b.ClangProperties.Local_include_dirs {
+	for _, include := range b.ClangProperties.Local_include_dirs.GetOrDefault(ctx, nil) {
 		cflags = append(cflags, "-I"+android.PathForModuleSrc(ctx, include).String())
 		implicits = append(implicits, android.PathForModuleSrc(ctx, include))
 	}
@@ -299,6 +299,11 @@ func (b *bindgenDecorator) GenerateSource(ctx ModuleContext, deps PathDeps) andr
 	// The Clang version used by CXX can be newer than the one used by Bindgen, and uses warning related flags that
 	// it cannot recognize. Turn off unknown warning flags warning.
 	cflags = append(cflags, "-Wno-unknown-warning-option")
+
+	// Suppress warnings while testing a new compiler.
+	if ctx.Config().IsEnvTrue("LLVM_NEXT") {
+		cflags = append(cflags, "-Wno-everything")
+	}
 
 	outputFile := android.PathForModuleOut(ctx, b.BaseSourceProvider.getStem(ctx)+".rs")
 
