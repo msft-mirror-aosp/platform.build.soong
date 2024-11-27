@@ -607,9 +607,6 @@ func newApexFile(ctx android.BaseModuleContext, builtFile android.Path, androidM
 		}
 		ret.moduleDir = ctx.OtherModuleDir(module)
 		ret.partition = module.PartitionTag(ctx.DeviceConfig())
-		ret.requiredModuleNames = module.RequiredModuleNames(ctx)
-		ret.targetRequiredModuleNames = module.TargetRequiredModuleNames()
-		ret.hostRequiredModuleNames = module.HostRequiredModuleNames()
 		ret.multilib = module.Target().Arch.ArchType.Multilib
 	}
 	return ret
