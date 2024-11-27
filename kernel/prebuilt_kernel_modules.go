@@ -100,6 +100,13 @@ func (pkm *prebuiltKernelModules) GenerateAndroidBuildActions(ctx android.Module
 	strippedModules := stripDebugSymbols(ctx, modules)
 
 	installDir := android.PathForModuleInstall(ctx, "lib", "modules")
+	// Kernel module is installed to vendor_ramdisk/lib/modules regardless of product
+	// configuration. This matches the behavior in make and prevents the files from being
+	// installed in `vendor_ramdisk/first_stage_ramdisk`.
+	if pkm.InstallInVendorRamdisk() {
+		installDir = android.PathForModuleInPartitionInstall(ctx, "vendor_ramdisk", "lib", "modules")
+	}
+
 	if pkm.KernelVersion() != "" {
 		installDir = installDir.Join(ctx, pkm.KernelVersion())
 	}
