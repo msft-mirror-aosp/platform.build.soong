@@ -238,6 +238,7 @@ var (
 	// opting into the warning.
 	noOverrideGlobalCflags = []string{
 		"-Werror=bool-operation",
+		"-Werror=dangling",
 		"-Werror=format-insufficient-args",
 		"-Werror=implicit-int-float-conversion",
 		"-Werror=int-in-bool-context",
