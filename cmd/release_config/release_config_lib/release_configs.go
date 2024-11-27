@@ -449,8 +449,10 @@ func (configs *ReleaseConfigs) getReleaseConfig(name string, allow_missing bool)
 func (configs *ReleaseConfigs) GetAllReleaseNames() []string {
 	var allReleaseNames []string
 	for _, v := range configs.ReleaseConfigs {
-		allReleaseNames = append(allReleaseNames, v.Name)
-		allReleaseNames = append(allReleaseNames, v.OtherNames...)
+		if v.isConfigListable() {
+			allReleaseNames = append(allReleaseNames, v.Name)
+			allReleaseNames = append(allReleaseNames, v.OtherNames...)
+		}
 	}
 	slices.Sort(allReleaseNames)
 	return allReleaseNames
