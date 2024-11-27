@@ -664,6 +664,7 @@ type PartitionVariables struct {
 	VendorRamdiskKernelModules       []string `json:",omitempty"`
 	VendorRamdiskKernelBlocklistFile string   `json:",omitempty"`
 	VendorRamdiskKernelLoadModules   []string `json:",omitempty"`
+	VendorRamdiskKernelOptionsFile   string   `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
