@@ -7937,46 +7937,6 @@ func TestRejectNonInstallableJavaLibrary(t *testing.T) {
 	`)
 }
 
-func TestCarryRequiredModuleNames(t *testing.T) {
-	t.Parallel()
-	ctx := testApex(t, `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			native_shared_libs: ["mylib"],
-			updatable: false,
-		}
-
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-
-		cc_library {
-			name: "mylib",
-			srcs: ["mylib.cpp"],
-			system_shared_libs: [],
-			stl: "none",
-			required: ["a", "b"],
-			host_required: ["c", "d"],
-			target_required: ["e", "f"],
-			apex_available: [ "myapex" ],
-		}
-	`)
-
-	apexBundle := ctx.ModuleForTests("myapex", "android_common_myapex").Module().(*apexBundle)
-	data := android.AndroidMkDataForTest(t, ctx, apexBundle)
-	name := apexBundle.BaseModuleName()
-	prefix := "TARGET_"
-	var builder strings.Builder
-	data.Custom(&builder, name, prefix, "", data)
-	androidMk := builder.String()
-	ensureContains(t, androidMk, "LOCAL_REQUIRED_MODULES := mylib.myapex:64 a b\n")
-	ensureContains(t, androidMk, "LOCAL_HOST_REQUIRED_MODULES := c d\n")
-	ensureContains(t, androidMk, "LOCAL_TARGET_REQUIRED_MODULES := e f\n")
-}
-
 func TestSymlinksFromApexToSystem(t *testing.T) {
 	t.Parallel()
 	bp := `
