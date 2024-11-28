@@ -117,6 +117,7 @@ type Module interface {
 	HostRequiredModuleNames() []string
 	TargetRequiredModuleNames() []string
 	VintfFragmentModuleNames(ctx ConfigurableEvaluatorContext) []string
+	VintfFragments(ctx ConfigurableEvaluatorContext) []string
 
 	ConfigurableEvaluator(ctx ConfigurableEvaluatorContext) proptools.ConfigurableEvaluator
 
@@ -1626,6 +1627,10 @@ func (m *ModuleBase) TargetRequiredModuleNames() []string {
 
 func (m *ModuleBase) VintfFragmentModuleNames(ctx ConfigurableEvaluatorContext) []string {
 	return m.base().commonProperties.Vintf_fragment_modules.GetOrDefault(m.ConfigurableEvaluator(ctx), nil)
+}
+
+func (m *ModuleBase) VintfFragments(ctx ConfigurableEvaluatorContext) []string {
+	return m.base().commonProperties.Vintf_fragments.GetOrDefault(m.ConfigurableEvaluator(ctx), nil)
 }
 
 func (m *ModuleBase) generateVariantTarget(ctx *moduleContext) {
