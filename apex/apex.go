@@ -607,9 +607,6 @@ func newApexFile(ctx android.BaseModuleContext, builtFile android.Path, androidM
 		}
 		ret.moduleDir = ctx.OtherModuleDir(module)
 		ret.partition = module.PartitionTag(ctx.DeviceConfig())
-		ret.requiredModuleNames = module.RequiredModuleNames(ctx)
-		ret.targetRequiredModuleNames = module.TargetRequiredModuleNames()
-		ret.hostRequiredModuleNames = module.HostRequiredModuleNames()
 		ret.multilib = module.Target().Arch.ArchType.Multilib
 	}
 	return ret
@@ -1743,7 +1740,13 @@ func (a *apexBundle) setPayloadFsType(ctx android.ModuleContext) {
 }
 
 func (a *apexBundle) isCompressable() bool {
-	return proptools.BoolDefault(a.overridableProperties.Compressible, false) && !a.testApex
+	if a.testApex {
+		return false
+	}
+	if a.payloadFsType == erofs {
+		return false
+	}
+	return proptools.Bool(a.overridableProperties.Compressible)
 }
 
 func (a *apexBundle) commonBuildActions(ctx android.ModuleContext) bool {
