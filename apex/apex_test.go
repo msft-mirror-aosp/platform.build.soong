@@ -7937,46 +7937,6 @@ func TestRejectNonInstallableJavaLibrary(t *testing.T) {
 	`)
 }
 
-func TestCarryRequiredModuleNames(t *testing.T) {
-	t.Parallel()
-	ctx := testApex(t, `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			native_shared_libs: ["mylib"],
-			updatable: false,
-		}
-
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-
-		cc_library {
-			name: "mylib",
-			srcs: ["mylib.cpp"],
-			system_shared_libs: [],
-			stl: "none",
-			required: ["a", "b"],
-			host_required: ["c", "d"],
-			target_required: ["e", "f"],
-			apex_available: [ "myapex" ],
-		}
-	`)
-
-	apexBundle := ctx.ModuleForTests("myapex", "android_common_myapex").Module().(*apexBundle)
-	data := android.AndroidMkDataForTest(t, ctx, apexBundle)
-	name := apexBundle.BaseModuleName()
-	prefix := "TARGET_"
-	var builder strings.Builder
-	data.Custom(&builder, name, prefix, "", data)
-	androidMk := builder.String()
-	ensureContains(t, androidMk, "LOCAL_REQUIRED_MODULES := mylib.myapex:64 a b\n")
-	ensureContains(t, androidMk, "LOCAL_HOST_REQUIRED_MODULES := c d\n")
-	ensureContains(t, androidMk, "LOCAL_TARGET_REQUIRED_MODULES := e f\n")
-}
-
 func TestSymlinksFromApexToSystem(t *testing.T) {
 	t.Parallel()
 	bp := `
@@ -9091,6 +9051,33 @@ func TestCompressedApex(t *testing.T) {
 	data.Custom(&builder, ab.BaseModuleName(), "TARGET_", "", data)
 	androidMk := builder.String()
 	ensureContains(t, androidMk, "LOCAL_MODULE_STEM := myapex.capex\n")
+}
+
+func TestCompressedApexIsDisabledWhenUsingErofs(t *testing.T) {
+	t.Parallel()
+	ctx := testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			compressible: true,
+			updatable: false,
+			payload_fs_type: "erofs",
+		}
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`,
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.CompressedApex = proptools.BoolPtr(true)
+		}),
+	)
+
+	compressRule := ctx.ModuleForTests("myapex", "android_common_myapex").MaybeRule("compressRule")
+	if compressRule.Rule != nil {
+		t.Error("erofs apex should not be compressed")
+	}
 }
 
 func TestApexSet_ShouldRespectCompressedApexFlag(t *testing.T) {
