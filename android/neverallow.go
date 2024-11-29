@@ -293,7 +293,7 @@ func createLimitDirgroupRule() []Rule {
 		NeverAllow().
 			ModuleType("genrule").
 			Without("name", "trusty-arm64.lk.elf.gen").
-			Without("name", "trusty-arm64-test.lk.elf.gen").
+			Without("name", "trusty-arm64-virt-test-debug.lk.elf.gen").
 			Without("name", "trusty-x86_64.lk.elf.gen").
 			Without("name", "trusty-x86_64-test.lk.elf.gen").
 			WithMatcher("dir_srcs", isSetMatcherInstance).Because(reason),
