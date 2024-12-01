@@ -613,20 +613,24 @@ type PartitionVariables struct {
 	VendorSecurityPatch string `json:",omitempty"`
 
 	// Boot image stuff
-	BuildingRamdiskImage            bool   `json:",omitempty"`
-	ProductBuildBootImage           bool   `json:",omitempty"`
-	ProductBuildVendorBootImage     string `json:",omitempty"`
-	ProductBuildInitBootImage       bool   `json:",omitempty"`
-	BoardUsesRecoveryAsBoot         bool   `json:",omitempty"`
-	BoardPrebuiltBootimage          string `json:",omitempty"`
-	BoardPrebuiltInitBootimage      string `json:",omitempty"`
-	BoardBootimagePartitionSize     string `json:",omitempty"`
-	BoardInitBootimagePartitionSize string `json:",omitempty"`
-	BoardBootHeaderVersion          string `json:",omitempty"`
-	TargetKernelPath                string `json:",omitempty"`
-	BoardUsesGenericKernelImage     bool   `json:",omitempty"`
-	BootSecurityPatch               string `json:",omitempty"`
-	InitBootSecurityPatch           string `json:",omitempty"`
+	BuildingRamdiskImage            bool     `json:",omitempty"`
+	ProductBuildBootImage           bool     `json:",omitempty"`
+	ProductBuildVendorBootImage     string   `json:",omitempty"`
+	ProductBuildInitBootImage       bool     `json:",omitempty"`
+	BoardUsesRecoveryAsBoot         bool     `json:",omitempty"`
+	BoardPrebuiltBootimage          string   `json:",omitempty"`
+	BoardPrebuiltInitBootimage      string   `json:",omitempty"`
+	BoardBootimagePartitionSize     string   `json:",omitempty"`
+	BoardInitBootimagePartitionSize string   `json:",omitempty"`
+	BoardBootHeaderVersion          string   `json:",omitempty"`
+	TargetKernelPath                string   `json:",omitempty"`
+	BoardUsesGenericKernelImage     bool     `json:",omitempty"`
+	BootSecurityPatch               string   `json:",omitempty"`
+	InitBootSecurityPatch           string   `json:",omitempty"`
+	BoardIncludeDtbInBootimg        bool     `json:",omitempty"`
+	InternalKernelCmdline           []string `json:",omitempty"`
+	InternalBootconfig              []string `json:",omitempty"`
+	InternalBootconfigFile          string   `json:",omitempty"`
 
 	// Avb (android verified boot) stuff
 	BoardAvbEnable          bool                                `json:",omitempty"`
@@ -656,6 +660,11 @@ type PartitionVariables struct {
 	BuildingOdmDlkmImage      bool     `json:",omitempty"`
 	OdmKernelModules          []string `json:",omitempty"`
 	OdmKernelBlocklistFile    string   `json:",omitempty"`
+
+	VendorRamdiskKernelModules       []string `json:",omitempty"`
+	VendorRamdiskKernelBlocklistFile string   `json:",omitempty"`
+	VendorRamdiskKernelLoadModules   []string `json:",omitempty"`
+	VendorRamdiskKernelOptionsFile   string   `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
