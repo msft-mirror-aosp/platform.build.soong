@@ -722,10 +722,6 @@ func (mod *Module) IsNdk(config android.Config) bool {
 	return false
 }
 
-func (mod *Module) HasStubsVariants() bool {
-	return false
-}
-
 func (mod *Module) IsStubs() bool {
 	return false
 }
