@@ -574,6 +574,7 @@ func InitPrebuiltEtcModule(p *PrebuiltEtc, dirBase string) {
 	p.installDirBase = dirBase
 	p.AddProperties(&p.properties)
 	p.AddProperties(&p.subdirProperties)
+	p.AddProperties(&p.rootProperties)
 }
 
 func InitPrebuiltRootModule(p *PrebuiltEtc) {
