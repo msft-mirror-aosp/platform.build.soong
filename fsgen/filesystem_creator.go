@@ -108,6 +108,9 @@ func generatedPartitions(ctx android.LoadHookContext) []string {
 	if buildingVendorBootImage(partitionVars) {
 		generatedPartitions = append(generatedPartitions, "vendor_ramdisk")
 	}
+	if ctx.DeviceConfig().BuildingRecoveryImage() && ctx.DeviceConfig().RecoveryPath() == "recovery" {
+		generatedPartitions = append(generatedPartitions, "recovery")
+	}
 	return generatedPartitions
 }
 
