@@ -1869,6 +1869,7 @@ type CommonModuleInfo struct {
 	// The Target of artifacts that this module variant is responsible for creating.
 	CompileTarget           Target
 	SkipAndroidMkProcessing bool
+	BaseModuleName          string
 }
 
 var CommonModuleInfoKey = blueprint.NewProvider[CommonModuleInfo]()
@@ -2137,6 +2138,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		ReplacedByPrebuilt:      m.commonProperties.ReplacedByPrebuilt,
 		CompileTarget:           m.commonProperties.CompileTarget,
 		SkipAndroidMkProcessing: shouldSkipAndroidMkProcessing(ctx, m),
+		BaseModuleName:          m.BaseModuleName(),
 	}
 	if m.commonProperties.ForcedDisabled {
 		commonData.Enabled = false
