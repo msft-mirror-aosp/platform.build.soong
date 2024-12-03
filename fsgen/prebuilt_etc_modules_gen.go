@@ -207,6 +207,7 @@ var (
 		"usr/keychars":    etc.PrebuiltUserKeyCharsFactory,
 		"usr/srec":        etc.PrebuiltUserSrecFactory,
 		"usr/idc":         etc.PrebuiltUserIdcFactory,
+		"vendor":          etc.PrebuiltVendorFactory,
 		"vendor_dlkm":     etc.PrebuiltVendorDlkmFactory,
 		"wallpaper":       etc.PrebuiltWallpaperFactory,
 		"wlc_upt":         etc.PrebuiltWlcUptFactory,
