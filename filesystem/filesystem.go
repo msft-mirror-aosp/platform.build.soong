@@ -677,11 +677,10 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 	switch fst {
 	case erofsType:
 		// Add erofs properties
-		if compressor := f.properties.Erofs.Compressor; compressor != nil {
-			addStr("erofs_default_compressor", proptools.String(compressor))
-		}
-		if compressHints := f.properties.Erofs.Compress_hints; compressHints != nil {
-			addPath("erofs_default_compress_hints", android.PathForModuleSrc(ctx, *compressHints))
+		addStr("erofs_default_compressor", proptools.StringDefault(f.properties.Erofs.Compressor, "lz4hc,9"))
+		if f.properties.Erofs.Compress_hints != nil {
+			src := android.PathForModuleSrc(ctx, *f.properties.Erofs.Compress_hints)
+			addPath("erofs_default_compress_hints", src)
 		}
 		if proptools.BoolDefault(f.properties.Erofs.Sparse, true) {
 			// https://source.corp.google.com/h/googleplex-android/platform/build/+/88b1c67239ca545b11580237242774b411f2fed9:core/Makefile;l=2292;bpv=1;bpt=0;drc=ea8f34bc1d6e63656b4ec32f2391e9d54b3ebb6b
