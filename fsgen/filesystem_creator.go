@@ -205,7 +205,7 @@ func (f *filesystemCreator) createDeviceModule(
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
 }
 
-func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitionVars android.PartitionVariables, partitionType string) {
+func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesystem.FilesystemProperties, partitionVars android.PartitionVariables, partitionType string) {
 	switch partitionType {
 	case "system":
 		fsProps.Build_logtags = proptools.BoolPtr(true)
@@ -356,6 +356,10 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 		fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
 	case "product":
 		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
+		fsProps.Android_filesystem_deps.System = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system"))
+		if ctx.DeviceConfig().SystemExtPath() == "system_ext" {
+			fsProps.Android_filesystem_deps.System_ext = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system_ext"))
+		}
 	case "vendor":
 		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
 		fsProps.Symlinks = []filesystem.SymlinkDefinition{
@@ -367,6 +371,10 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 				Target: proptools.StringPtr("/vendor_dlkm/lib/modules"),
 				Name:   proptools.StringPtr("vendor/lib/modules"),
 			},
+		}
+		fsProps.Android_filesystem_deps.System = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system"))
+		if ctx.DeviceConfig().SystemExtPath() == "system_ext" {
+			fsProps.Android_filesystem_deps.System_ext = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system_ext"))
 		}
 	case "odm":
 		fsProps.Symlinks = []filesystem.SymlinkDefinition{
@@ -711,7 +719,7 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 
 	fsProps.Is_auto_generated = proptools.BoolPtr(true)
 
-	partitionSpecificFsProps(fsProps, partitionVars, partitionType)
+	partitionSpecificFsProps(ctx, fsProps, partitionVars, partitionType)
 
 	// system_image properties that are not set:
 	// - filesystemProperties.Avb_hash_algorithm
