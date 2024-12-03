@@ -245,6 +245,7 @@ func createInstallInRootAllowingRules() []Rule {
 			Without("name", "librecovery_ui_ext").
 			With("install_in_root", "true").
 			NotModuleType("prebuilt_root").
+			NotModuleType("prebuilt_vendor").
 			Because("install_in_root is only for init_first_stage or librecovery_ui_ext."),
 	}
 }
@@ -341,6 +342,7 @@ func createPrebuiltEtcBpDefineRule() Rule {
 			"prebuilt_tvservice",
 			"prebuilt_optee",
 			"prebuilt_tvconfig",
+			"prebuilt_vendor",
 		).
 		DefinedInBpFile().
 		Because("module type not allowed to be defined in bp file")
@@ -705,6 +707,9 @@ func (r *rule) appliesToOsClass(osClass OsClass) bool {
 }
 
 func (r *rule) appliesToModuleType(moduleType string) bool {
+	// Remove prefix for auto-generated modules
+	moduleType = strings.TrimSuffix(moduleType, "__loadHookModule")
+	moduleType = strings.TrimSuffix(moduleType, "__bottomUpMutatorModule")
 	return (len(r.moduleTypes) == 0 || InList(moduleType, r.moduleTypes)) && !InList(moduleType, r.unlessModuleTypes)
 }
 
