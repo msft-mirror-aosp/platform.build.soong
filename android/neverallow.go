@@ -245,7 +245,6 @@ func createInstallInRootAllowingRules() []Rule {
 			Without("name", "librecovery_ui_ext").
 			With("install_in_root", "true").
 			NotModuleType("prebuilt_root").
-			NotModuleType("prebuilt_vendor").
 			Because("install_in_root is only for init_first_stage or librecovery_ui_ext."),
 	}
 }
