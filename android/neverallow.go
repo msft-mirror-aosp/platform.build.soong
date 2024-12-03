@@ -706,6 +706,9 @@ func (r *rule) appliesToOsClass(osClass OsClass) bool {
 }
 
 func (r *rule) appliesToModuleType(moduleType string) bool {
+	// Remove prefix for auto-generated modules
+	moduleType = strings.TrimSuffix(moduleType, "__loadHookModule")
+	moduleType = strings.TrimSuffix(moduleType, "__bottomUpMutatorModule")
 	return (len(r.moduleTypes) == 0 || InList(moduleType, r.moduleTypes)) && !InList(moduleType, r.unlessModuleTypes)
 }
 
