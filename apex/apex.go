@@ -2340,7 +2340,7 @@ func (a *apexBundle) enforceAppUpdatability(mctx android.ModuleContext) {
 	}
 	if a.Updatable() {
 		// checking direct deps is sufficient since apex->apk is a direct edge, even when inherited via apex_defaults
-		mctx.VisitDirectDeps(func(module android.Module) {
+		mctx.VisitDirectDepsProxy(func(module android.ModuleProxy) {
 			if appInfo, ok := android.OtherModuleProvider(mctx, module, java.AppInfoProvider); ok {
 				// ignore android_test_app
 				if !appInfo.TestHelperApp && !appInfo.Updatable {
