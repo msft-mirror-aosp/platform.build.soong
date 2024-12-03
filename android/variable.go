@@ -352,6 +352,8 @@ type ProductVariables struct {
 	OemPath               *string `json:",omitempty"`
 	UserdataPath          *string `json:",omitempty"`
 	BuildingUserdataImage *bool   `json:",omitempty"`
+	RecoveryPath          *string `json:",omitempty"`
+	BuildingRecoveryImage *bool   `json:",omitempty"`
 
 	ClangTidy  *bool   `json:",omitempty"`
 	TidyChecks *string `json:",omitempty"`
