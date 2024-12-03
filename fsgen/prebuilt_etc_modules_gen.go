@@ -36,6 +36,7 @@ type prebuiltSrcGroupByInstallPartition struct {
 	system_ext map[string][]srcBaseFileInstallBaseFileTuple
 	product    map[string][]srcBaseFileInstallBaseFileTuple
 	vendor     map[string][]srcBaseFileInstallBaseFileTuple
+	recovery   map[string][]srcBaseFileInstallBaseFileTuple
 }
 
 func newPrebuiltSrcGroupByInstallPartition() *prebuiltSrcGroupByInstallPartition {
@@ -44,6 +45,7 @@ func newPrebuiltSrcGroupByInstallPartition() *prebuiltSrcGroupByInstallPartition
 		system_ext: map[string][]srcBaseFileInstallBaseFileTuple{},
 		product:    map[string][]srcBaseFileInstallBaseFileTuple{},
 		vendor:     map[string][]srcBaseFileInstallBaseFileTuple{},
+		recovery:   map[string][]srcBaseFileInstallBaseFileTuple{},
 	}
 }
 
@@ -73,6 +75,8 @@ func appendIfCorrectInstallPartition(partitionToInstallPathList []partitionToIns
 				srcMap = srcGroup.product
 			case "vendor":
 				srcMap = srcGroup.vendor
+			case "recovery":
+				srcMap = srcGroup.recovery
 			}
 			if srcMap != nil {
 				srcMap[relativeInstallDir] = append(srcMap[relativeInstallDir], srcBaseFileInstallBaseFileTuple{
@@ -128,6 +132,7 @@ func processProductCopyFiles(ctx android.LoadHookContext) map[string]*prebuiltSr
 	// System is intentionally added at the last to consider the scenarios where
 	// non-system partitions are installed as part of the system partition
 	partitionToInstallPathList := []partitionToInstallPath{
+		{name: "recovery", installPath: "recovery/root"},
 		{name: "vendor", installPath: ctx.DeviceConfig().VendorPath()},
 		{name: "product", installPath: ctx.DeviceConfig().ProductPath()},
 		{name: "system_ext", installPath: ctx.DeviceConfig().SystemExtPath()},
@@ -155,6 +160,8 @@ type prebuiltModuleProperties struct {
 	Soc_specific        *bool
 	Product_specific    *bool
 	System_ext_specific *bool
+	Recovery            *bool
+	Ramdisk             *bool
 
 	Srcs []string
 	Dsts []string
@@ -172,6 +179,12 @@ type prebuiltSubdirProperties struct {
 	// If the base file name of the src and dst all match, dsts property does not need to be
 	// set, and only relative_install_path can be set.
 	Relative_install_path *string
+}
+
+// Split install_in_root to a separate struct as it is part of rootProperties instead of
+// properties
+type prebuiltInstallInRootProperties struct {
+	Install_in_root *bool
 }
 
 var (
@@ -246,7 +259,7 @@ func groupDestFilesBySrc(destFiles []srcBaseFileInstallBaseFileTuple) (ret map[s
 	return ret, maxLen
 }
 
-func prebuiltEtcModuleProps(moduleName, partition string) prebuiltModuleProperties {
+func prebuiltEtcModuleProps(ctx android.LoadHookContext, moduleName, partition, destDir string) prebuiltModuleProperties {
 	moduleProps := prebuiltModuleProperties{}
 	moduleProps.Name = proptools.StringPtr(moduleName)
 
@@ -258,6 +271,13 @@ func prebuiltEtcModuleProps(moduleName, partition string) prebuiltModuleProperti
 		moduleProps.Product_specific = proptools.BoolPtr(true)
 	case "vendor":
 		moduleProps.Soc_specific = proptools.BoolPtr(true)
+	case "recovery":
+		// To match the logic in modulePartition() in android/paths.go
+		if ctx.DeviceConfig().BoardUsesRecoveryAsBoot() && strings.HasPrefix(destDir, "first_stage_ramdisk") {
+			moduleProps.Ramdisk = proptools.BoolPtr(true)
+		} else {
+			moduleProps.Recovery = proptools.BoolPtr(true)
+		}
 	}
 
 	moduleProps.No_full_install = proptools.BoolPtr(true)
@@ -291,7 +311,7 @@ func createPrebuiltEtcModulesInDirectory(ctx android.LoadHookContext, partition,
 		}
 
 		moduleName := generatedPrebuiltEtcModuleName(partition, srcDir, destDir, fileIndex)
-		moduleProps := prebuiltEtcModuleProps(moduleName, partition)
+		moduleProps := prebuiltEtcModuleProps(ctx, moduleName, partition, destDir)
 		modulePropsPtr := &moduleProps
 		propsList := []interface{}{modulePropsPtr}
 
@@ -303,6 +323,16 @@ func createPrebuiltEtcModulesInDirectory(ctx android.LoadHookContext, partition,
 			}
 			srcBaseFiles = append(srcBaseFiles, tuple.srcBaseFile)
 			installBaseFiles = append(installBaseFiles, tuple.installBaseFile)
+		}
+
+		// Recovery partition-installed modules are installed to `recovery/root/system` by
+		// default (See modulePartition() in android/paths.go). If the destination file
+		// directory is not `recovery/root/system/...`, it should set install_in_root to true
+		// to prevent being installed in `recovery/root/system`.
+		if partition == "recovery" && !strings.HasPrefix(destDir, "system") {
+			propsList = append(propsList, &prebuiltInstallInRootProperties{
+				Install_in_root: proptools.BoolPtr(true),
+			})
 		}
 
 		// Set appropriate srcs, dsts, and releative_install_path based on
@@ -350,6 +380,7 @@ func createPrebuiltEtcModules(ctx android.LoadHookContext) (ret []string) {
 		ret = append(ret, createPrebuiltEtcModulesForPartition(ctx, "system_ext", srcDir, groupedSource.system_ext)...)
 		ret = append(ret, createPrebuiltEtcModulesForPartition(ctx, "product", srcDir, groupedSource.product)...)
 		ret = append(ret, createPrebuiltEtcModulesForPartition(ctx, "vendor", srcDir, groupedSource.vendor)...)
+		ret = append(ret, createPrebuiltEtcModulesForPartition(ctx, "recovery", srcDir, groupedSource.recovery)...)
 	}
 
 	return ret
