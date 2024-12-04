@@ -2328,7 +2328,7 @@ func (a *apexBundle) enforceAppUpdatability(mctx android.ModuleContext) {
 	}
 	if a.Updatable() {
 		// checking direct deps is sufficient since apex->apk is a direct edge, even when inherited via apex_defaults
-		mctx.VisitDirectDeps(func(module android.Module) {
+		mctx.VisitDirectDepsProxy(func(module android.ModuleProxy) {
 			if appInfo, ok := android.OtherModuleProvider(mctx, module, java.AppInfoProvider); ok {
 				// ignore android_test_app
 				if !appInfo.TestHelperApp && !appInfo.Updatable {
@@ -2635,16 +2635,12 @@ func (a *apexBundle) checkClasspathFragments(ctx android.ModuleContext) {
 func (a *apexBundle) checkJavaStableSdkVersion(ctx android.ModuleContext) {
 	// Visit direct deps only. As long as we guarantee top-level deps are using stable SDKs,
 	// java's checkLinkType guarantees correct usage for transitive deps
-	ctx.VisitDirectDeps(func(module android.Module) {
+	ctx.VisitDirectDepsProxy(func(module android.ModuleProxy) {
 		tag := ctx.OtherModuleDependencyTag(module)
 		switch tag {
 		case javaLibTag, androidAppTag:
-			if m, ok := module.(interface {
-				CheckStableSdkVersion(ctx android.BaseModuleContext) error
-			}); ok {
-				if err := m.CheckStableSdkVersion(ctx); err != nil {
-					ctx.ModuleErrorf("cannot depend on \"%v\": %v", ctx.OtherModuleName(module), err)
-				}
+			if err := java.CheckStableSdkVersion(ctx, module); err != nil {
+				ctx.ModuleErrorf("cannot depend on \"%v\": %v", ctx.OtherModuleName(module), err)
 			}
 		}
 	})

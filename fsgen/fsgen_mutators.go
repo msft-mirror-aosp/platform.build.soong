@@ -150,6 +150,7 @@ func createFsGenState(ctx android.LoadHookContext, generatedPrebuiltEtcModuleNam
 				},
 				"ramdisk":        {},
 				"vendor_ramdisk": {},
+				"recovery":       {},
 			},
 			fsDepsMutex:                     sync.Mutex{},
 			moduleToInstallationProps:       map[string]installationProperties{},
