@@ -415,6 +415,22 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 				"first_stage_ramdisk/sys",
 			})
 		}
+	case "recovery":
+		// Following https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/Makefile;l=2826;drc=ad7cfb56010cb22c3aa0e70cf71c804352553526
+		fsProps.Dirs = android.NewSimpleConfigurable([]string{
+			"sdcard",
+			"tmp",
+		})
+		fsProps.Symlinks = []filesystem.SymlinkDefinition{
+			{
+				Target: proptools.StringPtr("/system/bin/init"),
+				Name:   proptools.StringPtr("init"),
+			},
+			{
+				Target: proptools.StringPtr("prop.default"),
+				Name:   proptools.StringPtr("default.prop"),
+			},
+		}
 	}
 }
 
