@@ -16,6 +16,7 @@ package filesystem
 
 import (
 	"android/soong/android"
+	"strconv"
 
 	"github.com/google/blueprint/proptools"
 )
@@ -45,6 +46,12 @@ func (f *filesystem) buildAconfigFlagsFiles(ctx android.ModuleContext, builder *
 	installAconfigStorageDir := dir.Join(ctx, "etc", "aconfig")
 	builder.Command().Text("mkdir -p").Text(installAconfigStorageDir.String())
 
+	// To enable fingerprint, we need to have v2 storage files. The default version is 1.
+	storageFilesVersion := 1
+	if ctx.Config().ReleaseFingerprintAconfigPackages() {
+		storageFilesVersion = 2
+	}
+
 	generatePartitionAconfigStorageFile := func(fileType, fileName string) {
 		outputPath := installAconfigStorageDir.Join(ctx, fileName)
 		builder.Command().
@@ -52,7 +59,8 @@ func (f *filesystem) buildAconfigFlagsFiles(ctx android.ModuleContext, builder *
 			FlagWithArg("create-storage --container ", f.PartitionType()).
 			FlagWithArg("--file ", fileType).
 			FlagWithOutput("--out ", outputPath).
-			FlagWithArg("--cache ", installAconfigFlagsPath.String())
+			FlagWithArg("--cache ", installAconfigFlagsPath.String()).
+			FlagWithArg("--version ", strconv.Itoa(storageFilesVersion))
 		f.appendToEntry(ctx, outputPath)
 	}
 
