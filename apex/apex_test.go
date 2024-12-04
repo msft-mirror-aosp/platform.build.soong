@@ -84,26 +84,6 @@ func withFiles(files android.MockFS) android.FixturePreparer {
 	return files.AddToFixture()
 }
 
-// withNativeBridgeTargets sets configuration with targets including:
-// - X86_64 (primary)
-// - X86 (secondary)
-// - Arm64 on X86_64 (native bridge)
-// - Arm on X86 (native bridge)
-var withNativeBridgeEnabled = android.FixtureModifyConfig(
-	func(config android.Config) {
-		config.Targets[android.Android] = []android.Target{
-			{Os: android.Android, Arch: android.Arch{ArchType: android.X86_64, ArchVariant: "silvermont", Abi: []string{"arm64-v8a"}},
-				NativeBridge: android.NativeBridgeDisabled, NativeBridgeHostArchName: "", NativeBridgeRelativePath: ""},
-			{Os: android.Android, Arch: android.Arch{ArchType: android.X86, ArchVariant: "silvermont", Abi: []string{"armeabi-v7a"}},
-				NativeBridge: android.NativeBridgeDisabled, NativeBridgeHostArchName: "", NativeBridgeRelativePath: ""},
-			{Os: android.Android, Arch: android.Arch{ArchType: android.Arm64, ArchVariant: "armv8-a", Abi: []string{"arm64-v8a"}},
-				NativeBridge: android.NativeBridgeEnabled, NativeBridgeHostArchName: "x86_64", NativeBridgeRelativePath: "arm64"},
-			{Os: android.Android, Arch: android.Arch{ArchType: android.Arm, ArchVariant: "armv7-a-neon", Abi: []string{"armeabi-v7a"}},
-				NativeBridge: android.NativeBridgeEnabled, NativeBridgeHostArchName: "x86", NativeBridgeRelativePath: "arm"},
-		}
-	},
-)
-
 func withManifestPackageNameOverrides(specs []string) android.FixturePreparer {
 	return android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
 		variables.ManifestPackageNameOverrides = specs
@@ -3198,7 +3178,7 @@ func TestFilesInSubDirWhenNativeBridgeEnabled(t *testing.T) {
 				},
 			},
 		}
-	`, withNativeBridgeEnabled)
+	`, android.PrepareForNativeBridgeEnabled)
 	ensureExactContents(t, ctx, "myapex", "android_common_myapex", []string{
 		"bin/foo/bar/mybin",
 		"bin/foo/bar/mybin64",
