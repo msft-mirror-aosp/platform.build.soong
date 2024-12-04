@@ -973,21 +973,8 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		if !ok || !am.CanHaveApexVariants() {
 			return false
 		}
-		depTag := mctx.OtherModuleDependencyTag(child)
 
-		// Check to see if the tag always requires that the child module has an apex variant for every
-		// apex variant of the parent module. If it does not then it is still possible for something
-		// else, e.g. the DepIsInSameApex(...) method to decide that a variant is required.
-		if required, ok := depTag.(android.AlwaysRequireApexVariantTag); ok && required.AlwaysRequireApexVariant() {
-			return true
-		}
-		if !android.IsDepInSameApex(mctx, parent, child) {
-			return false
-		}
-
-		// By default, all the transitive dependencies are collected, unless filtered out
-		// above.
-		return true
+		return android.IsDepInSameApex(mctx, parent, child)
 	}
 
 	android.SetProvider(mctx, android.ApexBundleInfoProvider, android.ApexBundleInfo{})
