@@ -3513,7 +3513,6 @@ func DexImportFactory() android.Module {
 type Defaults struct {
 	android.ModuleBase
 	android.DefaultsModuleBase
-	android.ApexModuleBase
 }
 
 // java_defaults provides a set of properties that can be inherited by other java or android modules.
