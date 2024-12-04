@@ -16,6 +16,7 @@ package filesystem
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"android/soong/android"
@@ -182,10 +183,14 @@ func TestFileSystemFillsLinkerConfigWithStubLibs(t *testing.T) {
 	module := result.ModuleForTests("myfilesystem", "android_common")
 	output := module.Output("out/soong/.intermediates/myfilesystem/android_common/root/system/etc/linker.config.pb")
 
+	fullCommand := output.RuleParams.Command
+	startIndex := strings.Index(fullCommand, "conv_linker_config")
+	linkerConfigCommand := fullCommand[startIndex:]
+
 	android.AssertStringDoesContain(t, "linker.config.pb should have libfoo",
-		output.RuleParams.Command, "libfoo.so")
+		linkerConfigCommand, "libfoo.so")
 	android.AssertStringDoesNotContain(t, "linker.config.pb should not have libbar",
-		output.RuleParams.Command, "libbar.so")
+		linkerConfigCommand, "libbar.so")
 }
 
 func registerComponent(ctx android.RegistrationContext) {

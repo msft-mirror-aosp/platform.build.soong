@@ -282,7 +282,7 @@ func createLimitNdkExportRule() []Rule {
 }
 
 func createLimitDirgroupRule() []Rule {
-	reason := "dirgroup module and dir_srcs property of genrule is allowed only to Trusty build rule."
+	reason := "dirgroup module and dir_srcs / keep_gendir property of genrule is allowed only to Trusty build rule."
 	return []Rule{
 		NeverAllow().
 			ModuleType("dirgroup").
@@ -297,6 +297,13 @@ func createLimitDirgroupRule() []Rule {
 			Without("name", "trusty-x86_64.lk.elf.gen").
 			Without("name", "trusty-x86_64-test.lk.elf.gen").
 			WithMatcher("dir_srcs", isSetMatcherInstance).Because(reason),
+		NeverAllow().
+			ModuleType("genrule").
+			Without("name", "trusty-arm64.lk.elf.gen").
+			Without("name", "trusty-arm64-virt-test-debug.lk.elf.gen").
+			Without("name", "trusty-x86_64.lk.elf.gen").
+			Without("name", "trusty-x86_64-test.lk.elf.gen").
+			With("keep_gendir", "true").Because(reason),
 	}
 }
 
@@ -341,6 +348,7 @@ func createPrebuiltEtcBpDefineRule() Rule {
 			"prebuilt_tvservice",
 			"prebuilt_optee",
 			"prebuilt_tvconfig",
+			"prebuilt_vendor",
 		).
 		DefinedInBpFile().
 		Because("module type not allowed to be defined in bp file")
@@ -705,6 +713,9 @@ func (r *rule) appliesToOsClass(osClass OsClass) bool {
 }
 
 func (r *rule) appliesToModuleType(moduleType string) bool {
+	// Remove prefix for auto-generated modules
+	moduleType = strings.TrimSuffix(moduleType, "__loadHookModule")
+	moduleType = strings.TrimSuffix(moduleType, "__bottomUpMutatorModule")
 	return (len(r.moduleTypes) == 0 || InList(moduleType, r.moduleTypes)) && !InList(moduleType, r.unlessModuleTypes)
 }
 

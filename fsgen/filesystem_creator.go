@@ -108,6 +108,9 @@ func generatedPartitions(ctx android.LoadHookContext) []string {
 	if buildingVendorBootImage(partitionVars) {
 		generatedPartitions = append(generatedPartitions, "vendor_ramdisk")
 	}
+	if ctx.DeviceConfig().BuildingRecoveryImage() && ctx.DeviceConfig().RecoveryPath() == "recovery" {
+		generatedPartitions = append(generatedPartitions, "recovery")
+	}
 	return generatedPartitions
 }
 
@@ -205,23 +208,25 @@ func (f *filesystemCreator) createDeviceModule(
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
 }
 
-func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitionVars android.PartitionVariables, partitionType string) {
+func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesystem.FilesystemProperties, partitionVars android.PartitionVariables, partitionType string) {
 	switch partitionType {
 	case "system":
 		fsProps.Build_logtags = proptools.BoolPtr(true)
 		// https://source.corp.google.com/h/googleplex-android/platform/build//639d79f5012a6542ab1f733b0697db45761ab0f3:core/packaging/flags.mk;l=21;drc=5ba8a8b77507f93aa48cc61c5ba3f31a4d0cbf37;bpv=1;bpt=0
 		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
 		// Identical to that of the aosp_shared_system_image
-		fsProps.Fsverity.Inputs = []string{
-			"etc/boot-image.prof",
-			"etc/dirty-image-objects",
-			"etc/preloaded-classes",
-			"etc/classpaths/*.pb",
-			"framework/*",
-			"framework/*/*",     // framework/{arch}
-			"framework/oat/*/*", // framework/oat/{arch}
+		if partitionVars.ProductFsverityGenerateMetadata {
+			fsProps.Fsverity.Inputs = []string{
+				"etc/boot-image.prof",
+				"etc/dirty-image-objects",
+				"etc/preloaded-classes",
+				"etc/classpaths/*.pb",
+				"framework/*",
+				"framework/*/*",     // framework/{arch}
+				"framework/oat/*/*", // framework/oat/{arch}
+			}
+			fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
 		}
-		fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
 		// Most of the symlinks and directories listed here originate from create_root_structure.mk,
 		// but the handwritten generic system image also recreates them:
 		// https://cs.android.com/android/platform/superproject/main/+/main:build/make/target/product/generic/Android.bp;l=33;drc=db08311f1b6ef6cb0a4fbcc6263b89849360ce04
@@ -348,14 +353,20 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 			"product",
 		})
 	case "system_ext":
-		fsProps.Fsverity.Inputs = []string{
-			"framework/*",
-			"framework/*/*",     // framework/{arch}
-			"framework/oat/*/*", // framework/oat/{arch}
+		if partitionVars.ProductFsverityGenerateMetadata {
+			fsProps.Fsverity.Inputs = []string{
+				"framework/*",
+				"framework/*/*",     // framework/{arch}
+				"framework/oat/*/*", // framework/oat/{arch}
+			}
+			fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
 		}
-		fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
 	case "product":
 		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
+		fsProps.Android_filesystem_deps.System = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system"))
+		if ctx.DeviceConfig().SystemExtPath() == "system_ext" {
+			fsProps.Android_filesystem_deps.System_ext = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system_ext"))
+		}
 	case "vendor":
 		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
 		fsProps.Symlinks = []filesystem.SymlinkDefinition{
@@ -367,6 +378,10 @@ func partitionSpecificFsProps(fsProps *filesystem.FilesystemProperties, partitio
 				Target: proptools.StringPtr("/vendor_dlkm/lib/modules"),
 				Name:   proptools.StringPtr("vendor/lib/modules"),
 			},
+		}
+		fsProps.Android_filesystem_deps.System = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system"))
+		if ctx.DeviceConfig().SystemExtPath() == "system_ext" {
+			fsProps.Android_filesystem_deps.System_ext = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system_ext"))
 		}
 	case "odm":
 		fsProps.Symlinks = []filesystem.SymlinkDefinition{
@@ -711,7 +726,7 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 
 	fsProps.Is_auto_generated = proptools.BoolPtr(true)
 
-	partitionSpecificFsProps(fsProps, partitionVars, partitionType)
+	partitionSpecificFsProps(ctx, fsProps, partitionVars, partitionType)
 
 	// system_image properties that are not set:
 	// - filesystemProperties.Avb_hash_algorithm
