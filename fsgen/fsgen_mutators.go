@@ -162,6 +162,9 @@ func createFsGenState(ctx android.LoadHookContext, generatedPrebuiltEtcModuleNam
 			(*fsGenState.fsDeps["product"])["system_other_avbpubkey"] = defaultDepCandidateProps(ctx.Config())
 		}
 
+		// Add common resources `prebuilt_res` module as dep of recovery partition
+		(*fsGenState.fsDeps["recovery"])[fmt.Sprintf("recovery-resources-common-%s", getDpi(ctx))] = defaultDepCandidateProps(ctx.Config())
+
 		return &fsGenState
 	}).(*FsGenState)
 }
