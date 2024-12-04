@@ -351,6 +351,8 @@ type ProductVariables struct {
 	OemPath               *string `json:",omitempty"`
 	UserdataPath          *string `json:",omitempty"`
 	BuildingUserdataImage *bool   `json:",omitempty"`
+	RecoveryPath          *string `json:",omitempty"`
+	BuildingRecoveryImage *bool   `json:",omitempty"`
 
 	ClangTidy  *bool   `json:",omitempty"`
 	TidyChecks *string `json:",omitempty"`
@@ -665,6 +667,8 @@ type PartitionVariables struct {
 	VendorRamdiskKernelBlocklistFile string   `json:",omitempty"`
 	VendorRamdiskKernelLoadModules   []string `json:",omitempty"`
 	VendorRamdiskKernelOptionsFile   string   `json:",omitempty"`
+
+	ProductFsverityGenerateMetadata bool `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
