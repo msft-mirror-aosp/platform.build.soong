@@ -15,6 +15,7 @@
 package sh
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -45,6 +46,7 @@ func registerShBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("sh_binary_host", ShBinaryHostFactory)
 	ctx.RegisterModuleType("sh_test", ShTestFactory)
 	ctx.RegisterModuleType("sh_test_host", ShTestHostFactory)
+	ctx.RegisterModuleType("sh_defaults", ShDefaultsFactory)
 }
 
 // Test fixture preparer that will register most sh build components.
@@ -163,10 +165,14 @@ type TestProperties struct {
 
 	// Test options.
 	Test_options android.CommonTestOptions
+
+	// a list of extra test configuration files that should be installed with the module.
+	Extra_test_configs []string `android:"path,arch_variant"`
 }
 
 type ShBinary struct {
 	android.ModuleBase
+	android.DefaultableModuleBase
 
 	properties shBinaryProperties
 
@@ -184,8 +190,9 @@ type ShTest struct {
 
 	installDir android.InstallPath
 
-	data       []android.DataPath
-	testConfig android.Path
+	data             []android.DataPath
+	testConfig       android.Path
+	extraTestConfigs android.Paths
 
 	dataModules map[string]android.Path
 }
@@ -197,7 +204,7 @@ func (s *ShBinary) HostToolPath() android.OptionalPath {
 func (s *ShBinary) DepsMutator(ctx android.BottomUpMutatorContext) {
 }
 
-func (s *ShBinary) OutputFile() android.OutputPath {
+func (s *ShBinary) OutputFile() android.Path {
 	return s.outputFilePath
 }
 
@@ -469,6 +476,7 @@ func (s *ShTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		HostTemplate:           "${ShellTestConfigTemplate}",
 	})
 
+	s.extraTestConfigs = android.PathsForModuleSrc(ctx, s.testProperties.Extra_test_configs)
 	s.dataModules = make(map[string]android.Path)
 	ctx.VisitDirectDeps(func(dep android.Module) {
 		depTag := ctx.OtherModuleDependencyTag(dep)
@@ -508,6 +516,27 @@ func (s *ShTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	installedData := ctx.InstallTestData(s.installDir, s.data)
 	s.installedFile = ctx.InstallExecutable(s.installDir, s.outputFilePath.Base(), s.outputFilePath, installedData...)
+
+	mkEntries := s.AndroidMkEntries()[0]
+	android.SetProvider(ctx, tradefed.BaseTestProviderKey, tradefed.BaseTestProviderData{
+		TestcaseRelDataFiles: addArch(ctx.Arch().ArchType.String(), installedData.Paths()),
+		OutputFile:           s.outputFilePath,
+		TestConfig:           s.testConfig,
+		TestSuites:           s.testProperties.Test_suites,
+		IsHost:               false,
+		IsUnitTest:           Bool(s.testProperties.Test_options.Unit_test),
+		MkInclude:            mkEntries.Include,
+		MkAppClass:           mkEntries.Class,
+		InstallDir:           s.installDir,
+	})
+}
+
+func addArch(archType string, paths android.Paths) []string {
+	archRelPaths := []string{}
+	for _, p := range paths {
+		archRelPaths = append(archRelPaths, fmt.Sprintf("%s/%s", archType, p.Rel()))
+	}
+	return archRelPaths
 }
 
 func (s *ShTest) InstallInData() bool {
@@ -531,6 +560,9 @@ func (s *ShTest) AndroidMkEntries() []android.AndroidMkEntries {
 					entries.AddStrings("LOCAL_TEST_DATA_BINS", s.testProperties.Data_bins...)
 				}
 				entries.SetBoolIfTrue("LOCAL_COMPATIBILITY_PER_TESTCASE_DIRECTORY", Bool(s.testProperties.Per_testcase_directory))
+				if len(s.extraTestConfigs) > 0 {
+					entries.AddStrings("LOCAL_EXTRA_FULL_TEST_CONFIGS", s.extraTestConfigs.Strings()...)
+				}
 
 				s.testProperties.Test_options.SetAndroidMkEntries(entries)
 			},
@@ -548,6 +580,7 @@ func ShBinaryFactory() android.Module {
 	module := &ShBinary{}
 	initShBinaryModule(module)
 	android.InitAndroidArchModule(module, android.HostAndDeviceSupported, android.MultilibFirst)
+	android.InitDefaultableModule(module)
 	return module
 }
 
@@ -557,6 +590,7 @@ func ShBinaryHostFactory() android.Module {
 	module := &ShBinary{}
 	initShBinaryModule(module)
 	android.InitAndroidArchModule(module, android.HostSupported, android.MultilibFirst)
+	android.InitDefaultableModule(module)
 	return module
 }
 
@@ -567,6 +601,7 @@ func ShTestFactory() android.Module {
 	module.AddProperties(&module.testProperties)
 
 	android.InitAndroidArchModule(module, android.HostAndDeviceSupported, android.MultilibFirst)
+	android.InitDefaultableModule(module)
 	return module
 }
 
@@ -581,6 +616,21 @@ func ShTestHostFactory() android.Module {
 	}
 
 	android.InitAndroidArchModule(module, android.HostSupported, android.MultilibFirst)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+type ShDefaults struct {
+	android.ModuleBase
+	android.DefaultsModuleBase
+}
+
+func ShDefaultsFactory() android.Module {
+	module := &ShDefaults{}
+
+	module.AddProperties(&shBinaryProperties{}, &TestProperties{})
+	android.InitDefaultsModule(module)
+
 	return module
 }
 

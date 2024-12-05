@@ -59,16 +59,32 @@ func RegisterPrebuiltEtcBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("prebuilt_usr_keylayout", PrebuiltUserKeyLayoutFactory)
 	ctx.RegisterModuleType("prebuilt_usr_keychars", PrebuiltUserKeyCharsFactory)
 	ctx.RegisterModuleType("prebuilt_usr_idc", PrebuiltUserIdcFactory)
+	ctx.RegisterModuleType("prebuilt_usr_srec", PrebuiltUserSrecFactory)
 	ctx.RegisterModuleType("prebuilt_font", PrebuiltFontFactory)
 	ctx.RegisterModuleType("prebuilt_overlay", PrebuiltOverlayFactory)
 	ctx.RegisterModuleType("prebuilt_firmware", PrebuiltFirmwareFactory)
 	ctx.RegisterModuleType("prebuilt_dsp", PrebuiltDSPFactory)
 	ctx.RegisterModuleType("prebuilt_rfsa", PrebuiltRFSAFactory)
 	ctx.RegisterModuleType("prebuilt_renderscript_bitcode", PrebuiltRenderScriptBitcodeFactory)
-	ctx.RegisterModuleType("prebuilt_media_audio", PrebuiltMediaAudioFactory)
+	ctx.RegisterModuleType("prebuilt_media", PrebuiltMediaFactory)
 	ctx.RegisterModuleType("prebuilt_voicepack", PrebuiltVoicepackFactory)
 	ctx.RegisterModuleType("prebuilt_bin", PrebuiltBinaryFactory)
 	ctx.RegisterModuleType("prebuilt_wallpaper", PrebuiltWallpaperFactory)
+	ctx.RegisterModuleType("prebuilt_priv_app", PrebuiltPrivAppFactory)
+	ctx.RegisterModuleType("prebuilt_rfs", PrebuiltRfsFactory)
+	ctx.RegisterModuleType("prebuilt_framework", PrebuiltFrameworkFactory)
+	ctx.RegisterModuleType("prebuilt_res", PrebuiltResFactory)
+	ctx.RegisterModuleType("prebuilt_wlc_upt", PrebuiltWlcUptFactory)
+	ctx.RegisterModuleType("prebuilt_odm", PrebuiltOdmFactory)
+	ctx.RegisterModuleType("prebuilt_vendor_dlkm", PrebuiltVendorDlkmFactory)
+	ctx.RegisterModuleType("prebuilt_bt_firmware", PrebuiltBtFirmwareFactory)
+	ctx.RegisterModuleType("prebuilt_tvservice", PrebuiltTvServiceFactory)
+	ctx.RegisterModuleType("prebuilt_optee", PrebuiltOpteeFactory)
+	ctx.RegisterModuleType("prebuilt_tvconfig", PrebuiltTvConfigFactory)
+	ctx.RegisterModuleType("prebuilt_vendor", PrebuiltVendorFactory)
+	ctx.RegisterModuleType("prebuilt_sbin", PrebuiltSbinFactory)
+	ctx.RegisterModuleType("prebuilt_system", PrebuiltSystemFactory)
+	ctx.RegisterModuleType("prebuilt_first_stage_ramdisk", PrebuiltFirstStageRamdiskFactory)
 
 	ctx.RegisterModuleType("prebuilt_defaults", defaultsFactory)
 
@@ -76,7 +92,7 @@ func RegisterPrebuiltEtcBuildComponents(ctx android.RegistrationContext) {
 
 var PrepareForTestWithPrebuiltEtc = android.FixtureRegisterWithContext(RegisterPrebuiltEtcBuildComponents)
 
-type prebuiltEtcProperties struct {
+type PrebuiltEtcProperties struct {
 	// Source file of this prebuilt. Can reference a genrule type module with the ":module" syntax.
 	// Mutually exclusive with srcs.
 	Src proptools.Configurable[string] `android:"path,arch_variant,replace_instead_of_append"`
@@ -125,6 +141,9 @@ type prebuiltEtcProperties struct {
 
 	// Install symlinks to the installed file.
 	Symlinks []string `android:"arch_variant"`
+
+	// Install to partition oem when set to true.
+	Oem_specific *bool `android:"arch_variant"`
 }
 
 type prebuiltSubdirProperties struct {
@@ -160,7 +179,7 @@ type PrebuiltEtc struct {
 	android.ModuleBase
 	android.DefaultableModuleBase
 
-	properties prebuiltEtcProperties
+	properties PrebuiltEtcProperties
 
 	// rootProperties is used to return the value of the InstallInRoot() method. Currently, only
 	// prebuilt_avb and prebuilt_root modules use this.
@@ -169,7 +188,7 @@ type PrebuiltEtc struct {
 	subdirProperties prebuiltSubdirProperties
 
 	sourceFilePaths android.Paths
-	outputFilePaths android.OutputPaths
+	outputFilePaths android.WritablePaths
 	// The base install location, e.g. "etc" for prebuilt_etc, "usr/share" for prebuilt_usr_share.
 	installDirBase               string
 	installDirBase64             string
@@ -302,7 +321,7 @@ func (p *PrebuiltEtc) SetAdditionalDependencies(paths android.Paths) {
 	p.additionalDependencies = &paths
 }
 
-func (p *PrebuiltEtc) OutputFile() android.OutputPath {
+func (p *PrebuiltEtc) OutputFile() android.Path {
 	if p.usedSrcsProperty {
 		panic(fmt.Errorf("OutputFile not available on multi-source prebuilt %q", p.Name()))
 	}
@@ -362,6 +381,10 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		ctx.PropertyErrorf("sub_dir", "relative_install_path is set. Cannot set sub_dir")
 	}
 	baseInstallDirPath := android.PathForModuleInstall(ctx, p.installBaseDir(ctx), p.SubDir())
+	// TODO(b/377304441)
+	if android.Bool(p.properties.Oem_specific) {
+		baseInstallDirPath = android.PathForModuleInPartitionInstall(ctx, ctx.DeviceConfig().OemPath(), p.installBaseDir(ctx), p.SubDir())
+	}
 
 	filename := proptools.String(p.properties.Filename)
 	filenameFromSrc := proptools.Bool(p.properties.Filename_from_src)
@@ -391,7 +414,7 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			ctx.PropertyErrorf("filename", "filename cannot contain separator '/'")
 			return
 		}
-		p.outputFilePaths = android.OutputPaths{android.PathForModuleOut(ctx, filename).OutputPath}
+		p.outputFilePaths = android.WritablePaths{android.PathForModuleOut(ctx, filename)}
 
 		ip := installProperties{
 			filename:       filename,
@@ -434,7 +457,7 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				filename = src.Base()
 				installDirPath = baseInstallDirPath
 			}
-			output := android.PathForModuleOut(ctx, filename).OutputPath
+			output := android.PathForModuleOut(ctx, filename)
 			ip := installProperties{
 				filename:       filename,
 				sourceFilePath: src,
@@ -454,7 +477,7 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		if filename == "" {
 			filename = ctx.ModuleName()
 		}
-		p.outputFilePaths = android.OutputPaths{android.PathForModuleOut(ctx, filename).OutputPath}
+		p.outputFilePaths = android.WritablePaths{android.PathForModuleOut(ctx, filename)}
 		ip := installProperties{
 			filename:       filename,
 			sourceFilePath: p.sourceFilePaths[0],
@@ -482,7 +505,7 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 type installProperties struct {
 	filename       string
 	sourceFilePath android.Path
-	outputFilePath android.OutputPath
+	outputFilePath android.WritablePath
 	installDirPath android.InstallPath
 	symlinks       []string
 }
@@ -554,6 +577,7 @@ func InitPrebuiltEtcModule(p *PrebuiltEtc, dirBase string) {
 	p.installDirBase = dirBase
 	p.AddProperties(&p.properties)
 	p.AddProperties(&p.subdirProperties)
+	p.AddProperties(&p.rootProperties)
 }
 
 func InitPrebuiltRootModule(p *PrebuiltEtc) {
@@ -588,7 +612,7 @@ func DefaultsFactory(props ...interface{}) android.Module {
 
 	module.AddProperties(props...)
 	module.AddProperties(
-		&prebuiltEtcProperties{},
+		&PrebuiltEtcProperties{},
 		&prebuiltSubdirProperties{},
 	)
 
@@ -720,6 +744,17 @@ func PrebuiltUserIdcFactory() android.Module {
 	return module
 }
 
+// prebuilt_usr_srec is for a prebuilt artifact that is installed in
+// <partition>/usr/srec/<sub_dir> directory.
+func PrebuiltUserSrecFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "usr/srec")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
+	android.InitDefaultableModule(module)
+	return module
+}
+
 // prebuilt_font installs a font in <partition>/fonts directory.
 func PrebuiltFontFactory() android.Module {
 	module := &PrebuiltEtc{}
@@ -793,10 +828,10 @@ func PrebuiltRFSAFactory() android.Module {
 	return module
 }
 
-// prebuilt_media_audio installs audio files in <partition>/media/audio directory.
-func PrebuiltMediaAudioFactory() android.Module {
+// prebuilt_media installs media files in <partition>/media directory.
+func PrebuiltMediaFactory() android.Module {
 	module := &PrebuiltEtc{}
-	InitPrebuiltEtcModule(module, "media/audio")
+	InitPrebuiltEtcModule(module, "media")
 	// This module is device-only
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
@@ -827,6 +862,156 @@ func PrebuiltBinaryFactory() android.Module {
 func PrebuiltWallpaperFactory() android.Module {
 	module := &PrebuiltEtc{}
 	InitPrebuiltEtcModule(module, "wallpaper")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_priv_app installs files in <partition>/priv-app directory.
+func PrebuiltPrivAppFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "priv-app")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_rfs installs files in <partition>/rfs directory.
+func PrebuiltRfsFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "rfs")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_framework installs files in <partition>/framework directory.
+func PrebuiltFrameworkFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "framework")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_res installs files in <partition>/res directory.
+func PrebuiltResFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "res")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_wlc_upt installs files in <partition>/wlc_upt directory.
+func PrebuiltWlcUptFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "wlc_upt")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_odm installs files in <partition>/odm directory.
+func PrebuiltOdmFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "odm")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_vendor_dlkm installs files in <partition>/vendor_dlkm directory.
+func PrebuiltVendorDlkmFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "vendor_dlkm")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_bt_firmware installs files in <partition>/bt_firmware directory.
+func PrebuiltBtFirmwareFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "bt_firmware")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_tvservice installs files in <partition>/tvservice directory.
+func PrebuiltTvServiceFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "tvservice")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_optee installs files in <partition>/optee directory.
+func PrebuiltOpteeFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "optee")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_tvconfig installs files in <partition>/tvconfig directory.
+func PrebuiltTvConfigFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "tvconfig")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_vendor installs files in <partition>/vendor directory.
+func PrebuiltVendorFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "vendor")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_sbin installs files in <partition>/sbin directory.
+func PrebuiltSbinFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "sbin")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_system installs files in <partition>/system directory.
+func PrebuiltSystemFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "system")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_first_stage_ramdisk installs files in <partition>/first_stage_ramdisk directory.
+func PrebuiltFirstStageRamdiskFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "first_stage_ramdisk")
 	// This module is device-only
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
