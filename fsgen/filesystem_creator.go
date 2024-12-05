@@ -18,6 +18,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -51,6 +52,7 @@ type filesystemCreatorProps struct {
 	Boot_image        string `blueprint:"mutated" android:"path_device_first"`
 	Vendor_boot_image string `blueprint:"mutated" android:"path_device_first"`
 	Init_boot_image   string `blueprint:"mutated" android:"path_device_first"`
+	Super_image       string `blueprint:"mutated" android:"path_device_first"`
 }
 
 type filesystemCreator struct {
@@ -155,6 +157,11 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 	for _, x := range createVbmetaPartitions(ctx, finalSoongGeneratedPartitions) {
 		f.properties.Vbmeta_module_names = append(f.properties.Vbmeta_module_names, x.moduleName)
 		f.properties.Vbmeta_partition_names = append(f.properties.Vbmeta_partition_names, x.partitionName)
+	}
+
+	if buildingSuperImage(partitionVars) {
+		createSuperImage(ctx, finalSoongGeneratedPartitions, partitionVars)
+		f.properties.Super_image = ":" + generatedModuleName(ctx.Config(), "super")
 	}
 
 	ctx.Config().Get(fsGenStateOnceKey).(*FsGenState).soongGeneratedPartitions = finalSoongGeneratedPartitions
@@ -766,6 +773,7 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	fsProps.Avb_algorithm = avbInfo.avbAlgorithm
 	// BOARD_AVB_SYSTEM_ROLLBACK_INDEX
 	fsProps.Rollback_index = avbInfo.avbRollbackIndex
+	fsProps.Avb_hash_algorithm = avbInfo.avbHashAlgorithm
 
 	fsProps.Partition_name = proptools.StringPtr(partitionType)
 
@@ -799,6 +807,7 @@ type avbInfo struct {
 	avbAlgorithm     *string
 	avbRollbackIndex *int64
 	avbMode          *string
+	avbHashAlgorithm *string
 }
 
 func getAvbInfo(config android.Config, partitionType string) avbInfo {
@@ -808,10 +817,23 @@ func getAvbInfo(config android.Config, partitionType string) avbInfo {
 	boardAvbEnable := partitionVars.BoardAvbEnable
 	if boardAvbEnable {
 		result.avbEnable = proptools.BoolPtr(true)
+		// There are "global" and "specific" copies of a lot of these variables. Sometimes they
+		// choose the specific and then fall back to the global one if it's not set, other times
+		// the global one actually only applies to the vbmeta partition.
+		if partitionType == "vbmeta" {
+			if partitionVars.BoardAvbKeyPath != "" {
+				result.avbKeyPath = proptools.StringPtr(partitionVars.BoardAvbKeyPath)
+			}
+			if partitionVars.BoardAvbRollbackIndex != "" {
+				parsed, err := strconv.ParseInt(partitionVars.BoardAvbRollbackIndex, 10, 64)
+				if err != nil {
+					panic(fmt.Sprintf("Rollback index must be an int, got %s", partitionVars.BoardAvbRollbackIndex))
+				}
+				result.avbRollbackIndex = &parsed
+			}
+		}
 		if specificPartitionVars.BoardAvbKeyPath != "" {
 			result.avbKeyPath = proptools.StringPtr(specificPartitionVars.BoardAvbKeyPath)
-		} else if partitionVars.BoardAvbKeyPath != "" {
-			result.avbKeyPath = proptools.StringPtr(partitionVars.BoardAvbKeyPath)
 		}
 		if specificPartitionVars.BoardAvbAlgorithm != "" {
 			result.avbAlgorithm = proptools.StringPtr(specificPartitionVars.BoardAvbAlgorithm)
@@ -824,13 +846,24 @@ func getAvbInfo(config android.Config, partitionType string) avbInfo {
 				panic(fmt.Sprintf("Rollback index must be an int, got %s", specificPartitionVars.BoardAvbRollbackIndex))
 			}
 			result.avbRollbackIndex = &parsed
-		} else if partitionVars.BoardAvbRollbackIndex != "" {
-			parsed, err := strconv.ParseInt(partitionVars.BoardAvbRollbackIndex, 10, 64)
+		}
+		if specificPartitionVars.BoardAvbRollbackIndex != "" {
+			parsed, err := strconv.ParseInt(specificPartitionVars.BoardAvbRollbackIndex, 10, 64)
 			if err != nil {
-				panic(fmt.Sprintf("Rollback index must be an int, got %s", partitionVars.BoardAvbRollbackIndex))
+				panic(fmt.Sprintf("Rollback index must be an int, got %s", specificPartitionVars.BoardAvbRollbackIndex))
 			}
 			result.avbRollbackIndex = &parsed
 		}
+
+		// Make allows you to pass arbitrary arguments to avbtool via this variable, but in practice
+		// it's only used for --hash_algorithm. The soong module has a dedicated property for the
+		// hashtree algorithm, and doesn't allow custom arguments, so just extract the hashtree
+		// algorithm out of the arbitrary arguments.
+		addHashtreeFooterArgs := strings.Split(specificPartitionVars.BoardAvbAddHashtreeFooterArgs, " ")
+		if i := slices.Index(addHashtreeFooterArgs, "--hash_algorithm"); i >= 0 {
+			result.avbHashAlgorithm = &addHashtreeFooterArgs[i+1]
+		}
+
 		result.avbMode = proptools.StringPtr("make_legacy")
 	}
 	if result.avbKeyPath != nil {
@@ -970,6 +1003,14 @@ func (f *filesystemCreator) GenerateAndroidBuildActions(ctx android.ModuleContex
 		createDiffTest(ctx, diffTestFile, soongBootImg, makeBootImage)
 		diffTestFiles = append(diffTestFiles, diffTestFile)
 		ctx.Phony("soong_generated_init_boot_filesystem_test", diffTestFile)
+	}
+	if f.properties.Super_image != "" {
+		diffTestFile := android.PathForModuleOut(ctx, "super_diff_test.txt")
+		soongSuperImg := android.PathForModuleSrc(ctx, f.properties.Super_image)
+		makeSuperImage := android.PathForArbitraryOutput(ctx, fmt.Sprintf("target/product/%s/super.img", ctx.Config().DeviceName()))
+		createDiffTest(ctx, diffTestFile, soongSuperImg, makeSuperImage)
+		diffTestFiles = append(diffTestFiles, diffTestFile)
+		ctx.Phony("soong_generated_super_filesystem_test", diffTestFile)
 	}
 	ctx.Phony("soong_generated_filesystem_tests", diffTestFiles...)
 }
