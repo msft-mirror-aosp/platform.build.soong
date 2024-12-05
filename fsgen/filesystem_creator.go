@@ -52,6 +52,7 @@ type filesystemCreatorProps struct {
 	Boot_image        string `blueprint:"mutated" android:"path_device_first"`
 	Vendor_boot_image string `blueprint:"mutated" android:"path_device_first"`
 	Init_boot_image   string `blueprint:"mutated" android:"path_device_first"`
+	Super_image       string `blueprint:"mutated" android:"path_device_first"`
 }
 
 type filesystemCreator struct {
@@ -156,6 +157,11 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 	for _, x := range createVbmetaPartitions(ctx, finalSoongGeneratedPartitions) {
 		f.properties.Vbmeta_module_names = append(f.properties.Vbmeta_module_names, x.moduleName)
 		f.properties.Vbmeta_partition_names = append(f.properties.Vbmeta_partition_names, x.partitionName)
+	}
+
+	if buildingSuperImage(partitionVars) {
+		createSuperImage(ctx, finalSoongGeneratedPartitions, partitionVars)
+		f.properties.Super_image = ":" + generatedModuleName(ctx.Config(), "super")
 	}
 
 	ctx.Config().Get(fsGenStateOnceKey).(*FsGenState).soongGeneratedPartitions = finalSoongGeneratedPartitions
@@ -997,6 +1003,14 @@ func (f *filesystemCreator) GenerateAndroidBuildActions(ctx android.ModuleContex
 		createDiffTest(ctx, diffTestFile, soongBootImg, makeBootImage)
 		diffTestFiles = append(diffTestFiles, diffTestFile)
 		ctx.Phony("soong_generated_init_boot_filesystem_test", diffTestFile)
+	}
+	if f.properties.Super_image != "" {
+		diffTestFile := android.PathForModuleOut(ctx, "super_diff_test.txt")
+		soongSuperImg := android.PathForModuleSrc(ctx, f.properties.Super_image)
+		makeSuperImage := android.PathForArbitraryOutput(ctx, fmt.Sprintf("target/product/%s/super.img", ctx.Config().DeviceName()))
+		createDiffTest(ctx, diffTestFile, soongSuperImg, makeSuperImage)
+		diffTestFiles = append(diffTestFiles, diffTestFile)
+		ctx.Phony("soong_generated_super_filesystem_test", diffTestFile)
 	}
 	ctx.Phony("soong_generated_filesystem_tests", diffTestFiles...)
 }
