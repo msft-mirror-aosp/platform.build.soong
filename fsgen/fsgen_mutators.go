@@ -95,6 +95,7 @@ func createFsGenState(ctx android.LoadHookContext, generatedPrebuiltEtcModuleNam
 			fsDeps: map[string]*multilibDeps{
 				// These additional deps are added according to the cuttlefish system image bp.
 				"system": {
+					// keep-sorted start
 					"com.android.apex.cts.shim.v1_prebuilt":     defaultDepCandidateProps(ctx.Config()),
 					"dex_bootjars":                              defaultDepCandidateProps(ctx.Config()),
 					"framework_compatibility_matrix.device.xml": defaultDepCandidateProps(ctx.Config()),
@@ -105,6 +106,7 @@ func createFsGenState(ctx android.LoadHookContext, generatedPrebuiltEtcModuleNam
 					"llndk.libraries.txt":                       defaultDepCandidateProps(ctx.Config()),
 					"logpersist.start":                          defaultDepCandidateProps(ctx.Config()),
 					"update_engine_sideload":                    defaultDepCandidateProps(ctx.Config()),
+					// keep-sorted end
 				},
 				"vendor": {
 					"fs_config_files_vendor":                               defaultDepCandidateProps(ctx.Config()),
@@ -148,6 +150,7 @@ func createFsGenState(ctx android.LoadHookContext, generatedPrebuiltEtcModuleNam
 				},
 				"ramdisk":        {},
 				"vendor_ramdisk": {},
+				"recovery":       {},
 			},
 			fsDepsMutex:                     sync.Mutex{},
 			moduleToInstallationProps:       map[string]installationProperties{},
@@ -158,6 +161,9 @@ func createFsGenState(ctx android.LoadHookContext, generatedPrebuiltEtcModuleNam
 		if avbpubkeyGenerated {
 			(*fsGenState.fsDeps["product"])["system_other_avbpubkey"] = defaultDepCandidateProps(ctx.Config())
 		}
+
+		// Add common resources `prebuilt_res` module as dep of recovery partition
+		(*fsGenState.fsDeps["recovery"])[fmt.Sprintf("recovery-resources-common-%s", getDpi(ctx))] = defaultDepCandidateProps(ctx.Config())
 
 		return &fsGenState
 	}).(*FsGenState)

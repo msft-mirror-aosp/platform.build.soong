@@ -61,6 +61,11 @@ func createBootImage(ctx android.LoadHookContext, dtbImg dtbImg) bool {
 		dtbPrebuilt = proptools.StringPtr(":" + dtbImg.name)
 	}
 
+	var cmdline []string
+	if !buildingVendorBootImage(partitionVariables) {
+		cmdline = partitionVariables.InternalKernelCmdline
+	}
+
 	ctx.CreateModule(
 		filesystem.BootimgFactory,
 		&filesystem.BootimgProperties{
@@ -74,6 +79,7 @@ func createBootImage(ctx android.LoadHookContext, dtbImg dtbImg) bool {
 			Avb_algorithm:      avbInfo.avbAlgorithm,
 			Security_patch:     securityPatch,
 			Dtb_prebuilt:       dtbPrebuilt,
+			Cmdline:            cmdline,
 		},
 		&struct {
 			Name *string
@@ -96,6 +102,13 @@ func createVendorBootImage(ctx android.LoadHookContext, dtbImg dtbImg) bool {
 		dtbPrebuilt = proptools.StringPtr(":" + dtbImg.name)
 	}
 
+	cmdline := partitionVariables.InternalKernelCmdline
+
+	var vendorBootConfigImg *string
+	if name, ok := createVendorBootConfigImg(ctx); ok {
+		vendorBootConfigImg = proptools.StringPtr(":" + name)
+	}
+
 	ctx.CreateModule(
 		filesystem.BootimgFactory,
 		&filesystem.BootimgProperties{
@@ -108,6 +121,8 @@ func createVendorBootImage(ctx android.LoadHookContext, dtbImg dtbImg) bool {
 			Avb_rollback_index: avbInfo.avbRollbackIndex,
 			Avb_algorithm:      avbInfo.avbAlgorithm,
 			Dtb_prebuilt:       dtbPrebuilt,
+			Cmdline:            cmdline,
+			Bootconfig:         vendorBootConfigImg,
 		},
 		&struct {
 			Name *string
@@ -273,4 +288,30 @@ func createDtbImgFilegroup(ctx android.LoadHookContext) dtbImg {
 		}
 	}
 	return dtbImg{include: false}
+}
+
+func createVendorBootConfigImg(ctx android.LoadHookContext) (string, bool) {
+	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
+	bootconfig := partitionVars.InternalBootconfig
+	bootconfigFile := partitionVars.InternalBootconfigFile
+	if len(bootconfig) == 0 && len(bootconfigFile) == 0 {
+		return "", false
+	}
+
+	vendorBootconfigImgModuleName := generatedModuleName(ctx.Config(), "vendor_bootconfig_image")
+
+	ctx.CreateModule(
+		filesystem.BootconfigModuleFactory,
+		&struct {
+			Name             *string
+			Boot_config      []string
+			Boot_config_file *string
+		}{
+			Name:             proptools.StringPtr(vendorBootconfigImgModuleName),
+			Boot_config:      bootconfig,
+			Boot_config_file: proptools.StringPtr(bootconfigFile),
+		},
+	)
+
+	return vendorBootconfigImgModuleName, true
 }
