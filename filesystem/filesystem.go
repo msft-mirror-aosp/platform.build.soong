@@ -1012,7 +1012,7 @@ func (f *filesystem) getLibsForLinkerConfig(ctx android.ModuleContext) ([]androi
 	ctx.WalkDeps(func(child, parent android.Module) bool {
 		for _, ps := range android.OtherModuleProviderOrDefault(
 			ctx, child, android.InstallFilesProvider).PackagingSpecs {
-			if _, ok := deps[ps.RelPathInPackage()]; ok {
+			if _, ok := deps[ps.RelPathInPackage()]; ok && ps.Partition() == f.PartitionType() {
 				modulesInPackageByModule[child] = true
 				modulesInPackageByName[child.Name()] = true
 				return true
