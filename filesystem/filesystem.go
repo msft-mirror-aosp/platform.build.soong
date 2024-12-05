@@ -130,8 +130,12 @@ type FilesystemProperties struct {
 	// checks, and will be used in the future for API surface checks.
 	Partition_type *string
 
-	// file_contexts file to make image. Currently, only ext4 is supported.
+	// file_contexts file to make image. Currently, only ext4 is supported. These file contexts
+	// will be compiled with sefcontext_compile
 	File_contexts *string `android:"path"`
+
+	// The selinux file contexts, after having already run them through sefcontext_compile
+	Precompiled_file_contexts *string `android:"path"`
 
 	// Base directory relative to root, to which deps are installed, e.g. "system". Default is "."
 	// (root).
@@ -679,8 +683,15 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 		addStr("avb_salt", f.salt())
 	}
 
-	if proptools.String(f.properties.File_contexts) != "" {
+	if f.properties.File_contexts != nil && f.properties.Precompiled_file_contexts != nil {
+		ctx.ModuleErrorf("file_contexts and precompiled_file_contexts cannot both be set")
+	} else if f.properties.File_contexts != nil {
 		addPath("selinux_fc", f.buildFileContexts(ctx))
+	} else if f.properties.Precompiled_file_contexts != nil {
+		src := android.PathForModuleSrc(ctx, *f.properties.Precompiled_file_contexts)
+		if src != nil {
+			addPath("selinux_fc", src)
+		}
 	}
 	if timestamp := proptools.String(f.properties.Fake_timestamp); timestamp != "" {
 		addStr("timestamp", timestamp)
