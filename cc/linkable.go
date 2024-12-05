@@ -135,6 +135,10 @@ type LinkableInterface interface {
 	// IsNdk returns true if the library is in the configs known NDK list.
 	IsNdk(config android.Config) bool
 
+	// HasStubsVariants true if this module is a stub or has a sibling variant
+	// that is a stub.
+	HasStubsVariants() bool
+
 	// IsStubs returns true if the this is a stubs library.
 	IsStubs() bool
 
@@ -317,7 +321,9 @@ type SharedLibraryInfo struct {
 	SharedLibrary android.Path
 	Target        android.Target
 
-	TableOfContents android.OptionalPath
+	TableOfContents    android.OptionalPath
+	IsStubs            bool
+	ImplementationDeps depset.DepSet[string]
 
 	// should be obtained from static analogue
 	TransitiveStaticLibrariesForOrdering depset.DepSet[android.Path]
@@ -386,3 +392,9 @@ type FlagExporterInfo struct {
 }
 
 var FlagExporterInfoProvider = blueprint.NewProvider[FlagExporterInfo]()
+
+var ImplementationDepInfoProvider = blueprint.NewProvider[*ImplementationDepInfo]()
+
+type ImplementationDepInfo struct {
+	ImplementationDeps depset.DepSet[android.Path]
+}

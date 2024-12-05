@@ -63,6 +63,7 @@ type RuleBuilder struct {
 	missingDeps      []string
 	args             map[string]string
 	nsjail           bool
+	nsjailKeepGendir bool
 	nsjailBasePath   WritablePath
 	nsjailImplicits  Paths
 }
@@ -205,6 +206,18 @@ func (r *RuleBuilder) NsjailImplicits(inputs Paths) *RuleBuilder {
 		panic("NsjailImplicits() must be called after Nsjail()")
 	}
 	r.nsjailImplicits = append(r.nsjailImplicits, inputs...)
+	return r
+}
+
+// By default, nsjail rules truncate outputDir and baseDir before running commands, similar to Sbox
+// rules which always run commands in a fresh sandbox. Calling NsjailKeepGendir keeps outputDir and
+// baseDir as-is, leaving previous artifacts. This is useful when the rules support incremental
+// builds.
+func (r *RuleBuilder) NsjailKeepGendir() *RuleBuilder {
+	if !r.nsjail {
+		panic("NsjailKeepGendir() must be called after Nsjail()")
+	}
+	r.nsjailKeepGendir = true
 	return r
 }
 
@@ -488,21 +501,15 @@ func (r *RuleBuilder) depFileMergerCmd(depFiles WritablePaths) *RuleBuilderComma
 		Inputs(depFiles.Paths())
 }
 
-// BuildWithNinjaVars adds the built command line to the build graph, with dependencies on Inputs and Tools, and output files for
-// Outputs. This function will not escape Ninja variables, so it may be used to write sandbox manifests using Ninja variables.
-func (r *RuleBuilder) BuildWithUnescapedNinjaVars(name string, desc string) {
-	r.build(name, desc, false)
-}
-
 // Build adds the built command line to the build graph, with dependencies on Inputs and Tools, and output files for
 // Outputs.
 func (r *RuleBuilder) Build(name string, desc string) {
-	r.build(name, desc, true)
+	r.build(name, desc)
 }
 
 var sandboxEnvOnceKey = NewOnceKey("sandbox_environment_variables")
 
-func (r *RuleBuilder) build(name string, desc string, ninjaEscapeCommandString bool) {
+func (r *RuleBuilder) build(name string, desc string) {
 	name = ninjaNameEscape(name)
 
 	if len(r.missingDeps) > 0 {
@@ -561,8 +568,17 @@ func (r *RuleBuilder) build(name string, desc string, ninjaEscapeCommandString b
 	if r.nsjail {
 		var nsjailCmd strings.Builder
 		nsjailPath := r.ctx.Config().PrebuiltBuildTool(r.ctx, "nsjail")
+		if !r.nsjailKeepGendir {
+			nsjailCmd.WriteString("rm -rf ")
+			nsjailCmd.WriteString(r.nsjailBasePath.String())
+			nsjailCmd.WriteRune(' ')
+			nsjailCmd.WriteString(r.outDir.String())
+			nsjailCmd.WriteString(" && ")
+		}
 		nsjailCmd.WriteString("mkdir -p ")
 		nsjailCmd.WriteString(r.nsjailBasePath.String())
+		nsjailCmd.WriteRune(' ')
+		nsjailCmd.WriteString(r.outDir.String())
 		nsjailCmd.WriteString(" && ")
 		nsjailCmd.WriteString(nsjailPath.String())
 		nsjailCmd.WriteRune(' ')
@@ -575,25 +591,28 @@ func (r *RuleBuilder) build(name string, desc string, ninjaEscapeCommandString b
 		nsjailCmd.WriteString(r.outDir.String())
 		nsjailCmd.WriteString(":nsjail_build_sandbox/out")
 
-		for _, input := range inputs {
+		addBindMount := func(src, dst string) {
 			nsjailCmd.WriteString(" -R $PWD/")
-			nsjailCmd.WriteString(input.String())
+			nsjailCmd.WriteString(src)
 			nsjailCmd.WriteString(":nsjail_build_sandbox/")
-			nsjailCmd.WriteString(r.nsjailPathForInputRel(input))
+			nsjailCmd.WriteString(dst)
+		}
+
+		for _, input := range inputs {
+			addBindMount(input.String(), r.nsjailPathForInputRel(input))
 		}
 		for _, tool := range tools {
-			nsjailCmd.WriteString(" -R $PWD/")
-			nsjailCmd.WriteString(tool.String())
-			nsjailCmd.WriteString(":nsjail_build_sandbox/")
-			nsjailCmd.WriteString(nsjailPathForToolRel(r.ctx, tool))
+			addBindMount(tool.String(), nsjailPathForToolRel(r.ctx, tool))
 		}
 		inputs = append(inputs, tools...)
 		for _, c := range r.commands {
+			for _, directory := range c.implicitDirectories {
+				addBindMount(directory.String(), directory.String())
+				// TODO(b/375551969): Add implicitDirectories to BuildParams, rather than relying on implicits
+				inputs = append(inputs, SourcePath{basePath: directory.base()})
+			}
 			for _, tool := range c.packagedTools {
-				nsjailCmd.WriteString(" -R $PWD/")
-				nsjailCmd.WriteString(tool.srcPath.String())
-				nsjailCmd.WriteString(":nsjail_build_sandbox/")
-				nsjailCmd.WriteString(nsjailPathForPackagedToolRel(tool))
+				addBindMount(tool.srcPath.String(), nsjailPathForPackagedToolRel(tool))
 				inputs = append(inputs, tool.srcPath)
 			}
 		}
@@ -608,6 +627,7 @@ func (r *RuleBuilder) build(name string, desc string, ninjaEscapeCommandString b
 		nsjailCmd.WriteString(" -m none:/tmp:tmpfs:size=1073741824") // 1GB, should be enough
 		nsjailCmd.WriteString(" -D nsjail_build_sandbox")
 		nsjailCmd.WriteString(" --disable_rlimits")
+		nsjailCmd.WriteString(" --skip_setsid") // ABFS relies on process-groups to track file operations
 		nsjailCmd.WriteString(" -q")
 		nsjailCmd.WriteString(" -- ")
 		nsjailCmd.WriteString("/bin/bash -c ")
@@ -761,30 +781,7 @@ func (r *RuleBuilder) build(name string, desc string, ninjaEscapeCommandString b
 		if err != nil {
 			ReportPathErrorf(r.ctx, "sbox manifest failed to marshal: %q", err)
 		}
-		if ninjaEscapeCommandString {
-			WriteFileRule(r.ctx, r.sboxManifestPath, string(pbText))
-		} else {
-			// We need  to have a rule to write files that is
-			// defined on the RuleBuilder's pctx in order to
-			// write Ninja variables in the string.
-			// The WriteFileRule function above rule can only write
-			// raw strings because it is defined on the android
-			// package's pctx, and it can't access variables defined
-			// in another context.
-			r.ctx.Build(r.pctx, BuildParams{
-				Rule: r.ctx.Rule(r.pctx, "unescapedWriteFile", blueprint.RuleParams{
-					Command:        `rm -rf ${out} && cat ${out}.rsp > ${out}`,
-					Rspfile:        "${out}.rsp",
-					RspfileContent: "${content}",
-					Description:    "write file",
-				}, "content"),
-				Output:      r.sboxManifestPath,
-				Description: "write sbox manifest " + r.sboxManifestPath.Base(),
-				Args: map[string]string{
-					"content": string(pbText),
-				},
-			})
-		}
+		WriteFileRule(r.ctx, r.sboxManifestPath, string(pbText))
 
 		// Generate a new string to use as the command line of the sbox rule.  This uses
 		// a RuleBuilderCommand as a convenience method of building the command line, then
@@ -878,9 +875,19 @@ func (r *RuleBuilder) build(name string, desc string, ninjaEscapeCommandString b
 		pool = localPool
 	}
 
-	if ninjaEscapeCommandString {
-		commandString = proptools.NinjaEscape(commandString)
+	// If the command length is getting close to linux's maximum, dump it to a file, which allows
+	// for longer commands.
+	if len(commandString) > 100000 {
+		hasher := sha256.New()
+		hasher.Write([]byte(output.String()))
+		script := PathForOutput(r.ctx, "rule_builder_scripts", fmt.Sprintf("%x.sh", hasher.Sum(nil)))
+		commandString = "set -eu\n\n" + commandString + "\n"
+		WriteExecutableFileRuleVerbatim(r.ctx, script, commandString)
+		inputs = append(inputs, script)
+		commandString = script.String()
 	}
+
+	commandString = proptools.NinjaEscape(commandString)
 
 	args_vars := make([]string, len(r.args))
 	i := 0
@@ -917,16 +924,17 @@ func (r *RuleBuilder) build(name string, desc string, ninjaEscapeCommandString b
 type RuleBuilderCommand struct {
 	rule *RuleBuilder
 
-	buf           strings.Builder
-	inputs        Paths
-	implicits     Paths
-	orderOnlys    Paths
-	validations   Paths
-	outputs       WritablePaths
-	depFiles      WritablePaths
-	tools         Paths
-	packagedTools []PackagingSpec
-	rspFiles      []rspFileAndPaths
+	buf                 strings.Builder
+	inputs              Paths
+	implicits           Paths
+	orderOnlys          Paths
+	validations         Paths
+	outputs             WritablePaths
+	depFiles            WritablePaths
+	tools               Paths
+	packagedTools       []PackagingSpec
+	rspFiles            []rspFileAndPaths
+	implicitDirectories DirectoryPaths
 }
 
 type rspFileAndPaths struct {
@@ -949,6 +957,10 @@ func (c *RuleBuilderCommand) addInput(path Path) string {
 func (c *RuleBuilderCommand) addImplicit(path Path) {
 	checkPathNotNil(path)
 	c.implicits = append(c.implicits, path)
+}
+
+func (c *RuleBuilderCommand) addImplicitDirectory(path DirectoryPath) {
+	c.implicitDirectories = append(c.implicitDirectories, path)
 }
 
 func (c *RuleBuilderCommand) addOrderOnly(path Path) {
@@ -1310,6 +1322,16 @@ func (c *RuleBuilderCommand) Implicits(paths Paths) *RuleBuilderCommand {
 	for _, path := range paths {
 		c.addImplicit(path)
 	}
+	return c
+}
+
+// ImplicitDirectory adds the specified input directory to the dependencies without modifying the
+// command line. Added directories will be bind-mounted for the nsjail.
+func (c *RuleBuilderCommand) ImplicitDirectory(path DirectoryPath) *RuleBuilderCommand {
+	if !c.rule.nsjail {
+		panic("ImplicitDirectory() must be called after Nsjail()")
+	}
+	c.addImplicitDirectory(path)
 	return c
 }
 
