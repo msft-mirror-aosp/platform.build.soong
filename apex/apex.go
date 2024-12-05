@@ -1222,7 +1222,13 @@ const (
 var _ android.DepIsInSameApex = (*apexBundle)(nil)
 
 // Implements android.DepInInSameApex
-func (a *apexBundle) DepIsInSameApex(_ android.BaseModuleContext, _ android.Module) bool {
+func (a *apexBundle) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	// direct deps of an APEX bundle are all part of the APEX bundle
+	// TODO(jiyong): shouldn't we look into the payload field of the dependencyTag?
+	return true
+}
+
+func (a *apexBundle) IncomingDepIsInSameApex(tag blueprint.DependencyTag) bool {
 	// direct deps of an APEX bundle are all part of the APEX bundle
 	// TODO(jiyong): shouldn't we look into the payload field of the dependencyTag?
 	return true
@@ -2109,17 +2115,14 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			// like to record requiredNativeLibs even when
 			// DepIsInSameAPex is false. We also shouldn't do
 			// this for host.
-			//
-			// TODO(jiyong): explain why the same module is passed in twice.
-			// Switching the first am to parent breaks lots of tests.
-			if !android.IsDepInSameApex(ctx, am, am) {
+			if !android.IsDepInSameApex(ctx, parent, am) {
 				return false
 			}
 
 			vctx.filesInfo = append(vctx.filesInfo, af)
 			return true // track transitive dependencies
 		} else if rm, ok := child.(*rust.Module); ok {
-			if !android.IsDepInSameApex(ctx, am, am) {
+			if !android.IsDepInSameApex(ctx, parent, am) {
 				return false
 			}
 
