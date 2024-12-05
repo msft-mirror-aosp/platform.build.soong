@@ -91,6 +91,8 @@ type ModuleWithDepsPathContext interface {
 	EarlyModulePathContext
 	OtherModuleProviderContext
 	VisitDirectDeps(visit func(Module))
+	VisitDirectDepsProxy(visit func(ModuleProxy))
+	VisitDirectDepsProxyWithTag(tag blueprint.DependencyTag, visit func(ModuleProxy))
 	OtherModuleDependencyTag(m blueprint.Module) blueprint.DependencyTag
 	HasMutatorFinished(mutatorName string) bool
 }
@@ -117,6 +119,9 @@ type ModuleInstallPathContext interface {
 	InstallInOdm() bool
 	InstallInProduct() bool
 	InstallInVendor() bool
+	InstallInSystemDlkm() bool
+	InstallInVendorDlkm() bool
+	InstallInOdmDlkm() bool
 	InstallForceOS() (*OsType, *ArchType)
 }
 
@@ -168,6 +173,18 @@ func (ctx *baseModuleContextToModuleInstallPathContext) InstallInProduct() bool 
 
 func (ctx *baseModuleContextToModuleInstallPathContext) InstallInVendor() bool {
 	return ctx.Module().InstallInVendor()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInSystemDlkm() bool {
+	return ctx.Module().InstallInSystemDlkm()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInVendorDlkm() bool {
+	return ctx.Module().InstallInVendorDlkm()
+}
+
+func (ctx *baseModuleContextToModuleInstallPathContext) InstallInOdmDlkm() bool {
+	return ctx.Module().InstallInOdmDlkm()
 }
 
 func (ctx *baseModuleContextToModuleInstallPathContext) InstallForceOS() (*OsType, *ArchType) {
@@ -551,19 +568,39 @@ func PathsRelativeToModuleSourceDir(input SourceInput) Paths {
 	return ret
 }
 
+type directoryPath struct {
+	basePath
+}
+
+func (d *directoryPath) String() string {
+	return d.basePath.String()
+}
+
+func (d *directoryPath) base() basePath {
+	return d.basePath
+}
+
+// DirectoryPath represents a source path for directories. Incompatible with Path by design.
+type DirectoryPath interface {
+	String() string
+	base() basePath
+}
+
+var _ DirectoryPath = (*directoryPath)(nil)
+
+type DirectoryPaths []DirectoryPath
+
 // DirectoryPathsForModuleSrcExcludes returns a Paths{} containing the resolved references in
 // directory paths. Elements of paths are resolved as:
 //   - filepath, relative to local module directory, resolves as a filepath relative to the local
 //     source directory
 //   - other modules using the ":name" syntax. These modules must implement DirProvider.
-//
-// TODO(b/358302178): Implement DirectoryPath and change the return type.
-func DirectoryPathsForModuleSrc(ctx ModuleMissingDepsPathContext, paths []string) Paths {
-	var ret Paths
+func DirectoryPathsForModuleSrc(ctx ModuleMissingDepsPathContext, paths []string) DirectoryPaths {
+	var ret DirectoryPaths
 
 	for _, path := range paths {
 		if m, t := SrcIsModuleWithTag(path); m != "" {
-			module := GetModuleFromPathDep(ctx, m, t)
+			module := GetModuleProxyFromPathDep(ctx, m, t)
 			if module == nil {
 				ctx.ModuleErrorf(`missing dependency on %q, is the property annotated with android:"path"?`, m)
 				continue
@@ -576,7 +613,7 @@ func DirectoryPathsForModuleSrc(ctx ModuleMissingDepsPathContext, paths []string
 			if !ok {
 				panic(fmt.Errorf("%s is not an OtherModuleProviderContext", ctx))
 			}
-			if dirProvider, ok := OtherModuleProvider(mctx, module, DirProvider); ok {
+			if dirProvider, ok := OtherModuleProvider(mctx, *module, DirProvider); ok {
 				ret = append(ret, dirProvider.Dirs...)
 			} else {
 				ReportPathErrorf(ctx, "module %q does not implement DirProvider", module)
@@ -588,12 +625,12 @@ func DirectoryPathsForModuleSrc(ctx ModuleMissingDepsPathContext, paths []string
 			} else if !isDir {
 				ReportPathErrorf(ctx, "module directory path %q is not a directory", p)
 			} else {
-				ret = append(ret, p)
+				ret = append(ret, &directoryPath{basePath{path: p.path, rel: p.rel}})
 			}
 		}
 	}
 
-	seen := make(map[Path]bool, len(ret))
+	seen := make(map[DirectoryPath]bool, len(ret))
 	for _, path := range ret {
 		if seen[path] {
 			ReportPathErrorf(ctx, "duplicated path %q", path)
@@ -634,14 +671,15 @@ func (p OutputPaths) Strings() []string {
 // If the dependency is not found, a missingErrorDependency is returned.
 // If the module dependency is not a SourceFileProducer or OutputFileProducer, appropriate errors will be returned.
 func getPathsFromModuleDep(ctx ModuleWithDepsPathContext, path, moduleName, tag string) (Paths, error) {
-	module := GetModuleFromPathDep(ctx, moduleName, tag)
+	module := GetModuleProxyFromPathDep(ctx, moduleName, tag)
 	if module == nil {
 		return nil, missingDependencyError{[]string{moduleName}}
 	}
-	if aModule, ok := module.(Module); ok && !aModule.Enabled(ctx) {
+	if !OtherModuleProviderOrDefault(ctx, *module, CommonModuleInfoKey).Enabled {
 		return nil, missingDependencyError{[]string{moduleName}}
 	}
-	outputFiles, err := outputFilesForModule(ctx, module, tag)
+
+	outputFiles, err := outputFilesForModule(ctx, *module, tag)
 	if outputFiles != nil && err == nil {
 		return outputFiles, nil
 	} else {
@@ -649,7 +687,7 @@ func getPathsFromModuleDep(ctx ModuleWithDepsPathContext, path, moduleName, tag 
 	}
 }
 
-// GetModuleFromPathDep will return the module that was added as a dependency automatically for
+// GetModuleProxyFromPathDep will return the module that was added as a dependency automatically for
 // properties tagged with `android:"path"` or manually using ExtractSourceDeps or
 // ExtractSourcesDeps.
 //
@@ -659,6 +697,27 @@ func getPathsFromModuleDep(ctx ModuleWithDepsPathContext, path, moduleName, tag 
 //
 // If tag is "" then the returned module will be the dependency that was added for ":moduleName".
 // Otherwise, it is the dependency that was added for ":moduleName{tag}".
+func GetModuleProxyFromPathDep(ctx ModuleWithDepsPathContext, moduleName, tag string) *ModuleProxy {
+	var found *ModuleProxy
+	// The sourceOrOutputDepTag uniquely identifies the module dependency as it contains both the
+	// module name and the tag. Dependencies added automatically for properties tagged with
+	// `android:"path"` are deduped so are guaranteed to be unique. It is possible for duplicate
+	// dependencies to be added manually using ExtractSourcesDeps or ExtractSourceDeps but even then
+	// it will always be the case that the dependencies will be identical, i.e. the same tag and same
+	// moduleName referring to the same dependency module.
+	//
+	// It does not matter whether the moduleName is a fully qualified name or if the module
+	// dependency is a prebuilt module. All that matters is the same information is supplied to
+	// create the tag here as was supplied to create the tag when the dependency was added so that
+	// this finds the matching dependency module.
+	expectedTag := sourceOrOutputDepTag(moduleName, tag)
+	ctx.VisitDirectDepsProxyWithTag(expectedTag, func(module ModuleProxy) {
+		found = &module
+	})
+	return found
+}
+
+// Deprecated: use GetModuleProxyFromPathDep
 func GetModuleFromPathDep(ctx ModuleWithDepsPathContext, moduleName, tag string) blueprint.Module {
 	var found blueprint.Module
 	// The sourceOrOutputDepTag uniquely identifies the module dependency as it contains both the
@@ -2057,6 +2116,10 @@ func PathForMainlineSdksInstall(ctx PathContext, paths ...string) InstallPath {
 	return base.Join(ctx, paths...)
 }
 
+func PathForSuiteInstall(ctx PathContext, suite string, pathComponents ...string) InstallPath {
+	return pathForPartitionInstallDir(ctx, "test_suites", "test_suites", false).Join(ctx, suite).Join(ctx, pathComponents...)
+}
+
 func InstallPathToOnDevicePath(ctx PathContext, path InstallPath) string {
 	rel := Rel(ctx, strings.TrimSuffix(path.PartitionDir(), path.partition), path.String())
 	return "/" + rel
@@ -2111,6 +2174,12 @@ func modulePartition(ctx ModuleInstallPathContext, device bool) string {
 			partition = ctx.DeviceConfig().SystemExtPath()
 		} else if ctx.InstallInRoot() {
 			partition = "root"
+		} else if ctx.InstallInSystemDlkm() {
+			partition = ctx.DeviceConfig().SystemDlkmPath()
+		} else if ctx.InstallInVendorDlkm() {
+			partition = ctx.DeviceConfig().VendorDlkmPath()
+		} else if ctx.InstallInOdmDlkm() {
+			partition = ctx.DeviceConfig().OdmDlkmPath()
 		} else {
 			partition = "system"
 		}
@@ -2314,6 +2383,9 @@ type testModuleInstallPathContext struct {
 	inOdm           bool
 	inProduct       bool
 	inVendor        bool
+	inSystemDlkm    bool
+	inVendorDlkm    bool
+	inOdmDlkm       bool
 	forceOS         *OsType
 	forceArch       *ArchType
 }
@@ -2366,6 +2438,18 @@ func (m testModuleInstallPathContext) InstallInProduct() bool {
 
 func (m testModuleInstallPathContext) InstallInVendor() bool {
 	return m.inVendor
+}
+
+func (m testModuleInstallPathContext) InstallInSystemDlkm() bool {
+	return m.inSystemDlkm
+}
+
+func (m testModuleInstallPathContext) InstallInVendorDlkm() bool {
+	return m.inVendorDlkm
+}
+
+func (m testModuleInstallPathContext) InstallInOdmDlkm() bool {
+	return m.inOdmDlkm
 }
 
 func (m testModuleInstallPathContext) InstallForceOS() (*OsType, *ArchType) {
@@ -2528,4 +2612,20 @@ func IsThirdPartyPath(path string) bool {
 		return true
 	}
 	return false
+}
+
+// ToRelativeSourcePath converts absolute source path to the path relative to the source root.
+// This throws an error if the input path is outside of the source root and cannot be converted
+// to the relative path.
+// This should be rarely used given that the source path is relative in Soong.
+func ToRelativeSourcePath(ctx PathContext, path string) string {
+	ret := path
+	if filepath.IsAbs(path) {
+		relPath, err := filepath.Rel(absSrcDir, path)
+		if err != nil || strings.HasPrefix(relPath, "..") {
+			ReportPathErrorf(ctx, "%s is outside of the source root", path)
+		}
+		ret = relPath
+	}
+	return ret
 }

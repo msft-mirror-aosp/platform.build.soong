@@ -226,9 +226,9 @@ var (
 
 	// Rule for generating device binary default wrapper
 	deviceBinaryWrapper = pctx.StaticRule("deviceBinaryWrapper", blueprint.RuleParams{
-		Command: `echo -e '#!/system/bin/sh\n` +
+		Command: `printf '#!/system/bin/sh\n` +
 			`export CLASSPATH=/system/framework/$jar_name\n` +
-			`exec app_process /$partition/bin $main_class "$$@"'> ${out}`,
+			`exec app_process /$partition/bin $main_class "$$@"\n'> ${out}`,
 		Description: "Generating device binary wrapper ${jar_name}",
 	}, "jar_name", "partition", "main_class")
 )
@@ -326,6 +326,8 @@ type JavaInfo struct {
 	// AconfigIntermediateCacheOutputPaths is a path to the cache files collected from the
 	// java_aconfig_library modules that are statically linked to this module.
 	AconfigIntermediateCacheOutputPaths android.Paths
+
+	SdkVersion android.SdkSpec
 }
 
 var JavaInfoProvider = blueprint.NewProvider[*JavaInfo]()
@@ -606,10 +608,8 @@ func getJavaVersion(ctx android.ModuleContext, javaVersion string, sdkContext an
 	} else if ctx.Device() {
 		return defaultJavaLanguageVersion(ctx, sdkContext.SdkVersion(ctx))
 	} else if ctx.Config().TargetsJava21() {
-		// Temporary experimental flag to be able to try and build with
-		// java version 21 options.  The flag, if used, just sets Java
-		// 21 as the default version, leaving any components that
-		// target an older version intact.
+		// Build flag that controls whether Java 21 is used as the default
+		// target version, or Java 17.
 		return JAVA_VERSION_21
 	} else {
 		return JAVA_VERSION_17
@@ -944,6 +944,7 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		// Even though the source javalib is not used, we need to hide it to prevent duplicate installation rules.
 		// TODO (b/331665856): Implement a principled solution for this.
 		j.HideFromMake()
+		j.SkipInstall()
 	}
 	j.provideHiddenAPIPropertyInfo(ctx)
 
@@ -1558,14 +1559,16 @@ func (j *TestHost) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	j.Test.generateAndroidBuildActionsWithConfig(ctx, configs)
 	android.SetProvider(ctx, tradefed.BaseTestProviderKey, tradefed.BaseTestProviderData{
-		InstalledFiles:      j.data,
-		OutputFile:          j.outputFile,
-		TestConfig:          j.testConfig,
-		RequiredModuleNames: j.RequiredModuleNames(ctx),
-		TestSuites:          j.testProperties.Test_suites,
-		IsHost:              true,
-		LocalSdkVersion:     j.sdkVersion.String(),
-		IsUnitTest:          Bool(j.testProperties.Test_options.Unit_test),
+		TestcaseRelDataFiles: testcaseRel(j.data),
+		OutputFile:           j.outputFile,
+		TestConfig:           j.testConfig,
+		RequiredModuleNames:  j.RequiredModuleNames(ctx),
+		TestSuites:           j.testProperties.Test_suites,
+		IsHost:               true,
+		LocalSdkVersion:      j.sdkVersion.String(),
+		IsUnitTest:           Bool(j.testProperties.Test_options.Unit_test),
+		MkInclude:            "$(BUILD_SYSTEM)/soong_java_prebuilt.mk",
+		MkAppClass:           "JAVA_LIBRARIES",
 	})
 }
 
@@ -1609,6 +1612,8 @@ func (j *Test) generateAndroidBuildActionsWithConfig(ctx android.ModuleContext, 
 		j.data = append(j.data, android.OutputFileForModule(ctx, dep, ""))
 	})
 
+	var directImplementationDeps android.Paths
+	var transitiveImplementationDeps []depset.DepSet[android.Path]
 	ctx.VisitDirectDepsWithTag(jniLibTag, func(dep android.Module) {
 		sharedLibInfo, _ := android.OtherModuleProvider(ctx, dep, cc.SharedLibraryInfoProvider)
 		if sharedLibInfo.SharedLibrary != nil {
@@ -1627,9 +1632,18 @@ func (j *Test) generateAndroidBuildActionsWithConfig(ctx android.ModuleContext, 
 				Output: relocatedLib,
 			})
 			j.data = append(j.data, relocatedLib)
+
+			directImplementationDeps = append(directImplementationDeps, android.OutputFileForModule(ctx, dep, ""))
+			if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
+				transitiveImplementationDeps = append(transitiveImplementationDeps, info.ImplementationDeps)
+			}
 		} else {
 			ctx.PropertyErrorf("jni_libs", "%q of type %q is not supported", dep.Name(), ctx.OtherModuleType(dep))
 		}
+	})
+
+	android.SetProvider(ctx, cc.ImplementationDepInfoProvider, &cc.ImplementationDepInfo{
+		ImplementationDeps: depset.New(depset.PREORDER, directImplementationDeps, transitiveImplementationDeps),
 	})
 
 	j.Library.GenerateAndroidBuildActions(ctx)
@@ -2299,14 +2313,17 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		case libTag:
 			if provider, ok := android.OtherModuleProvider(ctx, dep, JavaInfoProvider); ok {
 				classPaths = append(classPaths, provider.HeaderJars...)
+				al.aconfigProtoFiles = append(al.aconfigProtoFiles, provider.AconfigIntermediateCacheOutputPaths...)
 			}
 		case bootClasspathTag:
 			if provider, ok := android.OtherModuleProvider(ctx, dep, JavaInfoProvider); ok {
 				bootclassPaths = append(bootclassPaths, provider.HeaderJars...)
+				al.aconfigProtoFiles = append(al.aconfigProtoFiles, provider.AconfigIntermediateCacheOutputPaths...)
 			}
 		case staticLibTag:
 			if provider, ok := android.OtherModuleProvider(ctx, dep, JavaInfoProvider); ok {
 				staticLibs = append(staticLibs, provider.HeaderJars...)
+				al.aconfigProtoFiles = append(al.aconfigProtoFiles, provider.AconfigIntermediateCacheOutputPaths...)
 			}
 		case systemModulesTag:
 			if sm, ok := android.OtherModuleProvider(ctx, dep, SystemModulesProvider); ok {
