@@ -69,6 +69,7 @@ func filesystemCreatorFactory() android.Module {
 		avbpubkeyGenerated := createAvbpubkeyModule(ctx)
 		createFsGenState(ctx, generatedPrebuiltEtcModuleNames, avbpubkeyGenerated)
 		module.createAvbKeyFilegroups(ctx)
+		module.createMiscFilegroups(ctx)
 		module.createInternalModules(ctx)
 	})
 
@@ -414,6 +415,22 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 				"first_stage_ramdisk/sys",
 			})
 		}
+	case "recovery":
+		// Following https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/Makefile;l=2826;drc=ad7cfb56010cb22c3aa0e70cf71c804352553526
+		fsProps.Dirs = android.NewSimpleConfigurable([]string{
+			"sdcard",
+			"tmp",
+		})
+		fsProps.Symlinks = []filesystem.SymlinkDefinition{
+			{
+				Target: proptools.StringPtr("/system/bin/init"),
+				Name:   proptools.StringPtr("init"),
+			},
+			{
+				Target: proptools.StringPtr("prop.default"),
+				Name:   proptools.StringPtr("default.prop"),
+			},
+		}
 	}
 }
 
@@ -503,6 +520,29 @@ func (f *filesystemCreator) createAvbKeyFilegroups(ctx android.LoadHookContext) 
 			},
 		)
 		fsGenState.avbKeyFilegroups[file] = name
+	}
+}
+
+// Creates filegroups for miscellaneous other files
+func (f *filesystemCreator) createMiscFilegroups(ctx android.LoadHookContext) {
+	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
+
+	if partitionVars.BoardErofsCompressorHints != "" {
+		dir := filepath.Dir(partitionVars.BoardErofsCompressorHints)
+		base := filepath.Base(partitionVars.BoardErofsCompressorHints)
+		ctx.CreateModuleInDirectory(
+			android.FileGroupFactory,
+			dir,
+			&struct {
+				Name       *string
+				Srcs       []string
+				Visibility []string
+			}{
+				Name:       proptools.StringPtr("soong_generated_board_erofs_compress_hints_filegroup"),
+				Srcs:       []string{base},
+				Visibility: []string{"//visibility:public"},
+			},
+		)
 	}
 }
 
@@ -703,6 +743,15 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	if filesystem.GetFsTypeFromString(ctx, *fsProps.Type).IsUnknown() {
 		// Currently the android_filesystem module type only supports a handful of FS types like ext4, erofs
 		return nil, false
+	}
+
+	if *fsProps.Type == "erofs" {
+		if partitionVars.BoardErofsCompressor != "" {
+			fsProps.Erofs.Compressor = proptools.StringPtr(partitionVars.BoardErofsCompressor)
+		}
+		if partitionVars.BoardErofsCompressorHints != "" {
+			fsProps.Erofs.Compress_hints = proptools.StringPtr(":soong_generated_board_erofs_compress_hints_filegroup")
+		}
 	}
 
 	// Don't build this module on checkbuilds, the soong-built partitions are still in-progress

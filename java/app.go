@@ -1102,7 +1102,18 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 			app.SdkVersion(ctx).Kind != android.SdkCorePlatform && !app.RequiresStableAPIs(ctx)
 	}
 	jniLib, prebuiltJniPackages := collectJniDeps(ctx, shouldCollectRecursiveNativeDeps,
-		checkNativeSdkVersion, func(dep cc.LinkableInterface) bool { return !dep.IsNdk(ctx.Config()) && !dep.IsStubs() })
+		checkNativeSdkVersion, func(parent, child android.Module) bool {
+			apkInApex := ctx.Module().(android.ApexModule).NotInPlatform()
+			childLinkable, _ := child.(cc.LinkableInterface)
+			parentLinkable, _ := parent.(cc.LinkableInterface)
+			useStubsOfDep := childLinkable.IsStubs()
+			if apkInApex && parentLinkable != nil {
+				// APK-in-APEX
+				// If the parent is a linkable interface, use stubs if the dependency edge crosses an apex boundary.
+				useStubsOfDep = useStubsOfDep || (childLinkable.HasStubsVariants() && cc.ShouldUseStubForApex(ctx, parent, child))
+			}
+			return !childLinkable.IsNdk(ctx.Config()) && !useStubsOfDep
+		})
 
 	var certificates []Certificate
 
@@ -1137,7 +1148,7 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 func collectJniDeps(ctx android.ModuleContext,
 	shouldCollectRecursiveNativeDeps bool,
 	checkNativeSdkVersion bool,
-	filter func(cc.LinkableInterface) bool) ([]jniLib, android.Paths) {
+	filter func(parent, child android.Module) bool) ([]jniLib, android.Paths) {
 	var jniLibs []jniLib
 	var prebuiltJniPackages android.Paths
 	seenModulePaths := make(map[string]bool)
@@ -1148,7 +1159,7 @@ func collectJniDeps(ctx android.ModuleContext,
 
 		if IsJniDepTag(tag) || cc.IsSharedDepTag(tag) {
 			if dep, ok := module.(cc.LinkableInterface); ok {
-				if filter != nil && !filter(dep) {
+				if filter != nil && !filter(parent, module) {
 					return false
 				}
 
