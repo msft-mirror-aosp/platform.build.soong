@@ -9,6 +9,8 @@ type ModuleProxy struct {
 	module blueprint.ModuleProxy
 }
 
+var _ Module = (*ModuleProxy)(nil)
+
 func (m ModuleProxy) Name() string {
 	return m.module.Name()
 }
@@ -103,6 +105,18 @@ func (m ModuleProxy) InstallInVendor() bool {
 }
 
 func (m ModuleProxy) InstallInSystemExt() bool {
+	panic("method is not implemented on ModuleProxy")
+}
+
+func (m ModuleProxy) InstallInSystemDlkm() bool {
+	panic("method is not implemented on ModuleProxy")
+}
+
+func (m ModuleProxy) InstallInVendorDlkm() bool {
+	panic("method is not implemented on ModuleProxy")
+}
+
+func (m ModuleProxy) InstallInOdmDlkm() bool {
 	panic("method is not implemented on ModuleProxy")
 }
 
@@ -211,5 +225,9 @@ func (m ModuleProxy) DecodeMultilib(ctx ConfigContext) (string, string) {
 }
 
 func (m ModuleProxy) Overrides() []string {
+	panic("method is not implemented on ModuleProxy")
+}
+
+func (m ModuleProxy) VintfFragments(ctx ConfigurableEvaluatorContext) []string {
 	panic("method is not implemented on ModuleProxy")
 }
