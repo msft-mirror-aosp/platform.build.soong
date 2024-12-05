@@ -5818,7 +5818,6 @@ func TestApexWithTests(t *testing.T) {
 			relative_install_path: "test",
 			shared_libs: ["mylib"],
 			system_shared_libs: [],
-			static_executable: true,
 			stl: "none",
 			data: [":fg"],
 		}
