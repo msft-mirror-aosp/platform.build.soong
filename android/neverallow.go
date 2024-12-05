@@ -249,6 +249,7 @@ func createInstallInRootAllowingRules() []Rule {
 			NotModuleType("prebuilt_sbin").
 			NotModuleType("prebuilt_system").
 			NotModuleType("prebuilt_first_stage_ramdisk").
+			NotModuleType("prebuilt_res").
 			Because("install_in_root is only for init_first_stage or librecovery_ui_ext."),
 	}
 }
@@ -344,7 +345,6 @@ func createPrebuiltEtcBpDefineRule() Rule {
 			"prebuilt_priv_app",
 			"prebuilt_rfs",
 			"prebuilt_framework",
-			"prebuilt_res",
 			"prebuilt_wlc_upt",
 			"prebuilt_odm",
 			"prebuilt_vendor_dlkm",
