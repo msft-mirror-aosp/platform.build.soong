@@ -1850,7 +1850,7 @@ func (vctx *visitorContext) normalizeFileInfo(mctx android.ModuleContext) {
 // as the apex.
 func (a *apexBundle) enforcePartitionTagOnApexSystemServerJar(ctx android.ModuleContext) {
 	global := dexpreopt.GetGlobalConfig(ctx)
-	ctx.VisitDirectDepsWithTag(sscpfTag, func(child android.Module) {
+	ctx.VisitDirectDepsProxyWithTag(sscpfTag, func(child android.ModuleProxy) {
 		info, ok := android.OtherModuleProvider(ctx, child, java.LibraryNameToPartitionInfoProvider)
 		if !ok {
 			ctx.ModuleErrorf("Could not find partition info of apex system server jars.")
@@ -2309,7 +2309,7 @@ func (a *apexBundle) providePrebuiltInfo(ctx android.ModuleContext) {
 // Apexes built from source retrieve this information by visiting `bootclasspath_fragments`
 // Used by dex_bootjars to generate the boot image
 func (a *apexBundle) provideApexExportsInfo(ctx android.ModuleContext) {
-	ctx.VisitDirectDepsWithTag(bcpfTag, func(child android.Module) {
+	ctx.VisitDirectDepsProxyWithTag(bcpfTag, func(child android.ModuleProxy) {
 		if info, ok := android.OtherModuleProvider(ctx, child, java.BootclasspathFragmentApexContentInfoProvider); ok {
 			exports := android.ApexExportsInfo{
 				ApexName:                      a.ApexVariationName(),
@@ -2885,7 +2885,7 @@ func (a *apexBundle) verifyNativeImplementationLibs(ctx android.ModuleContext) {
 	}
 
 	var appEmbeddedJNILibs android.Paths
-	ctx.VisitDirectDeps(func(dep android.Module) {
+	ctx.VisitDirectDepsProxy(func(dep android.ModuleProxy) {
 		tag := ctx.OtherModuleDependencyTag(dep)
 		if !checkApexTag(tag) {
 			return
