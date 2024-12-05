@@ -328,6 +328,20 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 				Target: proptools.StringPtr("/data/cache"),
 				Name:   proptools.StringPtr("cache"),
 			},
+			// For Treble Generic System Image (GSI), system-as-root GSI needs to work on
+			// both devices with and without /odm_dlkm partition. Those symlinks are for
+			// devices without /odm_dlkm partition. For devices with /odm_dlkm
+			// partition, mount odm_dlkm.img under /odm_dlkm will hide those symlinks.
+			// Note that /odm_dlkm/lib is omitted because odm DLKMs should be accessed
+			// via /odm/lib/modules directly. All of this also applies to the vendor_dlkm symlink
+			filesystem.SymlinkDefinition{
+				Target: proptools.StringPtr("/odm/odm_dlkm/etc"),
+				Name:   proptools.StringPtr("odm_dlkm/etc"),
+			},
+			filesystem.SymlinkDefinition{
+				Target: proptools.StringPtr("/vendor/vendor_dlkm/etc"),
+				Name:   proptools.StringPtr("vendor_dlkm/etc"),
+			},
 		}
 		fsProps.Dirs = proptools.NewSimpleConfigurable([]string{
 			// From generic_rootdirs in build/make/target/product/generic/Android.bp
@@ -777,6 +791,13 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 
 	fsProps.Partition_name = proptools.StringPtr(partitionType)
 
+	switch partitionType {
+	// The partitions that support file_contexts came from here:
+	// https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/Makefile;l=2270;drc=ad7cfb56010cb22c3aa0e70cf71c804352553526
+	case "system", "userdata", "cache", "vendor", "product", "system_ext", "odm", "vendor_dlkm", "odm_dlkm", "system_dlkm", "oem":
+		fsProps.Precompiled_file_contexts = proptools.StringPtr(":file_contexts_bin_gen")
+	}
+
 	if !strings.Contains(partitionType, "ramdisk") {
 		fsProps.Base_dir = proptools.StringPtr(partitionType)
 	}
@@ -784,18 +805,6 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	fsProps.Is_auto_generated = proptools.BoolPtr(true)
 
 	partitionSpecificFsProps(ctx, fsProps, partitionVars, partitionType)
-
-	// system_image properties that are not set:
-	// - filesystemProperties.Avb_hash_algorithm
-	// - filesystemProperties.File_contexts
-	// - filesystemProperties.Dirs
-	// - filesystemProperties.Symlinks
-	// - filesystemProperties.Fake_timestamp
-	// - filesystemProperties.Uuid
-	// - filesystemProperties.Mount_point
-	// - filesystemProperties.Include_make_built_files
-	// - filesystemProperties.Build_logtags
-	// - systemImageProperties.Linker_config_src
 
 	return fsProps, true
 }
