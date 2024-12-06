@@ -1794,9 +1794,9 @@ func OverrideAndroidAppModuleFactory() android.Module {
 
 	android.InitAndroidMultiTargetsArchModule(m, android.DeviceSupported, android.MultilibCommon)
 	android.InitOverrideModule(m)
-	android.AddLoadHook(m, func(ctx android.LoadHookContext) {
+	android.AddLoadHookWithPriority(m, func(ctx android.LoadHookContext) {
 		createInternalRuntimeOverlays(ctx, m.ModuleBase)
-	})
+	}, 1) // Run after soong config load hoook
 
 	return m
 }
