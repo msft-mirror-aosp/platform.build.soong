@@ -15,11 +15,11 @@
 package aconfig
 
 import (
+	"android/soong/android"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
-
-	"android/soong/android"
 
 	"github.com/google/blueprint"
 )
@@ -86,6 +86,13 @@ func (module *DeclarationsModule) DepsMutator(ctx android.BottomUpMutatorContext
 	}
 	if len(module.properties.Container) == 0 {
 		ctx.PropertyErrorf("container", "missing container property")
+	}
+
+	// treating system_ext as system partition as we are combining them as one container
+	// TODO remove this logic once we start enforcing that system_ext cannot be specified as
+	// container in the container field.
+	if module.properties.Container == "system_ext" {
+		module.properties.Container = "system"
 	}
 
 	// Add a dependency on the aconfig_value_sets defined in
@@ -178,6 +185,13 @@ func (module *DeclarationsModule) GenerateAndroidBuildActions(ctx android.Module
 				defaultPermission = confPerm
 			}
 		}
+		var allowReadWrite bool
+		if requireAllReadOnly, ok := ctx.Config().GetBuildFlag("RELEASE_ACONFIG_REQUIRE_ALL_READ_ONLY"); ok {
+			// The build flag (RELEASE_ACONFIG_REQUIRE_ALL_READ_ONLY) is the negation of the aconfig flag
+			// (allow-read-write) for historical reasons.
+			// Bool build flags are always "" for false, and generally "true" for true.
+			allowReadWrite = requireAllReadOnly == ""
+		}
 		inputFiles := make([]android.Path, len(declarationFiles))
 		copy(inputFiles, declarationFiles)
 		inputFiles = append(inputFiles, valuesFiles[config]...)
@@ -187,6 +201,7 @@ func (module *DeclarationsModule) GenerateAndroidBuildActions(ctx android.Module
 			"declarations":       android.JoinPathsWithPrefix(declarationFiles, "--declarations "),
 			"values":             joinAndPrefix(" --values ", values[config]),
 			"default-permission": optionalVariable(" --default-permission ", defaultPermission),
+			"allow-read-write":   optionalVariable(" --allow-read-write ", strconv.FormatBool(allowReadWrite)),
 		}
 		if len(module.properties.Container) > 0 {
 			args["container"] = "--container " + module.properties.Container

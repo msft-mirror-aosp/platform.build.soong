@@ -373,8 +373,10 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 				panic(fmt.Errorf("unknown dependency %q for %q", otherName, ctx.ModuleName()))
 			}
 		case libTag, sdkLibTag:
-			if dep, ok := module.(SdkLibraryDependency); ok {
-				deps.classpath = append(deps.classpath, dep.SdkHeaderJars(ctx, j.SdkVersion(ctx))...)
+			if sdkInfo, ok := android.OtherModuleProvider(ctx, module, SdkLibraryInfoProvider); ok {
+				generatingLibsString := android.PrettyConcat(
+					getGeneratingLibs(ctx, j.SdkVersion(ctx), module.Name(), sdkInfo), true, "or")
+				ctx.ModuleErrorf("cannot depend directly on java_sdk_library %q; try depending on %s instead", module.Name(), generatingLibsString)
 			} else if dep, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
 				deps.classpath = append(deps.classpath, dep.HeaderJars...)
 				deps.aidlIncludeDirs = append(deps.aidlIncludeDirs, dep.AidlIncludeDirs...)
@@ -425,9 +427,9 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 	// Find the corresponding aconfig_declarations module name for such case.
 	for _, src := range j.properties.Srcs {
 		if moduleName, tag := android.SrcIsModuleWithTag(src); moduleName != "" {
-			otherModule := android.GetModuleFromPathDep(ctx, moduleName, tag)
+			otherModule := android.GetModuleProxyFromPathDep(ctx, moduleName, tag)
 			if otherModule != nil {
-				if dep, ok := android.OtherModuleProvider(ctx, otherModule, android.CodegenInfoProvider); ok {
+				if dep, ok := android.OtherModuleProvider(ctx, *otherModule, android.CodegenInfoProvider); ok {
 					deps.aconfigProtoFiles = append(deps.aconfigProtoFiles, dep.IntermediateCacheOutputPaths...)
 				}
 			}
@@ -576,7 +578,6 @@ func (j *Javadoc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	rule.Build("javadoc", "javadoc")
 
-	ctx.SetOutputFiles(android.Paths{j.stubsSrcJar}, "")
 	ctx.SetOutputFiles(android.Paths{j.docZip}, ".docs.zip")
 }
 
