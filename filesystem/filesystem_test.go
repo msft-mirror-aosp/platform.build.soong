@@ -593,7 +593,7 @@ func TestErofsPartition(t *testing.T) {
 	`)
 
 	partition := result.ModuleForTests("erofs_partition", "android_common")
-	buildImageConfig := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("prop"))
+	buildImageConfig := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("prop_pre_processing"))
 	android.AssertStringDoesContain(t, "erofs fs type", buildImageConfig, "fs_type=erofs")
 	android.AssertStringDoesContain(t, "erofs fs type compress algorithm", buildImageConfig, "erofs_default_compressor=lz4hc,9")
 	android.AssertStringDoesContain(t, "erofs fs type compress hint", buildImageConfig, "erofs_default_compress_hints=compress_hints.txt")
@@ -609,7 +609,7 @@ func TestF2fsPartition(t *testing.T) {
 	`)
 
 	partition := result.ModuleForTests("f2fs_partition", "android_common")
-	buildImageConfig := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("prop"))
+	buildImageConfig := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("prop_pre_processing"))
 	android.AssertStringDoesContain(t, "f2fs fs type", buildImageConfig, "fs_type=f2fs")
 	android.AssertStringDoesContain(t, "f2fs fs type sparse", buildImageConfig, "f2fs_sparse_flag=-S")
 }
