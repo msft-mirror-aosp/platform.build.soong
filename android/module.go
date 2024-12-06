@@ -117,6 +117,7 @@ type Module interface {
 	HostRequiredModuleNames() []string
 	TargetRequiredModuleNames() []string
 	VintfFragmentModuleNames(ctx ConfigurableEvaluatorContext) []string
+	VintfFragments(ctx ConfigurableEvaluatorContext) []string
 
 	ConfigurableEvaluator(ctx ConfigurableEvaluatorContext) proptools.ConfigurableEvaluator
 
@@ -337,6 +338,7 @@ type commonProperties struct {
 		}
 		Android struct {
 			Compile_multilib *string
+			Enabled          *bool
 		}
 	}
 
@@ -1384,6 +1386,10 @@ func (m *ModuleBase) PartitionTag(config DeviceConfig) string {
 		}
 	} else if m.InstallInRamdisk() {
 		partition = "ramdisk"
+	} else if m.InstallInVendorRamdisk() {
+		partition = "vendor_ramdisk"
+	} else if m.InstallInRecovery() {
+		partition = "recovery"
 	}
 	return partition
 }
@@ -1626,6 +1632,10 @@ func (m *ModuleBase) VintfFragmentModuleNames(ctx ConfigurableEvaluatorContext) 
 	return m.base().commonProperties.Vintf_fragment_modules.GetOrDefault(m.ConfigurableEvaluator(ctx), nil)
 }
 
+func (m *ModuleBase) VintfFragments(ctx ConfigurableEvaluatorContext) []string {
+	return m.base().commonProperties.Vintf_fragments.GetOrDefault(m.ConfigurableEvaluator(ctx), nil)
+}
+
 func (m *ModuleBase) generateVariantTarget(ctx *moduleContext) {
 	namespacePrefix := ctx.Namespace().id
 	if namespacePrefix != "" {
@@ -1859,6 +1869,7 @@ type CommonModuleInfo struct {
 	// The Target of artifacts that this module variant is responsible for creating.
 	CompileTarget           Target
 	SkipAndroidMkProcessing bool
+	BaseModuleName          string
 }
 
 var CommonModuleInfoKey = blueprint.NewProvider[CommonModuleInfo]()
@@ -2127,6 +2138,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		ReplacedByPrebuilt:      m.commonProperties.ReplacedByPrebuilt,
 		CompileTarget:           m.commonProperties.CompileTarget,
 		SkipAndroidMkProcessing: shouldSkipAndroidMkProcessing(ctx, m),
+		BaseModuleName:          m.BaseModuleName(),
 	}
 	if m.commonProperties.ForcedDisabled {
 		commonData.Enabled = false
@@ -2450,6 +2462,8 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 					return proptools.ConfigurableValueString(v)
 				case "bool":
 					return proptools.ConfigurableValueBool(v == "true")
+				case "string_list":
+					return proptools.ConfigurableValueStringList(strings.Split(v, " "))
 				default:
 					panic("unhandled soong config variable type: " + ty)
 				}
