@@ -52,6 +52,7 @@ type filesystemCreatorProps struct {
 	Boot_image        string `blueprint:"mutated" android:"path_device_first"`
 	Vendor_boot_image string `blueprint:"mutated" android:"path_device_first"`
 	Init_boot_image   string `blueprint:"mutated" android:"path_device_first"`
+	Super_image       string `blueprint:"mutated" android:"path_device_first"`
 }
 
 type filesystemCreator struct {
@@ -156,6 +157,11 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 	for _, x := range createVbmetaPartitions(ctx, finalSoongGeneratedPartitions) {
 		f.properties.Vbmeta_module_names = append(f.properties.Vbmeta_module_names, x.moduleName)
 		f.properties.Vbmeta_partition_names = append(f.properties.Vbmeta_partition_names, x.partitionName)
+	}
+
+	if buildingSuperImage(partitionVars) {
+		createSuperImage(ctx, finalSoongGeneratedPartitions, partitionVars)
+		f.properties.Super_image = ":" + generatedModuleName(ctx.Config(), "super")
 	}
 
 	ctx.Config().Get(fsGenStateOnceKey).(*FsGenState).soongGeneratedPartitions = finalSoongGeneratedPartitions
@@ -321,6 +327,20 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 			filesystem.SymlinkDefinition{
 				Target: proptools.StringPtr("/data/cache"),
 				Name:   proptools.StringPtr("cache"),
+			},
+			// For Treble Generic System Image (GSI), system-as-root GSI needs to work on
+			// both devices with and without /odm_dlkm partition. Those symlinks are for
+			// devices without /odm_dlkm partition. For devices with /odm_dlkm
+			// partition, mount odm_dlkm.img under /odm_dlkm will hide those symlinks.
+			// Note that /odm_dlkm/lib is omitted because odm DLKMs should be accessed
+			// via /odm/lib/modules directly. All of this also applies to the vendor_dlkm symlink
+			filesystem.SymlinkDefinition{
+				Target: proptools.StringPtr("/odm/odm_dlkm/etc"),
+				Name:   proptools.StringPtr("odm_dlkm/etc"),
+			},
+			filesystem.SymlinkDefinition{
+				Target: proptools.StringPtr("/vendor/vendor_dlkm/etc"),
+				Name:   proptools.StringPtr("vendor_dlkm/etc"),
 			},
 		}
 		fsProps.Dirs = proptools.NewSimpleConfigurable([]string{
@@ -771,6 +791,13 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 
 	fsProps.Partition_name = proptools.StringPtr(partitionType)
 
+	switch partitionType {
+	// The partitions that support file_contexts came from here:
+	// https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/Makefile;l=2270;drc=ad7cfb56010cb22c3aa0e70cf71c804352553526
+	case "system", "userdata", "cache", "vendor", "product", "system_ext", "odm", "vendor_dlkm", "odm_dlkm", "system_dlkm", "oem":
+		fsProps.Precompiled_file_contexts = proptools.StringPtr(":file_contexts_bin_gen")
+	}
+
 	if !strings.Contains(partitionType, "ramdisk") {
 		fsProps.Base_dir = proptools.StringPtr(partitionType)
 	}
@@ -778,18 +805,6 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	fsProps.Is_auto_generated = proptools.BoolPtr(true)
 
 	partitionSpecificFsProps(ctx, fsProps, partitionVars, partitionType)
-
-	// system_image properties that are not set:
-	// - filesystemProperties.Avb_hash_algorithm
-	// - filesystemProperties.File_contexts
-	// - filesystemProperties.Dirs
-	// - filesystemProperties.Symlinks
-	// - filesystemProperties.Fake_timestamp
-	// - filesystemProperties.Uuid
-	// - filesystemProperties.Mount_point
-	// - filesystemProperties.Include_make_built_files
-	// - filesystemProperties.Build_logtags
-	// - systemImageProperties.Linker_config_src
 
 	return fsProps, true
 }
@@ -997,6 +1012,14 @@ func (f *filesystemCreator) GenerateAndroidBuildActions(ctx android.ModuleContex
 		createDiffTest(ctx, diffTestFile, soongBootImg, makeBootImage)
 		diffTestFiles = append(diffTestFiles, diffTestFile)
 		ctx.Phony("soong_generated_init_boot_filesystem_test", diffTestFile)
+	}
+	if f.properties.Super_image != "" {
+		diffTestFile := android.PathForModuleOut(ctx, "super_diff_test.txt")
+		soongSuperImg := android.PathForModuleSrc(ctx, f.properties.Super_image)
+		makeSuperImage := android.PathForArbitraryOutput(ctx, fmt.Sprintf("target/product/%s/super.img", ctx.Config().DeviceName()))
+		createDiffTest(ctx, diffTestFile, soongSuperImg, makeSuperImage)
+		diffTestFiles = append(diffTestFiles, diffTestFile)
+		ctx.Phony("soong_generated_super_filesystem_test", diffTestFile)
 	}
 	ctx.Phony("soong_generated_filesystem_tests", diffTestFiles...)
 }
