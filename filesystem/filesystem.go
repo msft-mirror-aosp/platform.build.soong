@@ -53,6 +53,12 @@ func registerMutators(ctx android.RegistrationContext) {
 	})
 }
 
+// Remember to add referenced files to implicits!
+var textFileProcessorRule = pctx.AndroidStaticRule("text_file_processing", blueprint.RuleParams{
+	Command:     "build/soong/scripts/text_file_processor.py $in $out",
+	CommandDeps: []string{"build/soong/scripts/text_file_processor.py"},
+})
+
 type filesystem struct {
 	android.ModuleBase
 	android.PackagingBase
@@ -107,6 +113,9 @@ type FilesystemProperties struct {
 	// avbtool. Default used by avbtool is sha1.
 	Avb_hash_algorithm *string
 
+	// Whether or not to use forward-error-correction codes when signing with AVB. Defaults to true.
+	Use_fec *bool
+
 	// The index used to prevent rollback of the image. Only used if use_avb is true.
 	Rollback_index *int64
 
@@ -121,8 +130,12 @@ type FilesystemProperties struct {
 	// checks, and will be used in the future for API surface checks.
 	Partition_type *string
 
-	// file_contexts file to make image. Currently, only ext4 is supported.
+	// file_contexts file to make image. Currently, only ext4 is supported. These file contexts
+	// will be compiled with sefcontext_compile
 	File_contexts *string `android:"path"`
+
+	// The selinux file contexts, after having already run them through sefcontext_compile
+	Precompiled_file_contexts *string `android:"path"`
 
 	// Base directory relative to root, to which deps are installed, e.g. "system". Default is "."
 	// (root).
@@ -563,11 +576,21 @@ func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) androi
 		FlagWithArg("--out_system=", rootDir.String()+"/system")
 
 	propFile, toolDeps := f.buildPropFile(ctx)
+
+	// Most of the time, if build_image were to call a host tool, it accepts the path to the
+	// host tool in a field in the prop file. However, it doesn't have that option for fec, which
+	// it expects to just be on the PATH. Add fec to the PATH.
+	fec := ctx.Config().HostToolPath(ctx, "fec")
+	pathToolDirs := []string{filepath.Dir(fec.String())}
+
 	output := android.PathForModuleOut(ctx, f.installFileName())
-	builder.Command().BuiltTool("build_image").
+	builder.Command().
+		Textf("PATH=%s:$PATH", strings.Join(pathToolDirs, ":")).
+		BuiltTool("build_image").
 		Text(rootDir.String()). // input directory
 		Input(propFile).
 		Implicits(toolDeps).
+		Implicit(fec).
 		Output(output).
 		Text(rootDir.String()) // directory where to find fs_config_files|dirs
 
@@ -634,10 +657,15 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 		addPath("avb_avbtool", ctx.Config().HostToolPath(ctx, "avbtool"))
 		algorithm := proptools.StringDefault(f.properties.Avb_algorithm, "SHA256_RSA4096")
 		addStr("avb_algorithm", algorithm)
-		key := android.PathForModuleSrc(ctx, proptools.String(f.properties.Avb_private_key))
-		addPath("avb_key_path", key)
+		if f.properties.Avb_private_key != nil {
+			key := android.PathForModuleSrc(ctx, *f.properties.Avb_private_key)
+			addPath("avb_key_path", key)
+		}
 		addStr("partition_name", f.partitionName())
-		avb_add_hashtree_footer_args := "--do_not_generate_fec"
+		avb_add_hashtree_footer_args := ""
+		if !proptools.BoolDefault(f.properties.Use_fec, true) {
+			avb_add_hashtree_footer_args += " --do_not_generate_fec"
+		}
 		if hashAlgorithm := proptools.String(f.properties.Avb_hash_algorithm); hashAlgorithm != "" {
 			avb_add_hashtree_footer_args += " --hash_algorithm " + hashAlgorithm
 		}
@@ -648,15 +676,22 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 			}
 			avb_add_hashtree_footer_args += " --rollback_index " + strconv.Itoa(rollbackIndex)
 		}
-		securityPatchKey := "com.android.build." + f.partitionName() + ".security_patch"
-		securityPatchValue := ctx.Config().PlatformSecurityPatch()
-		avb_add_hashtree_footer_args += " --prop " + securityPatchKey + ":" + securityPatchValue
+		avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.os_version:%s", f.partitionName(), ctx.Config().PlatformVersionLastStable())
+		avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.fingerprint:{CONTENTS_OF:%s}", f.partitionName(), ctx.Config().BuildFingerprintFile(ctx))
+		avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.security_patch:%s", f.partitionName(), ctx.Config().PlatformSecurityPatch())
 		addStr("avb_add_hashtree_footer_args", avb_add_hashtree_footer_args)
 		addStr("avb_salt", f.salt())
 	}
 
-	if proptools.String(f.properties.File_contexts) != "" {
+	if f.properties.File_contexts != nil && f.properties.Precompiled_file_contexts != nil {
+		ctx.ModuleErrorf("file_contexts and precompiled_file_contexts cannot both be set")
+	} else if f.properties.File_contexts != nil {
 		addPath("selinux_fc", f.buildFileContexts(ctx))
+	} else if f.properties.Precompiled_file_contexts != nil {
+		src := android.PathForModuleSrc(ctx, *f.properties.Precompiled_file_contexts)
+		if src != nil {
+			addPath("selinux_fc", src)
+		}
 	}
 	if timestamp := proptools.String(f.properties.Fake_timestamp); timestamp != "" {
 		addStr("timestamp", timestamp)
@@ -694,8 +729,15 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 	}
 	f.checkFsTypePropertyError(ctx, fst, fsTypeStr(fst))
 
+	propFilePreProcessing := android.PathForModuleOut(ctx, "prop_pre_processing")
+	android.WriteFileRuleVerbatim(ctx, propFilePreProcessing, propFileString.String())
 	propFile := android.PathForModuleOut(ctx, "prop")
-	android.WriteFileRuleVerbatim(ctx, propFile, propFileString.String())
+	ctx.Build(pctx, android.BuildParams{
+		Rule:     textFileProcessorRule,
+		Input:    propFilePreProcessing,
+		Output:   propFile,
+		Implicit: ctx.Config().BuildFingerprintFile(ctx),
+	})
 	return propFile, deps
 }
 
@@ -981,7 +1023,7 @@ func (f *filesystem) getLibsForLinkerConfig(ctx android.ModuleContext) ([]androi
 	ctx.WalkDeps(func(child, parent android.Module) bool {
 		for _, ps := range android.OtherModuleProviderOrDefault(
 			ctx, child, android.InstallFilesProvider).PackagingSpecs {
-			if _, ok := deps[ps.RelPathInPackage()]; ok {
+			if _, ok := deps[ps.RelPathInPackage()]; ok && ps.Partition() == f.PartitionType() {
 				modulesInPackageByModule[child] = true
 				modulesInPackageByName[child.Name()] = true
 				return true
