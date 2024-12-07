@@ -8,4 +8,6 @@
 // in internal first, and then aosp, create this variable that we can fill out in internal in the
 // same topic as the errorprone update, then move the flag out of the variable after the update,
 // then remove the variable.
-disable_identifiername_for_errorprone_update = []
+disable_identifiername_for_errorprone_update = [
+    "-Xep:IdentifierName:OFF",
+]

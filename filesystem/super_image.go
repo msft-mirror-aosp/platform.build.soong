@@ -44,7 +44,7 @@ type SuperImageProperties struct {
 	// the block device where metadata for dynamic partitions is stored
 	Metadata_device *string
 	// the super partition block device list
-	Block_devices *string
+	Block_devices []string
 	// whether A/B updater is used
 	Ab_update *bool
 	// whether dynamic partitions is enabled on devices that were launched without this support
@@ -153,7 +153,9 @@ func (s *superImage) buildMiscInfo(ctx android.ModuleContext) (android.Path, and
 	addStr("dynamic_partition_retrofit", strconv.FormatBool(proptools.Bool(s.properties.Retrofit)))
 	addStr("lpmake", "lpmake")
 	addStr("super_metadata_device", proptools.String(s.properties.Metadata_device))
-	addStr("super_block_devices", proptools.String(s.properties.Block_devices))
+	if len(s.properties.Block_devices) > 0 {
+		addStr("super_block_devices", strings.Join(s.properties.Block_devices, " "))
+	}
 	addStr("super_super_device_size", strconv.Itoa(proptools.Int(s.properties.Size)))
 	var groups, partitionList []string
 	for _, groupInfo := range s.properties.Partition_groups {
