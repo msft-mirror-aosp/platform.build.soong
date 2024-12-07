@@ -457,7 +457,7 @@ func (f *filesystem) validateVintfFragments(ctx android.ModuleContext) {
 }
 
 func (f *filesystem) appendToEntry(ctx android.ModuleContext, installedFile android.Path) {
-	partitionBaseDir := android.PathForModuleOut(ctx, "root", f.partitionName()).String() + "/"
+	partitionBaseDir := android.PathForModuleOut(ctx, "root", proptools.String(f.properties.Base_dir)).String() + "/"
 
 	relPath, inTargetPartition := strings.CutPrefix(installedFile.String(), partitionBaseDir)
 	if inTargetPartition {
