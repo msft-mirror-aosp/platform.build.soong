@@ -35,7 +35,7 @@ func createSuperImage(ctx android.LoadHookContext, partitions []string, partitio
 
 	superImageProps := &filesystem.SuperImageProperties{
 		Metadata_device:        proptools.StringPtr(partitionVars.BoardSuperPartitionMetadataDevice),
-		Block_devices:          proptools.StringPtr(partitionVars.BoardSuperPartitionBlockDevices[0]),
+		Block_devices:          partitionVars.BoardSuperPartitionBlockDevices,
 		Ab_update:              proptools.BoolPtr(partitionVars.AbOtaUpdater),
 		Retrofit:               proptools.BoolPtr(partitionVars.ProductRetrofitDynamicPartitions),
 		Virtual_ab:             proptools.BoolPtr(partitionVars.ProductVirtualAbOta),
