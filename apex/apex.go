@@ -1850,7 +1850,7 @@ func (vctx *visitorContext) normalizeFileInfo(mctx android.ModuleContext) {
 // as the apex.
 func (a *apexBundle) enforcePartitionTagOnApexSystemServerJar(ctx android.ModuleContext) {
 	global := dexpreopt.GetGlobalConfig(ctx)
-	ctx.VisitDirectDepsWithTag(sscpfTag, func(child android.Module) {
+	ctx.VisitDirectDepsProxyWithTag(sscpfTag, func(child android.ModuleProxy) {
 		info, ok := android.OtherModuleProvider(ctx, child, java.LibraryNameToPartitionInfoProvider)
 		if !ok {
 			ctx.ModuleErrorf("Could not find partition info of apex system server jars.")
@@ -2309,7 +2309,7 @@ func (a *apexBundle) providePrebuiltInfo(ctx android.ModuleContext) {
 // Apexes built from source retrieve this information by visiting `bootclasspath_fragments`
 // Used by dex_bootjars to generate the boot image
 func (a *apexBundle) provideApexExportsInfo(ctx android.ModuleContext) {
-	ctx.VisitDirectDepsWithTag(bcpfTag, func(child android.Module) {
+	ctx.VisitDirectDepsProxyWithTag(bcpfTag, func(child android.ModuleProxy) {
 		if info, ok := android.OtherModuleProvider(ctx, child, java.BootclasspathFragmentApexContentInfoProvider); ok {
 			exports := android.ApexExportsInfo{
 				ApexName:                      a.ApexVariationName(),
@@ -2340,7 +2340,7 @@ func (a *apexBundle) enforceAppUpdatability(mctx android.ModuleContext) {
 	}
 	if a.Updatable() {
 		// checking direct deps is sufficient since apex->apk is a direct edge, even when inherited via apex_defaults
-		mctx.VisitDirectDeps(func(module android.Module) {
+		mctx.VisitDirectDepsProxy(func(module android.ModuleProxy) {
 			if appInfo, ok := android.OtherModuleProvider(mctx, module, java.AppInfoProvider); ok {
 				// ignore android_test_app
 				if !appInfo.TestHelperApp && !appInfo.Updatable {
@@ -2647,16 +2647,12 @@ func (a *apexBundle) checkClasspathFragments(ctx android.ModuleContext) {
 func (a *apexBundle) checkJavaStableSdkVersion(ctx android.ModuleContext) {
 	// Visit direct deps only. As long as we guarantee top-level deps are using stable SDKs,
 	// java's checkLinkType guarantees correct usage for transitive deps
-	ctx.VisitDirectDeps(func(module android.Module) {
+	ctx.VisitDirectDepsProxy(func(module android.ModuleProxy) {
 		tag := ctx.OtherModuleDependencyTag(module)
 		switch tag {
 		case javaLibTag, androidAppTag:
-			if m, ok := module.(interface {
-				CheckStableSdkVersion(ctx android.BaseModuleContext) error
-			}); ok {
-				if err := m.CheckStableSdkVersion(ctx); err != nil {
-					ctx.ModuleErrorf("cannot depend on \"%v\": %v", ctx.OtherModuleName(module), err)
-				}
+			if err := java.CheckStableSdkVersion(ctx, module); err != nil {
+				ctx.ModuleErrorf("cannot depend on \"%v\": %v", ctx.OtherModuleName(module), err)
 			}
 		}
 	})
@@ -2889,7 +2885,7 @@ func (a *apexBundle) verifyNativeImplementationLibs(ctx android.ModuleContext) {
 	}
 
 	var appEmbeddedJNILibs android.Paths
-	ctx.VisitDirectDeps(func(dep android.Module) {
+	ctx.VisitDirectDepsProxy(func(dep android.ModuleProxy) {
 		tag := ctx.OtherModuleDependencyTag(dep)
 		if !checkApexTag(tag) {
 			return
