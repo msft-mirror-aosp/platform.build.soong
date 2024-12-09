@@ -1870,6 +1870,9 @@ type CommonModuleInfo struct {
 	CompileTarget           Target
 	SkipAndroidMkProcessing bool
 	BaseModuleName          string
+	CanHaveApexVariants     bool
+	MinSdkVersion           string
+	NotAvailableForPlatform bool
 }
 
 var CommonModuleInfoKey = blueprint.NewProvider[CommonModuleInfo]()
@@ -2140,10 +2143,25 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		SkipAndroidMkProcessing: shouldSkipAndroidMkProcessing(ctx, m),
 		BaseModuleName:          m.BaseModuleName(),
 	}
+	if mm, ok := m.module.(interface {
+		MinSdkVersion(ctx EarlyModuleContext) ApiLevel
+	}); ok {
+		ver := mm.MinSdkVersion(ctx)
+		if !ver.IsNone() {
+			commonData.MinSdkVersion = ver.String()
+		}
+	} else if mm, ok := m.module.(interface{ MinSdkVersion() string }); ok {
+		commonData.MinSdkVersion = mm.MinSdkVersion()
+	}
+
 	if m.commonProperties.ForcedDisabled {
 		commonData.Enabled = false
 	} else {
 		commonData.Enabled = m.commonProperties.Enabled.GetOrDefault(m.ConfigurableEvaluator(ctx), !m.Os().DefaultDisabled)
+	}
+	if am, ok := m.module.(ApexModule); ok {
+		commonData.CanHaveApexVariants = am.CanHaveApexVariants()
+		commonData.NotAvailableForPlatform = am.NotAvailableForPlatform()
 	}
 	SetProvider(ctx, CommonModuleInfoKey, commonData)
 	if p, ok := m.module.(PrebuiltInterface); ok && p.Prebuilt() != nil {
