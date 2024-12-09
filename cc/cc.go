@@ -53,13 +53,6 @@ type CcObjectInfo struct {
 
 var CcObjectInfoProvider = blueprint.NewProvider[CcObjectInfo]()
 
-// Common info about the cc module.
-type CcInfo struct {
-	HasStubsVariants bool
-}
-
-var CcInfoProvider = blueprint.NewProvider[CcInfo]()
-
 type LinkableInfo struct {
 	// StaticExecutable returns true if this is a binary module with "static_executable: true".
 	StaticExecutable bool
@@ -2129,10 +2122,6 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 
 	android.SetProvider(ctx, LinkableInfoKey, LinkableInfo{
 		StaticExecutable: c.StaticExecutable(),
-	})
-
-	android.SetProvider(ctx, CcInfoProvider, CcInfo{
-		HasStubsVariants: c.HasStubsVariants(),
 	})
 
 	c.setOutputFiles(ctx)

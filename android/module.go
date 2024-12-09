@@ -1870,7 +1870,6 @@ type CommonModuleInfo struct {
 	CompileTarget           Target
 	SkipAndroidMkProcessing bool
 	BaseModuleName          string
-	CanHaveApexVariants     bool
 }
 
 var CommonModuleInfoKey = blueprint.NewProvider[CommonModuleInfo]()
@@ -2146,8 +2145,6 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	} else {
 		commonData.Enabled = m.commonProperties.Enabled.GetOrDefault(m.ConfigurableEvaluator(ctx), !m.Os().DefaultDisabled)
 	}
-	am, ok := m.module.(ApexModule)
-	commonData.CanHaveApexVariants = ok && am.CanHaveApexVariants()
 	SetProvider(ctx, CommonModuleInfoKey, commonData)
 	if p, ok := m.module.(PrebuiltInterface); ok && p.Prebuilt() != nil {
 		SetProvider(ctx, PrebuiltModuleProviderKey, PrebuiltModuleProviderData{})

@@ -244,7 +244,7 @@ func TestFileSystemGathersItemsOnlyInSystemPartition(t *testing.T) {
 	`)
 
 	module := result.ModuleForTests("myfilesystem", "android_common").Module().(*systemImage)
-	android.AssertDeepEquals(t, "entries should have foo and not bar", []string{"components/foo", "etc/linker.config.pb"}, module.entries)
+	android.AssertDeepEquals(t, "entries should have foo only", []string{"components/foo"}, module.entries)
 }
 
 func TestAvbGenVbmetaImage(t *testing.T) {
