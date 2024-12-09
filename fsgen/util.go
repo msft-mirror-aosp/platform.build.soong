@@ -16,6 +16,7 @@ package fsgen
 
 import (
 	"android/soong/android"
+	"android/soong/filesystem"
 	"fmt"
 	"strconv"
 	"strings"
@@ -57,4 +58,13 @@ func getDpi(ctx android.LoadHookContext) string {
 	}
 
 	return recoveryDensity
+}
+
+// Returns a new list of symlinks with prefix added to the dest directory for all symlinks
+func symlinksWithNamePrefix(symlinks []filesystem.SymlinkDefinition, prefix string) []filesystem.SymlinkDefinition {
+	ret := make([]filesystem.SymlinkDefinition, len(symlinks))
+	for i, symlink := range symlinks {
+		ret[i] = symlink.CopyWithNamePrefix(prefix)
+	}
+	return ret
 }
