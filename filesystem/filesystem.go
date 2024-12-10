@@ -878,7 +878,8 @@ func (f *filesystem) buildEventLogtagsFile(ctx android.ModuleContext, builder *a
 	eventLogtagsPath := etcPath.Join(ctx, "event-log-tags")
 	builder.Command().Text("mkdir").Flag("-p").Text(etcPath.String())
 	cmd := builder.Command().BuiltTool("merge-event-log-tags").
-		FlagWithArg("-o ", eventLogtagsPath.String())
+		FlagWithArg("-o ", eventLogtagsPath.String()).
+		FlagWithInput("-m ", android.MergedLogtagsPath(ctx))
 
 	for _, path := range android.SortedKeys(logtagsFilePaths) {
 		cmd.Text(path)
