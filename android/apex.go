@@ -77,6 +77,9 @@ type ApexInfo struct {
 
 	// Returns the value of `apex_available_name`
 	ApexAvailableName string
+
+	// Returns the apex names that this module is available for
+	ApexAvailableFor []string
 }
 
 // AllApexInfo holds the ApexInfo of all apexes that include this module.
@@ -213,6 +216,12 @@ type ApexModule interface {
 	// apex_available property of the module.
 	AvailableFor(what string) bool
 
+	// Returns the apexes that are available for this module, valid values include
+	// "//apex_available:platform", "//apex_available:anyapex" and specific apexes.
+	// There are some differences between this one and the ApexAvailable on
+	// ApexModuleBase for cc, java library and sdkLibraryXml.
+	ApexAvailableFor() []string
+
 	// AlwaysRequiresPlatformApexVariant allows the implementing module to determine whether an
 	// APEX mutator should always be created for it.
 	//
@@ -320,6 +329,10 @@ func (m *ApexModuleBase) ApexAvailable() []string {
 	return CopyOf(availableToPlatformList)
 }
 
+func (m *ApexModuleBase) ApexAvailableFor() []string {
+	return m.ApexAvailable()
+}
+
 // Implements ApexModule
 func (m *ApexModuleBase) BuildForApex(apex ApexInfo) {
 	m.apexInfosLock.Lock()
@@ -420,7 +433,7 @@ func CheckAvailableForApex(what string, apex_available []string) bool {
 
 // Implements ApexModule
 func (m *ApexModuleBase) AvailableFor(what string) bool {
-	return CheckAvailableForApex(what, m.ApexProperties.Apex_available)
+	return CheckAvailableForApex(what, m.ApexAvailableFor())
 }
 
 // Implements ApexModule
@@ -614,6 +627,7 @@ func MutateApexTransition(ctx BaseModuleContext, variation string) {
 		} else {
 			panic(fmt.Errorf("failed to find apexInfo for incoming variation %q", variation))
 		}
+		thisApexInfo.ApexAvailableFor = module.ApexAvailableFor()
 
 		SetProvider(ctx, ApexInfoProvider, thisApexInfo)
 	}
