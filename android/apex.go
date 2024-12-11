@@ -77,6 +77,9 @@ type ApexInfo struct {
 
 	// Returns the value of `apex_available_name`
 	ApexAvailableName string
+
+	// Returns the apex names that this module is available for
+	ApexAvailableFor []string
 }
 
 // AllApexInfo holds the ApexInfo of all apexes that include this module.
@@ -213,6 +216,12 @@ type ApexModule interface {
 	// apex_available property of the module.
 	AvailableFor(what string) bool
 
+	// Returns the apexes that are available for this module, valid values include
+	// "//apex_available:platform", "//apex_available:anyapex" and specific apexes.
+	// There are some differences between this one and the ApexAvailable on
+	// ApexModuleBase for cc, java library and sdkLibraryXml.
+	ApexAvailableFor() []string
+
 	// AlwaysRequiresPlatformApexVariant allows the implementing module to determine whether an
 	// APEX mutator should always be created for it.
 	//
@@ -264,9 +273,6 @@ type ApexProperties struct {
 
 // Marker interface that identifies dependencies that are excluded from APEX contents.
 //
-// Unless the tag also implements the AlwaysRequireApexVariantTag this will prevent an apex variant
-// from being created for the module.
-//
 // At the moment the sdk.sdkRequirementsMutator relies on the fact that the existing tags which
 // implement this interface do not define dependencies onto members of an sdk_snapshot. If that
 // changes then sdk.sdkRequirementsMutator will need fixing.
@@ -275,17 +281,6 @@ type ExcludeFromApexContentsTag interface {
 
 	// Method that differentiates this interface from others.
 	ExcludeFromApexContents()
-}
-
-// Marker interface that identifies dependencies that always requires an APEX variant to be created.
-//
-// It is possible for a dependency to require an apex variant but exclude the module from the APEX
-// contents. See sdk.sdkMemberDependencyTag.
-type AlwaysRequireApexVariantTag interface {
-	blueprint.DependencyTag
-
-	// Return true if this tag requires that the target dependency has an apex variant.
-	AlwaysRequireApexVariant() bool
 }
 
 // Interface that identifies dependencies to skip Apex dependency check
@@ -332,6 +327,10 @@ func (m *ApexModuleBase) ApexAvailable() []string {
 	}
 	// Default is availability to platform
 	return CopyOf(availableToPlatformList)
+}
+
+func (m *ApexModuleBase) ApexAvailableFor() []string {
+	return m.ApexAvailable()
 }
 
 // Implements ApexModule
@@ -434,7 +433,7 @@ func CheckAvailableForApex(what string, apex_available []string) bool {
 
 // Implements ApexModule
 func (m *ApexModuleBase) AvailableFor(what string) bool {
-	return CheckAvailableForApex(what, m.ApexProperties.Apex_available)
+	return CheckAvailableForApex(what, m.ApexAvailableFor())
 }
 
 // Implements ApexModule
@@ -628,6 +627,7 @@ func MutateApexTransition(ctx BaseModuleContext, variation string) {
 		} else {
 			panic(fmt.Errorf("failed to find apexInfo for incoming variation %q", variation))
 		}
+		thisApexInfo.ApexAvailableFor = module.ApexAvailableFor()
 
 		SetProvider(ctx, ApexInfoProvider, thisApexInfo)
 	}
@@ -778,7 +778,7 @@ func (d *ApexBundleDepsInfo) BuildDepsInfoLists(ctx ModuleContext, minSdkVersion
 // Function called while walking an APEX's payload dependencies.
 //
 // Return true if the `to` module should be visited, false otherwise.
-type PayloadDepsCallback func(ctx BaseModuleContext, from blueprint.Module, to ApexModule, externalDep bool) bool
+type PayloadDepsCallback func(ctx BaseModuleContext, from Module, to ApexModule, externalDep bool) bool
 type WalkPayloadDepsFunc func(ctx BaseModuleContext, do PayloadDepsCallback)
 
 // ModuleWithMinSdkVersionCheck represents a module that implements min_sdk_version checks
@@ -806,7 +806,7 @@ func CheckMinSdkVersion(ctx ModuleContext, minSdkVersion ApiLevel, walk WalkPayl
 		return
 	}
 
-	walk(ctx, func(ctx BaseModuleContext, from blueprint.Module, to ApexModule, externalDep bool) bool {
+	walk(ctx, func(ctx BaseModuleContext, from Module, to ApexModule, externalDep bool) bool {
 		if externalDep {
 			// external deps are outside the payload boundary, which is "stable"
 			// interface. We don't have to check min_sdk_version for external
