@@ -457,7 +457,7 @@ func (f *filesystem) validateVintfFragments(ctx android.ModuleContext) {
 }
 
 func (f *filesystem) appendToEntry(ctx android.ModuleContext, installedFile android.Path) {
-	partitionBaseDir := android.PathForModuleOut(ctx, f.rootDirString(), proptools.String(f.properties.Base_dir)).String() + "/"
+	partitionBaseDir := android.PathForModuleOut(ctx, "root", proptools.String(f.properties.Base_dir)).String() + "/"
 
 	relPath, inTargetPartition := strings.CutPrefix(installedFile.String(), partitionBaseDir)
 	if inTargetPartition {
@@ -547,12 +547,8 @@ func (f *filesystem) copyFilesToProductOut(ctx android.ModuleContext, builder *a
 	builder.Command().Textf("cp -prf %s/* %s", rebasedDir, installPath)
 }
 
-func (f *filesystem) rootDirString() string {
-	return f.partitionName()
-}
-
 func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) android.Path {
-	rootDir := android.PathForModuleOut(ctx, f.rootDirString()).OutputPath
+	rootDir := android.PathForModuleOut(ctx, "root").OutputPath
 	rebasedDir := rootDir
 	if f.properties.Base_dir != nil {
 		rebasedDir = rootDir.Join(ctx, *f.properties.Base_dir)
@@ -779,7 +775,7 @@ func (f *filesystem) buildCpioImage(ctx android.ModuleContext, compressed bool) 
 		ctx.PropertyErrorf("include_make_built_files", "include_make_built_files is not supported for compressed cpio image.")
 	}
 
-	rootDir := android.PathForModuleOut(ctx, f.rootDirString()).OutputPath
+	rootDir := android.PathForModuleOut(ctx, "root").OutputPath
 	rebasedDir := rootDir
 	if f.properties.Base_dir != nil {
 		rebasedDir = rootDir.Join(ctx, *f.properties.Base_dir)
