@@ -98,6 +98,14 @@ type SymlinkDefinition struct {
 	Name   *string
 }
 
+// CopyWithNamePrefix returns a new [SymlinkDefinition] with prefix added to Name.
+func (s *SymlinkDefinition) CopyWithNamePrefix(prefix string) SymlinkDefinition {
+	return SymlinkDefinition{
+		Target: s.Target,
+		Name:   proptools.StringPtr(filepath.Join(prefix, proptools.String(s.Name))),
+	}
+}
+
 type FilesystemProperties struct {
 	// When set to true, sign the image with avbtool. Default is false.
 	Use_avb *bool
@@ -130,8 +138,12 @@ type FilesystemProperties struct {
 	// checks, and will be used in the future for API surface checks.
 	Partition_type *string
 
-	// file_contexts file to make image. Currently, only ext4 is supported.
+	// file_contexts file to make image. Currently, only ext4 is supported. These file contexts
+	// will be compiled with sefcontext_compile
 	File_contexts *string `android:"path"`
+
+	// The selinux file contexts, after having already run them through sefcontext_compile
+	Precompiled_file_contexts *string `android:"path"`
 
 	// Base directory relative to root, to which deps are installed, e.g. "system". Default is "."
 	// (root).
@@ -453,7 +465,7 @@ func (f *filesystem) validateVintfFragments(ctx android.ModuleContext) {
 }
 
 func (f *filesystem) appendToEntry(ctx android.ModuleContext, installedFile android.Path) {
-	partitionBaseDir := android.PathForModuleOut(ctx, "root", f.partitionName()).String() + "/"
+	partitionBaseDir := android.PathForModuleOut(ctx, "root", proptools.String(f.properties.Base_dir)).String() + "/"
 
 	relPath, inTargetPartition := strings.CutPrefix(installedFile.String(), partitionBaseDir)
 	if inTargetPartition {
@@ -679,8 +691,15 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 		addStr("avb_salt", f.salt())
 	}
 
-	if proptools.String(f.properties.File_contexts) != "" {
+	if f.properties.File_contexts != nil && f.properties.Precompiled_file_contexts != nil {
+		ctx.ModuleErrorf("file_contexts and precompiled_file_contexts cannot both be set")
+	} else if f.properties.File_contexts != nil {
 		addPath("selinux_fc", f.buildFileContexts(ctx))
+	} else if f.properties.Precompiled_file_contexts != nil {
+		src := android.PathForModuleSrc(ctx, *f.properties.Precompiled_file_contexts)
+		if src != nil {
+			addPath("selinux_fc", src)
+		}
 	}
 	if timestamp := proptools.String(f.properties.Fake_timestamp); timestamp != "" {
 		addStr("timestamp", timestamp)
@@ -867,8 +886,7 @@ func (f *filesystem) buildEventLogtagsFile(ctx android.ModuleContext, builder *a
 	eventLogtagsPath := etcPath.Join(ctx, "event-log-tags")
 	builder.Command().Text("mkdir").Flag("-p").Text(etcPath.String())
 	cmd := builder.Command().BuiltTool("merge-event-log-tags").
-		FlagWithArg("-o ", eventLogtagsPath.String()).
-		FlagWithInput("-m ", android.MergedLogtagsPath(ctx))
+		FlagWithArg("-o ", eventLogtagsPath.String())
 
 	for _, path := range android.SortedKeys(logtagsFilePaths) {
 		cmd.Text(path)
@@ -1012,7 +1030,7 @@ func (f *filesystem) getLibsForLinkerConfig(ctx android.ModuleContext) ([]androi
 	ctx.WalkDeps(func(child, parent android.Module) bool {
 		for _, ps := range android.OtherModuleProviderOrDefault(
 			ctx, child, android.InstallFilesProvider).PackagingSpecs {
-			if _, ok := deps[ps.RelPathInPackage()]; ok {
+			if _, ok := deps[ps.RelPathInPackage()]; ok && ps.Partition() == f.PartitionType() {
 				modulesInPackageByModule[child] = true
 				modulesInPackageByName[child.Name()] = true
 				return true

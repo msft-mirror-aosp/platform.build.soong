@@ -53,6 +53,13 @@ type CcObjectInfo struct {
 
 var CcObjectInfoProvider = blueprint.NewProvider[CcObjectInfo]()
 
+// Common info about the cc module.
+type CcInfo struct {
+	HasStubsVariants bool
+}
+
+var CcInfoProvider = blueprint.NewProvider[CcInfo]()
+
 type LinkableInfo struct {
 	// StaticExecutable returns true if this is a binary module with "static_executable: true".
 	StaticExecutable bool
@@ -512,6 +519,7 @@ type VendorProperties struct {
 type ModuleContextIntf interface {
 	static() bool
 	staticBinary() bool
+	staticLibrary() bool
 	testBinary() bool
 	testLibrary() bool
 	header() bool
@@ -1516,6 +1524,10 @@ func (ctx *moduleContextImpl) staticBinary() bool {
 	return ctx.mod.staticBinary()
 }
 
+func (ctx *moduleContextImpl) staticLibrary() bool {
+	return ctx.mod.staticLibrary()
+}
+
 func (ctx *moduleContextImpl) testBinary() bool {
 	return ctx.mod.testBinary()
 }
@@ -2122,6 +2134,10 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 
 	android.SetProvider(ctx, LinkableInfoKey, LinkableInfo{
 		StaticExecutable: c.StaticExecutable(),
+	})
+
+	android.SetProvider(ctx, CcInfoProvider, CcInfo{
+		HasStubsVariants: c.HasStubsVariants(),
 	})
 
 	c.setOutputFiles(ctx)
@@ -3535,6 +3551,15 @@ func (c *Module) static() bool {
 		static() bool
 	}); ok {
 		return static.static()
+	}
+	return false
+}
+
+func (c *Module) staticLibrary() bool {
+	if static, ok := c.linker.(interface {
+		staticLibrary() bool
+	}); ok {
+		return static.staticLibrary()
 	}
 	return false
 }
