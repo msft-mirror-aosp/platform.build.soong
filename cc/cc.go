@@ -3689,13 +3689,18 @@ func (c *Module) IsInstallableToApex() bool {
 }
 
 func (c *Module) AvailableFor(what string) bool {
+	return android.CheckAvailableForApex(what, c.ApexAvailableFor())
+}
+
+func (c *Module) ApexAvailableFor() []string {
+	list := c.ApexModuleBase.ApexAvailable()
 	if linker, ok := c.linker.(interface {
-		availableFor(string) bool
+		apexAvailable() []string
 	}); ok {
-		return c.ApexModuleBase.AvailableFor(what) || linker.availableFor(what)
-	} else {
-		return c.ApexModuleBase.AvailableFor(what)
+		list = append(list, linker.apexAvailable()...)
 	}
+
+	return android.FirstUniqueStrings(list)
 }
 
 func (c *Module) EverInstallable() bool {

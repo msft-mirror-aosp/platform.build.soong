@@ -2682,7 +2682,7 @@ func (a *apexBundle) checkApexAvailability(ctx android.ModuleContext) {
 		return
 	}
 
-	a.WalkPayloadDeps(ctx, func(ctx android.BaseModuleContext, from android.Module, to android.ApexModule, externalDep bool) bool {
+	a.WalkPayloadDepsProxy(ctx, func(ctx android.BaseModuleContext, from, to android.ModuleProxy, externalDep bool) bool {
 		// As soon as the dependency graph crosses the APEX boundary, don't go further.
 		if externalDep {
 			return false
@@ -2699,17 +2699,8 @@ func (a *apexBundle) checkApexAvailability(ctx android.ModuleContext) {
 		fromName := ctx.OtherModuleName(from)
 		toName := ctx.OtherModuleName(to)
 
-		// If `to` is not actually in the same APEX as `from` then it does not need
-		// apex_available and neither do any of its dependencies.
-		//
-		// It is ok to call DepIsInSameApex() directly from within WalkPayloadDeps().
-		if am, ok := from.(android.DepIsInSameApex); ok && !am.DepIsInSameApex(ctx, to) {
-			// As soon as the dependency graph crosses the APEX boundary, don't go
-			// further.
-			return false
-		}
-
-		if to.AvailableFor(apexName) {
+		if android.CheckAvailableForApex(apexName,
+			android.OtherModuleProviderOrDefault(ctx, to, android.ApexInfoProvider).ApexAvailableFor) {
 			return true
 		}
 
