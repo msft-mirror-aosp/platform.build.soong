@@ -1683,7 +1683,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	}
 
 	for _, lib := range deps.SharedLibs {
-		depTag := cc.SharedDepTag()
+		depTag := cc.SharedDepTag(mod.Static())
 		name, version := cc.StubsLibNameAndVersion(lib)
 
 		variations := []blueprint.Variation{
