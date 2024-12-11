@@ -98,6 +98,14 @@ type SymlinkDefinition struct {
 	Name   *string
 }
 
+// CopyWithNamePrefix returns a new [SymlinkDefinition] with prefix added to Name.
+func (s *SymlinkDefinition) CopyWithNamePrefix(prefix string) SymlinkDefinition {
+	return SymlinkDefinition{
+		Target: s.Target,
+		Name:   proptools.StringPtr(filepath.Join(prefix, proptools.String(s.Name))),
+	}
+}
+
 type FilesystemProperties struct {
 	// When set to true, sign the image with avbtool. Default is false.
 	Use_avb *bool
