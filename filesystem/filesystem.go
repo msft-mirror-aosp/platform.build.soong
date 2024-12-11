@@ -868,29 +868,10 @@ func (f *filesystem) buildEventLogtagsFile(ctx android.ModuleContext, builder *a
 		return
 	}
 
-	logtagsFilePaths := make(map[string]bool)
-	ctx.WalkDeps(func(child, parent android.Module) bool {
-		if logtagsInfo, ok := android.OtherModuleProvider(ctx, child, android.LogtagsProviderKey); ok {
-			for _, path := range logtagsInfo.Logtags {
-				logtagsFilePaths[path.String()] = true
-			}
-		}
-		return true
-	})
-
-	if len(logtagsFilePaths) == 0 {
-		return
-	}
-
 	etcPath := rebasedDir.Join(ctx, "etc")
 	eventLogtagsPath := etcPath.Join(ctx, "event-log-tags")
 	builder.Command().Text("mkdir").Flag("-p").Text(etcPath.String())
-	cmd := builder.Command().BuiltTool("merge-event-log-tags").
-		FlagWithArg("-o ", eventLogtagsPath.String())
-
-	for _, path := range android.SortedKeys(logtagsFilePaths) {
-		cmd.Text(path)
-	}
+	builder.Command().Text("cp").Input(android.MergedLogtagsPath(ctx)).Text(eventLogtagsPath.String())
 
 	f.appendToEntry(ctx, eventLogtagsPath)
 }
