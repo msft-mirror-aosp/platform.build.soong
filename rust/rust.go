@@ -594,7 +594,7 @@ func (mod *Module) CcLibraryInterface() bool {
 	if mod.compiler != nil {
 		// use build{Static,Shared}() instead of {static,shared}() here because this might be called before
 		// VariantIs{Static,Shared} is set.
-		if lib, ok := mod.compiler.(libraryInterface); ok && (lib.buildShared() || lib.buildStatic()) {
+		if lib, ok := mod.compiler.(libraryInterface); ok && (lib.buildShared() || lib.buildStatic() || lib.buildRlib()) {
 			return true
 		}
 	}
@@ -678,15 +678,6 @@ func (mod *Module) BuildRlibVariant() bool {
 		}
 	}
 	panic(fmt.Errorf("BuildRlibVariant called on non-library module: %q", mod.BaseModuleName()))
-}
-
-func (mod *Module) IsRustFFI() bool {
-	if mod.compiler != nil {
-		if library, ok := mod.compiler.(libraryInterface); ok {
-			return library.isFFILibrary()
-		}
-	}
-	return false
 }
 
 func (mod *Module) BuildSharedVariant() bool {
@@ -1236,6 +1227,8 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	ctx.VisitDirectDeps(func(dep android.Module) {
 		depName := ctx.OtherModuleName(dep)
 		depTag := ctx.OtherModuleDependencyTag(dep)
+		modStdLinkage := mod.compiler.stdLinkage(ctx.Device())
+
 		if _, exists := skipModuleList[depName]; exists {
 			return
 		}
@@ -1264,6 +1257,14 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
 				}
 
+				if !rustDep.compiler.noStdlibs() {
+					rustDepStdLinkage := rustDep.compiler.stdLinkage(ctx.Device())
+					if rustDepStdLinkage != modStdLinkage {
+						ctx.ModuleErrorf("Rust dependency %q has the wrong StdLinkage; expected %#v, got %#v", depName, modStdLinkage, rustDepStdLinkage)
+						return
+					}
+				}
+
 			case depTag == rlibDepTag:
 				rlib, ok := rustDep.compiler.(libraryInterface)
 				if !ok || !rlib.rlib() {
@@ -1282,6 +1283,14 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				// rlibs are not installed, so don't add the output file to directImplementationDeps
 				if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
 					depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
+				}
+
+				if !rustDep.compiler.noStdlibs() {
+					rustDepStdLinkage := rustDep.compiler.stdLinkage(ctx.Device())
+					if rustDepStdLinkage != modStdLinkage {
+						ctx.ModuleErrorf("Rust dependency %q has the wrong StdLinkage; expected %#v, got %#v", depName, modStdLinkage, rustDepStdLinkage)
+						return
+					}
 				}
 
 			case depTag == procMacroDepTag:
@@ -1602,7 +1611,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	}
 
 	stdLinkage := "dylib-std"
-	if mod.compiler.stdLinkage(ctx) == RlibLinkage {
+	if mod.compiler.stdLinkage(ctx.Device()) == RlibLinkage {
 		stdLinkage = "rlib-std"
 	}
 
@@ -1669,7 +1678,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 	// stdlibs
 	if deps.Stdlibs != nil {
-		if mod.compiler.stdLinkage(ctx) == RlibLinkage {
+		if mod.compiler.stdLinkage(ctx.Device()) == RlibLinkage {
 			for _, lib := range deps.Stdlibs {
 				actx.AddVariationDependencies(append(commonDepVariations, []blueprint.Variation{{Mutator: "rust_libraries", Variation: "rlib"}}...),
 					rlibDepTag, lib)

@@ -121,7 +121,7 @@ func (fuzzer *fuzzDecorator) compile(ctx ModuleContext, flags Flags, deps PathDe
 	return out
 }
 
-func (fuzzer *fuzzDecorator) stdLinkage(ctx *depsContext) RustLinkage {
+func (fuzzer *fuzzDecorator) stdLinkage(device bool) RustLinkage {
 	return RlibLinkage
 }
 

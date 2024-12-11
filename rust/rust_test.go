@@ -547,3 +547,31 @@ func assertString(t *testing.T, got, expected string) {
 		t.Errorf("expected %q got %q", expected, got)
 	}
 }
+
+func TestStdLinkMismatch(t *testing.T) {
+	// Test that we catch cases where the std linkage mismatches. This leads to
+	// a confusing rustc error where a crate is declared missing despite being
+	// passed in as a rustlib dependency / via the --extern flag. Thus, we want
+	// to make sure we detect it in Soong.
+
+	// libfoo depends on libbar as an rlib, but does not link libstd as an rlib.
+	// libbar only links libstd as an rlib (prefer_rlib).
+	testRustError(t, "wrong StdLinkage", `
+		rust_library {
+			name: "libfoo",
+			crate_name: "foo",
+			srcs: [
+				"foo.rs",
+			],
+			rlibs: ["libbar"],
+		}
+		rust_library {
+			name: "libbar",
+			crate_name: "bar",
+			srcs: [
+				"bar.rs",
+			],
+			prefer_rlib: true,
+		}
+	`)
+}
