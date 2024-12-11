@@ -838,13 +838,18 @@ func (j *Module) TargetSdkVersion(ctx android.EarlyModuleContext) android.ApiLev
 }
 
 func (j *Module) AvailableFor(what string) bool {
-	if what == android.AvailableToPlatform && Bool(j.deviceProperties.Hostdex) {
+	return android.CheckAvailableForApex(what, j.ApexAvailableFor())
+}
+
+func (j *Module) ApexAvailableFor() []string {
+	list := j.ApexModuleBase.ApexAvailable()
+	if Bool(j.deviceProperties.Hostdex) {
 		// Exception: for hostdex: true libraries, the platform variant is created
 		// even if it's not marked as available to platform. In that case, the platform
 		// variant is used only for the hostdex and not installed to the device.
-		return true
+		list = append(list, android.AvailableToPlatform)
 	}
-	return j.ApexModuleBase.AvailableFor(what)
+	return android.FirstUniqueStrings(list)
 }
 
 func (j *Module) staticLibs(ctx android.BaseModuleContext) []string {
