@@ -34,6 +34,8 @@ import (
 
 // LibraryProperties is a collection of properties shared by cc library rules/cc.
 type LibraryProperties struct {
+	// local file name to pass to the linker as -exported_symbols_list
+	Exported_symbols_list *string `android:"path,arch_variant"`
 	// local file name to pass to the linker as -unexported_symbols_list
 	Unexported_symbols_list *string `android:"path,arch_variant"`
 	// local file name to pass to the linker as -force_symbols_not_weak_list
@@ -723,7 +725,7 @@ type libraryInterface interface {
 	// Write LOCAL_ADDITIONAL_DEPENDENCIES for ABI diff
 	androidMkWriteAdditionalDependenciesForSourceAbiDiff(w io.Writer)
 
-	availableFor(string) bool
+	apexAvailable() []string
 
 	getAPIListCoverageXMLPath() android.ModuleOutPath
 
@@ -1049,10 +1051,14 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 	linkerDeps = append(linkerDeps, flags.LdFlagsDeps...)
 	linkerDeps = append(linkerDeps, ndkSharedLibDeps(ctx)...)
 
+	exportedSymbols := ctx.ExpandOptionalSource(library.Properties.Exported_symbols_list, "exported_symbols_list")
 	unexportedSymbols := ctx.ExpandOptionalSource(library.Properties.Unexported_symbols_list, "unexported_symbols_list")
 	forceNotWeakSymbols := ctx.ExpandOptionalSource(library.Properties.Force_symbols_not_weak_list, "force_symbols_not_weak_list")
 	forceWeakSymbols := ctx.ExpandOptionalSource(library.Properties.Force_symbols_weak_list, "force_symbols_weak_list")
 	if !ctx.Darwin() {
+		if exportedSymbols.Valid() {
+			ctx.PropertyErrorf("exported_symbols_list", "Only supported on Darwin")
+		}
 		if unexportedSymbols.Valid() {
 			ctx.PropertyErrorf("unexported_symbols_list", "Only supported on Darwin")
 		}
@@ -1063,6 +1069,10 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 			ctx.PropertyErrorf("force_symbols_weak_list", "Only supported on Darwin")
 		}
 	} else {
+		if exportedSymbols.Valid() {
+			flags.Local.LdFlags = append(flags.Local.LdFlags, "-Wl,-exported_symbols_list,"+exportedSymbols.String())
+			linkerDeps = append(linkerDeps, exportedSymbols.Path())
+		}
 		if unexportedSymbols.Valid() {
 			flags.Local.LdFlags = append(flags.Local.LdFlags, "-Wl,-unexported_symbols_list,"+unexportedSymbols.String())
 			linkerDeps = append(linkerDeps, unexportedSymbols.Path())
@@ -1800,12 +1810,17 @@ func (library *libraryDecorator) everInstallable() bool {
 	return library.shared() || library.static()
 }
 
-// static returns true if this library is for a "static' variant.
+// static returns true if this library is for a "static" variant.
 func (library *libraryDecorator) static() bool {
 	return library.MutatedProperties.VariantIsStatic
 }
 
-// shared returns true if this library is for a "shared' variant.
+// staticLibrary returns true if this library is for a "static"" variant.
+func (library *libraryDecorator) staticLibrary() bool {
+	return library.static()
+}
+
+// shared returns true if this library is for a "shared" variant.
 func (library *libraryDecorator) shared() bool {
 	return library.MutatedProperties.VariantIsShared
 }
@@ -1954,17 +1969,15 @@ func (library *libraryDecorator) isLatestStubVersion() bool {
 	return library.MutatedProperties.IsLatestVersion
 }
 
-func (library *libraryDecorator) availableFor(what string) bool {
+func (library *libraryDecorator) apexAvailable() []string {
 	var list []string
 	if library.static() {
 		list = library.StaticProperties.Static.Apex_available
 	} else if library.shared() {
 		list = library.SharedProperties.Shared.Apex_available
 	}
-	if len(list) == 0 {
-		return false
-	}
-	return android.CheckAvailableForApex(what, list)
+
+	return list
 }
 
 func (library *libraryDecorator) installable() *bool {
