@@ -98,6 +98,14 @@ type SymlinkDefinition struct {
 	Name   *string
 }
 
+// CopyWithNamePrefix returns a new [SymlinkDefinition] with prefix added to Name.
+func (s *SymlinkDefinition) CopyWithNamePrefix(prefix string) SymlinkDefinition {
+	return SymlinkDefinition{
+		Target: s.Target,
+		Name:   proptools.StringPtr(filepath.Join(prefix, proptools.String(s.Name))),
+	}
+}
+
 type FilesystemProperties struct {
 	// When set to true, sign the image with avbtool. Default is false.
 	Use_avb *bool
@@ -457,7 +465,7 @@ func (f *filesystem) validateVintfFragments(ctx android.ModuleContext) {
 }
 
 func (f *filesystem) appendToEntry(ctx android.ModuleContext, installedFile android.Path) {
-	partitionBaseDir := android.PathForModuleOut(ctx, "root", f.partitionName()).String() + "/"
+	partitionBaseDir := android.PathForModuleOut(ctx, "root", proptools.String(f.properties.Base_dir)).String() + "/"
 
 	relPath, inTargetPartition := strings.CutPrefix(installedFile.String(), partitionBaseDir)
 	if inTargetPartition {
@@ -878,8 +886,7 @@ func (f *filesystem) buildEventLogtagsFile(ctx android.ModuleContext, builder *a
 	eventLogtagsPath := etcPath.Join(ctx, "event-log-tags")
 	builder.Command().Text("mkdir").Flag("-p").Text(etcPath.String())
 	cmd := builder.Command().BuiltTool("merge-event-log-tags").
-		FlagWithArg("-o ", eventLogtagsPath.String()).
-		FlagWithInput("-m ", android.MergedLogtagsPath(ctx))
+		FlagWithArg("-o ", eventLogtagsPath.String())
 
 	for _, path := range android.SortedKeys(logtagsFilePaths) {
 		cmd.Text(path)
