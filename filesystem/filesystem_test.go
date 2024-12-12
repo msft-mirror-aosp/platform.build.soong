@@ -181,7 +181,7 @@ func TestFileSystemFillsLinkerConfigWithStubLibs(t *testing.T) {
 	`)
 
 	module := result.ModuleForTests("myfilesystem", "android_common")
-	output := module.Output("out/soong/.intermediates/myfilesystem/android_common/root/system/etc/linker.config.pb")
+	output := module.Output("out/soong/.intermediates/myfilesystem/android_common/myfilesystem/system/etc/linker.config.pb")
 
 	fullCommand := output.RuleParams.Command
 	startIndex := strings.Index(fullCommand, "conv_linker_config")
@@ -244,7 +244,7 @@ func TestFileSystemGathersItemsOnlyInSystemPartition(t *testing.T) {
 	`)
 
 	module := result.ModuleForTests("myfilesystem", "android_common").Module().(*systemImage)
-	android.AssertDeepEquals(t, "entries should have foo only", []string{"components/foo"}, module.entries)
+	android.AssertDeepEquals(t, "entries should have foo and not bar", []string{"components/foo", "etc/linker.config.pb"}, module.entries)
 }
 
 func TestAvbGenVbmetaImage(t *testing.T) {

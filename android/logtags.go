@@ -14,7 +14,11 @@
 
 package android
 
-import "github.com/google/blueprint"
+import (
+	"strings"
+
+	"github.com/google/blueprint"
+)
 
 func init() {
 	RegisterParallelSingletonType("logtags", LogtagsSingleton)
@@ -46,11 +50,20 @@ func (l *logtagsSingleton) GenerateBuildActions(ctx SingletonContext) {
 			allLogtags = append(allLogtags, logtagsInfo.Logtags...)
 		}
 	})
+	allLogtags = SortedUniquePaths(allLogtags)
+	filteredLogTags := make([]Path, 0, len(allLogtags))
+	for _, p := range allLogtags {
+		// Logic copied from make:
+		// https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/Makefile;l=987;drc=0585bb1bcf4c89065adaf709f48acc8b869fd3ce
+		if !strings.HasPrefix(p.String(), "vendor/") && !strings.HasPrefix(p.String(), "device/") && !strings.HasPrefix(p.String(), "out/") {
+			filteredLogTags = append(filteredLogTags, p)
+		}
+	}
 
 	builder := NewRuleBuilder(pctx, ctx)
 	builder.Command().
 		BuiltTool("merge-event-log-tags").
 		FlagWithOutput("-o ", MergedLogtagsPath(ctx)).
-		Inputs(SortedUniquePaths(allLogtags))
+		Inputs(filteredLogTags)
 	builder.Build("all-event-log-tags.txt", "merge logtags")
 }
