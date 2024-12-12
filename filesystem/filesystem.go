@@ -465,7 +465,7 @@ func (f *filesystem) validateVintfFragments(ctx android.ModuleContext) {
 }
 
 func (f *filesystem) appendToEntry(ctx android.ModuleContext, installedFile android.Path) {
-	partitionBaseDir := android.PathForModuleOut(ctx, "root", proptools.String(f.properties.Base_dir)).String() + "/"
+	partitionBaseDir := android.PathForModuleOut(ctx, f.rootDirString(), proptools.String(f.properties.Base_dir)).String() + "/"
 
 	relPath, inTargetPartition := strings.CutPrefix(installedFile.String(), partitionBaseDir)
 	if inTargetPartition {
@@ -555,8 +555,12 @@ func (f *filesystem) copyFilesToProductOut(ctx android.ModuleContext, builder *a
 	builder.Command().Textf("cp -prf %s/* %s", rebasedDir, installPath)
 }
 
+func (f *filesystem) rootDirString() string {
+	return f.partitionName()
+}
+
 func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) android.Path {
-	rootDir := android.PathForModuleOut(ctx, "root").OutputPath
+	rootDir := android.PathForModuleOut(ctx, f.rootDirString()).OutputPath
 	rebasedDir := rootDir
 	if f.properties.Base_dir != nil {
 		rebasedDir = rootDir.Join(ctx, *f.properties.Base_dir)
@@ -783,7 +787,7 @@ func (f *filesystem) buildCpioImage(ctx android.ModuleContext, compressed bool) 
 		ctx.PropertyErrorf("include_make_built_files", "include_make_built_files is not supported for compressed cpio image.")
 	}
 
-	rootDir := android.PathForModuleOut(ctx, "root").OutputPath
+	rootDir := android.PathForModuleOut(ctx, f.rootDirString()).OutputPath
 	rebasedDir := rootDir
 	if f.properties.Base_dir != nil {
 		rebasedDir = rootDir.Join(ctx, *f.properties.Base_dir)
@@ -868,29 +872,10 @@ func (f *filesystem) buildEventLogtagsFile(ctx android.ModuleContext, builder *a
 		return
 	}
 
-	logtagsFilePaths := make(map[string]bool)
-	ctx.WalkDeps(func(child, parent android.Module) bool {
-		if logtagsInfo, ok := android.OtherModuleProvider(ctx, child, android.LogtagsProviderKey); ok {
-			for _, path := range logtagsInfo.Logtags {
-				logtagsFilePaths[path.String()] = true
-			}
-		}
-		return true
-	})
-
-	if len(logtagsFilePaths) == 0 {
-		return
-	}
-
 	etcPath := rebasedDir.Join(ctx, "etc")
 	eventLogtagsPath := etcPath.Join(ctx, "event-log-tags")
 	builder.Command().Text("mkdir").Flag("-p").Text(etcPath.String())
-	cmd := builder.Command().BuiltTool("merge-event-log-tags").
-		FlagWithArg("-o ", eventLogtagsPath.String())
-
-	for _, path := range android.SortedKeys(logtagsFilePaths) {
-		cmd.Text(path)
-	}
+	builder.Command().Text("cp").Input(android.MergedLogtagsPath(ctx)).Text(eventLogtagsPath.String())
 
 	f.appendToEntry(ctx, eventLogtagsPath)
 }
