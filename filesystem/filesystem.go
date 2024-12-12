@@ -121,6 +121,9 @@ type FilesystemProperties struct {
 	// avbtool. Default used by avbtool is sha1.
 	Avb_hash_algorithm *string
 
+	// The security patch passed to as the com.android.build.<type>.security_patch avb property.
+	Security_patch *string
+
 	// Whether or not to use forward-error-correction codes when signing with AVB. Defaults to true.
 	Use_fec *bool
 
@@ -685,7 +688,9 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 		}
 		avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.os_version:%s", f.partitionName(), ctx.Config().PlatformVersionLastStable())
 		avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.fingerprint:{CONTENTS_OF:%s}", f.partitionName(), ctx.Config().BuildFingerprintFile(ctx))
-		avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.security_patch:%s", f.partitionName(), ctx.Config().PlatformSecurityPatch())
+		if f.properties.Security_patch != nil && proptools.String(f.properties.Security_patch) != "" {
+			avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.security_patch:%s", f.partitionName(), proptools.String(f.properties.Security_patch))
+		}
 		addStr("avb_add_hashtree_footer_args", avb_add_hashtree_footer_args)
 	}
 
