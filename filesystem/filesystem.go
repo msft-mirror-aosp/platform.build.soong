@@ -622,11 +622,6 @@ func (f *filesystem) buildFileContexts(ctx android.ModuleContext) android.Path {
 	return fcBin
 }
 
-// Calculates avb_salt from entry list (sorted) for deterministic output.
-func (f *filesystem) salt() string {
-	return sha1sum(f.entries)
-}
-
 func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, android.Paths) {
 	var deps android.Paths
 	var propFileString strings.Builder
@@ -692,7 +687,6 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 		avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.fingerprint:{CONTENTS_OF:%s}", f.partitionName(), ctx.Config().BuildFingerprintFile(ctx))
 		avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.security_patch:%s", f.partitionName(), ctx.Config().PlatformSecurityPatch())
 		addStr("avb_add_hashtree_footer_args", avb_add_hashtree_footer_args)
-		addStr("avb_salt", f.salt())
 	}
 
 	if f.properties.File_contexts != nil && f.properties.Precompiled_file_contexts != nil {
