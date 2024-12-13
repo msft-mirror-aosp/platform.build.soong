@@ -40,13 +40,8 @@ func init() {
 	android.RegisterModuleType("rust_library_host_rlib", RustLibraryRlibHostFactory)
 	android.RegisterModuleType("rust_ffi", RustFFIFactory)
 	android.RegisterModuleType("rust_ffi_shared", RustFFISharedFactory)
-	android.RegisterModuleType("rust_ffi_rlib", RustLibraryRlibFactory)
 	android.RegisterModuleType("rust_ffi_host", RustFFIHostFactory)
 	android.RegisterModuleType("rust_ffi_host_shared", RustFFISharedHostFactory)
-	android.RegisterModuleType("rust_ffi_host_rlib", RustLibraryRlibHostFactory)
-
-	// TODO: Remove when all instances of rust_ffi_static have been switched to rust_ffi_rlib
-	// Alias rust_ffi_static to the rust_ffi_rlib factory
 	android.RegisterModuleType("rust_ffi_static", RustLibraryRlibFactory)
 	android.RegisterModuleType("rust_ffi_host_static", RustLibraryRlibHostFactory)
 }
@@ -279,8 +274,7 @@ func RustLibraryFactory() android.Module {
 	return module.Init()
 }
 
-// rust_ffi produces all FFI variants (rust_ffi_shared, rust_ffi_static, and
-// rust_ffi_rlib).
+// rust_ffi produces all FFI variants (rust_ffi_shared, rust_ffi_static).
 func RustFFIFactory() android.Module {
 	module, library := NewRustLibrary(android.HostAndDeviceSupported)
 	library.BuildOnlyFFI()
@@ -318,7 +312,7 @@ func RustLibraryHostFactory() android.Module {
 }
 
 // rust_ffi_host produces all FFI variants for the host
-// (rust_ffi_rlib_host, rust_ffi_static_host, and rust_ffi_shared_host).
+// (rust_ffi_static_host and rust_ffi_shared_host).
 func RustFFIHostFactory() android.Module {
 	module, library := NewRustLibrary(android.HostSupported)
 	library.BuildOnlyFFI()
