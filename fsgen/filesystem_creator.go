@@ -757,6 +757,8 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	}
 
 	fsProps.Is_auto_generated = proptools.BoolPtr(true)
+	// TODO(b/381120092): Verify mount_point for system partition
+	fsProps.Mount_point = proptools.StringPtr(partitionType)
 
 	partitionSpecificFsProps(ctx, fsProps, partitionVars, partitionType)
 
