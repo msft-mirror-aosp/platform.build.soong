@@ -70,7 +70,7 @@ func init() {
 	pctx.HostBinToolVariable("extract_apks", "extract_apks")
 	pctx.HostBinToolVariable("make_f2fs", "make_f2fs")
 	pctx.HostBinToolVariable("sload_f2fs", "sload_f2fs")
-	pctx.HostBinToolVariable("make_erofs", "make_erofs")
+	pctx.HostBinToolVariable("make_erofs", "mkfs.erofs")
 	pctx.HostBinToolVariable("apex_compression_tool", "apex_compression_tool")
 	pctx.HostBinToolVariable("dexdeps", "dexdeps")
 	pctx.HostBinToolVariable("apex_sepolicy_tests", "apex_sepolicy_tests")
