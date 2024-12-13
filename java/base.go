@@ -60,6 +60,9 @@ type CommonProperties struct {
 	// This is most useful in the arch/multilib variants to remove non-common files
 	Exclude_srcs []string `android:"path,arch_variant"`
 
+	// list of Kotlin source files that should excluded from the list of common_srcs.
+	Exclude_common_srcs []string `android:"path,arch_variant"`
+
 	// list of directories containing Java resources
 	Java_resource_dirs []string `android:"arch_variant"`
 
@@ -362,13 +365,13 @@ func (e *embeddableInModuleAndImport) initModuleAndImport(module android.Module)
 	e.initSdkLibraryComponent(module)
 }
 
-// Module/Import's DepIsInSameApex(...) delegates to this method.
+// Module/Import's OutgoingDepIsInSameApex(...) delegates to this method.
 //
-// This cannot implement DepIsInSameApex(...) directly as that leads to ambiguity with
+// This cannot implement OutgoingDepIsInSameApex(...) directly as that leads to ambiguity with
 // the one provided by ApexModuleBase.
-func (e *embeddableInModuleAndImport) depIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
+func (e *embeddableInModuleAndImport) depIsInSameApex(tag blueprint.DependencyTag) bool {
 	// dependencies other than the static linkage are all considered crossing APEX boundary
-	if staticLibTag == ctx.OtherModuleDependencyTag(dep) {
+	if tag == staticLibTag {
 		return true
 	}
 	return false
@@ -835,13 +838,18 @@ func (j *Module) TargetSdkVersion(ctx android.EarlyModuleContext) android.ApiLev
 }
 
 func (j *Module) AvailableFor(what string) bool {
-	if what == android.AvailableToPlatform && Bool(j.deviceProperties.Hostdex) {
+	return android.CheckAvailableForApex(what, j.ApexAvailableFor())
+}
+
+func (j *Module) ApexAvailableFor() []string {
+	list := j.ApexModuleBase.ApexAvailable()
+	if Bool(j.deviceProperties.Hostdex) {
 		// Exception: for hostdex: true libraries, the platform variant is created
 		// even if it's not marked as available to platform. In that case, the platform
 		// variant is used only for the hostdex and not installed to the device.
-		return true
+		list = append(list, android.AvailableToPlatform)
 	}
-	return j.ApexModuleBase.AvailableFor(what)
+	return android.FirstUniqueStrings(list)
 }
 
 func (j *Module) staticLibs(ctx android.BaseModuleContext) []string {
@@ -922,7 +930,7 @@ func (j *Module) deps(ctx android.BottomUpMutatorContext) {
 
 	if j.useCompose(ctx) {
 		ctx.AddVariationDependencies(ctx.Config().BuildOSCommonTarget.Variations(), kotlinPluginTag,
-			"androidx.compose.compiler_compiler-hosted-plugin")
+			"kotlin-compose-compiler-plugin")
 	}
 }
 
@@ -1182,7 +1190,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		flags = protoFlags(ctx, &j.properties, &j.protoProperties, flags)
 	}
 
-	kotlinCommonSrcFiles := android.PathsForModuleSrcExcludes(ctx, j.properties.Common_srcs, nil)
+	kotlinCommonSrcFiles := android.PathsForModuleSrcExcludes(ctx, j.properties.Common_srcs, j.properties.Exclude_common_srcs)
 	if len(kotlinCommonSrcFiles.FilterOutByExt(".kt")) > 0 {
 		ctx.PropertyErrorf("common_srcs", "common_srcs must be .kt files")
 	}
@@ -1434,20 +1442,27 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			// build.
 			flags = enableErrorproneFlags(flags)
 		} else if hasErrorproneableFiles && ctx.Config().RunErrorProne() && j.properties.Errorprone.Enabled == nil {
-			// Otherwise, if the RUN_ERROR_PRONE environment variable is set, create
-			// a new jar file just for compiling with the errorprone compiler to.
-			// This is because we don't want to cause the java files to get completely
-			// rebuilt every time the state of the RUN_ERROR_PRONE variable changes.
-			// We also don't want to run this if errorprone is enabled by default for
-			// this module, or else we could have duplicated errorprone messages.
-			errorproneFlags := enableErrorproneFlags(flags)
-			errorprone := android.PathForModuleOut(ctx, "errorprone", jarName)
-			errorproneAnnoSrcJar := android.PathForModuleOut(ctx, "errorprone", "anno.srcjar")
+			if ctx.Config().RunErrorProneInline() {
+				// On CI, we're not going to toggle back/forth between errorprone and non-errorprone
+				// builds, so it's faster if we don't compile the module twice and instead always
+				// compile the module with errorprone.
+				flags = enableErrorproneFlags(flags)
+			} else {
+				// Otherwise, if the RUN_ERROR_PRONE environment variable is set, create
+				// a new jar file just for compiling with the errorprone compiler to.
+				// This is because we don't want to cause the java files to get completely
+				// rebuilt every time the state of the RUN_ERROR_PRONE variable changes.
+				// We also don't want to run this if errorprone is enabled by default for
+				// this module, or else we could have duplicated errorprone messages.
+				errorproneFlags := enableErrorproneFlags(flags)
+				errorprone := android.PathForModuleOut(ctx, "errorprone", jarName)
+				errorproneAnnoSrcJar := android.PathForModuleOut(ctx, "errorprone", "anno.srcjar")
 
-			transformJavaToClasses(ctx, errorprone, -1, uniqueJavaFiles, srcJars, errorproneAnnoSrcJar, errorproneFlags, nil,
-				"errorprone", "errorprone")
+				transformJavaToClasses(ctx, errorprone, -1, uniqueJavaFiles, srcJars, errorproneAnnoSrcJar, errorproneFlags, nil,
+					"errorprone", "errorprone")
 
-			extraJarDeps = append(extraJarDeps, errorprone)
+				extraJarDeps = append(extraJarDeps, errorprone)
+			}
 		}
 
 		if enableSharding {
@@ -2206,8 +2221,8 @@ func (j *Module) hasCode(ctx android.ModuleContext) bool {
 }
 
 // Implements android.ApexModule
-func (j *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
-	return j.depIsInSameApex(ctx, dep)
+func (j *Module) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	return j.depIsInSameApex(tag)
 }
 
 // Implements android.ApexModule
