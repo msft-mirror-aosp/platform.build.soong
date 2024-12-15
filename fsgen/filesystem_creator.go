@@ -52,6 +52,7 @@ type filesystemCreatorProps struct {
 	Boot_image        string `blueprint:"mutated" android:"path_device_first"`
 	Vendor_boot_image string `blueprint:"mutated" android:"path_device_first"`
 	Init_boot_image   string `blueprint:"mutated" android:"path_device_first"`
+	Super_image       string `blueprint:"mutated" android:"path_device_first"`
 }
 
 type filesystemCreator struct {
@@ -158,6 +159,11 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 		f.properties.Vbmeta_partition_names = append(f.properties.Vbmeta_partition_names, x.partitionName)
 	}
 
+	if buildingSuperImage(partitionVars) {
+		createSuperImage(ctx, finalSoongGeneratedPartitions, partitionVars)
+		f.properties.Super_image = ":" + generatedModuleName(ctx.Config(), "super")
+	}
+
 	ctx.Config().Get(fsGenStateOnceKey).(*FsGenState).soongGeneratedPartitions = finalSoongGeneratedPartitions
 	f.createDeviceModule(ctx, finalSoongGeneratedPartitions, f.properties.Vbmeta_module_names)
 }
@@ -229,131 +235,37 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 			}
 			fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
 		}
-		// Most of the symlinks and directories listed here originate from create_root_structure.mk,
-		// but the handwritten generic system image also recreates them:
-		// https://cs.android.com/android/platform/superproject/main/+/main:build/make/target/product/generic/Android.bp;l=33;drc=db08311f1b6ef6cb0a4fbcc6263b89849360ce04
-		// TODO(b/377734331): only generate the symlinks if the relevant partitions exist
-		fsProps.Symlinks = []filesystem.SymlinkDefinition{
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/system/bin/init"),
-				Name:   proptools.StringPtr("init"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/system/etc"),
-				Name:   proptools.StringPtr("etc"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/system/bin"),
-				Name:   proptools.StringPtr("bin"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/data/user_de/0/com.android.shell/files/bugreports"),
-				Name:   proptools.StringPtr("bugreports"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/sys/kernel/debug"),
-				Name:   proptools.StringPtr("d"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/storage/self/primary"),
-				Name:   proptools.StringPtr("sdcard"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/product/etc/security/adb_keys"),
-				Name:   proptools.StringPtr("adb_keys"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/vendor/odm/app"),
-				Name:   proptools.StringPtr("odm/app"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/vendor/odm/bin"),
-				Name:   proptools.StringPtr("odm/bin"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/vendor/odm/etc"),
-				Name:   proptools.StringPtr("odm/etc"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/vendor/odm/firmware"),
-				Name:   proptools.StringPtr("odm/firmware"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/vendor/odm/framework"),
-				Name:   proptools.StringPtr("odm/framework"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/vendor/odm/lib"),
-				Name:   proptools.StringPtr("odm/lib"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/vendor/odm/lib64"),
-				Name:   proptools.StringPtr("odm/lib64"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/vendor/odm/overlay"),
-				Name:   proptools.StringPtr("odm/overlay"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/vendor/odm/priv-app"),
-				Name:   proptools.StringPtr("odm/priv-app"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/vendor/odm/usr"),
-				Name:   proptools.StringPtr("odm/usr"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/product"),
-				Name:   proptools.StringPtr("system/product"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/system_ext"),
-				Name:   proptools.StringPtr("system/system_ext"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/vendor"),
-				Name:   proptools.StringPtr("system/vendor"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/system_dlkm/lib/modules"),
-				Name:   proptools.StringPtr("system/lib/modules"),
-			},
-			filesystem.SymlinkDefinition{
-				Target: proptools.StringPtr("/data/cache"),
-				Name:   proptools.StringPtr("cache"),
-			},
-		}
-		fsProps.Dirs = proptools.NewSimpleConfigurable([]string{
-			// From generic_rootdirs in build/make/target/product/generic/Android.bp
-			"acct",
-			"apex",
-			"bootstrap-apex",
-			"config",
-			"data",
-			"data_mirror",
-			"debug_ramdisk",
-			"dev",
-			"linkerconfig",
-			"metadata",
-			"mnt",
-			"odm",
-			"odm_dlkm",
-			"oem",
-			"postinstall",
-			"proc",
-			"second_stage_resources",
-			"storage",
-			"sys",
-			"system",
-			"system_dlkm",
-			"tmp",
-			"vendor",
-			"vendor_dlkm",
-
-			// from android_rootdirs in build/make/target/product/generic/Android.bp
-			"system_ext",
-			"product",
-		})
+		fsProps.Symlinks = commonSymlinksFromRoot
+		fsProps.Symlinks = append(fsProps.Symlinks,
+			[]filesystem.SymlinkDefinition{
+				{
+					Target: proptools.StringPtr("/data/cache"),
+					Name:   proptools.StringPtr("cache"),
+				},
+				{
+					Target: proptools.StringPtr("/storage/self/primary"),
+					Name:   proptools.StringPtr("sdcard"),
+				},
+				{
+					Target: proptools.StringPtr("/system_dlkm/lib/modules"),
+					Name:   proptools.StringPtr("system/lib/modules"),
+				},
+				{
+					Target: proptools.StringPtr("/product"),
+					Name:   proptools.StringPtr("system/product"),
+				},
+				{
+					Target: proptools.StringPtr("/system_ext"),
+					Name:   proptools.StringPtr("system/system_ext"),
+				},
+				{
+					Target: proptools.StringPtr("/vendor"),
+					Name:   proptools.StringPtr("system/vendor"),
+				},
+			}...,
+		)
+		fsProps.Base_dir = proptools.StringPtr("system")
+		fsProps.Dirs = proptools.NewSimpleConfigurable(commonPartitionDirs)
 	case "system_ext":
 		if partitionVars.ProductFsverityGenerateMetadata {
 			fsProps.Fsverity.Inputs = []string{
@@ -374,11 +286,11 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 		fsProps.Symlinks = []filesystem.SymlinkDefinition{
 			filesystem.SymlinkDefinition{
 				Target: proptools.StringPtr("/odm"),
-				Name:   proptools.StringPtr("vendor/odm"),
+				Name:   proptools.StringPtr("odm"),
 			},
 			filesystem.SymlinkDefinition{
 				Target: proptools.StringPtr("/vendor_dlkm/lib/modules"),
-				Name:   proptools.StringPtr("vendor/lib/modules"),
+				Name:   proptools.StringPtr("lib/modules"),
 			},
 		}
 		fsProps.Android_filesystem_deps.System = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system"))
@@ -389,7 +301,7 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 		fsProps.Symlinks = []filesystem.SymlinkDefinition{
 			filesystem.SymlinkDefinition{
 				Target: proptools.StringPtr("/odm_dlkm/lib/modules"),
-				Name:   proptools.StringPtr("odm/lib/modules"),
+				Name:   proptools.StringPtr("lib/modules"),
 			},
 		}
 	case "userdata":
@@ -417,21 +329,35 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 			})
 		}
 	case "recovery":
-		// Following https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/Makefile;l=2826;drc=ad7cfb56010cb22c3aa0e70cf71c804352553526
-		fsProps.Dirs = android.NewSimpleConfigurable([]string{
+		dirs := append(commonPartitionDirs, []string{
+			"odm_file_contexts",
+			"odm_property_contexts",
+			"plat_file_contexts",
+			"plat_property_contexts",
+			"plat_service_contexts",
+			"product_file_contexts",
+			"product_property_contexts",
+			"product_service_contexts",
 			"sdcard",
-			"tmp",
-		})
-		fsProps.Symlinks = []filesystem.SymlinkDefinition{
-			{
-				Target: proptools.StringPtr("/system/bin/init"),
-				Name:   proptools.StringPtr("init"),
-			},
-			{
-				Target: proptools.StringPtr("prop.default"),
-				Name:   proptools.StringPtr("default.prop"),
-			},
+			"sepolicy",
+			"system_ext_file_contexts",
+			"system_ext_property_contexts",
+			"system_ext_service_contexts",
+			"vendor_file_contexts",
+			"vendor_property_contexts",
+			"vendor_service_contexts",
+		}...)
+
+		dirsWithRoot := make([]string, len(dirs))
+		for i, dir := range dirs {
+			dirsWithRoot[i] = filepath.Join("root", dir)
 		}
+
+		fsProps.Dirs = proptools.NewSimpleConfigurable(dirsWithRoot)
+		fsProps.Symlinks = symlinksWithNamePrefix(append(commonSymlinksFromRoot, filesystem.SymlinkDefinition{
+			Target: proptools.StringPtr("prop.default"),
+			Name:   proptools.StringPtr("default.prop"),
+		}), "root")
 	}
 }
 
@@ -564,6 +490,7 @@ func (f *filesystemCreator) createPrebuiltKernelModules(ctx android.LoadHookCont
 		Load_by_default      *bool
 		Blocklist_file       *string
 		Options_file         *string
+		Strip_debug_symbols  *bool
 	}{
 		Name: proptools.StringPtr(name),
 	}
@@ -579,6 +506,7 @@ func (f *filesystemCreator) createPrebuiltKernelModules(ctx android.LoadHookCont
 		if blocklistFile := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.SystemKernelBlocklistFile; blocklistFile != "" {
 			props.Blocklist_file = proptools.StringPtr(blocklistFile)
 		}
+		props.Strip_debug_symbols = proptools.BoolPtr(false)
 	case "vendor_dlkm":
 		props.Srcs = android.ExistentPathsForSources(ctx, ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.VendorKernelModules).Strings()
 		if len(ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.SystemKernelModules) > 0 {
@@ -588,12 +516,14 @@ func (f *filesystemCreator) createPrebuiltKernelModules(ctx android.LoadHookCont
 		if blocklistFile := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.VendorKernelBlocklistFile; blocklistFile != "" {
 			props.Blocklist_file = proptools.StringPtr(blocklistFile)
 		}
+		props.Strip_debug_symbols = proptools.BoolPtr(false)
 	case "odm_dlkm":
 		props.Srcs = android.ExistentPathsForSources(ctx, ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.OdmKernelModules).Strings()
 		props.Odm_dlkm_specific = proptools.BoolPtr(true)
 		if blocklistFile := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.OdmKernelBlocklistFile; blocklistFile != "" {
 			props.Blocklist_file = proptools.StringPtr(blocklistFile)
 		}
+		props.Strip_debug_symbols = proptools.BoolPtr(false)
 	case "vendor_ramdisk":
 		props.Srcs = android.ExistentPathsForSources(ctx, ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.VendorRamdiskKernelModules).Strings()
 		props.Vendor_ramdisk = proptools.BoolPtr(true)
@@ -771,25 +701,16 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 
 	fsProps.Partition_name = proptools.StringPtr(partitionType)
 
-	if !strings.Contains(partitionType, "ramdisk") {
-		fsProps.Base_dir = proptools.StringPtr(partitionType)
+	switch partitionType {
+	// The partitions that support file_contexts came from here:
+	// https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/Makefile;l=2270;drc=ad7cfb56010cb22c3aa0e70cf71c804352553526
+	case "system", "userdata", "cache", "vendor", "product", "system_ext", "odm", "vendor_dlkm", "odm_dlkm", "system_dlkm", "oem":
+		fsProps.Precompiled_file_contexts = proptools.StringPtr(":file_contexts_bin_gen")
 	}
 
 	fsProps.Is_auto_generated = proptools.BoolPtr(true)
 
 	partitionSpecificFsProps(ctx, fsProps, partitionVars, partitionType)
-
-	// system_image properties that are not set:
-	// - filesystemProperties.Avb_hash_algorithm
-	// - filesystemProperties.File_contexts
-	// - filesystemProperties.Dirs
-	// - filesystemProperties.Symlinks
-	// - filesystemProperties.Fake_timestamp
-	// - filesystemProperties.Uuid
-	// - filesystemProperties.Mount_point
-	// - filesystemProperties.Include_make_built_files
-	// - filesystemProperties.Build_logtags
-	// - systemImageProperties.Linker_config_src
 
 	return fsProps, true
 }
@@ -997,6 +918,14 @@ func (f *filesystemCreator) GenerateAndroidBuildActions(ctx android.ModuleContex
 		createDiffTest(ctx, diffTestFile, soongBootImg, makeBootImage)
 		diffTestFiles = append(diffTestFiles, diffTestFile)
 		ctx.Phony("soong_generated_init_boot_filesystem_test", diffTestFile)
+	}
+	if f.properties.Super_image != "" {
+		diffTestFile := android.PathForModuleOut(ctx, "super_diff_test.txt")
+		soongSuperImg := android.PathForModuleSrc(ctx, f.properties.Super_image)
+		makeSuperImage := android.PathForArbitraryOutput(ctx, fmt.Sprintf("target/product/%s/super.img", ctx.Config().DeviceName()))
+		createDiffTest(ctx, diffTestFile, soongSuperImg, makeSuperImage)
+		diffTestFiles = append(diffTestFiles, diffTestFile)
+		ctx.Phony("soong_generated_super_filesystem_test", diffTestFile)
 	}
 	ctx.Phony("soong_generated_filesystem_tests", diffTestFiles...)
 }
