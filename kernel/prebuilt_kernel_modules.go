@@ -58,12 +58,19 @@ type prebuiltKernelModulesProperties struct {
 
 	Blocklist_file *string `android:"path"`
 
+	// Path to the kernel module options file
+	Options_file *string `android:"path"`
+
 	// Kernel version that these modules are for. Kernel modules are installed to
 	// /lib/modules/<kernel_version> directory in the corresponding partition. Default is "".
 	Kernel_version *string
 
 	// Whether this module is directly installable to one of the partitions. Default is true
 	Installable *bool
+
+	// Whether debug symbols should be stripped from the *.ko files.
+	// Defaults to true.
+	Strip_debug_symbols *bool
 }
 
 // prebuilt_kernel_modules installs a set of prebuilt kernel module files to the correct directory.
@@ -97,14 +104,23 @@ func (pkm *prebuiltKernelModules) GenerateAndroidBuildActions(ctx android.Module
 	systemModules := android.PathsForModuleSrc(ctx, pkm.properties.System_deps)
 
 	depmodOut := pkm.runDepmod(ctx, modules, systemModules)
-	strippedModules := stripDebugSymbols(ctx, modules)
+	if proptools.BoolDefault(pkm.properties.Strip_debug_symbols, true) {
+		modules = stripDebugSymbols(ctx, modules)
+	}
 
 	installDir := android.PathForModuleInstall(ctx, "lib", "modules")
+	// Kernel module is installed to vendor_ramdisk/lib/modules regardless of product
+	// configuration. This matches the behavior in make and prevents the files from being
+	// installed in `vendor_ramdisk/first_stage_ramdisk`.
+	if pkm.InstallInVendorRamdisk() {
+		installDir = android.PathForModuleInPartitionInstall(ctx, "vendor_ramdisk", "lib", "modules")
+	}
+
 	if pkm.KernelVersion() != "" {
 		installDir = installDir.Join(ctx, pkm.KernelVersion())
 	}
 
-	for _, m := range strippedModules {
+	for _, m := range modules {
 		ctx.InstallFile(installDir, filepath.Base(m.String()), m)
 	}
 	ctx.InstallFile(installDir, "modules.load", depmodOut.modulesLoad)
@@ -112,6 +128,7 @@ func (pkm *prebuiltKernelModules) GenerateAndroidBuildActions(ctx android.Module
 	ctx.InstallFile(installDir, "modules.softdep", depmodOut.modulesSoftdep)
 	ctx.InstallFile(installDir, "modules.alias", depmodOut.modulesAlias)
 	pkm.installBlocklistFile(ctx, installDir)
+	pkm.installOptionsFile(ctx, installDir)
 
 	ctx.SetOutputFiles(modules, ".modules")
 }
@@ -130,6 +147,20 @@ func (pkm *prebuiltKernelModules) installBlocklistFile(ctx android.ModuleContext
 	ctx.InstallFile(installDir, "modules.blocklist", blocklistOut)
 }
 
+func (pkm *prebuiltKernelModules) installOptionsFile(ctx android.ModuleContext, installDir android.InstallPath) {
+	if pkm.properties.Options_file == nil {
+		return
+	}
+	optionsOut := android.PathForModuleOut(ctx, "modules.options")
+
+	ctx.Build(pctx, android.BuildParams{
+		Rule:   processOptionsFile,
+		Input:  android.PathForModuleSrc(ctx, proptools.String(pkm.properties.Options_file)),
+		Output: optionsOut,
+	})
+	ctx.InstallFile(installDir, "modules.options", optionsOut)
+}
+
 var (
 	pctx = android.NewPackageContext("android/soong/kernel")
 
@@ -140,9 +171,9 @@ var (
 		}, "stripCmd")
 )
 
-func stripDebugSymbols(ctx android.ModuleContext, modules android.Paths) android.OutputPaths {
+func stripDebugSymbols(ctx android.ModuleContext, modules android.Paths) android.Paths {
 	dir := android.PathForModuleOut(ctx, "stripped").OutputPath
-	var outputs android.OutputPaths
+	var outputs android.Paths
 
 	for _, m := range modules {
 		stripped := dir.Join(ctx, filepath.Base(m.String()))
@@ -184,6 +215,19 @@ var (
 				` NF == 0 { next }` +
 				` NF != 2 || $$1 != "blocklist"` +
 				` { print "Invalid blocklist line " FNR ": " $$0 >"/dev/stderr";` +
+				` exit_status = 1; next }` +
+				` { $$1 = $$1; print }` +
+				` END { exit exit_status }'`,
+		},
+	)
+	// Remove empty lines. Raise an exception if line is _not_ formatted as `options $name.ko`
+	processOptionsFile = pctx.AndroidStaticRule("process_options_file",
+		blueprint.RuleParams{
+			Command: `rm -rf $out && awk <$in > $out` +
+				` '/^#/ { print; next }` +
+				` NF == 0 { next }` +
+				` NF < 2 || $$1 != "options"` +
+				` { print "Invalid options line " FNR ": " $$0 >"/dev/stderr";` +
 				` exit_status = 1; next }` +
 				` { $$1 = $$1; print }` +
 				` END { exit exit_status }'`,
@@ -267,7 +311,7 @@ func (pkm *prebuiltKernelModules) runDepmod(ctx android.ModuleContext, modules a
 	finalModulesDep := modulesDep
 	// Add a leading slash to paths in modules.dep of android dlkm
 	if ctx.InstallInSystemDlkm() || ctx.InstallInVendorDlkm() || ctx.InstallInOdmDlkm() {
-		finalModulesDep := modulesDep.ReplaceExtension(ctx, "intermediates")
+		finalModulesDep = modulesDep.ReplaceExtension(ctx, "intermediates")
 		ctx.Build(pctx, android.BuildParams{
 			Rule:   addLeadingSlashToPaths,
 			Input:  modulesDep,

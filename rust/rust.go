@@ -427,6 +427,7 @@ type PathDeps struct {
 	StaticLibs    android.Paths
 	ProcMacros    RustLibraries
 	AfdoProfiles  android.Paths
+	LinkerDeps    android.Paths
 
 	// depFlags and depLinkFlags are rustc and linker (clang) flags.
 	depFlags     []string
@@ -719,6 +720,10 @@ func (mod *Module) CoverageOutputFile() android.OptionalPath {
 }
 
 func (mod *Module) IsNdk(config android.Config) bool {
+	return false
+}
+
+func (mod *Module) HasStubsVariants() bool {
 	return false
 }
 
@@ -1820,41 +1825,23 @@ func (mod *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVer
 }
 
 // Implements android.ApexModule
-func (mod *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
-	depTag := ctx.OtherModuleDependencyTag(dep)
-
-	if ccm, ok := dep.(*cc.Module); ok {
-		if ccm.HasStubsVariants() {
-			if cc.IsSharedDepTag(depTag) {
-				// dynamic dep to a stubs lib crosses APEX boundary
-				return false
-			}
-			if cc.IsRuntimeDepTag(depTag) {
-				// runtime dep to a stubs lib also crosses APEX boundary
-				return false
-			}
-
-			if cc.IsHeaderDepTag(depTag) {
-				return false
-			}
-		}
-		if mod.Static() && cc.IsSharedDepTag(depTag) {
-			// shared_lib dependency from a static lib is considered as crossing
-			// the APEX boundary because the dependency doesn't actually is
-			// linked; the dependency is used only during the compilation phase.
-			return false
-		}
-	}
-
+func (mod *Module) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
 	if depTag == procMacroDepTag || depTag == customBindgenDepTag {
 		return false
 	}
 
-	if rustDep, ok := dep.(*Module); ok && rustDep.ApexExclude() {
+	if mod.Static() && cc.IsSharedDepTag(depTag) {
+		// shared_lib dependency from a static lib is considered as crossing
+		// the APEX boundary because the dependency doesn't actually is
+		// linked; the dependency is used only during the compilation phase.
 		return false
 	}
 
 	return true
+}
+
+func (mod *Module) IncomingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
+	return !mod.ApexExclude()
 }
 
 // Overrides ApexModule.IsInstallabeToApex()

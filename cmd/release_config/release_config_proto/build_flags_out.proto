@@ -96,6 +96,14 @@ message ReleaseConfigArtifact {
   // config.  The listed directories contain at least a `release_config` message
   // for this release config.
   repeated string value_directories = 8;
+
+  // The ReleaseConfigType of this release config.
+  optional ReleaseConfigType release_config_type = 9;
+
+  // Whether to disallow this release config as TARGET_RELEASE.
+  // If true, this release config can only be inherited, it cannot be used
+  // directly in a build.
+  optional bool disallow_lunch_use = 10;
 }
 
 message ReleaseConfigsArtifact {

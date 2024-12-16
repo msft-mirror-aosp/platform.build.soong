@@ -42,6 +42,9 @@ var (
 	InstrumentFrameworkModules = []string{
 		"framework",
 		"framework-minus-apex",
+		// TODO(b/383559945) Remove "framework-minus-apex_jarjar-sharded" once
+		// we remove this module.
+		"framework-minus-apex_jarjar-sharded",
 		"ims-common",
 		"telephony-common",
 		"services",
@@ -159,6 +162,7 @@ func init() {
 	pctx.SourcePathVariable("ResourceProcessorBusyBox", "prebuilts/bazel/common/android_tools/android_tools/all_android_tools_deploy.jar")
 
 	pctx.HostBinToolVariable("GenKotlinBuildFileCmd", "gen-kotlin-build-file")
+	pctx.HostBinToolVariable("FindInputDeltaCmd", "find_input_delta")
 
 	pctx.SourcePathVariable("JarArgsCmd", "build/soong/scripts/jar-args.sh")
 	pctx.SourcePathVariable("PackageCheckCmd", "build/soong/scripts/package-check.sh")

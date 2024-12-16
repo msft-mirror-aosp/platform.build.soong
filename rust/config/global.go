@@ -25,7 +25,7 @@ import (
 var (
 	pctx = android.NewPackageContext("android/soong/rust/config")
 
-	RustDefaultVersion = "1.81.0"
+	RustDefaultVersion = "1.82.0"
 	RustDefaultBase    = "prebuilts/rust/"
 	DefaultEdition     = "2021"
 	Stdlibs            = []string{
@@ -121,7 +121,7 @@ func init() {
 	pctx.StaticVariable("RustBin", "${RustPath}/bin")
 
 	pctx.ImportAs("cc_config", "android/soong/cc/config")
-	pctx.StaticVariable("RustLinker", "${cc_config.ClangBin}/clang++")
+	pctx.StaticVariable("ClangCmd", "${cc_config.ClangBin}/clang++")
 
 	pctx.StaticVariable("DeviceGlobalLinkFlags", strings.Join(deviceGlobalLinkFlags, " "))
 

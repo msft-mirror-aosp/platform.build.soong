@@ -1320,6 +1320,10 @@ func (c *config) RunErrorProne() bool {
 	return c.IsEnvTrue("RUN_ERROR_PRONE")
 }
 
+func (c *config) RunErrorProneInline() bool {
+	return c.IsEnvTrue("RUN_ERROR_PRONE_INLINE")
+}
+
 // XrefCorpusName returns the Kythe cross-reference corpus name.
 func (c *config) XrefCorpusName() string {
 	return c.Getenv("XREF_CORPUS")
@@ -1519,6 +1523,13 @@ func (c *deviceConfig) BinderBitness() string {
 	return "64"
 }
 
+func (c *deviceConfig) RecoveryPath() string {
+	if c.config.productVariables.RecoveryPath != nil {
+		return *c.config.productVariables.RecoveryPath
+	}
+	return "recovery"
+}
+
 func (c *deviceConfig) VendorPath() string {
 	if c.config.productVariables.VendorPath != nil {
 		return *c.config.productVariables.VendorPath
@@ -1612,6 +1623,10 @@ func (c *deviceConfig) UserdataPath() string {
 
 func (c *deviceConfig) BuildingUserdataImage() bool {
 	return proptools.Bool(c.config.productVariables.BuildingUserdataImage)
+}
+
+func (c *deviceConfig) BuildingRecoveryImage() bool {
+	return proptools.Bool(c.config.productVariables.BuildingRecoveryImage)
 }
 
 func (c *deviceConfig) BtConfigIncludeDir() string {
@@ -2146,6 +2161,10 @@ func (c *config) UseResourceProcessorByDefault() bool {
 
 func (c *config) UseTransitiveJarsInClasspath() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_USE_TRANSITIVE_JARS_IN_CLASSPATH")
+}
+
+func (c *config) UseDexV41() bool {
+	return c.productVariables.GetBuildFlagBool("RELEASE_USE_DEX_V41")
 }
 
 var (

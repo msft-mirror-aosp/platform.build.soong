@@ -84,26 +84,6 @@ func withFiles(files android.MockFS) android.FixturePreparer {
 	return files.AddToFixture()
 }
 
-// withNativeBridgeTargets sets configuration with targets including:
-// - X86_64 (primary)
-// - X86 (secondary)
-// - Arm64 on X86_64 (native bridge)
-// - Arm on X86 (native bridge)
-var withNativeBridgeEnabled = android.FixtureModifyConfig(
-	func(config android.Config) {
-		config.Targets[android.Android] = []android.Target{
-			{Os: android.Android, Arch: android.Arch{ArchType: android.X86_64, ArchVariant: "silvermont", Abi: []string{"arm64-v8a"}},
-				NativeBridge: android.NativeBridgeDisabled, NativeBridgeHostArchName: "", NativeBridgeRelativePath: ""},
-			{Os: android.Android, Arch: android.Arch{ArchType: android.X86, ArchVariant: "silvermont", Abi: []string{"armeabi-v7a"}},
-				NativeBridge: android.NativeBridgeDisabled, NativeBridgeHostArchName: "", NativeBridgeRelativePath: ""},
-			{Os: android.Android, Arch: android.Arch{ArchType: android.Arm64, ArchVariant: "armv8-a", Abi: []string{"arm64-v8a"}},
-				NativeBridge: android.NativeBridgeEnabled, NativeBridgeHostArchName: "x86_64", NativeBridgeRelativePath: "arm64"},
-			{Os: android.Android, Arch: android.Arch{ArchType: android.Arm, ArchVariant: "armv7-a-neon", Abi: []string{"armeabi-v7a"}},
-				NativeBridge: android.NativeBridgeEnabled, NativeBridgeHostArchName: "x86", NativeBridgeRelativePath: "arm"},
-		}
-	},
-)
-
 func withManifestPackageNameOverrides(specs []string) android.FixturePreparer {
 	return android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
 		variables.ManifestPackageNameOverrides = specs
@@ -3198,7 +3178,7 @@ func TestFilesInSubDirWhenNativeBridgeEnabled(t *testing.T) {
 				},
 			},
 		}
-	`, withNativeBridgeEnabled)
+	`, android.PrepareForNativeBridgeEnabled)
 	ensureExactContents(t, ctx, "myapex", "android_common_myapex", []string{
 		"bin/foo/bar/mybin",
 		"bin/foo/bar/mybin64",
@@ -5838,7 +5818,6 @@ func TestApexWithTests(t *testing.T) {
 			relative_install_path: "test",
 			shared_libs: ["mylib"],
 			system_shared_libs: [],
-			static_executable: true,
 			stl: "none",
 			data: [":fg"],
 		}
@@ -6373,10 +6352,16 @@ func TestApexAvailable_IndirectDep(t *testing.T) {
 	testApexError(t, `requires "libbaz" that doesn't list the APEX under 'apex_available'.\n\nDependency path:
 .*via tag apex\.dependencyTag\{"sharedLib"\}
 .*-> libfoo.*link:shared.*
+.*via tag cc\.dependencyTag.*
+.*-> libfoo.*link:static.*
 .*via tag cc\.libraryDependencyTag.*Kind:sharedLibraryDependency.*
 .*-> libbar.*link:shared.*
+.*via tag cc\.dependencyTag.*
+.*-> libbar.*link:static.*
 .*via tag cc\.libraryDependencyTag.*Kind:sharedLibraryDependency.*
-.*-> libbaz.*link:shared.*`, `
+.*-> libbaz.*link:shared.*
+.*via tag cc\.dependencyTag.*
+.*-> libbaz.*link:static.*`, `
 	apex {
 		name: "myapex",
 		key: "myapex.key",
@@ -7937,46 +7922,6 @@ func TestRejectNonInstallableJavaLibrary(t *testing.T) {
 	`)
 }
 
-func TestCarryRequiredModuleNames(t *testing.T) {
-	t.Parallel()
-	ctx := testApex(t, `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			native_shared_libs: ["mylib"],
-			updatable: false,
-		}
-
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-
-		cc_library {
-			name: "mylib",
-			srcs: ["mylib.cpp"],
-			system_shared_libs: [],
-			stl: "none",
-			required: ["a", "b"],
-			host_required: ["c", "d"],
-			target_required: ["e", "f"],
-			apex_available: [ "myapex" ],
-		}
-	`)
-
-	apexBundle := ctx.ModuleForTests("myapex", "android_common_myapex").Module().(*apexBundle)
-	data := android.AndroidMkDataForTest(t, ctx, apexBundle)
-	name := apexBundle.BaseModuleName()
-	prefix := "TARGET_"
-	var builder strings.Builder
-	data.Custom(&builder, name, prefix, "", data)
-	androidMk := builder.String()
-	ensureContains(t, androidMk, "LOCAL_REQUIRED_MODULES := mylib.myapex:64 a b\n")
-	ensureContains(t, androidMk, "LOCAL_HOST_REQUIRED_MODULES := c d\n")
-	ensureContains(t, androidMk, "LOCAL_TARGET_REQUIRED_MODULES := e f\n")
-}
-
 func TestSymlinksFromApexToSystem(t *testing.T) {
 	t.Parallel()
 	bp := `
@@ -9091,6 +9036,33 @@ func TestCompressedApex(t *testing.T) {
 	data.Custom(&builder, ab.BaseModuleName(), "TARGET_", "", data)
 	androidMk := builder.String()
 	ensureContains(t, androidMk, "LOCAL_MODULE_STEM := myapex.capex\n")
+}
+
+func TestCompressedApexIsDisabledWhenUsingErofs(t *testing.T) {
+	t.Parallel()
+	ctx := testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			compressible: true,
+			updatable: false,
+			payload_fs_type: "erofs",
+		}
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`,
+		android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+			variables.CompressedApex = proptools.BoolPtr(true)
+		}),
+	)
+
+	compressRule := ctx.ModuleForTests("myapex", "android_common_myapex").MaybeRule("compressRule")
+	if compressRule.Rule != nil {
+		t.Error("erofs apex should not be compressed")
+	}
 }
 
 func TestApexSet_ShouldRespectCompressedApexFlag(t *testing.T) {
@@ -12181,34 +12153,32 @@ func TestApexVerifyNativeImplementationLibs(t *testing.T) {
 			},
 			dependencyPath: []string{"myapex", "libjni", "libbar", "libplatform"},
 		},
-		// TODO: embedded JNI in apps should be checked too, but Soong currently just packages the transitive
-		//  JNI libraries even if they came from another apex.
-		//{
-		//	name:           "app jni library dependency in other apex",
-		//	bpModifier:     addToSharedLibs("libembeddedjni", "libotherapex#impl"),
-		//	dependencyPath: []string{"myapex", "myapp", "libembeddedjni", "libotherapex"},
-		//},
-		//{
-		//	name: "transitive app jni library dependency in other apex",
-		//	bpModifier: func(bp *bpmodify.Blueprint) {
-		//		addToSharedLibs("libembeddedjni", "libbar")(bp)
-		//		addToSharedLibs("libbar", "libotherapex#impl")(bp)
-		//	},
-		//	dependencyPath: []string{"myapex", "myapp", "libembeddedjni", "libbar", "libotherapex"},
-		//},
-		//{
-		//	name:           "app jni library dependency in platform",
-		//	bpModifier:     addToSharedLibs("libembeddedjni", "libplatform#impl"),
-		//	dependencyPath: []string{"myapex", "myapp", "libembeddedjni", "libplatform"},
-		//},
-		//{
-		//	name: "transitive app jni library dependency in platform",
-		//	bpModifier: func(bp *bpmodify.Blueprint) {
-		//		addToSharedLibs("libembeddedjni", "libbar")(bp)
-		//		addToSharedLibs("libbar", "libplatform#impl")(bp)
-		//	},
-		//	dependencyPath: []string{"myapex", "myapp", "libembeddedjni", "libbar", "libplatform"},
-		//},
+		{
+			name:           "app jni library dependency in other apex",
+			bpModifier:     addToSharedLibs("libembeddedjni", "libotherapex#impl"),
+			dependencyPath: []string{"myapex", "myapp", "libembeddedjni", "libotherapex"},
+		},
+		{
+			name: "transitive app jni library dependency in other apex",
+			bpModifier: func(bp *bpmodify.Blueprint) {
+				addToSharedLibs("libembeddedjni", "libbar")(bp)
+				addToSharedLibs("libbar", "libotherapex#impl")(bp)
+			},
+			dependencyPath: []string{"myapex", "myapp", "libembeddedjni", "libbar", "libotherapex"},
+		},
+		{
+			name:           "app jni library dependency in platform",
+			bpModifier:     addToSharedLibs("libembeddedjni", "libplatform#impl"),
+			dependencyPath: []string{"myapex", "myapp", "libembeddedjni", "libplatform"},
+		},
+		{
+			name: "transitive app jni library dependency in platform",
+			bpModifier: func(bp *bpmodify.Blueprint) {
+				addToSharedLibs("libembeddedjni", "libbar")(bp)
+				addToSharedLibs("libbar", "libplatform#impl")(bp)
+			},
+			dependencyPath: []string{"myapex", "myapp", "libembeddedjni", "libbar", "libplatform"},
+		},
 		{
 			name:           "binary dependency in other apex",
 			bpModifier:     addToSharedLibs("mybin", "libotherapex#impl"),

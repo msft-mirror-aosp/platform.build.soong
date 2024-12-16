@@ -108,7 +108,7 @@ def parse_args():
 
 def generate_common_build_props(args):
   print("####################################")
-  print("# from generate_common_build_props")
+  print("# from generate-common-build-props")
   print("# These properties identify this partition image.")
   print("####################################")
 
@@ -246,9 +246,15 @@ def generate_build_info(args):
   print(f"# end build properties")
 
 def write_properties_from_file(file):
+  # Make and Soong use different intermediate files to build vendor/build.prop.
+  # Although the sysprop contents are same, the absolute paths of these
+  # intermediate files are different.
+  # Print the filename for the intermediate files (files in OUT_DIR).
+  # This helps with validating mk->soong migration of android partitions.
+  filename = os.path.basename(file.name) if file.name.startswith(os.environ.get("OUT_DIR")) else file.name
   print()
   print("####################################")
-  print(f"# from {file.name}")
+  print(f"# from {filename}")
   print("####################################")
   print(file.read(), end="")
 
@@ -453,7 +459,7 @@ def append_additional_vendor_props(args):
   props.append(f"ro.vendor.build.security_patch={config['VendorSecurityPatch']}")
   props.append(f"ro.product.board={config['BootloaderBoardName']}")
   props.append(f"ro.board.platform={config['BoardPlatform']}")
-  props.append(f"ro.hwui.use_vulkan={'true' if config['UsesVulkan'] else 'false'}")
+  props.append(f"ro.hwui.use_vulkan={config['UsesVulkan']}")
 
   if config["ScreenDensity"]:
     props.append(f"ro.sf.lcd_density={config['ScreenDensity']}")

@@ -180,12 +180,14 @@ func TestFileSystemFillsLinkerConfigWithStubLibs(t *testing.T) {
 	`)
 
 	module := result.ModuleForTests("myfilesystem", "android_common")
-	output := module.Output("out/soong/.intermediates/myfilesystem/android_common/root/system/etc/linker.config.pb")
+	output := module.Output("out/soong/.intermediates/myfilesystem/android_common/linker.config.pb")
+
+	linkerConfigCommand := output.RuleParams.Command
 
 	android.AssertStringDoesContain(t, "linker.config.pb should have libfoo",
-		output.RuleParams.Command, "libfoo.so")
+		linkerConfigCommand, "libfoo.so")
 	android.AssertStringDoesNotContain(t, "linker.config.pb should not have libbar",
-		output.RuleParams.Command, "libbar.so")
+		linkerConfigCommand, "libbar.so")
 }
 
 func registerComponent(ctx android.RegistrationContext) {
@@ -239,7 +241,7 @@ func TestFileSystemGathersItemsOnlyInSystemPartition(t *testing.T) {
 	`)
 
 	module := result.ModuleForTests("myfilesystem", "android_common").Module().(*systemImage)
-	android.AssertDeepEquals(t, "entries should have foo only", []string{"components/foo"}, module.entries)
+	android.AssertDeepEquals(t, "entries should have foo and not bar", []string{"components/foo", "etc/linker.config.pb"}, module.entries)
 }
 
 func TestAvbGenVbmetaImage(t *testing.T) {
@@ -588,7 +590,7 @@ func TestErofsPartition(t *testing.T) {
 	`)
 
 	partition := result.ModuleForTests("erofs_partition", "android_common")
-	buildImageConfig := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("prop"))
+	buildImageConfig := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("prop_pre_processing"))
 	android.AssertStringDoesContain(t, "erofs fs type", buildImageConfig, "fs_type=erofs")
 	android.AssertStringDoesContain(t, "erofs fs type compress algorithm", buildImageConfig, "erofs_default_compressor=lz4hc,9")
 	android.AssertStringDoesContain(t, "erofs fs type compress hint", buildImageConfig, "erofs_default_compress_hints=compress_hints.txt")
@@ -604,7 +606,7 @@ func TestF2fsPartition(t *testing.T) {
 	`)
 
 	partition := result.ModuleForTests("f2fs_partition", "android_common")
-	buildImageConfig := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("prop"))
+	buildImageConfig := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("prop_pre_processing"))
 	android.AssertStringDoesContain(t, "f2fs fs type", buildImageConfig, "fs_type=f2fs")
 	android.AssertStringDoesContain(t, "f2fs fs type sparse", buildImageConfig, "f2fs_sparse_flag=-S")
 }
@@ -730,7 +732,7 @@ cc_library {
 }
 	`)
 
-	linkerConfigCmd := result.ModuleForTests("myfilesystem", "android_common").Rule("build_filesystem_image").RuleParams.Command
+	linkerConfigCmd := result.ModuleForTests("myfilesystem", "android_common").Output("out/soong/.intermediates/myfilesystem/android_common/linker.config.pb").RuleParams.Command
 	android.AssertStringDoesContain(t, "Could not find linker.config.json file in cmd", linkerConfigCmd, "conv_linker_config proto --force -s linker.config.json")
 	android.AssertStringDoesContain(t, "Could not find stub in `provideLibs`", linkerConfigCmd, "--key provideLibs --value libfoo_has_stubs.so")
 }
