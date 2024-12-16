@@ -288,7 +288,7 @@ func SharedLibrarySymbolsInstallLocation(libraryBase string, isVendor bool, fuzz
 }
 
 func (fuzzBin *fuzzBinary) install(ctx ModuleContext, file android.Path) {
-	fuzzBin.fuzzPackagedModule = PackageFuzzModule(ctx, fuzzBin.fuzzPackagedModule, pctx)
+	fuzzBin.fuzzPackagedModule = PackageFuzzModule(ctx, fuzzBin.fuzzPackagedModule)
 
 	installBase := "fuzz"
 
@@ -345,7 +345,7 @@ func (fuzzBin *fuzzBinary) install(ctx ModuleContext, file android.Path) {
 	fuzzBin.binaryDecorator.baseInstaller.install(ctx, file)
 }
 
-func PackageFuzzModule(ctx android.ModuleContext, fuzzPackagedModule fuzz.FuzzPackagedModule, pctx android.PackageContext) fuzz.FuzzPackagedModule {
+func PackageFuzzModule(ctx android.ModuleContext, fuzzPackagedModule fuzz.FuzzPackagedModule) fuzz.FuzzPackagedModule {
 	fuzzPackagedModule.Corpus = android.PathsForModuleSrc(ctx, fuzzPackagedModule.FuzzProperties.Corpus)
 	fuzzPackagedModule.Corpus = append(fuzzPackagedModule.Corpus, android.PathsForModuleSrc(ctx, fuzzPackagedModule.FuzzProperties.Device_common_corpus)...)
 
