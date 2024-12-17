@@ -110,6 +110,8 @@ type BaseModuleContext interface {
 
 	GetDirectDepsWithTag(tag blueprint.DependencyTag) []Module
 
+	GetDirectDepsProxyWithTag(tag blueprint.DependencyTag) []ModuleProxy
+
 	// GetDirectDepWithTag returns the Module the direct dependency with the specified name, or nil if
 	// none exists.  It panics if the dependency does not have the specified tag.  It skips any
 	// dependencies that are not an android.Module.
@@ -455,6 +457,16 @@ func (b *baseModuleContext) GetDirectDepsWithTag(tag blueprint.DependencyTag) []
 	var deps []Module
 	b.VisitDirectDeps(func(module Module) {
 		if b.bp.OtherModuleDependencyTag(module) == tag {
+			deps = append(deps, module)
+		}
+	})
+	return deps
+}
+
+func (b *baseModuleContext) GetDirectDepsProxyWithTag(tag blueprint.DependencyTag) []ModuleProxy {
+	var deps []ModuleProxy
+	b.VisitDirectDepsProxy(func(module ModuleProxy) {
+		if b.OtherModuleDependencyTag(module) == tag {
 			deps = append(deps, module)
 		}
 	})
