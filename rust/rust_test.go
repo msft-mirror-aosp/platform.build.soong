@@ -434,21 +434,21 @@ func TestRustAliases(t *testing.T) {
 
 func TestRustRlibs(t *testing.T) {
 	ctx := testRust(t, `
-		rust_ffi_rlib {
+		rust_ffi_static {
 			name: "libbar",
 			crate_name: "bar",
 			srcs: ["src/lib.rs"],
 			export_include_dirs: ["bar_includes"]
 		}
 
-		rust_ffi_rlib {
+		rust_ffi_static {
 			name: "libfoo",
 			crate_name: "foo",
 			srcs: ["src/lib.rs"],
 			export_include_dirs: ["foo_includes"]
 		}
 
-		rust_ffi_rlib {
+		rust_ffi_static {
 			name: "libbuzz",
 			crate_name: "buzz",
 			srcs: ["src/lib.rs"],
