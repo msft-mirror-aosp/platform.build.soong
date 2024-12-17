@@ -1202,8 +1202,6 @@ func (a *apexTransitionMutator) Split(ctx android.BaseModuleContext) []string {
 			return []string{overridable.GetOverriddenBy()}
 		}
 		return []string{ai.ApexVariationName()}
-	} else if _, ok := ctx.Module().(*OverrideApex); ok {
-		return []string{ctx.ModuleName()}
 	}
 	return []string{""}
 }
@@ -1220,8 +1218,6 @@ func (a *apexTransitionMutator) IncomingTransition(ctx android.IncomingTransitio
 			return overridable.GetOverriddenBy()
 		}
 		return ai.ApexVariationName()
-	} else if _, ok := ctx.Module().(*OverrideApex); ok {
-		return ctx.Module().Name()
 	}
 
 	return ""
