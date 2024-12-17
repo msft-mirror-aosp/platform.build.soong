@@ -130,7 +130,7 @@ func (fuzzer *fuzzDecorator) autoDep(ctx android.BottomUpMutatorContext) autoDep
 }
 
 func (fuzz *fuzzDecorator) install(ctx ModuleContext) {
-	fuzz.fuzzPackagedModule = cc.PackageFuzzModule(ctx, fuzz.fuzzPackagedModule, pctx)
+	fuzz.fuzzPackagedModule = cc.PackageFuzzModule(ctx, fuzz.fuzzPackagedModule)
 
 	installBase := "fuzz"
 
