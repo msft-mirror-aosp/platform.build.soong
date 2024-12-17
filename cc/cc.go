@@ -2167,7 +2167,7 @@ func buildComplianceMetadataInfo(ctx ModuleContext, c *Module, deps PathDeps) {
 	complianceMetadataInfo.SetStringValue(android.ComplianceMetadataProp.BUILT_FILES, c.outputFile.String())
 
 	// Static deps
-	staticDeps := ctx.GetDirectDepsWithTag(StaticDepTag(false))
+	staticDeps := ctx.GetDirectDepsProxyWithTag(StaticDepTag(false))
 	staticDepNames := make([]string, 0, len(staticDeps))
 	for _, dep := range staticDeps {
 		staticDepNames = append(staticDepNames, dep.Name())
@@ -2181,7 +2181,7 @@ func buildComplianceMetadataInfo(ctx ModuleContext, c *Module, deps PathDeps) {
 	complianceMetadataInfo.SetListValue(android.ComplianceMetadataProp.STATIC_DEP_FILES, android.FirstUniqueStrings(staticDepPaths))
 
 	// Whole static deps
-	wholeStaticDeps := ctx.GetDirectDepsWithTag(StaticDepTag(true))
+	wholeStaticDeps := ctx.GetDirectDepsProxyWithTag(StaticDepTag(true))
 	wholeStaticDepNames := make([]string, 0, len(wholeStaticDeps))
 	for _, dep := range wholeStaticDeps {
 		wholeStaticDepNames = append(wholeStaticDepNames, dep.Name())
