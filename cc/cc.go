@@ -93,6 +93,11 @@ type BinaryDecoratorInfo struct{}
 type LibraryDecoratorInfo struct {
 	ExportIncludeDirs proptools.Configurable[[]string]
 }
+
+type LibraryInfo struct {
+	StubsVersion string
+}
+
 type TestBinaryInfo struct {
 	Gtest bool
 }
@@ -106,6 +111,7 @@ type CcInfo struct {
 	CmakeSnapshotSupported bool
 	CompilerInfo           *CompilerInfo
 	LinkerInfo             *LinkerInfo
+	LibraryInfo            *LibraryInfo
 }
 
 var CcInfoProvider = blueprint.NewProvider[CcInfo]()
@@ -2225,6 +2231,11 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 			ccInfo.LinkerInfo.BenchmarkDecoratorInfo = &BenchmarkDecoratorInfo{}
 		case *objectLinker:
 			ccInfo.LinkerInfo.ObjectLinkerInfo = &ObjectLinkerInfo{}
+		}
+	}
+	if c.library != nil {
+		ccInfo.LibraryInfo = &LibraryInfo{
+			StubsVersion: c.library.stubsVersion(),
 		}
 	}
 	android.SetProvider(ctx, CcInfoProvider, ccInfo)
