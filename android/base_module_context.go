@@ -117,11 +117,6 @@ type BaseModuleContext interface {
 	// dependencies that are not an android.Module.
 	GetDirectDepWithTag(name string, tag blueprint.DependencyTag) Module
 
-	// GetDirectDep returns the Module and DependencyTag for the direct dependency with the specified
-	// name, or nil if none exists.  If there are multiple dependencies on the same module it returns
-	// the first DependencyTag.
-	GetDirectDep(name string) (blueprint.Module, blueprint.DependencyTag)
-
 	// VisitDirectDeps calls visit for each direct dependency.  If there are multiple
 	// direct dependencies on the same module visit will be called multiple times on that module
 	// and OtherModuleDependencyTag will return a different tag for each.  It raises an error if any of the
@@ -434,25 +429,6 @@ func (b *baseModuleContext) getDirectDepInternal(name string, tag blueprint.Depe
 	}
 }
 
-func (b *baseModuleContext) getDirectDepFirstTag(name string) (blueprint.Module, blueprint.DependencyTag) {
-	foundDeps := b.getDirectDepsInternal(name, nil)
-	deps := map[blueprint.Module]bool{}
-	for _, dep := range foundDeps {
-		deps[dep.mod] = true
-	}
-	if len(deps) == 1 {
-		return foundDeps[0].mod, foundDeps[0].tag
-	} else if len(deps) >= 2 {
-		// this could happen if two dependencies have the same name in different namespaces
-		// TODO(b/186554727): this should not occur if namespaces are handled within
-		// getDirectDepsInternal.
-		panic(fmt.Errorf("Multiple dependencies having same BaseModuleName() %q found from %q",
-			name, b.ModuleName()))
-	} else {
-		return nil, nil
-	}
-}
-
 func (b *baseModuleContext) GetDirectDepsWithTag(tag blueprint.DependencyTag) []Module {
 	var deps []Module
 	b.VisitDirectDeps(func(module Module) {
@@ -471,13 +447,6 @@ func (b *baseModuleContext) GetDirectDepsProxyWithTag(tag blueprint.DependencyTa
 		}
 	})
 	return deps
-}
-
-// GetDirectDep returns the Module and DependencyTag for the direct dependency with the specified
-// name, or nil if none exists. If there are multiple dependencies on the same module it returns the
-// first DependencyTag.
-func (b *baseModuleContext) GetDirectDep(name string) (blueprint.Module, blueprint.DependencyTag) {
-	return b.getDirectDepFirstTag(name)
 }
 
 func (b *baseModuleContext) VisitDirectDeps(visit func(Module)) {
