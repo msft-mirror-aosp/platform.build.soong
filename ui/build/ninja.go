@@ -17,6 +17,7 @@ package build
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -49,14 +50,10 @@ func runNinjaForBuild(ctx Context, config Config) {
 	nr := status.NewNinjaReader(ctx, ctx.Status.StartTool(), fifo)
 	defer nr.Close()
 
-	executable := config.NinjaBin()
-	args := []string{
-		"-d", "keepdepfile",
-		"-d", "keeprsp",
-		"-d", "stats",
-		"--frontend_file", fifo,
-	}
-	if config.useN2 {
+	var executable string
+	var args []string
+	switch config.ninjaCommand {
+	case NINJA_N2:
 		executable = config.N2Bin()
 		args = []string{
 			"-d", "trace",
@@ -66,8 +63,31 @@ func runNinjaForBuild(ctx Context, config Config) {
 			//"-d", "stats",
 			"--frontend-file", fifo,
 		}
+	case NINJA_SISO:
+		executable = config.SisoBin()
+		args = []string{
+			"ninja",
+			"--log_dir", config.SoongOutDir(),
+			// TODO: implement these features, or remove them.
+			//"-d", "trace",
+			//"-d", "keepdepfile",
+			//"-d", "keeprsp",
+			//"-d", "stats",
+			//"--frontend-file", fifo,
+		}
+	default:
+		// NINJA_NINJA is the default.
+		executable = config.NinjaBin()
+		args = []string{
+			"-d", "keepdepfile",
+			"-d", "keeprsp",
+			"-d", "stats",
+			"--frontend_file", fifo,
+			"-o", "usesphonyoutputs=yes",
+			"-w", "dupbuild=err",
+			"-w", "missingdepfile=err",
+		}
 	}
-
 	args = append(args, config.NinjaArgs()...)
 
 	var parallel int
@@ -83,17 +103,10 @@ func runNinjaForBuild(ctx Context, config Config) {
 
 	args = append(args, "-f", config.CombinedNinjaFile())
 
-	if !config.useN2 {
-		args = append(args,
-			"-o", "usesphonyoutputs=yes",
-			"-w", "dupbuild=err",
-			"-w", "missingdepfile=err")
-	}
-
 	if !config.BuildBrokenMissingOutputs() {
 		// Missing outputs will be treated as errors.
 		// BUILD_BROKEN_MISSING_OUTPUTS can be used to bypass this check.
-		if !config.useN2 {
+		if config.ninjaCommand != NINJA_N2 {
 			args = append(args,
 				"-w", "missingoutfile=err",
 			)
@@ -110,21 +123,18 @@ func runNinjaForBuild(ctx Context, config Config) {
 		cmd.Environment.AppendFromKati(config.KatiEnvFile())
 	}
 
-	switch config.NinjaWeightListSource() {
-	case NINJA_LOG:
-		if !config.useN2 {
+	// TODO(b/346806126): implement this for the other ninjaCommand values.
+	if config.ninjaCommand == NINJA_NINJA {
+		switch config.NinjaWeightListSource() {
+		case NINJA_LOG:
 			cmd.Args = append(cmd.Args, "-o", "usesninjalogasweightlist=yes")
-		}
-	case EVENLY_DISTRIBUTED:
-		// pass empty weight list means ninja considers every tasks's weight as 1(default value).
-		if !config.useN2 {
+		case EVENLY_DISTRIBUTED:
+			// pass empty weight list means ninja considers every tasks's weight as 1(default value).
 			cmd.Args = append(cmd.Args, "-o", "usesweightlist=/dev/null")
-		}
-	case EXTERNAL_FILE:
-		fallthrough
-	case HINT_FROM_SOONG:
-		// The weight list is already copied/generated.
-		if !config.useN2 {
+		case EXTERNAL_FILE:
+			fallthrough
+		case HINT_FROM_SOONG:
+			// The weight list is already copied/generated.
 			ninjaWeightListPath := filepath.Join(config.OutDir(), ninjaWeightListFileName)
 			cmd.Args = append(cmd.Args, "-o", "usesweightlist="+ninjaWeightListPath)
 		}
@@ -227,17 +237,32 @@ func runNinjaForBuild(ctx Context, config Config) {
 			// We don't want this build broken flag to cause reanalysis, so allow it through to the
 			// actions.
 			"BUILD_BROKEN_INCORRECT_PARTITION_IMAGES",
+			// Do not do reanalysis just because we changed ninja commands.
+			"SOONG_NINJA",
 			"SOONG_USE_N2",
 			"RUST_BACKTRACE",
 			"RUST_LOG",
+
+			// SOONG_USE_PARTIAL_COMPILE only determines which half of the rule we execute.
+			"SOONG_USE_PARTIAL_COMPILE",
+
+			// Directory for ExecutionMetrics
+			"SOONG_METRICS_AGGREGATION_DIR",
 		}, config.BuildBrokenNinjaUsesEnvVars()...)...)
 	}
 
 	cmd.Environment.Set("DIST_DIR", config.DistDir())
 	cmd.Environment.Set("SHELL", "/bin/bash")
-	if config.useN2 {
+	switch config.ninjaCommand {
+	case NINJA_N2:
 		cmd.Environment.Set("RUST_BACKTRACE", "1")
+	default:
+		// Only set RUST_BACKTRACE for n2.
 	}
+
+	// Set up the metrics aggregation directory.
+	ctx.ExecutionMetrics.SetDir(filepath.Join(config.OutDir(), "soong", "metrics_aggregation"))
+	cmd.Environment.Set("SOONG_METRICS_AGGREGATION_DIR", ctx.ExecutionMetrics.MetricsAggregationDir)
 
 	// Print the environment variables that Ninja is operating in.
 	ctx.Verboseln("Ninja environment: ")
@@ -283,6 +308,8 @@ func runNinjaForBuild(ctx Context, config Config) {
 		}
 	}()
 
+	ctx.ExecutionMetrics.Start()
+	defer ctx.ExecutionMetrics.Finish(ctx)
 	ctx.Status.Status("Starting ninja...")
 	cmd.RunAndStreamOrFatal()
 }
@@ -321,4 +348,41 @@ func (c *ninjaStucknessChecker) check(ctx Context, config Config) {
 		ctx.Verbosef("done\n")
 	}
 	c.prevModTime = newModTime
+}
+
+// Constructs and runs the Ninja command line to get the inputs of a goal.
+// For now, this will always run ninja, because ninjago, n2 and siso don't have the
+// `-t inputs` command.  This command will use the inputs command's -d option,
+// to use the dep file iff ninja was the executor. For other executors, the
+// results will be wrong.
+func runNinjaInputs(ctx Context, config Config, goal string) ([]string, error) {
+	executable := config.PrebuiltBuildTool("ninja")
+
+	args := []string{
+		"-f",
+		config.CombinedNinjaFile(),
+		"-t",
+		"inputs",
+	}
+	// Add deps file arg for ninja
+	// TODO: Update as inputs command is implemented
+	if config.ninjaCommand == NINJA_NINJA && !config.UseABFS() {
+		args = append(args, "-d")
+	}
+	args = append(args, goal)
+
+	// This is just ninja -t inputs, so we won't bother running it in the sandbox,
+	// so use exec.Command, not soong_ui's command.
+	cmd := exec.Command(executable, args...)
+
+	cmd.Stdin = os.Stdin
+	cmd.Stderr = os.Stderr
+
+	out, err := cmd.Output()
+	if err != nil {
+		fmt.Printf("Error getting goal inputs for %s: %s\n", goal, err)
+		return nil, err
+	}
+
+	return strings.Split(strings.TrimSpace(string(out)), "\n"), nil
 }

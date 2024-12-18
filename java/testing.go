@@ -30,6 +30,7 @@ import (
 )
 
 const defaultJavaDir = "default/java"
+const testDefaultUpdatableModuleVersion = "340090000"
 
 // Test fixture preparer that will register most java build components.
 //
@@ -61,6 +62,7 @@ var PrepareForTestWithJavaBuildComponents = android.GroupFixturePreparers(
 		// Needed for the global lint checks provided from frameworks/base
 		"prebuilts/cmdline-tools/AndroidGlobalLintChecker.jar": nil,
 	}.AddToFixture(),
+	android.PrepareForTestWithBuildFlag("RELEASE_DEFAULT_UPDATABLE_MODULE_VERSION", testDefaultUpdatableModuleVersion),
 )
 
 var prepareForTestWithFrameworkDeps = android.GroupFixturePreparers(
@@ -184,6 +186,11 @@ var PrepareForTestWithJacocoInstrumentation = android.GroupFixturePreparers(
 			host_supported: true,
 			srcs: ["Test.java"],
 			sdk_version: "current",
+			apex_available: [
+				"//apex_available:anyapex",
+				"//apex_available:platform",
+			],
+			compile_dex: true,
 		}
 	`)),
 )
@@ -384,7 +391,6 @@ func registerRequiredBuildComponentsForTest(ctx android.RegistrationContext) {
 	RegisterStubsBuildComponents(ctx)
 	RegisterSystemModulesBuildComponents(ctx)
 	registerSystemserverClasspathBuildComponents(ctx)
-	registerLintBuildComponents(ctx)
 	android.RegisterApexContributionsBuildComponents(ctx)
 }
 
@@ -408,7 +414,6 @@ func gatherRequiredDepsForTest() string {
 		"core.current.stubs",
 		"legacy.core.platform.api.stubs",
 		"stable.core.platform.api.stubs",
-
 		"android_stubs_current_exportable",
 		"android_system_stubs_current_exportable",
 		"android_test_stubs_current_exportable",
@@ -416,7 +421,6 @@ func gatherRequiredDepsForTest() string {
 		"android_system_server_stubs_current_exportable",
 		"core.current.stubs.exportable",
 		"legacy.core.platform.api.stubs.exportable",
-
 		"kotlin-stdlib",
 		"kotlin-stdlib-jdk7",
 		"kotlin-stdlib-jdk8",
@@ -424,6 +428,7 @@ func gatherRequiredDepsForTest() string {
 		"stub-annotations",
 
 		"aconfig-annotations-lib",
+		"aconfig_storage_stub",
 		"unsupportedappusage",
 	}
 
@@ -435,6 +440,7 @@ func gatherRequiredDepsForTest() string {
 				sdk_version: "none",
 				system_modules: "stable-core-platform-api-stubs-system-modules",
 				compile_dex: true,
+				is_stubs_module: true,
 			}
 		`, extra)
 	}
@@ -579,6 +585,7 @@ func gatherRequiredDepsForTest() string {
 				name: "%[1]s-lib",
 				sdk_version: "none",
 				system_modules: "none",
+				srcs: ["a.java"],
 			}
 		`, extra)
 	}
@@ -628,6 +635,18 @@ func CheckModuleHasDependency(t *testing.T, ctx *android.TestContext, name, vari
 		}
 	}
 	return false
+}
+
+// CheckModuleHasDependency returns true if the module depends on the expected dependency.
+func CheckModuleHasDependencyWithTag(t *testing.T, ctx *android.TestContext, name, variant string, desiredTag blueprint.DependencyTag, expected string) bool {
+	module := ctx.ModuleForTests(name, variant).Module()
+	found := false
+	ctx.VisitDirectDepsWithTags(module, func(m blueprint.Module, tag blueprint.DependencyTag) {
+		if tag == desiredTag && m.Name() == expected {
+			found = true
+		}
+	})
+	return found
 }
 
 // CheckPlatformBootclasspathModules returns the apex:module pair for the modules depended upon by
@@ -778,3 +797,5 @@ func FixtureSetBootImageInstallDirOnDevice(name string, installDir string) andro
 		config.installDir = installDir
 	})
 }
+
+var PrepareForTestWithTransitiveClasspathEnabled = android.PrepareForTestWithBuildFlag("RELEASE_USE_TRANSITIVE_JARS_IN_CLASSPATH", "true")

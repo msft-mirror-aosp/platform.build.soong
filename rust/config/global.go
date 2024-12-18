@@ -15,6 +15,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 
 	"android/soong/android"
@@ -24,7 +25,7 @@ import (
 var (
 	pctx = android.NewPackageContext("android/soong/rust/config")
 
-	RustDefaultVersion = "1.80.1"
+	RustDefaultVersion = "1.81.0"
 	RustDefaultBase    = "prebuilts/rust/"
 	DefaultEdition     = "2021"
 	Stdlibs            = []string{
@@ -93,6 +94,16 @@ var (
 	}
 )
 
+func RustPath(ctx android.PathContext) string {
+	// I can't see any way to flatten the static variable inside Soong, so this
+	// reproduces the init logic.
+	var RustBase string = RustDefaultBase
+	if override := ctx.Config().Getenv("RUST_PREBUILTS_BASE"); override != "" {
+		RustBase = override
+	}
+	return fmt.Sprintf("%s/%s/%s", RustBase, HostPrebuiltTag(ctx.Config()), GetRustVersion(ctx))
+}
+
 func init() {
 	pctx.SourcePathVariable("RustDefaultBase", RustDefaultBase)
 	pctx.VariableConfigMethod("HostPrebuiltTag", HostPrebuiltTag)
@@ -110,7 +121,7 @@ func init() {
 	pctx.StaticVariable("RustBin", "${RustPath}/bin")
 
 	pctx.ImportAs("cc_config", "android/soong/cc/config")
-	pctx.StaticVariable("RustLinker", "${cc_config.ClangBin}/clang++")
+	pctx.StaticVariable("ClangCmd", "${cc_config.ClangBin}/clang++")
 
 	pctx.StaticVariable("DeviceGlobalLinkFlags", strings.Join(deviceGlobalLinkFlags, " "))
 

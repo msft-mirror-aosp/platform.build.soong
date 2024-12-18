@@ -63,7 +63,7 @@ func CcAconfigLibraryFactory() android.Module {
 	callbacks := &CcAconfigLibraryCallbacks{
 		properties: &CcAconfigLibraryProperties{},
 	}
-	return cc.GeneratedCcLibraryModuleFactory("cc_aconfig_library", callbacks)
+	return cc.GeneratedCcLibraryModuleFactory(callbacks)
 }
 
 func (this *CcAconfigLibraryCallbacks) GeneratorInit(ctx cc.BaseModuleContext) {
@@ -104,7 +104,7 @@ func (this *CcAconfigLibraryCallbacks) GeneratorSources(ctx cc.ModuleContext) cc
 	result := cc.GeneratedSource{}
 
 	// Get the values that came from the global RELEASE_ACONFIG_VALUE_SETS flag
-	declarationsModules := ctx.GetDirectDepsWithTag(ccDeclarationsTag)
+	declarationsModules := ctx.GetDirectDepsProxyWithTag(ccDeclarationsTag)
 	if len(declarationsModules) != 1 {
 		panic(fmt.Errorf("Exactly one aconfig_declarations property required"))
 	}
@@ -134,7 +134,7 @@ func (this *CcAconfigLibraryCallbacks) GeneratorFlags(ctx cc.ModuleContext, flag
 
 func (this *CcAconfigLibraryCallbacks) GeneratorBuildActions(ctx cc.ModuleContext, flags cc.Flags, deps cc.PathDeps) {
 	// Get the values that came from the global RELEASE_ACONFIG_VALUE_SETS flag
-	declarationsModules := ctx.GetDirectDepsWithTag(ccDeclarationsTag)
+	declarationsModules := ctx.GetDirectDepsProxyWithTag(ccDeclarationsTag)
 	if len(declarationsModules) != 1 {
 		panic(fmt.Errorf("Exactly one aconfig_declarations property required"))
 	}
@@ -156,7 +156,7 @@ func (this *CcAconfigLibraryCallbacks) GeneratorBuildActions(ctx cc.ModuleContex
 		Args: map[string]string{
 			"gendir": this.generatedDir.String(),
 			"mode":   mode,
-			"debug":  strconv.FormatBool(ctx.Config().ReleaseReadFromNewStorageCc()),
+			"debug":  strconv.FormatBool(ctx.Config().ReleaseReadFromNewStorage()),
 		},
 	})
 

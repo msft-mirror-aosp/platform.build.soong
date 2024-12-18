@@ -15,8 +15,6 @@
 package aconfig
 
 import (
-	"encoding/gob"
-
 	"android/soong/android"
 
 	"github.com/google/blueprint"
@@ -34,6 +32,7 @@ var (
 				` ${declarations}` +
 				` ${values}` +
 				` ${default-permission}` +
+				` ${allow-read-write}` +
 				` --cache ${out}.tmp` +
 				` && ( if cmp -s ${out}.tmp ${out} ; then rm ${out}.tmp ; else mv ${out}.tmp ${out} ; fi )`,
 			//				` --build-id ${release_version}` +
@@ -41,7 +40,7 @@ var (
 				"${aconfig}",
 			},
 			Restat: true,
-		}, "release_version", "package", "container", "declarations", "values", "default-permission")
+		}, "release_version", "package", "container", "declarations", "values", "default-permission", "allow-read-write")
 
 	// For create-device-config-sysprops: Generate aconfig flag value map text file
 	aconfigTextRule = pctx.AndroidStaticRule("aconfig_text",
@@ -74,11 +73,11 @@ var (
 
 	CreateStorageRule = pctx.AndroidStaticRule("aconfig_create_storage",
 		blueprint.RuleParams{
-			Command: `${aconfig} create-storage --container ${container} --file ${file_type} --out ${out} ${cache_files}`,
+			Command: `${aconfig} create-storage --container ${container} --file ${file_type} --out ${out} ${cache_files} --version ${version}`,
 			CommandDeps: []string{
 				"${aconfig}",
 			},
-		}, "container", "file_type", "cache_files")
+		}, "container", "file_type", "cache_files", "version")
 
 	// For exported_java_aconfig_library: Generate a JAR from all
 	// java_aconfig_libraries to be consumed by apps built outside the
@@ -108,10 +107,6 @@ func init() {
 	RegisterBuildComponents(android.InitRegistrationContext)
 	pctx.HostBinToolVariable("aconfig", "aconfig")
 	pctx.HostBinToolVariable("soong_zip", "soong_zip")
-
-	gob.Register(android.AconfigDeclarationsProviderData{})
-	gob.Register(android.AconfigReleaseDeclarationsProviderData{})
-	gob.Register(android.ModuleOutPath{})
 }
 
 func RegisterBuildComponents(ctx android.RegistrationContext) {

@@ -434,21 +434,21 @@ func TestRustAliases(t *testing.T) {
 
 func TestRustRlibs(t *testing.T) {
 	ctx := testRust(t, `
-		rust_ffi_rlib {
+		rust_ffi_static {
 			name: "libbar",
 			crate_name: "bar",
 			srcs: ["src/lib.rs"],
 			export_include_dirs: ["bar_includes"]
 		}
 
-		rust_ffi_rlib {
+		rust_ffi_static {
 			name: "libfoo",
 			crate_name: "foo",
 			srcs: ["src/lib.rs"],
 			export_include_dirs: ["foo_includes"]
 		}
 
-		rust_ffi_rlib {
+		rust_ffi_static {
 			name: "libbuzz",
 			crate_name: "buzz",
 			srcs: ["src/lib.rs"],
@@ -494,7 +494,7 @@ func TestRustRlibs(t *testing.T) {
 	}
 
 	// Make sure the static lib is included in the ld command
-	if !strings.Contains(libcc_shared_ld.Args["libFlags"], "generated_rust_staticlib/liblibcc_shared_rust_staticlib.a") {
+	if !strings.Contains(libcc_shared_ld.Args["libFlags"], "generated_rust_staticlib/librustlibs.a") {
 		t.Errorf("missing generated static library in linker step libFlags %#v, libFlags: %#v",
 			"libcc_shared.generated_rust_staticlib.a", libcc_shared_ld.Args["libFlags"])
 	}
@@ -511,7 +511,7 @@ func TestRustRlibs(t *testing.T) {
 	}
 
 	// Make sure the static lib is included in the cc command
-	if !strings.Contains(ccbin_ld.Args["libFlags"], "generated_rust_staticlib/libccBin_rust_staticlib.a") {
+	if !strings.Contains(ccbin_ld.Args["libFlags"], "generated_rust_staticlib/librustlibs.a") {
 		t.Errorf("missing generated static library in linker step libFlags, expecting %#v, libFlags: %#v",
 			"ccBin.generated_rust_staticlib.a", ccbin_ld.Args["libFlags"])
 	}
@@ -546,4 +546,32 @@ func assertString(t *testing.T, got, expected string) {
 	if got != expected {
 		t.Errorf("expected %q got %q", expected, got)
 	}
+}
+
+func TestStdLinkMismatch(t *testing.T) {
+	// Test that we catch cases where the std linkage mismatches. This leads to
+	// a confusing rustc error where a crate is declared missing despite being
+	// passed in as a rustlib dependency / via the --extern flag. Thus, we want
+	// to make sure we detect it in Soong.
+
+	// libfoo depends on libbar as an rlib, but does not link libstd as an rlib.
+	// libbar only links libstd as an rlib (prefer_rlib).
+	testRustError(t, "wrong StdLinkage", `
+		rust_library {
+			name: "libfoo",
+			crate_name: "foo",
+			srcs: [
+				"foo.rs",
+			],
+			rlibs: ["libbar"],
+		}
+		rust_library {
+			name: "libbar",
+			crate_name: "bar",
+			srcs: [
+				"bar.rs",
+			],
+			prefer_rlib: true,
+		}
+	`)
 }

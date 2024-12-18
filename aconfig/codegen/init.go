@@ -32,6 +32,8 @@ var (
 				`    --mode ${mode}` +
 				`    --cache ${in}` +
 				`    --out ${out}.tmp` +
+				`    --allow-instrumentation ${debug}` +
+				`    --new-exported ${new_exported}` +
 				` && $soong_zip -write_if_changed -jar -o ${out} -C ${out}.tmp -D ${out}.tmp` +
 				` && rm -rf ${out}.tmp`,
 			CommandDeps: []string{
@@ -39,7 +41,7 @@ var (
 				"$soong_zip",
 			},
 			Restat: true,
-		}, "mode")
+		}, "mode", "debug", "new_exported")
 
 	// For cc_aconfig_library: Generate C++ library
 	cppRule = pctx.AndroidStaticRule("cc_aconfig_library",
@@ -64,11 +66,12 @@ var (
 				` && ${aconfig} create-rust-lib` +
 				`    --mode ${mode}` +
 				`    --cache ${in}` +
+				`    --allow-instrumentation ${debug}` +
 				`    --out ${gendir}`,
 			CommandDeps: []string{
 				"$aconfig",
 			},
-		}, "gendir", "mode")
+		}, "gendir", "mode", "debug")
 )
 
 func init() {

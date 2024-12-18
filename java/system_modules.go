@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
@@ -127,6 +128,9 @@ type SystemModulesProviderInfo struct {
 
 	OutputDir     android.Path
 	OutputDirDeps android.Paths
+
+	// depset of header jars for this module and all transitive static dependencies
+	TransitiveStaticLibsHeaderJars depset.DepSet[android.Path]
 }
 
 var SystemModulesProvider = blueprint.NewProvider[*SystemModulesProviderInfo]()
@@ -149,18 +153,21 @@ type SystemModulesProperties struct {
 func (system *SystemModules) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	var jars android.Paths
 
+	var transitiveStaticLibsHeaderJars []depset.DepSet[android.Path]
 	ctx.VisitDirectDepsWithTag(systemModulesLibsTag, func(module android.Module) {
 		if dep, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
 			jars = append(jars, dep.HeaderJars...)
+			transitiveStaticLibsHeaderJars = append(transitiveStaticLibsHeaderJars, dep.TransitiveStaticLibsHeaderJars)
 		}
 	})
 
 	system.outputDir, system.outputDeps = TransformJarsToSystemModules(ctx, jars)
 
 	android.SetProvider(ctx, SystemModulesProvider, &SystemModulesProviderInfo{
-		HeaderJars:    jars,
-		OutputDir:     system.outputDir,
-		OutputDirDeps: system.outputDeps,
+		HeaderJars:                     jars,
+		OutputDir:                      system.outputDir,
+		OutputDirDeps:                  system.outputDeps,
+		TransitiveStaticLibsHeaderJars: depset.New(depset.PREORDER, nil, transitiveStaticLibsHeaderJars),
 	})
 }
 
@@ -307,7 +314,7 @@ func (p *systemModulesInfoProperties) AddToPropertySet(ctx android.SdkMemberCont
 // implement the following interface for IDE completion.
 var _ android.IDEInfo = (*SystemModules)(nil)
 
-func (s *SystemModules) IDEInfo(ideInfo *android.IdeInfo) {
+func (s *SystemModules) IDEInfo(ctx android.BaseModuleContext, ideInfo *android.IdeInfo) {
 	ideInfo.Deps = append(ideInfo.Deps, s.properties.Libs...)
 	ideInfo.Libs = append(ideInfo.Libs, s.properties.Libs...)
 }

@@ -177,6 +177,41 @@ func setFromList[T comparable](l []T) map[T]bool {
 	return m
 }
 
+// PrettyConcat returns the formatted concatenated string suitable for displaying user-facing
+// messages.
+func PrettyConcat(list []string, quote bool, lastSep string) string {
+	if len(list) == 0 {
+		return ""
+	}
+
+	quoteStr := func(v string) string {
+		if !quote {
+			return v
+		}
+		return fmt.Sprintf("%q", v)
+	}
+
+	if len(list) == 1 {
+		return quoteStr(list[0])
+	}
+
+	var sb strings.Builder
+	for i, val := range list {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		if i == len(list)-1 {
+			sb.WriteString(lastSep)
+			if lastSep != "" {
+				sb.WriteString(" ")
+			}
+		}
+		sb.WriteString(quoteStr(val))
+	}
+
+	return sb.String()
+}
+
 // ListSetDifference checks if the two lists contain the same elements. It returns
 // a boolean which is true if there is a difference, and then returns lists of elements
 // that are in l1 but not l2, and l2 but not l1.
@@ -624,4 +659,14 @@ func (m *SyncMap[K, V]) Store(key K, value V) {
 func (m *SyncMap[K, V]) LoadOrStore(key K, value V) (actual V, loaded bool) {
 	v, loaded := m.Map.LoadOrStore(key, value)
 	return v.(V), loaded
+}
+
+// AppendIfNotZero append the given value to the slice if it is not the zero value
+// for its type.
+func AppendIfNotZero[T comparable](slice []T, value T) []T {
+	var zeroValue T // Get the zero value of the type T
+	if value != zeroValue {
+		return append(slice, value)
+	}
+	return slice
 }

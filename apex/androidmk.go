@@ -136,6 +136,11 @@ func (a *apexBundle) androidMkForFiles(w io.Writer, apexBundleName, moduleDir st
 		fmt.Fprintln(w, "LOCAL_SOONG_INSTALLED_MODULE :=", filepath.Join(modulePath, fi.stem()))
 		fmt.Fprintln(w, "LOCAL_SOONG_INSTALL_PAIRS :=", fi.builtFile.String()+":"+filepath.Join(modulePath, fi.stem()))
 		fmt.Fprintln(w, "LOCAL_PREBUILT_MODULE_FILE :=", fi.builtFile.String())
+		if fi.checkbuildTarget != nil {
+			fmt.Fprintln(w, "LOCAL_CHECKED_MODULE :=", fi.checkbuildTarget.String())
+		} else {
+			fmt.Fprintln(w, "LOCAL_CHECKED_MODULE :=", fi.builtFile.String())
+		}
 		fmt.Fprintln(w, "LOCAL_MODULE_CLASS :=", fi.class.nameInMake())
 		if fi.module != nil {
 			// This apexFile's module comes from Soong
@@ -292,7 +297,7 @@ func (a *apexBundle) androidMkForType() android.AndroidMkData {
 				fmt.Fprintf(w, "$(call declare-0p-target,%s)\n", a.installedFilesFile.String())
 			}
 			for _, dist := range data.Entries.GetDistForGoals(a) {
-				fmt.Fprintf(w, dist)
+				fmt.Fprintln(w, dist)
 			}
 
 			distCoverageFiles(w, "ndk_apis_usedby_apex", a.nativeApisUsedByModuleFile.String())

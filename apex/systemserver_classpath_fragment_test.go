@@ -29,6 +29,7 @@ var prepareForTestWithSystemserverclasspathFragment = android.GroupFixturePrepar
 )
 
 func TestSystemserverclasspathFragmentContents(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		prepareForTestWithSystemserverclasspathFragment,
 		prepareForTestWithMyapex,
@@ -80,6 +81,7 @@ func TestSystemserverclasspathFragmentContents(t *testing.T) {
 			apex_available: [
 				"myapex",
 			],
+			sdk_version: "core_current",
 		}
 
 		systemserverclasspath_fragment {
@@ -117,6 +119,7 @@ func TestSystemserverclasspathFragmentContents(t *testing.T) {
 }
 
 func TestSystemserverclasspathFragmentNoGeneratedProto(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		prepareForTestWithSystemserverclasspathFragment,
 		prepareForTestWithMyapex,
@@ -170,6 +173,7 @@ func TestSystemserverclasspathFragmentNoGeneratedProto(t *testing.T) {
 }
 
 func TestSystemServerClasspathFragmentWithContentNotInMake(t *testing.T) {
+	t.Parallel()
 	android.GroupFixturePreparers(
 		prepareForTestWithSystemserverclasspathFragment,
 		prepareForTestWithMyapex,
@@ -221,6 +225,7 @@ func TestSystemServerClasspathFragmentWithContentNotInMake(t *testing.T) {
 }
 
 func TestPrebuiltSystemserverclasspathFragmentContents(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		prepareForTestWithSystemserverclasspathFragment,
 		prepareForTestWithMyapex,
@@ -276,8 +281,6 @@ func TestPrebuiltSystemserverclasspathFragmentContents(t *testing.T) {
 	java.CheckModuleDependencies(t, ctx, "myapex", "android_common_myapex", []string{
 		`all_apex_contributions`,
 		`dex2oatd`,
-		`prebuilt_myapex.apex.selector`,
-		`prebuilt_myapex.deapexer`,
 		`prebuilt_mysystemserverclasspathfragment`,
 	})
 
@@ -285,10 +288,9 @@ func TestPrebuiltSystemserverclasspathFragmentContents(t *testing.T) {
 		`all_apex_contributions`,
 		`prebuilt_bar`,
 		`prebuilt_foo`,
-		`prebuilt_myapex.deapexer`,
 	})
 
-	ensureExactDeapexedContents(t, ctx, "prebuilt_myapex", "android_common", []string{
+	ensureExactDeapexedContents(t, ctx, "myapex", "android_common_myapex", []string{
 		"javalib/foo.jar",
 		"javalib/bar.jar",
 		"javalib/bar.jar.prof",
@@ -299,6 +301,7 @@ func TestPrebuiltSystemserverclasspathFragmentContents(t *testing.T) {
 }
 
 func TestSystemserverclasspathFragmentStandaloneContents(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		prepareForTestWithSystemserverclasspathFragment,
 		prepareForTestWithMyapex,
@@ -350,6 +353,7 @@ func TestSystemserverclasspathFragmentStandaloneContents(t *testing.T) {
 			apex_available: [
 				"myapex",
 			],
+			sdk_version: "core_current",
 		}
 
 		systemserverclasspath_fragment {
@@ -381,6 +385,7 @@ func TestSystemserverclasspathFragmentStandaloneContents(t *testing.T) {
 }
 
 func TestPrebuiltStandaloneSystemserverclasspathFragmentContents(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		prepareForTestWithSystemserverclasspathFragment,
 		prepareForTestWithMyapex,
@@ -437,10 +442,9 @@ func TestPrebuiltStandaloneSystemserverclasspathFragmentContents(t *testing.T) {
 		`all_apex_contributions`,
 		`prebuilt_bar`,
 		`prebuilt_foo`,
-		`prebuilt_myapex.deapexer`,
 	})
 
-	ensureExactDeapexedContents(t, ctx, "prebuilt_myapex", "android_common", []string{
+	ensureExactDeapexedContents(t, ctx, "myapex", "android_common_myapex", []string{
 		"javalib/foo.jar",
 		"javalib/bar.jar",
 		"javalib/bar.jar.prof",

@@ -1009,6 +1009,76 @@ my_module_type {
 			},
 			expectedError: `variable already set in inherited scope, previous assignment:`,
 		},
+		{
+			name: "Basic string list postprocessor",
+			bp: `
+my_defaults {
+	name: "defaults_a",
+	my_string_list: ["a", "b", "c"],
+	string_list_postprocessor_add_to_elements: "1",
+}
+my_defaults {
+	name: "defaults_b",
+	my_string_list: ["d", "e", "f"],
+	string_list_postprocessor_add_to_elements: "2",
+}
+my_module_type {
+	name: "foo",
+	defaults: ["defaults_a", "defaults_b"],
+}
+`,
+			provider: selectsTestProvider{
+				my_string_list: &[]string{"d2", "e2", "f2", "a1", "b1", "c1"},
+			},
+		},
+		{
+			name: "string list variables",
+			bp: `
+my_module_type {
+	name: "foo",
+	my_string_list: ["a"] + select(soong_config_variable("my_namespace", "my_var"), {
+		any @ my_var: my_var,
+		default: [],
+	}),
+}
+`,
+			vendorVars: map[string]map[string]string{
+				"my_namespace": {
+					"my_var": "b c",
+				},
+			},
+			vendorVarTypes: map[string]map[string]string{
+				"my_namespace": {
+					"my_var": "string_list",
+				},
+			},
+			provider: selectsTestProvider{
+				my_string_list: &[]string{"a", "b", "c"},
+			},
+		},
+		{
+			name: "string list variables don't match string matchers",
+			bp: `
+my_module_type {
+	name: "foo",
+	my_string_list: ["a"] + select(soong_config_variable("my_namespace", "my_var"), {
+		"foo": ["b"],
+		default: [],
+	}),
+}
+`,
+			vendorVars: map[string]map[string]string{
+				"my_namespace": {
+					"my_var": "b c",
+				},
+			},
+			vendorVarTypes: map[string]map[string]string{
+				"my_namespace": {
+					"my_var": "string_list",
+				},
+			},
+			expectedError: `Expected all branches of a select on condition soong_config_variable\("my_namespace", "my_var"\) to have type string_list, found string`,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -1161,9 +1231,15 @@ func newSelectsMockModule() Module {
 	return m
 }
 
+type selectsMockDefaultsProperties struct {
+	String_list_postprocessor_add_to_elements string
+}
+
 type selectsMockModuleDefaults struct {
 	ModuleBase
 	DefaultsModuleBase
+	myProperties       selectsMockModuleProperties
+	defaultsProperties selectsMockDefaultsProperties
 }
 
 func (d *selectsMockModuleDefaults) GenerateAndroidBuildActions(ctx ModuleContext) {
@@ -1173,10 +1249,22 @@ func newSelectsMockModuleDefaults() Module {
 	module := &selectsMockModuleDefaults{}
 
 	module.AddProperties(
-		&selectsMockModuleProperties{},
+		&module.myProperties,
+		&module.defaultsProperties,
 	)
 
 	InitDefaultsModule(module)
+
+	AddLoadHook(module, func(lhc LoadHookContext) {
+		if module.defaultsProperties.String_list_postprocessor_add_to_elements != "" {
+			module.myProperties.My_string_list.AddPostProcessor(func(x []string) []string {
+				for i := range x {
+					x[i] = x[i] + module.defaultsProperties.String_list_postprocessor_add_to_elements
+				}
+				return x
+			})
+		}
+	})
 
 	return module
 }
