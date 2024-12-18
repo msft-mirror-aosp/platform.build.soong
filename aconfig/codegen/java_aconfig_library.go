@@ -72,7 +72,7 @@ func (callbacks *JavaAconfigDeclarationsLibraryCallbacks) DepsMutator(module *ja
 		module.AddSharedLibrary("aconfig-annotations-lib")
 		// TODO(b/303773055): Remove the annotation after access issue is resolved.
 		module.AddSharedLibrary("unsupportedappusage")
-		module.AddSharedLibrary("aconfig_storage_reader_java")
+		module.AddSharedLibrary("aconfig_storage_stub")
 	}
 }
 
@@ -98,14 +98,23 @@ func (callbacks *JavaAconfigDeclarationsLibraryCallbacks) GenerateSourceJarBuild
 		ctx.PropertyErrorf("mode", "exported mode requires its aconfig_declaration has exportable prop true")
 	}
 
+	var newExported bool
+	if useNewExported, ok := ctx.Config().GetBuildFlag("RELEASE_ACONFIG_NEW_EXPORTED"); ok {
+		// The build flag (RELEASE_ACONFIG_REQUIRE_ALL_READ_ONLY) is the negation of the aconfig flag
+		// (allow-read-write) for historical reasons.
+		// Bool build flags are always "" for false, and generally "true" for true.
+		newExported = useNewExported == "true"
+	}
+
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        javaRule,
 		Input:       declarations.IntermediateCacheOutputPath,
 		Output:      srcJarPath,
 		Description: "aconfig.srcjar",
 		Args: map[string]string{
-			"mode":  mode,
-			"debug": strconv.FormatBool(ctx.Config().ReleaseReadFromNewStorage()),
+			"mode":         mode,
+			"debug":        strconv.FormatBool(ctx.Config().ReleaseReadFromNewStorage()),
+			"new_exported": strconv.FormatBool(newExported),
 		},
 	})
 

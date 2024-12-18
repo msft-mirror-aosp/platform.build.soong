@@ -30,22 +30,21 @@ import (
 type RustLinkage int
 
 const (
-	DefaultLinkage RustLinkage = iota
+	DylibLinkage RustLinkage = iota
 	RlibLinkage
-	DylibLinkage
 )
 
 type compiler interface {
 	initialize(ctx ModuleContext)
 	compilerFlags(ctx ModuleContext, flags Flags) Flags
 	cfgFlags(ctx ModuleContext, flags Flags) Flags
-	featureFlags(ctx ModuleContext, flags Flags) Flags
+	featureFlags(ctx ModuleContext, module *Module, flags Flags) Flags
 	compilerProps() []interface{}
 	compile(ctx ModuleContext, flags Flags, deps PathDeps) buildOutput
 	compilerDeps(ctx DepsContext, deps Deps) Deps
 	crateName() string
 	edition() string
-	features() []string
+	features(ctx android.ConfigurableEvaluatorContext, module *Module) []string
 	rustdoc(ctx ModuleContext, flags Flags, deps PathDeps) android.OptionalPath
 	Thinlto() bool
 
@@ -69,7 +68,7 @@ type compiler interface {
 	Disabled() bool
 	SetDisabled()
 
-	stdLinkage(ctx *depsContext) RustLinkage
+	stdLinkage(device bool) RustLinkage
 	noStdlibs() bool
 
 	unstrippedOutputFilePath() android.Path
@@ -154,7 +153,7 @@ type BaseCompilerProperties struct {
 
 	// list of rust automatic crate dependencies.
 	// Rustlibs linkage is rlib for host targets and dylib for device targets.
-	Rustlibs []string `android:"arch_variant"`
+	Rustlibs proptools.Configurable[[]string] `android:"arch_variant"`
 
 	// list of rust proc_macro crate dependencies
 	Proc_macros []string `android:"arch_variant"`
@@ -194,7 +193,7 @@ type BaseCompilerProperties struct {
 	Crate_name string `android:"arch_variant"`
 
 	// list of features to enable for this crate
-	Features []string `android:"arch_variant"`
+	Features proptools.Configurable[[]string] `android:"arch_variant"`
 
 	// list of configuration options to enable for this crate. To enable features, use the "features" property.
 	Cfgs proptools.Configurable[[]string] `android:"arch_variant"`
@@ -316,11 +315,11 @@ func (compiler *baseCompiler) Aliases() map[string]string {
 	return aliases
 }
 
-func (compiler *baseCompiler) stdLinkage(ctx *depsContext) RustLinkage {
+func (compiler *baseCompiler) stdLinkage(device bool) RustLinkage {
 	// For devices, we always link stdlibs in as dylibs by default.
 	if compiler.preferRlib() {
 		return RlibLinkage
-	} else if ctx.Device() {
+	} else if device {
 		return DylibLinkage
 	} else {
 		return RlibLinkage
@@ -346,22 +345,23 @@ func cfgsToFlags(cfgs []string) []string {
 	return flags
 }
 
-func (compiler *baseCompiler) features() []string {
-	return compiler.Properties.Features
+func (compiler *baseCompiler) features(ctx android.ConfigurableEvaluatorContext, module *Module) []string {
+	eval := module.ConfigurableEvaluator(ctx)
+	return compiler.Properties.Features.GetOrDefault(eval, nil)
 }
 
-func (compiler *baseCompiler) featuresToFlags() []string {
+func (compiler *baseCompiler) featuresToFlags(ctx android.ConfigurableEvaluatorContext, module *Module) []string {
 	flags := []string{}
-	for _, feature := range compiler.features() {
+	for _, feature := range compiler.features(ctx, module) {
 		flags = append(flags, "--cfg 'feature=\""+feature+"\"'")
 	}
 
 	return flags
 }
 
-func (compiler *baseCompiler) featureFlags(ctx ModuleContext, flags Flags) Flags {
-	flags.RustFlags = append(flags.RustFlags, compiler.featuresToFlags()...)
-	flags.RustdocFlags = append(flags.RustdocFlags, compiler.featuresToFlags()...)
+func (compiler *baseCompiler) featureFlags(ctx ModuleContext, module *Module, flags Flags) Flags {
+	flags.RustFlags = append(flags.RustFlags, compiler.featuresToFlags(ctx, module)...)
+	flags.RustdocFlags = append(flags.RustdocFlags, compiler.featuresToFlags(ctx, module)...)
 
 	return flags
 }
@@ -496,7 +496,7 @@ func (compiler *baseCompiler) strippedOutputFilePath() android.OptionalPath {
 
 func (compiler *baseCompiler) compilerDeps(ctx DepsContext, deps Deps) Deps {
 	deps.Rlibs = append(deps.Rlibs, compiler.Properties.Rlibs...)
-	deps.Rustlibs = append(deps.Rustlibs, compiler.Properties.Rustlibs...)
+	deps.Rustlibs = append(deps.Rustlibs, compiler.Properties.Rustlibs.GetOrDefault(ctx, nil)...)
 	deps.ProcMacros = append(deps.ProcMacros, compiler.Properties.Proc_macros...)
 	deps.StaticLibs = append(deps.StaticLibs, compiler.Properties.Static_libs...)
 	deps.WholeStaticLibs = append(deps.WholeStaticLibs, compiler.Properties.Whole_static_libs...)

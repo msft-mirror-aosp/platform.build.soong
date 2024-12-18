@@ -20,6 +20,8 @@ import (
 
 	"android/soong/android"
 	"android/soong/dexpreopt"
+
+	"github.com/google/blueprint/depset"
 )
 
 type DeviceHostConverter struct {
@@ -96,6 +98,10 @@ func (d *DeviceHostConverter) GenerateAndroidBuildActions(ctx android.ModuleCont
 		ctx.PropertyErrorf("libs", "at least one dependency is required")
 	}
 
+	var transitiveHeaderJars []depset.DepSet[android.Path]
+	var transitiveImplementationJars []depset.DepSet[android.Path]
+	var transitiveResourceJars []depset.DepSet[android.Path]
+
 	ctx.VisitDirectDepsWithTag(deviceHostConverterDepTag, func(m android.Module) {
 		if dep, ok := android.OtherModuleProvider(ctx, m, JavaInfoProvider); ok {
 			d.headerJars = append(d.headerJars, dep.HeaderJars...)
@@ -105,6 +111,10 @@ func (d *DeviceHostConverter) GenerateAndroidBuildActions(ctx android.ModuleCont
 
 			d.srcJarArgs = append(d.srcJarArgs, dep.SrcJarArgs...)
 			d.srcJarDeps = append(d.srcJarDeps, dep.SrcJarDeps...)
+
+			transitiveHeaderJars = append(transitiveHeaderJars, dep.TransitiveStaticLibsHeaderJars)
+			transitiveImplementationJars = append(transitiveImplementationJars, dep.TransitiveStaticLibsImplementationJars)
+			transitiveResourceJars = append(transitiveResourceJars, dep.TransitiveStaticLibsResourceJars)
 		} else {
 			ctx.PropertyErrorf("libs", "module %q cannot be used as a dependency", ctx.OtherModuleName(m))
 		}
@@ -131,13 +141,17 @@ func (d *DeviceHostConverter) GenerateAndroidBuildActions(ctx android.ModuleCont
 	}
 
 	android.SetProvider(ctx, JavaInfoProvider, &JavaInfo{
-		HeaderJars:                     d.headerJars,
-		ImplementationAndResourcesJars: d.implementationAndResourceJars,
-		ImplementationJars:             d.implementationJars,
-		ResourceJars:                   d.resourceJars,
-		SrcJarArgs:                     d.srcJarArgs,
-		SrcJarDeps:                     d.srcJarDeps,
-		StubsLinkType:                  Implementation,
+		HeaderJars:                             d.headerJars,
+		LocalHeaderJars:                        d.headerJars,
+		TransitiveStaticLibsHeaderJars:         depset.New(depset.PREORDER, nil, transitiveHeaderJars),
+		TransitiveStaticLibsImplementationJars: depset.New(depset.PREORDER, nil, transitiveImplementationJars),
+		TransitiveStaticLibsResourceJars:       depset.New(depset.PREORDER, nil, transitiveResourceJars),
+		ImplementationAndResourcesJars:         d.implementationAndResourceJars,
+		ImplementationJars:                     d.implementationJars,
+		ResourceJars:                           d.resourceJars,
+		SrcJarArgs:                             d.srcJarArgs,
+		SrcJarDeps:                             d.srcJarDeps,
+		StubsLinkType:                          Implementation,
 		// TODO: Not sure if aconfig flags that have been moved between device and host variants
 		// make sense.
 	})

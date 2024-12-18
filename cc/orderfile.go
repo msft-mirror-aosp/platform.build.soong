@@ -54,10 +54,6 @@ func getOrderfileProjects(config android.DeviceConfig) []string {
 	})
 }
 
-func recordMissingOrderfile(ctx BaseModuleContext, missing string) {
-	getNamedMapForConfig(ctx.Config(), modulesMissingProfileFileKey).Store(missing, true)
-}
-
 type OrderfileProperties struct {
 	Orderfile struct {
 		Instrumentation *bool
@@ -117,7 +113,7 @@ func (props *OrderfileProperties) getOrderfile(ctx BaseModuleContext) android.Op
 
 	// Record that this module's order file is absent
 	missing := *props.Orderfile.Order_file_path + ":" + ctx.ModuleDir() + "/Android.bp:" + ctx.ModuleName()
-	recordMissingOrderfile(ctx, missing)
+	ctx.getOrCreateMakeVarsInfo().MissingProfile = missing
 
 	return android.OptionalPath{}
 }
@@ -157,7 +153,7 @@ func (orderfile *orderfile) begin(ctx BaseModuleContext) {
 	}
 
 	// Currently, we are not enabling orderfiles to begin from static libraries
-	if ctx.static() && !ctx.staticBinary() {
+	if ctx.staticLibrary() {
 		return
 	}
 

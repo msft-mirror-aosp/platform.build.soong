@@ -26,9 +26,9 @@ import (
 	"strings"
 
 	"android/soong/remoteexec"
-	"android/soong/testing"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
@@ -70,9 +70,9 @@ func registerJavaBuildComponents(ctx android.RegistrationContext) {
 	// established, to not get the dependencies split into the wrong variants and
 	// to support the checks in dexpreoptDisabled().
 	ctx.FinalDepsMutators(func(ctx android.RegisterMutatorsContext) {
-		ctx.BottomUp("dexpreopt_tool_deps", dexpreoptToolDepsMutator).Parallel()
+		ctx.BottomUp("dexpreopt_tool_deps", dexpreoptToolDepsMutator)
 		// needs access to ApexInfoProvider which is available after variant creation
-		ctx.BottomUp("jacoco_deps", jacocoDepsMutator).Parallel()
+		ctx.BottomUp("jacoco_deps", jacocoDepsMutator)
 	})
 
 	ctx.RegisterParallelSingletonType("kythe_java_extract", kytheExtractJavaFactory)
@@ -226,9 +226,9 @@ var (
 
 	// Rule for generating device binary default wrapper
 	deviceBinaryWrapper = pctx.StaticRule("deviceBinaryWrapper", blueprint.RuleParams{
-		Command: `echo -e '#!/system/bin/sh\n` +
+		Command: `printf '#!/system/bin/sh\n` +
 			`export CLASSPATH=/system/framework/$jar_name\n` +
-			`exec app_process /$partition/bin $main_class "$$@"'> ${out}`,
+			`exec app_process /$partition/bin $main_class "$$@"\n'> ${out}`,
 		Description: "Generating device binary wrapper ${jar_name}",
 	}, "jar_name", "partition", "main_class")
 )
@@ -242,10 +242,10 @@ type ProguardSpecInfo struct {
 	// TransitiveDepsProguardSpecFiles is a depset of paths to proguard flags files that are exported from
 	// all transitive deps. This list includes all proguard flags files from transitive static dependencies,
 	// and all proguard flags files from transitive libs dependencies which set `export_proguard_spec: true`.
-	ProguardFlagsFiles *android.DepSet[android.Path]
+	ProguardFlagsFiles depset.DepSet[android.Path]
 
 	// implementation detail to store transitive proguard flags files from exporting shared deps
-	UnconditionallyExportedProguardFlags *android.DepSet[android.Path]
+	UnconditionallyExportedProguardFlags depset.DepSet[android.Path]
 }
 
 var ProguardSpecInfoProvider = blueprint.NewProvider[ProguardSpecInfo]()
@@ -254,15 +254,25 @@ var ProguardSpecInfoProvider = blueprint.NewProvider[ProguardSpecInfo]()
 type JavaInfo struct {
 	// HeaderJars is a list of jars that can be passed as the javac classpath in order to link
 	// against this module.  If empty, ImplementationJars should be used instead.
+	// Unlike LocalHeaderJars, HeaderJars includes classes from static dependencies.
 	HeaderJars android.Paths
 
 	RepackagedHeaderJars android.Paths
 
 	// set of header jars for all transitive libs deps
-	TransitiveLibsHeaderJarsForR8 *android.DepSet[android.Path]
+	TransitiveLibsHeaderJarsForR8 depset.DepSet[android.Path]
 
 	// set of header jars for all transitive static libs deps
-	TransitiveStaticLibsHeaderJarsForR8 *android.DepSet[android.Path]
+	TransitiveStaticLibsHeaderJarsForR8 depset.DepSet[android.Path]
+
+	// depset of header jars for this module and all transitive static dependencies
+	TransitiveStaticLibsHeaderJars depset.DepSet[android.Path]
+
+	// depset of implementation jars for this module and all transitive static dependencies
+	TransitiveStaticLibsImplementationJars depset.DepSet[android.Path]
+
+	// depset of resource jars for this module and all transitive static dependencies
+	TransitiveStaticLibsResourceJars depset.DepSet[android.Path]
 
 	// ImplementationAndResourceJars is a list of jars that contain the implementations of classes
 	// in the module as well as any resources included in the module.
@@ -274,6 +284,9 @@ type JavaInfo struct {
 
 	// ResourceJars is a list of jars that contain the resources included in the module.
 	ResourceJars android.Paths
+
+	// LocalHeaderJars is a list of jars that contain classes from this module, but not from any static dependencies.
+	LocalHeaderJars android.Paths
 
 	// AidlIncludeDirs is a list of directories that should be passed to the aidl tool when
 	// depending on this module.
@@ -287,7 +300,7 @@ type JavaInfo struct {
 	SrcJarDeps android.Paths
 
 	// The source files of this module and all its transitive static dependencies.
-	TransitiveSrcFiles *android.DepSet[android.Path]
+	TransitiveSrcFiles depset.DepSet[android.Path]
 
 	// ExportedPlugins is a list of paths that should be used as annotation processors for any
 	// module that depends on this module.
@@ -313,6 +326,8 @@ type JavaInfo struct {
 	// AconfigIntermediateCacheOutputPaths is a path to the cache files collected from the
 	// java_aconfig_library modules that are statically linked to this module.
 	AconfigIntermediateCacheOutputPaths android.Paths
+
+	SdkVersion android.SdkSpec
 }
 
 var JavaInfoProvider = blueprint.NewProvider[*JavaInfo]()
@@ -343,10 +358,15 @@ type UsesLibraryDependency interface {
 // TODO(jungjw): Move this to kythe.go once it's created.
 type xref interface {
 	XrefJavaFiles() android.Paths
+	XrefKotlinFiles() android.Paths
 }
 
 func (j *Module) XrefJavaFiles() android.Paths {
 	return j.kytheFiles
+}
+
+func (j *Module) XrefKotlinFiles() android.Paths {
+	return j.kytheKotlinFiles
 }
 
 func (d dependencyTag) PropagateAconfigValidation() bool {
@@ -432,7 +452,6 @@ var (
 	javaApiContributionTag  = dependencyTag{name: "java-api-contribution"}
 	aconfigDeclarationTag   = dependencyTag{name: "aconfig-declaration"}
 	jniInstallTag           = dependencyTag{name: "jni install", runtimeLinked: true, installable: true}
-	binaryInstallTag        = dependencyTag{name: "binary install", runtimeLinked: true, installable: true}
 	usesLibReqTag           = makeUsesLibraryDependencyTag(dexpreopt.AnySdkVersion, false)
 	usesLibOptTag           = makeUsesLibraryDependencyTag(dexpreopt.AnySdkVersion, true)
 	usesLibCompat28OptTag   = makeUsesLibraryDependencyTag(28, true)
@@ -568,6 +587,10 @@ type deps struct {
 	aconfigProtoFiles       android.Paths
 
 	disableTurbine bool
+
+	transitiveStaticLibsHeaderJars         []depset.DepSet[android.Path]
+	transitiveStaticLibsImplementationJars []depset.DepSet[android.Path]
+	transitiveStaticLibsResourceJars       []depset.DepSet[android.Path]
 }
 
 func checkProducesJars(ctx android.ModuleContext, dep android.SourceFileProducer) {
@@ -585,10 +608,8 @@ func getJavaVersion(ctx android.ModuleContext, javaVersion string, sdkContext an
 	} else if ctx.Device() {
 		return defaultJavaLanguageVersion(ctx, sdkContext.SdkVersion(ctx))
 	} else if ctx.Config().TargetsJava21() {
-		// Temporary experimental flag to be able to try and build with
-		// java version 21 options.  The flag, if used, just sets Java
-		// 21 as the default version, leaving any components that
-		// target an older version intact.
+		// Build flag that controls whether Java 21 is used as the default
+		// target version, or Java 17.
 		return JAVA_VERSION_21
 	} else {
 		return JAVA_VERSION_17
@@ -923,6 +944,7 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		// Even though the source javalib is not used, we need to hide it to prevent duplicate installation rules.
 		// TODO (b/331665856): Implement a principled solution for this.
 		j.HideFromMake()
+		j.SkipInstall()
 	}
 	j.provideHiddenAPIPropertyInfo(ctx)
 
@@ -982,13 +1004,7 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	j.compile(ctx, nil, nil, nil, nil)
 
-	// If this module is an impl library created from java_sdk_library,
-	// install the files under the java_sdk_library module outdir instead of this module outdir.
-	if j.SdkLibraryName() != nil && strings.HasSuffix(j.Name(), ".impl") {
-		j.setInstallRules(ctx, proptools.String(j.SdkLibraryName()))
-	} else {
-		j.setInstallRules(ctx, ctx.ModuleName())
-	}
+	j.setInstallRules(ctx)
 
 	android.SetProvider(ctx, android.TestOnlyProviderKey, android.TestModuleInformation{
 		TestOnly:       Bool(j.sourceProperties.Test_only),
@@ -998,7 +1014,27 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	setOutputFiles(ctx, j.Module)
 }
 
-func (j *Library) setInstallRules(ctx android.ModuleContext, installModuleName string) {
+func (j *Library) getJarInstallDir(ctx android.ModuleContext) android.InstallPath {
+	var installDir android.InstallPath
+	if ctx.InstallInTestcases() {
+		var archDir string
+		if !ctx.Host() {
+			archDir = ctx.DeviceConfig().DeviceArch()
+		}
+		installModuleName := ctx.ModuleName()
+		// If this module is an impl library created from java_sdk_library,
+		// install the files under the java_sdk_library module outdir instead of this module outdir.
+		if j.SdkLibraryName() != nil && strings.HasSuffix(j.Name(), ".impl") {
+			installModuleName = proptools.String(j.SdkLibraryName())
+		}
+		installDir = android.PathForModuleInstall(ctx, installModuleName, archDir)
+	} else {
+		installDir = android.PathForModuleInstall(ctx, "framework")
+	}
+	return installDir
+}
+
+func (j *Library) setInstallRules(ctx android.ModuleContext) {
 	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 
 	if (Bool(j.properties.Installable) || ctx.Host()) && apexInfo.IsForPlatform() {
@@ -1008,21 +1044,11 @@ func (j *Library) setInstallRules(ctx android.ModuleContext, installModuleName s
 		}
 		hostDexNeeded := Bool(j.deviceProperties.Hostdex) && !ctx.Host()
 		if hostDexNeeded {
-			j.hostdexInstallFile = ctx.InstallFile(
+			j.hostdexInstallFile = ctx.InstallFileWithoutCheckbuild(
 				android.PathForHostDexInstall(ctx, "framework"),
 				j.Stem()+"-hostdex.jar", j.outputFile)
 		}
-		var installDir android.InstallPath
-		if ctx.InstallInTestcases() {
-			var archDir string
-			if !ctx.Host() {
-				archDir = ctx.DeviceConfig().DeviceArch()
-			}
-			installDir = android.PathForModuleInstall(ctx, installModuleName, archDir)
-		} else {
-			installDir = android.PathForModuleInstall(ctx, "framework")
-		}
-		j.installFile = ctx.InstallFile(installDir, j.Stem()+".jar", j.outputFile, extraInstallDeps...)
+		j.installFile = ctx.InstallFileWithoutCheckbuild(j.getJarInstallDir(ctx), j.Stem()+".jar", j.outputFile, extraInstallDeps...)
 	}
 }
 
@@ -1266,6 +1292,22 @@ type testProperties struct {
 	// the test
 	Data []string `android:"path"`
 
+	// Same as data, but will add dependencies on modules using the device's os variation and
+	// the common arch variation. Useful for a host test that wants to embed a module built for
+	// device.
+	Device_common_data []string `android:"path_device_common"`
+
+	// same as data, but adds dependencies using the device's os variation and the device's first
+	// architecture's variation. Can be used to add a module built for device to the data of a
+	// host test.
+	Device_first_data []string `android:"path_device_first"`
+
+	// same as data, but adds dependencies using the device's os variation and the device's first
+	// 32-bit architecture's variation. If a 32-bit arch doesn't exist for this device, it will use
+	// a 64 bit arch instead. Can be used to add a module built for device to the data of a
+	// host test.
+	Device_first_prefer32_data []string `android:"path_device_first_prefer32"`
+
 	// Flag to indicate whether or not to create test config automatically. If AndroidTest.xml
 	// doesn't exist next to the Android.bp, this attribute doesn't need to be set to true
 	// explicitly.
@@ -1279,7 +1321,7 @@ type testProperties struct {
 	Test_options TestOptions
 
 	// Names of modules containing JNI libraries that should be installed alongside the test.
-	Jni_libs []string
+	Jni_libs proptools.Configurable[[]string]
 
 	// Install the test into a folder named for the module in all test suites.
 	Per_testcase_directory *bool
@@ -1463,10 +1505,11 @@ func (j *TestHost) DepsMutator(ctx android.BottomUpMutatorContext) {
 		}
 	}
 
-	if len(j.testProperties.Jni_libs) > 0 {
+	jniLibs := j.testProperties.Jni_libs.GetOrDefault(ctx, nil)
+	if len(jniLibs) > 0 {
 		for _, target := range ctx.MultiTargets() {
 			sharedLibVariations := append(target.Variations(), blueprint.Variation{Mutator: "link", Variation: "shared"})
-			ctx.AddFarVariationDependencies(sharedLibVariations, jniLibTag, j.testProperties.Jni_libs...)
+			ctx.AddFarVariationDependencies(sharedLibVariations, jniLibTag, jniLibs...)
 		}
 	}
 
@@ -1515,23 +1558,23 @@ func (j *TestHost) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	j.Test.generateAndroidBuildActionsWithConfig(ctx, configs)
-	android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 	android.SetProvider(ctx, tradefed.BaseTestProviderKey, tradefed.BaseTestProviderData{
-		InstalledFiles:      j.data,
-		OutputFile:          j.outputFile,
-		TestConfig:          j.testConfig,
-		RequiredModuleNames: j.RequiredModuleNames(ctx),
-		TestSuites:          j.testProperties.Test_suites,
-		IsHost:              true,
-		LocalSdkVersion:     j.sdkVersion.String(),
-		IsUnitTest:          Bool(j.testProperties.Test_options.Unit_test),
+		TestcaseRelDataFiles: testcaseRel(j.data),
+		OutputFile:           j.outputFile,
+		TestConfig:           j.testConfig,
+		RequiredModuleNames:  j.RequiredModuleNames(ctx),
+		TestSuites:           j.testProperties.Test_suites,
+		IsHost:               true,
+		LocalSdkVersion:      j.sdkVersion.String(),
+		IsUnitTest:           Bool(j.testProperties.Test_options.Unit_test),
+		MkInclude:            "$(BUILD_SYSTEM)/soong_java_prebuilt.mk",
+		MkAppClass:           "JAVA_LIBRARIES",
 	})
 }
 
 func (j *Test) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	checkMinSdkVersionMts(ctx, j.MinSdkVersion(ctx))
 	j.generateAndroidBuildActionsWithConfig(ctx, nil)
-	android.SetProvider(ctx, testing.TestModuleProviderKey, testing.TestModuleProviderData{})
 }
 
 func (j *Test) generateAndroidBuildActionsWithConfig(ctx android.ModuleContext, configs []tradefed.Config) {
@@ -1555,6 +1598,9 @@ func (j *Test) generateAndroidBuildActionsWithConfig(ctx android.ModuleContext, 
 	})
 
 	j.data = android.PathsForModuleSrc(ctx, j.testProperties.Data)
+	j.data = append(j.data, android.PathsForModuleSrc(ctx, j.testProperties.Device_common_data)...)
+	j.data = append(j.data, android.PathsForModuleSrc(ctx, j.testProperties.Device_first_data)...)
+	j.data = append(j.data, android.PathsForModuleSrc(ctx, j.testProperties.Device_first_prefer32_data)...)
 
 	j.extraTestConfigs = android.PathsForModuleSrc(ctx, j.testProperties.Test_options.Extra_test_configs)
 
@@ -1566,6 +1612,8 @@ func (j *Test) generateAndroidBuildActionsWithConfig(ctx android.ModuleContext, 
 		j.data = append(j.data, android.OutputFileForModule(ctx, dep, ""))
 	})
 
+	var directImplementationDeps android.Paths
+	var transitiveImplementationDeps []depset.DepSet[android.Path]
 	ctx.VisitDirectDepsWithTag(jniLibTag, func(dep android.Module) {
 		sharedLibInfo, _ := android.OtherModuleProvider(ctx, dep, cc.SharedLibraryInfoProvider)
 		if sharedLibInfo.SharedLibrary != nil {
@@ -1584,9 +1632,18 @@ func (j *Test) generateAndroidBuildActionsWithConfig(ctx android.ModuleContext, 
 				Output: relocatedLib,
 			})
 			j.data = append(j.data, relocatedLib)
+
+			directImplementationDeps = append(directImplementationDeps, android.OutputFileForModule(ctx, dep, ""))
+			if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
+				transitiveImplementationDeps = append(transitiveImplementationDeps, info.ImplementationDeps)
+			}
 		} else {
 			ctx.PropertyErrorf("jni_libs", "%q of type %q is not supported", dep.Name(), ctx.OtherModuleType(dep))
 		}
+	})
+
+	android.SetProvider(ctx, cc.ImplementationDepInfoProvider, &cc.ImplementationDepInfo{
+		ImplementationDeps: depset.New(depset.PREORDER, directImplementationDeps, transitiveImplementationDeps),
 	})
 
 	j.Library.GenerateAndroidBuildActions(ctx)
@@ -1772,8 +1829,7 @@ type binaryProperties struct {
 	// Name of the class containing main to be inserted into the manifest as Main-Class.
 	Main_class *string
 
-	// Names of modules containing JNI libraries that should be installed alongside the host
-	// variant of the binary.
+	// Names of modules containing JNI libraries that should be installed alongside the binary.
 	Jni_libs []string `android:"arch_variant"`
 }
 
@@ -1782,10 +1838,10 @@ type Binary struct {
 
 	binaryProperties binaryProperties
 
-	isWrapperVariant bool
-
 	wrapperFile android.Path
 	binaryFile  android.InstallPath
+
+	androidMkNamesOfJniLibs []string
 }
 
 func (j *Binary) HostToolPath() android.OptionalPath {
@@ -1795,84 +1851,94 @@ func (j *Binary) HostToolPath() android.OptionalPath {
 func (j *Binary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	j.stem = proptools.StringDefault(j.overridableProperties.Stem, ctx.ModuleName())
 
-	if ctx.Arch().ArchType == android.Common {
-		// Compile the jar
-		if j.binaryProperties.Main_class != nil {
-			if j.properties.Manifest != nil {
-				ctx.PropertyErrorf("main_class", "main_class cannot be used when manifest is set")
-			}
-			manifestFile := android.PathForModuleOut(ctx, "manifest.txt")
-			GenerateMainClassManifest(ctx, manifestFile, String(j.binaryProperties.Main_class))
-			j.overrideManifest = android.OptionalPathForPath(manifestFile)
-		}
-
-		j.Library.GenerateAndroidBuildActions(ctx)
+	// Handle the binary wrapper. This comes before compiling the jar so that the wrapper
+	// is the first PackagingSpec
+	if j.binaryProperties.Wrapper != nil {
+		j.wrapperFile = android.PathForModuleSrc(ctx, *j.binaryProperties.Wrapper)
 	} else {
-		// Handle the binary wrapper
-		j.isWrapperVariant = true
-
-		if j.binaryProperties.Wrapper != nil {
-			j.wrapperFile = android.PathForModuleSrc(ctx, *j.binaryProperties.Wrapper)
-		} else {
-			if ctx.Windows() {
-				ctx.PropertyErrorf("wrapper", "wrapper is required for Windows")
-			}
-
-			if ctx.Device() {
-				// device binary should have a main_class property if it does not
-				// have a specific wrapper, so that a default wrapper can
-				// be generated for it.
-				if j.binaryProperties.Main_class == nil {
-					ctx.PropertyErrorf("main_class", "main_class property "+
-						"is required for device binary if no default wrapper is assigned")
-				} else {
-					wrapper := android.PathForModuleOut(ctx, ctx.ModuleName()+".sh")
-					jarName := j.Stem() + ".jar"
-					partition := j.PartitionTag(ctx.DeviceConfig())
-					ctx.Build(pctx, android.BuildParams{
-						Rule:   deviceBinaryWrapper,
-						Output: wrapper,
-						Args: map[string]string{
-							"jar_name":   jarName,
-							"partition":  partition,
-							"main_class": String(j.binaryProperties.Main_class),
-						},
-					})
-					j.wrapperFile = wrapper
-				}
-			} else {
-				j.wrapperFile = android.PathForSource(ctx, "build/soong/scripts/jar-wrapper.sh")
-			}
-		}
-
-		ext := ""
 		if ctx.Windows() {
-			ext = ".bat"
+			ctx.PropertyErrorf("wrapper", "wrapper is required for Windows")
 		}
 
-		// The host installation rules make the installed wrapper depend on all the dependencies
-		// of the wrapper variant, which will include the common variant's jar file and any JNI
-		// libraries.  This is verified by TestBinary.
-		j.binaryFile = ctx.InstallExecutable(android.PathForModuleInstall(ctx, "bin"),
-			ctx.ModuleName()+ext, j.wrapperFile)
-
-		setOutputFiles(ctx, j.Library.Module)
+		if ctx.Device() {
+			// device binary should have a main_class property if it does not
+			// have a specific wrapper, so that a default wrapper can
+			// be generated for it.
+			if j.binaryProperties.Main_class == nil {
+				ctx.PropertyErrorf("main_class", "main_class property "+
+					"is required for device binary if no default wrapper is assigned")
+			} else {
+				wrapper := android.PathForModuleOut(ctx, ctx.ModuleName()+".sh")
+				jarName := j.Stem() + ".jar"
+				partition := j.PartitionTag(ctx.DeviceConfig())
+				ctx.Build(pctx, android.BuildParams{
+					Rule:   deviceBinaryWrapper,
+					Output: wrapper,
+					Args: map[string]string{
+						"jar_name":   jarName,
+						"partition":  partition,
+						"main_class": String(j.binaryProperties.Main_class),
+					},
+				})
+				j.wrapperFile = wrapper
+			}
+		} else {
+			j.wrapperFile = android.PathForSource(ctx, "build/soong/scripts/jar-wrapper.sh")
+		}
 	}
+
+	ext := ""
+	if ctx.Windows() {
+		ext = ".bat"
+	}
+
+	// The host installation rules make the installed wrapper depend on all the dependencies
+	// of the wrapper variant, which will include the common variant's jar file and any JNI
+	// libraries.  This is verified by TestBinary. Also make it depend on the jar file so that
+	// the binary file timestamp will update when the jar file timestamp does. The jar file is
+	// built later on, in j.Library.GenerateAndroidBuildActions, so we have to create an identical
+	// installpath representing it here.
+	j.binaryFile = ctx.InstallExecutable(android.PathForModuleInstall(ctx, "bin"),
+		ctx.ModuleName()+ext, j.wrapperFile, j.getJarInstallDir(ctx).Join(ctx, j.Stem()+".jar"))
+
+	// Set the jniLibs of this binary.
+	// These will be added to `LOCAL_REQUIRED_MODULES`, and the kati packaging system will
+	// install these alongside the java binary.
+	ctx.VisitDirectDepsWithTag(jniInstallTag, func(jni android.Module) {
+		// Use the BaseModuleName of the dependency (without any prebuilt_ prefix)
+		bmn, _ := jni.(interface{ BaseModuleName() string })
+		j.androidMkNamesOfJniLibs = append(j.androidMkNamesOfJniLibs, bmn.BaseModuleName()+":"+jni.Target().Arch.ArchType.Bitness())
+	})
+	// Check that native libraries are not listed in `required`. Prompt users to use `jni_libs` instead.
+	ctx.VisitDirectDepsWithTag(android.RequiredDepTag, func(dep android.Module) {
+		if _, hasSharedLibraryInfo := android.OtherModuleProvider(ctx, dep, cc.SharedLibraryInfoProvider); hasSharedLibraryInfo {
+			ctx.ModuleErrorf("cc_library %s is no longer supported in `required` of java_binary modules. Please use jni_libs instead.", dep.Name())
+		}
+	})
+
+	// Compile the jar
+	if j.binaryProperties.Main_class != nil {
+		if j.properties.Manifest != nil {
+			ctx.PropertyErrorf("main_class", "main_class cannot be used when manifest is set")
+		}
+		manifestFile := android.PathForModuleOut(ctx, "manifest.txt")
+		GenerateMainClassManifest(ctx, manifestFile, String(j.binaryProperties.Main_class))
+		j.overrideManifest = android.OptionalPathForPath(manifestFile)
+	}
+
+	j.Library.GenerateAndroidBuildActions(ctx)
 }
 
 func (j *Binary) DepsMutator(ctx android.BottomUpMutatorContext) {
-	if ctx.Arch().ArchType == android.Common {
-		j.deps(ctx)
-	}
+	j.deps(ctx)
 	// These dependencies ensure the installation rules will install the jar file when the
-	// wrapper is installed, and the jni libraries on host when the wrapper is installed.
-	if ctx.Arch().ArchType != android.Common && ctx.Os().Class == android.Host {
-		ctx.AddVariationDependencies(nil, jniInstallTag, j.binaryProperties.Jni_libs...)
-	}
-	if ctx.Arch().ArchType != android.Common {
-		ctx.AddVariationDependencies(
-			[]blueprint.Variation{{Mutator: "arch", Variation: android.CommonArch.String()}},
-			binaryInstallTag, ctx.ModuleName())
+	// wrapper is installed, and the jni libraries when the wrapper is installed.
+	if ctx.Os().Class == android.Host {
+		ctx.AddVariationDependencies(ctx.Config().BuildOSTarget.Variations(), jniInstallTag, j.binaryProperties.Jni_libs...)
+	} else if ctx.Os().Class == android.Device {
+		ctx.AddVariationDependencies(ctx.Config().AndroidFirstDeviceTarget.Variations(), jniInstallTag, j.binaryProperties.Jni_libs...)
+	} else {
+		ctx.ModuleErrorf("Unknown os class")
 	}
 }
 
@@ -1892,7 +1958,7 @@ func BinaryFactory() android.Module {
 
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 
-	android.InitAndroidArchModule(module, android.HostAndDeviceSupported, android.MultilibCommonFirst)
+	android.InitAndroidArchModule(module, android.HostAndDeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
 
 	return module
@@ -1910,7 +1976,7 @@ func BinaryHostFactory() android.Module {
 
 	module.Module.properties.Installable = proptools.BoolPtr(true)
 
-	android.InitAndroidArchModule(module, android.HostSupported, android.MultilibCommonFirst)
+	android.InitAndroidArchModule(module, android.HostSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
 	return module
 }
@@ -1994,11 +2060,11 @@ type JavaApiLibraryProperties struct {
 
 	// List of shared java libs that this module has dependencies to and
 	// should be passed as classpath in javac invocation
-	Libs []string
+	Libs proptools.Configurable[[]string]
 
 	// List of java libs that this module has static dependencies to and will be
 	// merge zipped after metalava invocation
-	Static_libs []string
+	Static_libs proptools.Configurable[[]string]
 
 	// Version of previously released API file for compatibility check.
 	Previous_api *string `android:"path"`
@@ -2174,8 +2240,8 @@ func (al *ApiLibrary) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 		}
 	}
-	ctx.AddVariationDependencies(nil, libTag, al.properties.Libs...)
-	ctx.AddVariationDependencies(nil, staticLibTag, al.properties.Static_libs...)
+	ctx.AddVariationDependencies(nil, libTag, al.properties.Libs.GetOrDefault(ctx, nil)...)
+	ctx.AddVariationDependencies(nil, staticLibTag, al.properties.Static_libs.GetOrDefault(ctx, nil)...)
 
 	for _, aconfigDeclarationsName := range al.properties.Aconfig_declarations {
 		ctx.AddDependency(ctx.Module(), aconfigDeclarationTag, aconfigDeclarationsName)
@@ -2247,14 +2313,17 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		case libTag:
 			if provider, ok := android.OtherModuleProvider(ctx, dep, JavaInfoProvider); ok {
 				classPaths = append(classPaths, provider.HeaderJars...)
+				al.aconfigProtoFiles = append(al.aconfigProtoFiles, provider.AconfigIntermediateCacheOutputPaths...)
 			}
 		case bootClasspathTag:
 			if provider, ok := android.OtherModuleProvider(ctx, dep, JavaInfoProvider); ok {
 				bootclassPaths = append(bootclassPaths, provider.HeaderJars...)
+				al.aconfigProtoFiles = append(al.aconfigProtoFiles, provider.AconfigIntermediateCacheOutputPaths...)
 			}
 		case staticLibTag:
 			if provider, ok := android.OtherModuleProvider(ctx, dep, JavaInfoProvider); ok {
 				staticLibs = append(staticLibs, provider.HeaderJars...)
+				al.aconfigProtoFiles = append(al.aconfigProtoFiles, provider.AconfigIntermediateCacheOutputPaths...)
 			}
 		case systemModulesTag:
 			if sm, ok := android.OtherModuleProvider(ctx, dep, SystemModulesProvider); ok {
@@ -2359,11 +2428,14 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	ctx.Phony(ctx.ModuleName(), al.stubsJar)
 
 	android.SetProvider(ctx, JavaInfoProvider, &JavaInfo{
-		HeaderJars:                     android.PathsIfNonNil(al.stubsJar),
-		ImplementationAndResourcesJars: android.PathsIfNonNil(al.stubsJar),
-		ImplementationJars:             android.PathsIfNonNil(al.stubsJar),
-		AidlIncludeDirs:                android.Paths{},
-		StubsLinkType:                  Stubs,
+		HeaderJars:                             android.PathsIfNonNil(al.stubsJar),
+		LocalHeaderJars:                        android.PathsIfNonNil(al.stubsJar),
+		TransitiveStaticLibsHeaderJars:         depset.New(depset.PREORDER, android.PathsIfNonNil(al.stubsJar), nil),
+		TransitiveStaticLibsImplementationJars: depset.New(depset.PREORDER, android.PathsIfNonNil(al.stubsJar), nil),
+		ImplementationAndResourcesJars:         android.PathsIfNonNil(al.stubsJar),
+		ImplementationJars:                     android.PathsIfNonNil(al.stubsJar),
+		AidlIncludeDirs:                        android.Paths{},
+		StubsLinkType:                          Stubs,
 		// No aconfig libraries on api libraries
 	})
 }
@@ -2406,17 +2478,17 @@ func (al *ApiLibrary) TargetSdkVersion(ctx android.EarlyModuleContext) android.A
 
 func (al *ApiLibrary) IDEInfo(ctx android.BaseModuleContext, i *android.IdeInfo) {
 	i.Deps = append(i.Deps, al.ideDeps(ctx)...)
-	i.Libs = append(i.Libs, al.properties.Libs...)
-	i.Static_libs = append(i.Static_libs, al.properties.Static_libs...)
+	i.Libs = append(i.Libs, al.properties.Libs.GetOrDefault(ctx, nil)...)
+	i.Static_libs = append(i.Static_libs, al.properties.Static_libs.GetOrDefault(ctx, nil)...)
 	i.SrcJars = append(i.SrcJars, al.stubsSrcJar.String())
 }
 
 // deps of java_api_library for module_bp_java_deps.json
 func (al *ApiLibrary) ideDeps(ctx android.BaseModuleContext) []string {
 	ret := []string{}
-	ret = append(ret, al.properties.Libs...)
-	ret = append(ret, al.properties.Static_libs...)
-	if al.properties.System_modules != nil {
+	ret = append(ret, al.properties.Libs.GetOrDefault(ctx, nil)...)
+	ret = append(ret, al.properties.Static_libs.GetOrDefault(ctx, nil)...)
+	if proptools.StringDefault(al.properties.System_modules, "none") != "none" {
 		ret = append(ret, proptools.String(al.properties.System_modules))
 	}
 	// Other non java_library dependencies like java_api_contribution are ignored for now.
@@ -2459,7 +2531,7 @@ type ImportProperties struct {
 	Libs []string
 
 	// List of static java libs that this module has dependencies to
-	Static_libs []string
+	Static_libs proptools.Configurable[[]string]
 
 	// List of files to remove from the jar file(s)
 	Exclude_files []string
@@ -2587,20 +2659,9 @@ func (a *Import) JacocoReportClassesFile() android.Path {
 	return nil
 }
 
-func (j *Import) LintDepSets() LintDepSets {
-	return LintDepSets{}
-}
-
-func (j *Import) getStrictUpdatabilityLinting() bool {
-	return false
-}
-
-func (j *Import) setStrictUpdatabilityLinting(bool) {
-}
-
 func (j *Import) DepsMutator(ctx android.BottomUpMutatorContext) {
 	ctx.AddVariationDependencies(nil, libTag, j.properties.Libs...)
-	ctx.AddVariationDependencies(nil, staticLibTag, j.properties.Static_libs...)
+	ctx.AddVariationDependencies(nil, staticLibTag, j.properties.Static_libs.GetOrDefault(ctx, nil)...)
 
 	if ctx.Device() && Bool(j.dexProperties.Compile_dex) {
 		sdkDeps(ctx, android.SdkContext(j), j.dexer)
@@ -2634,6 +2695,12 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	var flags javaBuilderFlags
 
+	var transitiveClasspathHeaderJars []depset.DepSet[android.Path]
+	var transitiveBootClasspathHeaderJars []depset.DepSet[android.Path]
+	var transitiveStaticLibsHeaderJars []depset.DepSet[android.Path]
+	var transitiveStaticLibsImplementationJars []depset.DepSet[android.Path]
+	var transitiveStaticLibsResourceJars []depset.DepSet[android.Path]
+
 	j.collectTransitiveHeaderJarsForR8(ctx)
 	var staticJars android.Paths
 	var staticResourceJars android.Paths
@@ -2645,32 +2712,57 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			case libTag, sdkLibTag:
 				flags.classpath = append(flags.classpath, dep.HeaderJars...)
 				flags.dexClasspath = append(flags.dexClasspath, dep.HeaderJars...)
+				transitiveClasspathHeaderJars = append(transitiveClasspathHeaderJars, dep.TransitiveStaticLibsHeaderJars)
 			case staticLibTag:
 				flags.classpath = append(flags.classpath, dep.HeaderJars...)
 				staticJars = append(staticJars, dep.ImplementationJars...)
 				staticResourceJars = append(staticResourceJars, dep.ResourceJars...)
 				staticHeaderJars = append(staticHeaderJars, dep.HeaderJars...)
+				transitiveClasspathHeaderJars = append(transitiveClasspathHeaderJars, dep.TransitiveStaticLibsHeaderJars)
+				transitiveStaticLibsHeaderJars = append(transitiveStaticLibsHeaderJars, dep.TransitiveStaticLibsHeaderJars)
+				transitiveStaticLibsImplementationJars = append(transitiveStaticLibsImplementationJars, dep.TransitiveStaticLibsImplementationJars)
+				transitiveStaticLibsResourceJars = append(transitiveStaticLibsResourceJars, dep.TransitiveStaticLibsResourceJars)
 			case bootClasspathTag:
 				flags.bootClasspath = append(flags.bootClasspath, dep.HeaderJars...)
+				transitiveBootClasspathHeaderJars = append(transitiveBootClasspathHeaderJars, dep.TransitiveStaticLibsHeaderJars)
 			}
-		} else if dep, ok := module.(SdkLibraryDependency); ok {
+		} else if _, ok := android.OtherModuleProvider(ctx, module, SdkLibraryInfoProvider); ok {
 			switch tag {
 			case libTag, sdkLibTag:
-				flags.classpath = append(flags.classpath, dep.SdkHeaderJars(ctx, j.SdkVersion(ctx))...)
+				sdkInfo, _ := android.OtherModuleProvider(ctx, module, SdkLibraryInfoProvider)
+				generatingLibsString := android.PrettyConcat(
+					getGeneratingLibs(ctx, j.SdkVersion(ctx), module.Name(), sdkInfo), true, "or")
+				ctx.ModuleErrorf("cannot depend directly on java_sdk_library %q; try depending on %s instead", module.Name(), generatingLibsString)
 			}
 		}
 
 		addCLCFromDep(ctx, module, j.classLoaderContexts)
 	})
 
-	jars := android.PathsForModuleSrc(ctx, j.properties.Jars)
+	localJars := android.PathsForModuleSrc(ctx, j.properties.Jars)
 	jarName := j.Stem() + ".jar"
+
+	// Combine only the local jars together for use in transitive classpaths.
+	// Always pass input jar through TransformJarsToJar to strip module-info.class from prebuilts.
+	localCombinedHeaderJar := android.PathForModuleOut(ctx, "local-combined", jarName)
+	TransformJarsToJar(ctx, localCombinedHeaderJar, "combine local prebuilt implementation jars", localJars, android.OptionalPath{},
+		false, j.properties.Exclude_files, j.properties.Exclude_dirs)
+	localStrippedJars := android.Paths{localCombinedHeaderJar}
+
+	completeStaticLibsHeaderJars := depset.New(depset.PREORDER, localStrippedJars, transitiveStaticLibsHeaderJars)
+	completeStaticLibsImplementationJars := depset.New(depset.PREORDER, localStrippedJars, transitiveStaticLibsImplementationJars)
+	completeStaticLibsResourceJars := depset.New(depset.PREORDER, nil, transitiveStaticLibsResourceJars)
 
 	// Always pass the input jars to TransformJarsToJar, even if there is only a single jar, we need the output
 	// file of the module to be named jarName.
 	var outputFile android.Path
 	combinedImplementationJar := android.PathForModuleOut(ctx, "combined", jarName)
-	implementationJars := append(slices.Clone(jars), staticJars...)
+	var implementationJars android.Paths
+	if ctx.Config().UseTransitiveJarsInClasspath() {
+		implementationJars = completeStaticLibsImplementationJars.ToList()
+	} else {
+		implementationJars = append(slices.Clone(localJars), staticJars...)
+	}
 	TransformJarsToJar(ctx, combinedImplementationJar, "combine prebuilt implementation jars", implementationJars, android.OptionalPath{},
 		false, j.properties.Exclude_files, j.properties.Exclude_dirs)
 	outputFile = combinedImplementationJar
@@ -2693,7 +2785,12 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	if reuseImplementationJarAsHeaderJar {
 		headerJar = outputFile
 	} else {
-		headerJars := append(slices.Clone(jars), staticHeaderJars...)
+		var headerJars android.Paths
+		if ctx.Config().UseTransitiveJarsInClasspath() {
+			headerJars = completeStaticLibsHeaderJars.ToList()
+		} else {
+			headerJars = append(slices.Clone(localJars), staticHeaderJars...)
+		}
 		headerOutputFile := android.PathForModuleOut(ctx, "turbine-combined", jarName)
 		TransformJarsToJar(ctx, headerOutputFile, "combine prebuilt header jars", headerJars, android.OptionalPath{},
 			false, j.properties.Exclude_files, j.properties.Exclude_dirs)
@@ -2712,6 +2809,11 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		} else {
 			headerJar = outputFile
 		}
+
+		// Enabling jetifier requires modifying classes from transitive dependencies, disable transitive
+		// classpath and use the combined header jar instead.
+		completeStaticLibsHeaderJars = depset.New(depset.PREORDER, android.Paths{headerJar}, nil)
+		completeStaticLibsImplementationJars = depset.New(depset.PREORDER, android.Paths{outputFile}, nil)
 	}
 
 	implementationJarFile := outputFile
@@ -2735,44 +2837,21 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	j.exportAidlIncludeDirs = android.PathsForModuleSrc(ctx, j.properties.Aidl.Export_include_dirs)
 
-	ctx.CheckbuildFile(outputFile)
+	if ctx.Config().UseTransitiveJarsInClasspath() {
+		ctx.CheckbuildFile(localJars...)
+	} else {
+		ctx.CheckbuildFile(outputFile)
+	}
 
 	if ctx.Device() {
-		// If this is a variant created for a prebuilt_apex then use the dex implementation jar
-		// obtained from the associated deapexer module.
+		// Shared libraries deapexed from prebuilt apexes are no longer supported.
+		// Set the dexJarBuildPath to a fake path.
+		// This allows soong analysis pass, but will be an error during ninja execution if there are
+		// any rdeps.
 		ai, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
 		if ai.ForPrebuiltApex {
-			// Get the path of the dex implementation jar from the `deapexer` module.
-			di, err := android.FindDeapexerProviderForModule(ctx)
-			if err != nil {
-				// An error was found, possibly due to multiple apexes in the tree that export this library
-				// Defer the error till a client tries to call DexJarBuildPath
-				j.dexJarFileErr = err
-				j.initHiddenAPIError(err)
-				return
-			}
-			dexJarFileApexRootRelative := ApexRootRelativePathToJavaLib(j.BaseModuleName())
-			if dexOutputPath := di.PrebuiltExportPath(dexJarFileApexRootRelative); dexOutputPath != nil {
-				dexJarFile := makeDexJarPathFromPath(dexOutputPath)
-				j.dexJarFile = dexJarFile
-				installPath := android.PathForModuleInPartitionInstall(ctx, "apex", ai.ApexVariationName, ApexRootRelativePathToJavaLib(j.BaseModuleName()))
-				j.dexJarInstallFile = installPath
-
-				j.dexpreopter.installPath = j.dexpreopter.getInstallPath(ctx, android.RemoveOptionalPrebuiltPrefix(ctx.ModuleName()), installPath)
-				setUncompressDex(ctx, &j.dexpreopter, &j.dexer)
-				j.dexpreopter.uncompressedDex = *j.dexProperties.Uncompress_dex
-
-				if profilePath := di.PrebuiltExportPath(dexJarFileApexRootRelative + ".prof"); profilePath != nil {
-					j.dexpreopter.inputProfilePathOnHost = profilePath
-				}
-
-				// Initialize the hiddenapi structure.
-				j.initHiddenAPI(ctx, dexJarFile, outputFile, j.dexProperties.Uncompress_dex)
-			} else {
-				// This should never happen as a variant for a prebuilt_apex is only created if the
-				// prebuilt_apex has been configured to export the java library dex file.
-				ctx.ModuleErrorf("internal error: no dex implementation jar available from prebuilt APEX %s", di.ApexModuleName())
-			}
+			j.dexJarFile = makeDexJarPathFromPath(android.PathForModuleInstall(ctx, "intentionally_no_longer_supported"))
+			j.initHiddenAPI(ctx, j.dexJarFile, outputFile, j.dexProperties.Uncompress_dex)
 		} else if Bool(j.dexProperties.Compile_dex) {
 			sdkDep := decodeSdkDep(ctx, android.SdkContext(j))
 			if sdkDep.invalidVersion {
@@ -2817,14 +2896,18 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	android.SetProvider(ctx, JavaInfoProvider, &JavaInfo{
-		HeaderJars:                          android.PathsIfNonNil(j.combinedHeaderFile),
-		TransitiveLibsHeaderJarsForR8:       j.transitiveLibsHeaderJarsForR8,
-		TransitiveStaticLibsHeaderJarsForR8: j.transitiveStaticLibsHeaderJarsForR8,
-		ImplementationAndResourcesJars:      android.PathsIfNonNil(j.combinedImplementationFile),
-		ImplementationJars:                  android.PathsIfNonNil(implementationJarFile.WithoutRel()),
-		ResourceJars:                        android.PathsIfNonNil(resourceJarFile),
-		AidlIncludeDirs:                     j.exportAidlIncludeDirs,
-		StubsLinkType:                       j.stubsLinkType,
+		HeaderJars:                             android.PathsIfNonNil(j.combinedHeaderFile),
+		LocalHeaderJars:                        android.PathsIfNonNil(j.combinedHeaderFile),
+		TransitiveLibsHeaderJarsForR8:          j.transitiveLibsHeaderJarsForR8,
+		TransitiveStaticLibsHeaderJarsForR8:    j.transitiveStaticLibsHeaderJarsForR8,
+		TransitiveStaticLibsHeaderJars:         completeStaticLibsHeaderJars,
+		TransitiveStaticLibsImplementationJars: completeStaticLibsImplementationJars,
+		TransitiveStaticLibsResourceJars:       completeStaticLibsResourceJars,
+		ImplementationAndResourcesJars:         android.PathsIfNonNil(j.combinedImplementationFile),
+		ImplementationJars:                     android.PathsIfNonNil(implementationJarFile.WithoutRel()),
+		ResourceJars:                           android.PathsIfNonNil(resourceJarFile),
+		AidlIncludeDirs:                        j.exportAidlIncludeDirs,
+		StubsLinkType:                          j.stubsLinkType,
 		// TODO(b/289117800): LOCAL_ACONFIG_FILES for prebuilts
 	})
 
@@ -2876,8 +2959,8 @@ func (j *Import) ClassLoaderContexts() dexpreopt.ClassLoaderContextMap {
 var _ android.ApexModule = (*Import)(nil)
 
 // Implements android.ApexModule
-func (j *Import) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
-	return j.depIsInSameApex(ctx, dep)
+func (j *Import) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	return j.depIsInSameApex(tag)
 }
 
 // Implements android.ApexModule
@@ -3041,19 +3124,8 @@ func (a *DexImport) JacocoReportClassesFile() android.Path {
 	return nil
 }
 
-func (a *DexImport) LintDepSets() LintDepSets {
-	return LintDepSets{}
-}
-
 func (j *DexImport) IsInstallable() bool {
 	return true
-}
-
-func (j *DexImport) getStrictUpdatabilityLinting() bool {
-	return false
-}
-
-func (j *DexImport) setStrictUpdatabilityLinting(bool) {
 }
 
 func (j *DexImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -3210,6 +3282,7 @@ func DefaultsFactory() android.Module {
 		&JavaApiLibraryProperties{},
 		&bootclasspathFragmentProperties{},
 		&SourceOnlyBootclasspathProperties{},
+		&ravenwoodTestProperties{},
 	)
 
 	android.InitDefaultsModule(module)
@@ -3225,14 +3298,19 @@ type kytheExtractJavaSingleton struct {
 
 func (ks *kytheExtractJavaSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 	var xrefTargets android.Paths
+	var xrefKotlinTargets android.Paths
 	ctx.VisitAllModules(func(module android.Module) {
 		if javaModule, ok := module.(xref); ok {
 			xrefTargets = append(xrefTargets, javaModule.XrefJavaFiles()...)
+			xrefKotlinTargets = append(xrefKotlinTargets, javaModule.XrefKotlinFiles()...)
 		}
 	})
 	// TODO(asmundak): perhaps emit a rule to output a warning if there were no xrefTargets
 	if len(xrefTargets) > 0 {
 		ctx.Phony("xref_java", xrefTargets...)
+	}
+	if len(xrefKotlinTargets) > 0 {
+		ctx.Phony("xref_kotlin", xrefKotlinTargets...)
 	}
 }
 
@@ -3253,9 +3331,13 @@ func addCLCFromDep(ctx android.ModuleContext, depModule android.Module,
 	depName := android.RemoveOptionalPrebuiltPrefix(ctx.OtherModuleName(depModule))
 
 	var sdkLib *string
-	if lib, ok := depModule.(SdkLibraryDependency); ok && lib.sharedLibrary() {
+	if lib, ok := android.OtherModuleProvider(ctx, depModule, SdkLibraryInfoProvider); ok && lib.SharedLibrary {
 		// A shared SDK library. This should be added as a top-level CLC element.
 		sdkLib = &depName
+	} else if lib, ok := depModule.(SdkLibraryComponentDependency); ok && lib.OptionalSdkLibraryImplementation() != nil {
+		if depModule.Name() == proptools.String(lib.OptionalSdkLibraryImplementation())+".impl" {
+			sdkLib = lib.OptionalSdkLibraryImplementation()
+		}
 	} else if ulib, ok := depModule.(ProvidesUsesLib); ok {
 		// A non-SDK library disguised as an SDK library by the means of `provides_uses_lib`
 		// property. This should be handled in the same way as a shared SDK library.
@@ -3286,7 +3368,7 @@ func addCLCFromDep(ctx android.ModuleContext, depModule android.Module,
 	if sdkLib != nil {
 		optional := false
 		if module, ok := ctx.Module().(ModuleWithUsesLibrary); ok {
-			if android.InList(*sdkLib, module.UsesLibrary().usesLibraryProperties.Optional_uses_libs) {
+			if android.InList(*sdkLib, module.UsesLibrary().usesLibraryProperties.Optional_uses_libs.GetOrDefault(ctx, nil)) {
 				optional = true
 			}
 		}

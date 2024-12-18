@@ -17,6 +17,8 @@ package android
 import (
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/blueprint"
@@ -81,97 +83,6 @@ func TestMutatorAddMissingDependencies(t *testing.T) {
 	AssertDeepEquals(t, "foo missing deps", []string{"added_missing_dep", "regular_missing_dep"}, foo.missingDeps)
 }
 
-func TestModuleString(t *testing.T) {
-	bp := `
-		test {
-			name: "foo",
-		}
-	`
-
-	var moduleStrings []string
-
-	GroupFixturePreparers(
-		FixtureRegisterWithContext(func(ctx RegistrationContext) {
-
-			ctx.PreArchMutators(func(ctx RegisterMutatorsContext) {
-				ctx.BottomUp("pre_arch", func(ctx BottomUpMutatorContext) {
-					moduleStrings = append(moduleStrings, ctx.Module().String())
-					ctx.CreateVariations("a", "b")
-				})
-				ctx.TopDown("rename_top_down", func(ctx TopDownMutatorContext) {
-					moduleStrings = append(moduleStrings, ctx.Module().String())
-					ctx.Rename(ctx.Module().base().Name() + "_renamed1")
-				})
-			})
-
-			ctx.PreDepsMutators(func(ctx RegisterMutatorsContext) {
-				ctx.BottomUp("pre_deps", func(ctx BottomUpMutatorContext) {
-					moduleStrings = append(moduleStrings, ctx.Module().String())
-					ctx.CreateVariations("c", "d")
-				})
-			})
-
-			ctx.PostDepsMutators(func(ctx RegisterMutatorsContext) {
-				ctx.BottomUp("post_deps", func(ctx BottomUpMutatorContext) {
-					moduleStrings = append(moduleStrings, ctx.Module().String())
-					ctx.CreateLocalVariations("e", "f")
-				})
-				ctx.BottomUp("rename_bottom_up", func(ctx BottomUpMutatorContext) {
-					moduleStrings = append(moduleStrings, ctx.Module().String())
-					ctx.Rename(ctx.Module().base().Name() + "_renamed2")
-				})
-				ctx.BottomUp("final", func(ctx BottomUpMutatorContext) {
-					moduleStrings = append(moduleStrings, ctx.Module().String())
-				})
-			})
-
-			ctx.RegisterModuleType("test", mutatorTestModuleFactory)
-		}),
-		FixtureWithRootAndroidBp(bp),
-	).RunTest(t)
-
-	want := []string{
-		// Initial name.
-		"foo{}",
-
-		// After pre_arch (reversed because rename_top_down is TopDown so it visits in reverse order).
-		"foo{pre_arch:b}",
-		"foo{pre_arch:a}",
-
-		// After rename_top_down.
-		"foo_renamed1{pre_arch:a}",
-		"foo_renamed1{pre_arch:b}",
-
-		// After pre_deps.
-		"foo_renamed1{pre_arch:a,pre_deps:c}",
-		"foo_renamed1{pre_arch:a,pre_deps:d}",
-		"foo_renamed1{pre_arch:b,pre_deps:c}",
-		"foo_renamed1{pre_arch:b,pre_deps:d}",
-
-		// After post_deps.
-		"foo_renamed1{pre_arch:a,pre_deps:c,post_deps:e}",
-		"foo_renamed1{pre_arch:a,pre_deps:c,post_deps:f}",
-		"foo_renamed1{pre_arch:a,pre_deps:d,post_deps:e}",
-		"foo_renamed1{pre_arch:a,pre_deps:d,post_deps:f}",
-		"foo_renamed1{pre_arch:b,pre_deps:c,post_deps:e}",
-		"foo_renamed1{pre_arch:b,pre_deps:c,post_deps:f}",
-		"foo_renamed1{pre_arch:b,pre_deps:d,post_deps:e}",
-		"foo_renamed1{pre_arch:b,pre_deps:d,post_deps:f}",
-
-		// After rename_bottom_up.
-		"foo_renamed2{pre_arch:a,pre_deps:c,post_deps:e}",
-		"foo_renamed2{pre_arch:a,pre_deps:c,post_deps:f}",
-		"foo_renamed2{pre_arch:a,pre_deps:d,post_deps:e}",
-		"foo_renamed2{pre_arch:a,pre_deps:d,post_deps:f}",
-		"foo_renamed2{pre_arch:b,pre_deps:c,post_deps:e}",
-		"foo_renamed2{pre_arch:b,pre_deps:c,post_deps:f}",
-		"foo_renamed2{pre_arch:b,pre_deps:d,post_deps:e}",
-		"foo_renamed2{pre_arch:b,pre_deps:d,post_deps:f}",
-	}
-
-	AssertDeepEquals(t, "module String() values", want, moduleStrings)
-}
-
 func TestFinalDepsPhase(t *testing.T) {
 	bp := `
 		test {
@@ -185,7 +96,7 @@ func TestFinalDepsPhase(t *testing.T) {
 		}
 	`
 
-	finalGot := map[string]int{}
+	finalGot := sync.Map{}
 
 	GroupFixturePreparers(
 		FixtureRegisterWithContext(func(ctx RegistrationContext) {
@@ -202,8 +113,10 @@ func TestFinalDepsPhase(t *testing.T) {
 						ctx.AddFarVariationDependencies([]blueprint.Variation{}, dep1Tag, "common_dep_1")
 					}
 				})
-				ctx.BottomUp("variant", func(ctx BottomUpMutatorContext) {
-					ctx.CreateLocalVariations("a", "b")
+				ctx.Transition("variant", &testTransitionMutator{
+					split: func(ctx BaseModuleContext) []string {
+						return []string{"a", "b"}
+					},
 				})
 			})
 
@@ -214,9 +127,11 @@ func TestFinalDepsPhase(t *testing.T) {
 					}
 				})
 				ctx.BottomUp("final", func(ctx BottomUpMutatorContext) {
-					finalGot[ctx.Module().String()] += 1
+					counter, _ := finalGot.LoadOrStore(ctx.Module().String(), &atomic.Int64{})
+					counter.(*atomic.Int64).Add(1)
 					ctx.VisitDirectDeps(func(mod Module) {
-						finalGot[fmt.Sprintf("%s -> %s", ctx.Module().String(), mod)] += 1
+						counter, _ := finalGot.LoadOrStore(fmt.Sprintf("%s -> %s", ctx.Module().String(), mod), &atomic.Int64{})
+						counter.(*atomic.Int64).Add(1)
 					})
 				})
 			})
@@ -239,31 +154,11 @@ func TestFinalDepsPhase(t *testing.T) {
 		"foo{variant:b} -> common_dep_2{variant:a}": 1,
 	}
 
-	AssertDeepEquals(t, "final", finalWant, finalGot)
-}
+	finalGotMap := make(map[string]int)
+	finalGot.Range(func(k, v any) bool {
+		finalGotMap[k.(string)] = int(v.(*atomic.Int64).Load())
+		return true
+	})
 
-func TestNoCreateVariationsInFinalDeps(t *testing.T) {
-	checkErr := func() {
-		if err := recover(); err == nil || !strings.Contains(fmt.Sprintf("%s", err), "not allowed in FinalDepsMutators") {
-			panic("Expected FinalDepsMutators consistency check to fail")
-		}
-	}
-
-	GroupFixturePreparers(
-		FixtureRegisterWithContext(func(ctx RegistrationContext) {
-			ctx.FinalDepsMutators(func(ctx RegisterMutatorsContext) {
-				ctx.BottomUp("vars", func(ctx BottomUpMutatorContext) {
-					defer checkErr()
-					ctx.CreateVariations("a", "b")
-				})
-				ctx.BottomUp("local_vars", func(ctx BottomUpMutatorContext) {
-					defer checkErr()
-					ctx.CreateLocalVariations("a", "b")
-				})
-			})
-
-			ctx.RegisterModuleType("test", mutatorTestModuleFactory)
-		}),
-		FixtureWithRootAndroidBp(`test {name: "foo"}`),
-	).RunTest(t)
+	AssertDeepEquals(t, "final", finalWant, finalGotMap)
 }

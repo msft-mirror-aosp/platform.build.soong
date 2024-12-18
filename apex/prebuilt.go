@@ -107,11 +107,6 @@ type PrebuiltCommonProperties struct {
 	// from PRODUCT_PACKAGES.
 	Overrides []string
 
-	// List of java libraries that are embedded inside this prebuilt APEX bundle and for which this
-	// APEX bundle will create an APEX variant and provide dex implementation jars for use by
-	// dexpreopt and boot jars package check.
-	Exported_java_libs []string
-
 	// List of bootclasspath fragments inside this prebuilt APEX bundle and for which this APEX
 	// bundle will create an APEX variant.
 	Exported_bootclasspath_fragments []string
@@ -199,9 +194,8 @@ func (p *prebuiltCommon) initApexFilesForAndroidMk(ctx android.ModuleContext) {
 }
 
 // If this prebuilt has system server jar, create the rules to dexpreopt it and install it alongside the prebuilt apex
-func (p *prebuiltCommon) dexpreoptSystemServerJars(ctx android.ModuleContext) {
-	// If this apex does not export anything, return
-	if !p.hasExportedDeps() {
+func (p *prebuiltCommon) dexpreoptSystemServerJars(ctx android.ModuleContext, di *android.DeapexerInfo) {
+	if di == nil {
 		return
 	}
 	// If this prebuilt apex has not been selected, return
@@ -210,10 +204,7 @@ func (p *prebuiltCommon) dexpreoptSystemServerJars(ctx android.ModuleContext) {
 	}
 	// Use apex_name to determine the api domain of this prebuilt apex
 	apexName := p.ApexVariationName()
-	di, err := android.FindDeapexerProviderForModule(ctx)
-	if err != nil {
-		ctx.ModuleErrorf(err.Error())
-	}
+	// TODO: do not compute twice
 	dc := dexpreopt.GetGlobalConfig(ctx)
 	systemServerJarList := dc.AllApexSystemServerJars(ctx)
 
@@ -262,40 +253,14 @@ func (p *prebuiltCommon) AndroidMkEntries() []android.AndroidMkEntries {
 	return entriesList
 }
 
-// prebuiltApexModuleCreator defines the methods that need to be implemented by prebuilt_apex and
-// apex_set in order to create the modules needed to provide access to the prebuilt .apex file.
-type prebuiltApexModuleCreator interface {
-	createPrebuiltApexModules(ctx android.TopDownMutatorContext)
-}
-
-// prebuiltApexModuleCreatorMutator is the mutator responsible for invoking the
-// prebuiltApexModuleCreator's createPrebuiltApexModules method.
-//
-// It is registered as a pre-arch mutator as it must run after the ComponentDepsMutator because it
-// will need to access dependencies added by that (exported modules) but must run before the
-// DepsMutator so that the deapexer module it creates can add dependencies onto itself from the
-// exported modules.
-func prebuiltApexModuleCreatorMutator(ctx android.TopDownMutatorContext) {
-	module := ctx.Module()
-	if creator, ok := module.(prebuiltApexModuleCreator); ok {
-		creator.createPrebuiltApexModules(ctx)
-	}
-}
-
 func (p *prebuiltCommon) hasExportedDeps() bool {
-	return len(p.prebuiltCommonProperties.Exported_java_libs) > 0 ||
-		len(p.prebuiltCommonProperties.Exported_bootclasspath_fragments) > 0 ||
+	return len(p.prebuiltCommonProperties.Exported_bootclasspath_fragments) > 0 ||
 		len(p.prebuiltCommonProperties.Exported_systemserverclasspath_fragments) > 0
 }
 
 // prebuiltApexContentsDeps adds dependencies onto the prebuilt apex module's contents.
 func (p *prebuiltCommon) prebuiltApexContentsDeps(ctx android.BottomUpMutatorContext) {
 	module := ctx.Module()
-
-	for _, dep := range p.prebuiltCommonProperties.Exported_java_libs {
-		prebuiltDep := android.PrebuiltNameFromSource(dep)
-		ctx.AddDependency(module, exportedJavaLibTag, prebuiltDep)
-	}
 
 	for _, dep := range p.prebuiltCommonProperties.Exported_bootclasspath_fragments {
 		prebuiltDep := android.PrebuiltNameFromSource(dep)
@@ -309,10 +274,13 @@ func (p *prebuiltCommon) prebuiltApexContentsDeps(ctx android.BottomUpMutatorCon
 }
 
 // Implements android.DepInInSameApex
-func (p *prebuiltCommon) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
-	tag := ctx.OtherModuleDependencyTag(dep)
+func (p *prebuiltCommon) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
 	_, ok := tag.(exportedDependencyTag)
 	return ok
+}
+
+func (p *prebuiltCommon) IncomingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	return true
 }
 
 // apexInfoMutator marks any modules for which this apex exports a file as requiring an apex
@@ -341,10 +309,6 @@ func (p *prebuiltCommon) DepIsInSameApex(ctx android.BaseModuleContext, dep andr
 //     extra copying of files. Contrast that with source apex modules that has to build each variant
 //     from source.
 func (p *prebuiltCommon) apexInfoMutator(mctx android.TopDownMutatorContext) {
-
-	// Collect direct dependencies into contents.
-	contents := make(map[string]android.ApexMembership)
-
 	// Collect the list of dependencies.
 	var dependencies []android.ApexModule
 	mctx.WalkDeps(func(child, parent android.Module) bool {
@@ -382,29 +346,19 @@ func (p *prebuiltCommon) apexInfoMutator(mctx android.TopDownMutatorContext) {
 		// behavior whether there is a corresponding source module present or not.
 		depName = android.RemoveOptionalPrebuiltPrefix(depName)
 
-		// Remember if this module was added as a direct dependency.
-		direct := parent == mctx.Module()
-		contents[depName] = contents[depName].Add(direct)
-
 		// Add the module to the list of dependencies that need to have an APEX variant.
 		dependencies = append(dependencies, child.(android.ApexModule))
 
 		return true
 	})
 
-	// Create contents for the prebuilt_apex and store it away for later use.
-	apexContents := android.NewApexContents(contents)
-	android.SetProvider(mctx, android.ApexBundleInfoProvider, android.ApexBundleInfo{
-		Contents: apexContents,
-	})
+	android.SetProvider(mctx, android.ApexBundleInfoProvider, android.ApexBundleInfo{})
 
 	// Create an ApexInfo for the prebuilt_apex.
 	apexVariationName := p.ApexVariationName()
 	apexInfo := android.ApexInfo{
 		ApexVariationName: apexVariationName,
 		InApexVariants:    []string{apexVariationName},
-		InApexModules:     []string{p.BaseModuleName()}, // BaseModuleName() to avoid the prebuilt_ prefix.
-		ApexContents:      []*android.ApexContents{apexContents},
 		ForPrebuiltApex:   true,
 	}
 
@@ -414,34 +368,6 @@ func (p *prebuiltCommon) apexInfoMutator(mctx android.TopDownMutatorContext) {
 	}
 }
 
-// prebuiltApexSelectorModule is a private module type that is only created by the prebuilt_apex
-// module. It selects the apex to use and makes it available for use by prebuilt_apex and the
-// deapexer.
-type prebuiltApexSelectorModule struct {
-	android.ModuleBase
-
-	apexFileProperties ApexFileProperties
-
-	inputApex android.Path
-}
-
-func privateApexSelectorModuleFactory() android.Module {
-	module := &prebuiltApexSelectorModule{}
-	module.AddProperties(
-		&module.apexFileProperties,
-	)
-	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
-	return module
-}
-
-func (p *prebuiltApexSelectorModule) Srcs() android.Paths {
-	return android.Paths{p.inputApex}
-}
-
-func (p *prebuiltApexSelectorModule) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	p.inputApex = android.SingleSourcePathFromSupplier(ctx, p.apexFileProperties.prebuiltApexSelector, "src")
-}
-
 type Prebuilt struct {
 	prebuiltCommon
 
@@ -449,7 +375,7 @@ type Prebuilt struct {
 
 	inputApex android.Path
 
-	provenanceMetaDataFile android.OutputPath
+	provenanceMetaDataFile android.Path
 }
 
 type ApexFileProperties struct {
@@ -484,11 +410,11 @@ type ApexFileProperties struct {
 // to use methods on it that are specific to the current module.
 //
 // See the ApexFileProperties.Src property.
-func (p *ApexFileProperties) prebuiltApexSelector(ctx android.BaseModuleContext, prebuilt android.Module) []string {
+func (p *ApexFileProperties) prebuiltApexSelector(ctx android.BaseModuleContext, prebuilt android.Module) string {
 	multiTargets := prebuilt.MultiTargets()
 	if len(multiTargets) != 1 {
 		ctx.OtherModuleErrorf(prebuilt, "compile_multilib shouldn't be \"both\" for prebuilt_apex")
-		return nil
+		return ""
 	}
 	var src string
 	switch multiTargets[0].Arch.ArchType {
@@ -521,7 +447,7 @@ func (p *ApexFileProperties) prebuiltApexSelector(ctx android.BaseModuleContext,
 		// logic from reporting a more general, less useful message.
 	}
 
-	return []string{src}
+	return src
 }
 
 type PrebuiltProperties struct {
@@ -538,35 +464,19 @@ func (a *Prebuilt) hasSanitizedSource(sanitizer string) bool {
 func PrebuiltFactory() android.Module {
 	module := &Prebuilt{}
 	module.AddProperties(&module.properties)
-	module.initPrebuiltCommon(module, &module.properties.PrebuiltCommonProperties)
+	module.prebuiltCommon.prebuiltCommonProperties = &module.properties.PrebuiltCommonProperties
+
+	// init the module as a prebuilt
+	// even though this module type has srcs, use `InitPrebuiltModuleWithoutSrcs`, since the existing
+	// InitPrebuiltModule* are not friendly with Sources of Configurable type.
+	// The actual src will be evaluated in GenerateAndroidBuildActions.
+	android.InitPrebuiltModuleWithoutSrcs(module)
+	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 
 	return module
 }
 
-func createApexSelectorModule(ctx android.TopDownMutatorContext, name string, apexFileProperties *ApexFileProperties) {
-	props := struct {
-		Name *string
-	}{
-		Name: proptools.StringPtr(name),
-	}
-
-	ctx.CreateModule(privateApexSelectorModuleFactory,
-		&props,
-		apexFileProperties,
-	)
-}
-
-// createDeapexerModuleIfNeeded will create a deapexer module if it is needed.
-//
-// A deapexer module is only needed when the prebuilt apex specifies one or more modules in either
-// the `exported_java_libs` or `exported_bootclasspath_fragments` properties as that indicates that
-// the listed modules need access to files from within the prebuilt .apex file.
-func (p *prebuiltCommon) createDeapexerModuleIfNeeded(ctx android.TopDownMutatorContext, deapexerName string, apexFileSource string) {
-	// Only create the deapexer module if it is needed.
-	if !p.hasExportedDeps() {
-		return
-	}
-
+func (p *prebuiltCommon) getDeapexerPropertiesIfNeeded(ctx android.ModuleContext) DeapexerProperties {
 	// Compute the deapexer properties from the transitive dependencies of this module.
 	commonModules := []string{}
 	dexpreoptProfileGuidedModules := []string{}
@@ -600,7 +510,7 @@ func (p *prebuiltCommon) createDeapexerModuleIfNeeded(ctx android.TopDownMutator
 	})
 
 	// Create properties for deapexer module.
-	deapexerProperties := &DeapexerProperties{
+	deapexerProperties := DeapexerProperties{
 		// Remove any duplicates from the common modules lists as a module may be included via a direct
 		// dependency as well as transitive ones.
 		CommonModules:                 android.SortedUniqueStrings(commonModules),
@@ -609,22 +519,7 @@ func (p *prebuiltCommon) createDeapexerModuleIfNeeded(ctx android.TopDownMutator
 
 	// Populate the exported files property in a fixed order.
 	deapexerProperties.ExportedFiles = android.SortedUniqueStrings(exportedFiles)
-
-	props := struct {
-		Name          *string
-		Selected_apex *string
-	}{
-		Name:          proptools.StringPtr(deapexerName),
-		Selected_apex: proptools.StringPtr(apexFileSource),
-	}
-	ctx.CreateModule(privateDeapexerFactory,
-		&props,
-		deapexerProperties,
-	)
-}
-
-func apexSelectorModuleName(baseModuleName string) string {
-	return baseModuleName + ".apex.selector"
+	return deapexerProperties
 }
 
 func prebuiltApexExportedModuleName(ctx android.BottomUpMutatorContext, name string) string {
@@ -666,64 +561,12 @@ func (t exportedDependencyTag) RequiresFilesFromPrebuiltApex() {}
 var _ android.RequiresFilesFromPrebuiltApexTag = exportedDependencyTag{}
 
 var (
-	exportedJavaLibTag                       = exportedDependencyTag{name: "exported_java_libs"}
 	exportedBootclasspathFragmentTag         = exportedDependencyTag{name: "exported_bootclasspath_fragments"}
 	exportedSystemserverclasspathFragmentTag = exportedDependencyTag{name: "exported_systemserverclasspath_fragments"}
 )
 
-var _ prebuiltApexModuleCreator = (*Prebuilt)(nil)
-
-// createPrebuiltApexModules creates modules necessary to export files from the prebuilt apex to the
-// build.
-//
-// If this needs to make files from within a `.apex` file available for use by other Soong modules,
-// e.g. make dex implementation jars available for java_import modules listed in exported_java_libs,
-// it does so as follows:
-//
-//  1. It creates a `deapexer` module that actually extracts the files from the `.apex` file and
-//     makes them available for use by other modules, at both Soong and ninja levels.
-//
-//  2. It adds a dependency onto those modules and creates an apex specific variant similar to what
-//     an `apex` module does. That ensures that code which looks for specific apex variant, e.g.
-//     dexpreopt, will work the same way from source and prebuilt.
-//
-//  3. The `deapexer` module adds a dependency from the modules that require the exported files onto
-//     itself so that they can retrieve the file paths to those files.
-//
-// It also creates a child module `selector` that is responsible for selecting the appropriate
-// input apex for both the prebuilt_apex and the deapexer. That is needed for a couple of reasons:
-//
-//  1. To dedup the selection logic so it only runs in one module.
-//
-//  2. To allow the deapexer to be wired up to a different source for the input apex, e.g. an
-//     `apex_set`.
-//
-//     prebuilt_apex
-//     /      |      \
-//     /         |         \
-//     V            V            V
-//     selector  <---  deapexer  <---  exported java lib
-func (p *Prebuilt) createPrebuiltApexModules(ctx android.TopDownMutatorContext) {
-	apexSelectorModuleName := apexSelectorModuleName(p.Name())
-	createApexSelectorModule(ctx, apexSelectorModuleName, &p.properties.ApexFileProperties)
-
-	apexFileSource := ":" + apexSelectorModuleName
-	p.createDeapexerModuleIfNeeded(ctx, deapexerModuleName(p.Name()), apexFileSource)
-
-	// Add a source reference to retrieve the selected apex from the selector module.
-	p.prebuiltCommonProperties.Selected_apex = proptools.StringPtr(apexFileSource)
-}
-
 func (p *Prebuilt) ComponentDepsMutator(ctx android.BottomUpMutatorContext) {
 	p.prebuiltApexContentsDeps(ctx)
-}
-
-func (p *prebuiltCommon) DepsMutator(ctx android.BottomUpMutatorContext) {
-	if p.hasExportedDeps() {
-		// Create a dependency from the prebuilt apex (prebuilt_apex/apex_set) to the internal deapexer module
-		// The deapexer will return a provider which will be used to determine the exported artfifacts from this prebuilt.
-		ctx.AddDependency(ctx.Module(), android.DeapexerTag, deapexerModuleName(p.Name()))
-	}
 }
 
 var _ ApexInfoMutator = (*Prebuilt)(nil)
@@ -732,31 +575,36 @@ func (p *Prebuilt) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 	p.apexInfoMutator(mctx)
 }
 
+// creates the build rules to deapex the prebuilt, and returns a deapexerInfo
+func (p *prebuiltCommon) getDeapexerInfo(ctx android.ModuleContext, apexFile android.Path) *android.DeapexerInfo {
+	if !p.hasExportedDeps() {
+		// nothing to do
+		return nil
+	}
+	deapexerProps := p.getDeapexerPropertiesIfNeeded(ctx)
+	return deapex(ctx, apexFile, deapexerProps)
+}
+
 // Set a provider containing information about the jars and .prof provided by the apex
 // Apexes built from prebuilts retrieve this information by visiting its internal deapexer module
 // Used by dex_bootjars to generate the boot image
-func (p *prebuiltCommon) provideApexExportsInfo(ctx android.ModuleContext) {
-	if !p.hasExportedDeps() {
-		// nothing to do
+func (p *prebuiltCommon) provideApexExportsInfo(ctx android.ModuleContext, di *android.DeapexerInfo) {
+	if di == nil {
 		return
 	}
-	if di, err := android.FindDeapexerProviderForModule(ctx); err == nil {
-		javaModuleToDexPath := map[string]android.Path{}
-		for _, commonModule := range di.GetExportedModuleNames() {
-			if dex := di.PrebuiltExportPath(java.ApexRootRelativePathToJavaLib(commonModule)); dex != nil {
-				javaModuleToDexPath[commonModule] = dex
-			}
+	javaModuleToDexPath := map[string]android.Path{}
+	for _, commonModule := range di.GetExportedModuleNames() {
+		if dex := di.PrebuiltExportPath(java.ApexRootRelativePathToJavaLib(commonModule)); dex != nil {
+			javaModuleToDexPath[commonModule] = dex
 		}
-
-		exports := android.ApexExportsInfo{
-			ApexName:                      p.ApexVariationName(),
-			ProfilePathOnHost:             di.PrebuiltExportPath(java.ProfileInstallPathInApex),
-			LibraryNameToDexJarPathOnHost: javaModuleToDexPath,
-		}
-		android.SetProvider(ctx, android.ApexExportsInfoProvider, exports)
-	} else {
-		ctx.ModuleErrorf(err.Error())
 	}
+
+	exports := android.ApexExportsInfo{
+		ApexName:                      p.ApexVariationName(),
+		ProfilePathOnHost:             di.PrebuiltExportPath(java.ProfileInstallPathInApex),
+		LibraryNameToDexJarPathOnHost: javaModuleToDexPath,
+	}
+	android.SetProvider(ctx, android.ApexExportsInfoProvider, exports)
 }
 
 // Set prebuiltInfoProvider. This will be used by `apex_prebuiltinfo_singleton` to print out a metadata file
@@ -792,7 +640,7 @@ func (p *Prebuilt) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	p.apexKeysPath = writeApexKeys(ctx, p)
 	// TODO(jungjw): Check the key validity.
-	p.inputApex = android.OptionalPathForModuleSrc(ctx, p.prebuiltCommonProperties.Selected_apex).Path()
+	p.inputApex = android.PathForModuleSrc(ctx, p.properties.prebuiltApexSelector(ctx, ctx.Module()))
 	p.installDir = android.PathForModuleInstall(ctx, "apex")
 	p.installFilename = p.InstallFilename()
 	if !strings.HasSuffix(p.installFilename, imageApexSuffix) {
@@ -810,11 +658,13 @@ func (p *Prebuilt) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		return
 	}
 
+	deapexerInfo := p.getDeapexerInfo(ctx, p.inputApex)
+
 	// dexpreopt any system server jars if present
-	p.dexpreoptSystemServerJars(ctx)
+	p.dexpreoptSystemServerJars(ctx, deapexerInfo)
 
 	// provide info used for generating the boot image
-	p.provideApexExportsInfo(ctx)
+	p.provideApexExportsInfo(ctx, deapexerInfo)
 
 	p.providePrebuiltInfo(ctx)
 
@@ -836,7 +686,7 @@ func (p *Prebuilt) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	ctx.SetOutputFiles(android.Paths{p.outputApex}, "")
 }
 
-func (p *Prebuilt) ProvenanceMetaDataFile() android.OutputPath {
+func (p *Prebuilt) ProvenanceMetaDataFile() android.Path {
 	return p.provenanceMetaDataFile
 }
 
@@ -850,26 +700,11 @@ type prebuiltApexExtractorModule struct {
 	extractedApex android.WritablePath
 }
 
-func privateApexExtractorModuleFactory() android.Module {
-	module := &prebuiltApexExtractorModule{}
-	module.AddProperties(
-		&module.properties,
-	)
-	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
-	return module
-}
-
-func (p *prebuiltApexExtractorModule) Srcs() android.Paths {
-	return android.Paths{p.extractedApex}
-}
-
-func (p *prebuiltApexExtractorModule) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	srcsSupplier := func(ctx android.BaseModuleContext, prebuilt android.Module) []string {
-		return p.properties.prebuiltSrcs(ctx)
-	}
+// extract registers the build actions to extract an apex from .apks file
+// returns the path of the extracted apex
+func extract(ctx android.ModuleContext, apexSet android.Path, prerelease *bool) android.Path {
 	defaultAllowPrerelease := ctx.Config().IsEnvTrue("SOONG_ALLOW_PRERELEASE_APEXES")
-	apexSet := android.SingleSourcePathFromSupplier(ctx, srcsSupplier, "set")
-	p.extractedApex = android.PathForModuleOut(ctx, "extracted", apexSet.Base())
+	extractedApex := android.PathForModuleOut(ctx, "extracted", apexSet.Base())
 	// Filter out NativeBridge archs (b/260115309)
 	abis := java.SupportedAbis(ctx, true)
 	ctx.Build(pctx,
@@ -877,14 +712,16 @@ func (p *prebuiltApexExtractorModule) GenerateAndroidBuildActions(ctx android.Mo
 			Rule:        extractMatchingApex,
 			Description: "Extract an apex from an apex set",
 			Inputs:      android.Paths{apexSet},
-			Output:      p.extractedApex,
+			Output:      extractedApex,
 			Args: map[string]string{
 				"abis":              strings.Join(abis, ","),
-				"allow-prereleased": strconv.FormatBool(proptools.BoolDefault(p.properties.Prerelease, defaultAllowPrerelease)),
+				"allow-prereleased": strconv.FormatBool(proptools.BoolDefault(prerelease, defaultAllowPrerelease)),
 				"sdk-version":       ctx.Config().PlatformSdkVersion().String(),
 				"skip-sdk-check":    strconv.FormatBool(ctx.Config().IsEnvTrue("SOONG_SKIP_APPSET_SDK_CHECK")),
 			},
-		})
+		},
+	)
+	return extractedApex
 }
 
 type ApexSet struct {
@@ -953,46 +790,16 @@ func (a *ApexSet) hasSanitizedSource(sanitizer string) bool {
 func apexSetFactory() android.Module {
 	module := &ApexSet{}
 	module.AddProperties(&module.properties)
-	module.initPrebuiltCommon(module, &module.properties.PrebuiltCommonProperties)
+	module.prebuiltCommon.prebuiltCommonProperties = &module.properties.PrebuiltCommonProperties
+
+	// init the module as a prebuilt
+	// even though this module type has srcs, use `InitPrebuiltModuleWithoutSrcs`, since the existing
+	// InitPrebuiltModule* are not friendly with Sources of Configurable type.
+	// The actual src will be evaluated in GenerateAndroidBuildActions.
+	android.InitPrebuiltModuleWithoutSrcs(module)
+	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
 
 	return module
-}
-
-func createApexExtractorModule(ctx android.TopDownMutatorContext, name string, apexExtractorProperties *ApexExtractorProperties) {
-	props := struct {
-		Name *string
-	}{
-		Name: proptools.StringPtr(name),
-	}
-
-	ctx.CreateModule(privateApexExtractorModuleFactory,
-		&props,
-		apexExtractorProperties,
-	)
-}
-
-func apexExtractorModuleName(baseModuleName string) string {
-	return baseModuleName + ".apex.extractor"
-}
-
-var _ prebuiltApexModuleCreator = (*ApexSet)(nil)
-
-// createPrebuiltApexModules creates modules necessary to export files from the apex set to other
-// modules.
-//
-// This effectively does for apex_set what Prebuilt.createPrebuiltApexModules does for a
-// prebuilt_apex except that instead of creating a selector module which selects one .apex file
-// from those provided this creates an extractor module which extracts the appropriate .apex file
-// from the zip file containing them.
-func (a *ApexSet) createPrebuiltApexModules(ctx android.TopDownMutatorContext) {
-	apexExtractorModuleName := apexExtractorModuleName(a.Name())
-	createApexExtractorModule(ctx, apexExtractorModuleName, &a.properties.ApexExtractorProperties)
-
-	apexFileSource := ":" + apexExtractorModuleName
-	a.createDeapexerModuleIfNeeded(ctx, deapexerModuleName(a.Name()), apexFileSource)
-
-	// After passing the arch specific src properties to the creating the apex selector module
-	a.prebuiltCommonProperties.Selected_apex = proptools.StringPtr(apexFileSource)
 }
 
 func (a *ApexSet) ComponentDepsMutator(ctx android.BottomUpMutatorContext) {
@@ -1017,7 +824,15 @@ func (a *ApexSet) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		ctx.ModuleErrorf("filename should end in %s or %s for apex_set", imageApexSuffix, imageCapexSuffix)
 	}
 
-	inputApex := android.OptionalPathForModuleSrc(ctx, a.prebuiltCommonProperties.Selected_apex).Path()
+	var apexSet android.Path
+	if srcs := a.properties.prebuiltSrcs(ctx); len(srcs) == 1 {
+		apexSet = android.PathForModuleSrc(ctx, srcs[0])
+	} else {
+		ctx.ModuleErrorf("Expected exactly one source apex_set file, found %v\n", srcs)
+	}
+
+	extractedApex := extract(ctx, apexSet, a.properties.Prerelease)
+
 	a.outputApex = android.PathForModuleOut(ctx, a.installFilename)
 
 	// Build the output APEX. If compression is not enabled, make sure the output is not compressed even if the input is compressed
@@ -1027,7 +842,7 @@ func (a *ApexSet) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	ctx.Build(pctx, android.BuildParams{
 		Rule:   buildRule,
-		Input:  inputApex,
+		Input:  extractedApex,
 		Output: a.outputApex,
 	})
 
@@ -1036,11 +851,13 @@ func (a *ApexSet) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		return
 	}
 
+	deapexerInfo := a.getDeapexerInfo(ctx, extractedApex)
+
 	// dexpreopt any system server jars if present
-	a.dexpreoptSystemServerJars(ctx)
+	a.dexpreoptSystemServerJars(ctx, deapexerInfo)
 
 	// provide info used for generating the boot image
-	a.provideApexExportsInfo(ctx)
+	a.provideApexExportsInfo(ctx, deapexerInfo)
 
 	a.providePrebuiltInfo(ctx)
 

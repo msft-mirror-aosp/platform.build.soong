@@ -5,6 +5,7 @@ import (
 	"android/soong/fuzz"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
 )
 
 // PlatformSanitizeable is an interface for sanitizing platform modules.
@@ -101,9 +102,6 @@ type LinkableInterface interface {
 	IsPrebuilt() bool
 	Toc() android.OptionalPath
 
-	// IsRustFFI returns true if this is a Rust FFI library.
-	IsRustFFI() bool
-
 	// IsFuzzModule returns true if this a *_fuzz module.
 	IsFuzzModule() bool
 
@@ -133,6 +131,10 @@ type LinkableInterface interface {
 
 	// IsNdk returns true if the library is in the configs known NDK list.
 	IsNdk(config android.Config) bool
+
+	// HasStubsVariants true if this module is a stub or has a sibling variant
+	// that is a stub.
+	HasStubsVariants() bool
 
 	// IsStubs returns true if the this is a stubs library.
 	IsStubs() bool
@@ -316,10 +318,12 @@ type SharedLibraryInfo struct {
 	SharedLibrary android.Path
 	Target        android.Target
 
-	TableOfContents android.OptionalPath
+	TableOfContents    android.OptionalPath
+	IsStubs            bool
+	ImplementationDeps depset.DepSet[string]
 
 	// should be obtained from static analogue
-	TransitiveStaticLibrariesForOrdering *android.DepSet[android.Path]
+	TransitiveStaticLibrariesForOrdering depset.DepSet[android.Path]
 }
 
 var SharedLibraryInfoProvider = blueprint.NewProvider[SharedLibraryInfo]()
@@ -361,7 +365,7 @@ type StaticLibraryInfo struct {
 	// This isn't the actual transitive DepSet, shared library dependencies have been
 	// converted into static library analogues.  It is only used to order the static
 	// library dependencies that were specified for the current module.
-	TransitiveStaticLibrariesForOrdering *android.DepSet[android.Path]
+	TransitiveStaticLibrariesForOrdering depset.DepSet[android.Path]
 }
 
 var StaticLibraryInfoProvider = blueprint.NewProvider[StaticLibraryInfo]()
@@ -385,3 +389,9 @@ type FlagExporterInfo struct {
 }
 
 var FlagExporterInfoProvider = blueprint.NewProvider[FlagExporterInfo]()
+
+var ImplementationDepInfoProvider = blueprint.NewProvider[*ImplementationDepInfo]()
+
+type ImplementationDepInfo struct {
+	ImplementationDeps depset.DepSet[android.Path]
+}
