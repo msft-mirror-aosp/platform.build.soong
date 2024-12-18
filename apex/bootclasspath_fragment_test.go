@@ -242,6 +242,7 @@ func TestBootclasspathFragmentInArtApex(t *testing.T) {
 					apex_available: [
 						"com.android.art",
 					],
+					min_sdk_version: "33",
 				}
 			`, content)
 		}
