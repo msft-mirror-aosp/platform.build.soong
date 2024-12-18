@@ -2120,8 +2120,6 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		})
 	}
 
-	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: deps.GeneratedSources.Strings()})
-
 	if Bool(c.Properties.Cmake_snapshot_supported) {
 		android.SetProvider(ctx, cmakeSnapshotSourcesProvider, android.GlobFiles(ctx, ctx.ModuleDir()+"/**/*", nil))
 	}
