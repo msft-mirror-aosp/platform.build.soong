@@ -289,6 +289,10 @@ func (c Config) ReleaseUseSystemFeatureBuildFlags() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_USE_SYSTEM_FEATURE_BUILD_FLAGS")
 }
 
+func (c Config) ReleaseFingerprintAconfigPackages() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_FINGERPRINT_ACONFIG_PACKAGES")
+}
+
 // A DeviceConfig object represents the configuration for a particular device
 // being built. For now there will only be one of these, but in the future there
 // may be multiple devices being built.
@@ -1318,6 +1322,10 @@ func (c *config) UseRemoteBuild() bool {
 
 func (c *config) RunErrorProne() bool {
 	return c.IsEnvTrue("RUN_ERROR_PRONE")
+}
+
+func (c *config) RunErrorProneInline() bool {
+	return c.IsEnvTrue("RUN_ERROR_PRONE_INLINE")
 }
 
 // XrefCorpusName returns the Kythe cross-reference corpus name.

@@ -275,6 +275,12 @@ func (a *apexBundle) buildAconfigFiles(ctx android.ModuleContext) []apexFile {
 		})
 		files = append(files, newApexFile(ctx, apexAconfigFile, "aconfig_flags", "etc", etc, nil))
 
+		// To enable fingerprint, we need to have v2 storage files. The default version is 1.
+		storageFilesVersion := 1
+		if ctx.Config().ReleaseFingerprintAconfigPackages() {
+			storageFilesVersion = 2
+		}
+
 		for _, info := range createStorageInfo {
 			outputFile := android.PathForModuleOut(ctx, info.Output_file)
 			ctx.Build(pctx, android.BuildParams{
@@ -286,6 +292,7 @@ func (a *apexBundle) buildAconfigFiles(ctx android.ModuleContext) []apexFile {
 					"container":   ctx.ModuleName(),
 					"file_type":   info.File_type,
 					"cache_files": android.JoinPathsWithPrefix(aconfigFiles, "--cache "),
+					"version":     strconv.Itoa(storageFilesVersion),
 				},
 			})
 			files = append(files, newApexFile(ctx, outputFile, info.File_type, "etc", etc, nil))
@@ -544,7 +551,7 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 
 	imageDir := android.PathForModuleOut(ctx, "image"+suffix)
 
-	installSymbolFiles := (!ctx.Config().KatiEnabled() || a.ExportedToMake()) && a.installable()
+	installSymbolFiles := (ctx.Config().KatiEnabled() && a.ExportedToMake()) && a.installable()
 
 	// set of dependency module:location mappings
 	installMapSet := make(map[string]bool)
@@ -763,18 +770,6 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 	builder.Build("notice_dir", "Building notice dir")
 	implicitInputs = append(implicitInputs, noticeAssetPath)
 	optFlags = append(optFlags, "--assets_dir "+filepath.Dir(noticeAssetPath.String()))
-
-	// Apexes which are supposed to be installed in builtin dirs(/system, etc)
-	// don't need hashtree for activation. Therefore, by removing hashtree from
-	// apex bundle (filesystem image in it, to be specific), we can save storage.
-	needHashTree := moduleMinSdkVersion.LessThanOrEqualTo(android.SdkVersion_Android10) ||
-		a.shouldGenerateHashtree()
-	if ctx.Config().ApexCompressionEnabled() && a.isCompressable() {
-		needHashTree = true
-	}
-	if !needHashTree {
-		optFlags = append(optFlags, "--no_hashtree")
-	}
 
 	if a.testOnlyShouldSkipPayloadSign() {
 		optFlags = append(optFlags, "--unsigned_payload")

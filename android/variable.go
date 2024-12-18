@@ -617,7 +617,11 @@ type PartitionVariables struct {
 	ProductUseDynamicPartitionSize bool   `json:",omitempty"`
 	CopyImagesForTargetFilesZip    bool   `json:",omitempty"`
 
-	VendorSecurityPatch string `json:",omitempty"`
+	VendorSecurityPatch     string `json:",omitempty"`
+	OdmSecurityPatch        string `json:",omitempty"`
+	SystemDlkmSecurityPatch string `json:",omitempty"`
+	VendorDlkmSecurityPatch string `json:",omitempty"`
+	OdmDlkmSecurityPatch    string `json:",omitempty"`
 
 	// Boot image stuff
 	BuildingRamdiskImage            bool     `json:",omitempty"`
@@ -688,6 +692,8 @@ type PartitionVariables struct {
 	ProductFsverityGenerateMetadata bool `json:",omitempty"`
 
 	TargetScreenDensity string `json:",omitempty"`
+
+	PrivateRecoveryUiProperties map[string]string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
