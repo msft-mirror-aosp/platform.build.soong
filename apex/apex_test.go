@@ -4771,7 +4771,7 @@ func TestApexInVariousPartition(t *testing.T) {
 			`)
 
 			apex := ctx.ModuleForTests("myapex", "android_common_myapex").Module().(*apexBundle)
-			expected := "out/soong/target/product/test_device/" + tc.partition + "/apex"
+			expected := "out/target/product/test_device/" + tc.partition + "/apex"
 			actual := apex.installDir.RelativeToTop().String()
 			if actual != expected {
 				t.Errorf("wrong install path. expected %q. actual %q", expected, actual)
