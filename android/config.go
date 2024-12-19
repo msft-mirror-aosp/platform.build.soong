@@ -2177,7 +2177,7 @@ var (
 		"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES":              "com.android.adservices",
 		"RELEASE_APEX_CONTRIBUTIONS_APPSEARCH":               "com.android.appsearch",
 		"RELEASE_APEX_CONTRIBUTIONS_ART":                     "com.android.art",
-		"RELEASE_APEX_CONTRIBUTIONS_BLUETOOTH":               "com.android.btservices",
+		"RELEASE_APEX_CONTRIBUTIONS_BLUETOOTH":               "com.android.bt",
 		"RELEASE_APEX_CONTRIBUTIONS_CAPTIVEPORTALLOGIN":      "",
 		"RELEASE_APEX_CONTRIBUTIONS_CELLBROADCAST":           "com.android.cellbroadcast",
 		"RELEASE_APEX_CONTRIBUTIONS_CONFIGINFRASTRUCTURE":    "com.android.configinfrastructure",
