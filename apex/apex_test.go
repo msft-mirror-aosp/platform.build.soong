@@ -5475,7 +5475,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkHiddenAPIIndexFromFlagsInputs(t, ctx, `
 			my-bootclasspath-fragment/index.csv
 			out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
-			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_apex10000/modular-hiddenapi/index.csv
+			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_com.android.art/modular-hiddenapi/index.csv
 		`)
 	})
 
@@ -5548,7 +5548,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkHiddenAPIIndexFromFlagsInputs(t, ctx, `
 			my-bootclasspath-fragment/index.csv
 			out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
-			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_apex10000/modular-hiddenapi/index.csv
+			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_com.android.art/modular-hiddenapi/index.csv
 		`)
 
 		myApex := ctx.ModuleForTests("myapex", "android_common_myapex").Module()
@@ -5743,7 +5743,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkHiddenAPIIndexFromFlagsInputs(t, ctx, `
 			my-bootclasspath-fragment/index.csv
 			out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
-			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_apex10000/modular-hiddenapi/index.csv
+			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_com.android.art/modular-hiddenapi/index.csv
 		`)
 	})
 
@@ -5842,7 +5842,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkHiddenAPIIndexFromFlagsInputs(t, ctx, `
 			out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
 			out/soong/.intermediates/my-bootclasspath-fragment/android_common_myapex/modular-hiddenapi/index.csv
-			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_apex10000/modular-hiddenapi/index.csv
+			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_com.android.art/modular-hiddenapi/index.csv
 		`)
 	})
 
@@ -5954,7 +5954,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkHiddenAPIIndexFromFlagsInputs(t, ctx, `
 			my-bootclasspath-fragment/index.csv
 			out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
-			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_apex10000/modular-hiddenapi/index.csv
+			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_com.android.art/modular-hiddenapi/index.csv
 		`)
 	})
 
@@ -11311,7 +11311,7 @@ func TestBootDexJarsMultipleApexPrebuilts(t *testing.T) {
 		{
 			desc:                      "Source apex com.android.foo is selected, bootjar should come from source java library",
 			selectedApexContributions: "foo.source.contributions",
-			expectedBootJar:           "out/soong/.intermediates/foo-bootclasspath-fragment/android_common_apex10000/hiddenapi-modular/encoded/framework-foo.jar",
+			expectedBootJar:           "out/soong/.intermediates/foo-bootclasspath-fragment/android_common_com.android.foo/hiddenapi-modular/encoded/framework-foo.jar",
 		},
 		{
 			desc:                      "Prebuilt apex prebuilt_com.android.foo is selected, profile should come from .prof deapexed from the prebuilt",
