@@ -1225,12 +1225,11 @@ func addStubDependencyProviders(ctx ModuleContext) []SharedStubLibrary {
 				continue
 			}
 			flagInfo, _ := android.OtherModuleProvider(ctx, stub, FlagExporterInfoProvider)
-			ccInfo, ok := android.OtherModuleProvider(ctx, stub, CcInfoProvider)
-			if !ok || ccInfo.LibraryInfo == nil {
-				panic(fmt.Errorf("couldn't find library info for %s", stub))
+			if _, ok = android.OtherModuleProvider(ctx, stub, CcInfoProvider); !ok {
+				panic(fmt.Errorf("stub is not a cc module %s", stub))
 			}
 			stubsInfo = append(stubsInfo, SharedStubLibrary{
-				Version:           ccInfo.LibraryInfo.StubsVersion,
+				Version:           android.OtherModuleProviderOrDefault(ctx, stub, LinkableInfoProvider).StubsVersion,
 				SharedLibraryInfo: stubInfo,
 				FlagExporterInfo:  flagInfo,
 			})

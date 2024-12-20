@@ -1868,12 +1868,14 @@ type CommonModuleInfo struct {
 	// Whether the module has been replaced by a prebuilt
 	ReplacedByPrebuilt bool
 	// The Target of artifacts that this module variant is responsible for creating.
-	CompileTarget           Target
+	Target                  Target
 	SkipAndroidMkProcessing bool
 	BaseModuleName          string
 	CanHaveApexVariants     bool
 	MinSdkVersion           string
 	NotAvailableForPlatform bool
+	// There some subtle differences between this one and the one above.
+	NotInPlatform bool
 	// UninstallableApexPlatformVariant is set by MakeUninstallable called by the apex
 	// mutator.  MakeUninstallable also sets HideFromMake.  UninstallableApexPlatformVariant
 	// is used to avoid adding install or packaging dependencies into libraries provided
@@ -1896,6 +1898,20 @@ type HostToolProviderData struct {
 }
 
 var HostToolProviderKey = blueprint.NewProvider[HostToolProviderData]()
+
+type SourceFileGenerator interface {
+	GeneratedSourceFiles() Paths
+	GeneratedHeaderDirs() Paths
+	GeneratedDeps() Paths
+}
+
+type GeneratedSourceInfo struct {
+	GeneratedSourceFiles Paths
+	GeneratedHeaderDirs  Paths
+	GeneratedDeps        Paths
+}
+
+var GeneratedSourceInfoProvider = blueprint.NewProvider[GeneratedSourceInfo]()
 
 func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) {
 	ctx := &moduleContext{
@@ -2147,7 +2163,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 
 	commonData := CommonModuleInfo{
 		ReplacedByPrebuilt:               m.commonProperties.ReplacedByPrebuilt,
-		CompileTarget:                    m.commonProperties.CompileTarget,
+		Target:                           m.commonProperties.CompileTarget,
 		SkipAndroidMkProcessing:          shouldSkipAndroidMkProcessing(ctx, m),
 		BaseModuleName:                   m.BaseModuleName(),
 		UninstallableApexPlatformVariant: m.commonProperties.UninstallableApexPlatformVariant,
@@ -2173,6 +2189,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	if am, ok := m.module.(ApexModule); ok {
 		commonData.CanHaveApexVariants = am.CanHaveApexVariants()
 		commonData.NotAvailableForPlatform = am.NotAvailableForPlatform()
+		commonData.NotInPlatform = am.NotInPlatform()
 	}
 	SetProvider(ctx, CommonModuleInfoKey, commonData)
 	if p, ok := m.module.(PrebuiltInterface); ok && p.Prebuilt() != nil {
@@ -2185,6 +2202,14 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 
 	if p, ok := m.module.(AndroidMkProviderInfoProducer); ok && !commonData.SkipAndroidMkProcessing {
 		SetProvider(ctx, AndroidMkInfoProvider, p.PrepareAndroidMKProviderInfo(ctx.Config()))
+	}
+
+	if s, ok := m.module.(SourceFileGenerator); ok {
+		SetProvider(ctx, GeneratedSourceInfoProvider, GeneratedSourceInfo{
+			GeneratedSourceFiles: s.GeneratedSourceFiles(),
+			GeneratedHeaderDirs:  s.GeneratedHeaderDirs(),
+			GeneratedDeps:        s.GeneratedDeps(),
+		})
 	}
 }
 
