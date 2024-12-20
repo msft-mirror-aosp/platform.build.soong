@@ -533,7 +533,8 @@ type ProductVariables struct {
 	OdmPropFiles       []string `json:",omitempty"`
 	VendorPropFiles    []string `json:",omitempty"`
 
-	EnableUffdGc *string `json:",omitempty"`
+	EnableUffdGc       *string `json:",omitempty"`
+	BoardKernelVersion *string `json:",omitempty"`
 
 	BoardAvbEnable                         *bool    `json:",omitempty"`
 	BoardAvbSystemAddHashtreeFooterArgs    []string `json:",omitempty"`
