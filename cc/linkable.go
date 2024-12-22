@@ -102,9 +102,6 @@ type LinkableInterface interface {
 	IsPrebuilt() bool
 	Toc() android.OptionalPath
 
-	// IsRustFFI returns true if this is a Rust FFI library.
-	IsRustFFI() bool
-
 	// IsFuzzModule returns true if this a *_fuzz module.
 	IsFuzzModule() bool
 
@@ -294,8 +291,8 @@ func DepTagMakeSuffix(depTag blueprint.DependencyTag) string {
 }
 
 // SharedDepTag returns the dependency tag for any C++ shared libraries.
-func SharedDepTag(fromStatic bool) blueprint.DependencyTag {
-	return libraryDependencyTag{Kind: sharedLibraryDependency, fromStatic: fromStatic}
+func SharedDepTag() blueprint.DependencyTag {
+	return libraryDependencyTag{Kind: sharedLibraryDependency}
 }
 
 // StaticDepTag returns the dependency tag for any C++ static libraries.

@@ -289,6 +289,10 @@ func (c Config) ReleaseUseSystemFeatureBuildFlags() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_USE_SYSTEM_FEATURE_BUILD_FLAGS")
 }
 
+func (c Config) ReleaseFingerprintAconfigPackages() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_FINGERPRINT_ACONFIG_PACKAGES")
+}
+
 // A DeviceConfig object represents the configuration for a particular device
 // being built. For now there will only be one of these, but in the future there
 // may be multiple devices being built.
@@ -1317,7 +1321,16 @@ func (c *config) UseRemoteBuild() bool {
 }
 
 func (c *config) RunErrorProne() bool {
-	return c.IsEnvTrue("RUN_ERROR_PRONE")
+	return c.IsEnvTrue("RUN_ERROR_PRONE") || c.RunErrorProneInline()
+}
+
+// Returns if the errorprone build should be run "inline", that is, using errorprone as part
+// of the main javac compilation instead of its own separate compilation. This is good for CI
+// but bad for local development, because if you toggle errorprone+inline on/off it will repeatedly
+// clobber java files from the old configuration.
+func (c *config) RunErrorProneInline() bool {
+	value := strings.ToLower(c.Getenv("RUN_ERROR_PRONE"))
+	return c.IsEnvTrue("RUN_ERROR_PRONE_INLINE") || value == "inline"
 }
 
 // XrefCorpusName returns the Kythe cross-reference corpus name.

@@ -121,6 +121,9 @@ type FilesystemProperties struct {
 	// avbtool. Default used by avbtool is sha1.
 	Avb_hash_algorithm *string
 
+	// The security patch passed to as the com.android.build.<type>.security_patch avb property.
+	Security_patch *string
+
 	// Whether or not to use forward-error-correction codes when signing with AVB. Defaults to true.
 	Use_fec *bool
 
@@ -177,6 +180,11 @@ type FilesystemProperties struct {
 
 	// Install aconfig_flags.pb file for the modules installed in this partition.
 	Gen_aconfig_flags_pb *bool
+
+	// List of names of other filesystem partitions to import their aconfig flags from.
+	// This is used for the system partition to import system_ext's aconfig flags, as currently
+	// those are considered one "container": aosp/3261300
+	Import_aconfig_flags_from []string
 
 	Fsverity fsverityProperties
 
@@ -305,6 +313,9 @@ func (f *filesystem) DepsMutator(ctx android.BottomUpMutatorContext) {
 	}
 	if f.properties.Android_filesystem_deps.System_ext != nil {
 		ctx.AddDependency(ctx.Module(), interPartitionDependencyTag, proptools.String(f.properties.Android_filesystem_deps.System_ext))
+	}
+	for _, partition := range f.properties.Import_aconfig_flags_from {
+		ctx.AddDependency(ctx.Module(), importAconfigDependencyTag, partition)
 	}
 }
 
@@ -526,6 +537,12 @@ func (f *filesystem) buildNonDepsFiles(ctx android.ModuleContext, builder *andro
 		builder.Command().Text("ln -sf").Text(proptools.ShellEscape(target)).Text(dst.String())
 		f.appendToEntry(ctx, dst)
 	}
+
+	// https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/Makefile;l=2835;drc=b186569ef00ff2f2a1fab28aedc75ebc32bcd67b
+	if f.partitionName() == "recovery" {
+		builder.Command().Text("mkdir -p").Text(rootDir.Join(ctx, "root/linkerconfig").String())
+		builder.Command().Text("touch").Text(rootDir.Join(ctx, "root/linkerconfig/ld.config.txt").String())
+	}
 }
 
 func (f *filesystem) copyPackagingSpecs(ctx android.ModuleContext, builder *android.RuleBuilder, specs map[string]android.PackagingSpec, rootDir, rebasedDir android.WritablePath) []string {
@@ -603,6 +620,7 @@ func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) androi
 		Input(propFile).
 		Implicits(toolDeps).
 		Implicit(fec).
+		FlagWithArg("--build_datetime_file ", ctx.Config().Getenv("BUILD_DATETIME_FILE")).
 		Output(output).
 		Text(rootDir.String()) // directory where to find fs_config_files|dirs
 
@@ -620,11 +638,6 @@ func (f *filesystem) buildFileContexts(ctx android.ModuleContext) android.Path {
 		Input(android.PathForModuleSrc(ctx, proptools.String(f.properties.File_contexts)))
 	builder.Build("build_filesystem_file_contexts", fmt.Sprintf("Creating filesystem file contexts for %s", f.BaseModuleName()))
 	return fcBin
-}
-
-// Calculates avb_salt from entry list (sorted) for deterministic output.
-func (f *filesystem) salt() string {
-	return sha1sum(f.entries)
 }
 
 func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, android.Paths) {
@@ -689,10 +702,14 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 			avb_add_hashtree_footer_args += " --rollback_index " + strconv.Itoa(rollbackIndex)
 		}
 		avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.os_version:%s", f.partitionName(), ctx.Config().PlatformVersionLastStable())
+		// We're not going to add BuildFingerPrintFile as a dep. If it changed, it's likely because
+		// the build number changed, and we don't want to trigger rebuilds solely based on the build
+		// number.
 		avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.fingerprint:{CONTENTS_OF:%s}", f.partitionName(), ctx.Config().BuildFingerprintFile(ctx))
-		avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.security_patch:%s", f.partitionName(), ctx.Config().PlatformSecurityPatch())
+		if f.properties.Security_patch != nil && proptools.String(f.properties.Security_patch) != "" {
+			avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.security_patch:%s", f.partitionName(), proptools.String(f.properties.Security_patch))
+		}
 		addStr("avb_add_hashtree_footer_args", avb_add_hashtree_footer_args)
-		addStr("avb_salt", f.salt())
 	}
 
 	if f.properties.File_contexts != nil && f.properties.Precompiled_file_contexts != nil {
@@ -745,10 +762,9 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 	android.WriteFileRuleVerbatim(ctx, propFilePreProcessing, propFileString.String())
 	propFile := android.PathForModuleOut(ctx, "prop")
 	ctx.Build(pctx, android.BuildParams{
-		Rule:     textFileProcessorRule,
-		Input:    propFilePreProcessing,
-		Output:   propFile,
-		Implicit: ctx.Config().BuildFingerprintFile(ctx),
+		Rule:   textFileProcessorRule,
+		Input:  propFilePreProcessing,
+		Output: propFile,
 	})
 	return propFile, deps
 }
@@ -886,8 +902,10 @@ func (f *filesystem) BuildLinkerConfigFile(ctx android.ModuleContext, builder *a
 	}
 
 	provideModules, _ := f.getLibsForLinkerConfig(ctx)
+	intermediateOutput := android.PathForModuleOut(ctx, "linker.config.pb")
+	linkerconfig.BuildLinkerConfig(ctx, android.PathsForModuleSrc(ctx, f.properties.Linker_config.Linker_config_srcs), provideModules, nil, intermediateOutput)
 	output := rebasedDir.Join(ctx, "etc", "linker.config.pb")
-	linkerconfig.BuildLinkerConfig(ctx, builder, android.PathsForModuleSrc(ctx, f.properties.Linker_config.Linker_config_srcs), provideModules, nil, output)
+	builder.Command().Text("cp").Input(intermediateOutput).Output(output)
 
 	f.appendToEntry(ctx, output)
 }
@@ -1077,6 +1095,12 @@ func addAutogeneratedRroDeps(ctx android.BottomUpMutatorContext) {
 	}
 	thisPartition := f.PartitionType()
 	if thisPartition != "vendor" && thisPartition != "product" {
+		if f.properties.Android_filesystem_deps.System != nil {
+			ctx.PropertyErrorf("android_filesystem_deps.system", "only vendor or product partitions can use android_filesystem_deps")
+		}
+		if f.properties.Android_filesystem_deps.System_ext != nil {
+			ctx.PropertyErrorf("android_filesystem_deps.system_ext", "only vendor or product partitions can use android_filesystem_deps")
+		}
 		return
 	}
 	ctx.WalkDeps(func(child, parent android.Module) bool {

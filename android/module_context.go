@@ -440,10 +440,27 @@ func (m *moduleContext) GetMissingDependencies() []string {
 }
 
 func (m *moduleContext) GetDirectDepWithTag(name string, tag blueprint.DependencyTag) Module {
-	if module, _ := m.getDirectDepInternal(name, tag); module != nil {
-		return module.(Module)
+	deps := m.getDirectDepsInternal(name, tag)
+	if len(deps) == 1 {
+		return deps[0]
+	} else if len(deps) >= 2 {
+		panic(fmt.Errorf("Multiple dependencies having same BaseModuleName() %q found from %q",
+			name, m.ModuleName()))
+	} else {
+		return nil
 	}
-	return nil
+}
+
+func (m *moduleContext) GetDirectDepProxyWithTag(name string, tag blueprint.DependencyTag) *ModuleProxy {
+	deps := m.getDirectDepsProxyInternal(name, tag)
+	if len(deps) == 1 {
+		return &deps[0]
+	} else if len(deps) >= 2 {
+		panic(fmt.Errorf("Multiple dependencies having same BaseModuleName() %q found from %q",
+			name, m.ModuleName()))
+	} else {
+		return nil
+	}
 }
 
 func (m *moduleContext) ModuleSubDir() string {
@@ -623,8 +640,10 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 
 	if m.requiresFullInstall() {
 		deps = append(deps, InstallPaths(m.TransitiveInstallFiles.ToList())...)
-		deps = append(deps, m.installedInitRcPaths...)
-		deps = append(deps, m.installedVintfFragmentsPaths...)
+		if m.config.KatiEnabled() {
+			deps = append(deps, m.installedInitRcPaths...)
+			deps = append(deps, m.installedVintfFragmentsPaths...)
+		}
 
 		var implicitDeps, orderOnlyDeps Paths
 
