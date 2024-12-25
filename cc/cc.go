@@ -1955,13 +1955,13 @@ func (c *Module) stubLibraryMultipleApexViolation(ctx android.ModuleContext) boo
 		return false
 	}
 
-	_, aaWithoutTestApexes, _ := android.ListSetDifference(c.ApexAvailable(), c.TestApexes())
 	// Stub libraries should not have more than one apex_available
-	if len(aaWithoutTestApexes) > 1 {
+	apexAvailable := android.FirstUniqueStrings(c.ApexAvailable())
+	if len(apexAvailable) > 1 {
 		return true
 	}
 	// Stub libraries should not use the wildcard
-	if aaWithoutTestApexes[0] == android.AvailableToAnyApex {
+	if apexAvailable[0] == android.AvailableToAnyApex {
 		return true
 	}
 	// Default: no violation
