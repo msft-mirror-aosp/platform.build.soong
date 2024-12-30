@@ -1410,6 +1410,9 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	a.generateAndroidBuildActions(ctx)
 
+	for _, c := range a.testProperties.Test_options.Tradefed_options {
+		configs = append(configs, c)
+	}
 	for _, module := range a.testProperties.Test_mainline_modules {
 		configs = append(configs, tradefed.Option{Name: "config-descriptor:metadata", Key: "mainline-param", Value: module})
 	}
