@@ -78,7 +78,7 @@ func filesystemCreatorFactory() android.Module {
 	return module
 }
 
-func generatedPartitions(ctx android.LoadHookContext) []string {
+func generatedPartitions(ctx android.EarlyModuleContext) []string {
 	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
 	generatedPartitions := []string{"system"}
 	if ctx.DeviceConfig().SystemExtPath() == "system_ext" {
@@ -339,22 +339,7 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 		}
 	case "recovery":
 		dirs := append(commonPartitionDirs, []string{
-			"odm_file_contexts",
-			"odm_property_contexts",
-			"plat_file_contexts",
-			"plat_property_contexts",
-			"plat_service_contexts",
-			"product_file_contexts",
-			"product_property_contexts",
-			"product_service_contexts",
 			"sdcard",
-			"sepolicy",
-			"system_ext_file_contexts",
-			"system_ext_property_contexts",
-			"system_ext_service_contexts",
-			"vendor_file_contexts",
-			"vendor_property_contexts",
-			"vendor_service_contexts",
 		}...)
 
 		dirsWithRoot := make([]string, len(dirs))
@@ -373,6 +358,10 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 		fsProps.Security_patch = proptools.StringPtr(partitionVars.VendorDlkmSecurityPatch)
 	case "odm_dlkm":
 		fsProps.Security_patch = proptools.StringPtr(partitionVars.OdmDlkmSecurityPatch)
+	case "vendor_ramdisk":
+		if android.InList("recovery", generatedPartitions(ctx)) {
+			fsProps.Include_files_of = []string{generatedModuleNameForPartition(ctx.Config(), "recovery")}
+		}
 	}
 }
 
