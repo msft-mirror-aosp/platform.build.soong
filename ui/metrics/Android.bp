@@ -26,6 +26,7 @@ bootstrap_go_package {
         "soong-ui-metrics_proto",
         "soong-ui-mk_metrics_proto",
         "soong-shared",
+        "soong-ui-execution_metrics_proto",
     ],
     srcs: [
         "hostinfo.go",
@@ -59,6 +60,19 @@ bootstrap_go_package {
     ],
     srcs: [
         "metrics_proto/metrics.pb.go",
+    ],
+}
+
+bootstrap_go_package {
+    name: "soong-ui-execution_metrics_proto",
+    pkgPath: "android/soong/ui/metrics/execution_metrics_proto",
+    deps: [
+        "golang-protobuf-reflect-protoreflect",
+        "golang-protobuf-runtime-protoimpl",
+        "soong-cmd-find_input_delta-proto",
+    ],
+    srcs: [
+        "execution_metrics_proto/execution_metrics.pb.go",
     ],
 }
 

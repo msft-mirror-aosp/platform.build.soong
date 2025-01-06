@@ -274,10 +274,13 @@ func (p *prebuiltCommon) prebuiltApexContentsDeps(ctx android.BottomUpMutatorCon
 }
 
 // Implements android.DepInInSameApex
-func (p *prebuiltCommon) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
-	tag := ctx.OtherModuleDependencyTag(dep)
+func (p *prebuiltCommon) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
 	_, ok := tag.(exportedDependencyTag)
 	return ok
+}
+
+func (p *prebuiltCommon) IncomingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	return true
 }
 
 // apexInfoMutator marks any modules for which this apex exports a file as requiring an apex
@@ -306,10 +309,6 @@ func (p *prebuiltCommon) DepIsInSameApex(ctx android.BaseModuleContext, dep andr
 //     extra copying of files. Contrast that with source apex modules that has to build each variant
 //     from source.
 func (p *prebuiltCommon) apexInfoMutator(mctx android.TopDownMutatorContext) {
-
-	// Collect direct dependencies into contents.
-	contents := make(map[string]android.ApexMembership)
-
 	// Collect the list of dependencies.
 	var dependencies []android.ApexModule
 	mctx.WalkDeps(func(child, parent android.Module) bool {
@@ -347,29 +346,19 @@ func (p *prebuiltCommon) apexInfoMutator(mctx android.TopDownMutatorContext) {
 		// behavior whether there is a corresponding source module present or not.
 		depName = android.RemoveOptionalPrebuiltPrefix(depName)
 
-		// Remember if this module was added as a direct dependency.
-		direct := parent == mctx.Module()
-		contents[depName] = contents[depName].Add(direct)
-
 		// Add the module to the list of dependencies that need to have an APEX variant.
 		dependencies = append(dependencies, child.(android.ApexModule))
 
 		return true
 	})
 
-	// Create contents for the prebuilt_apex and store it away for later use.
-	apexContents := android.NewApexContents(contents)
-	android.SetProvider(mctx, android.ApexBundleInfoProvider, android.ApexBundleInfo{
-		Contents: apexContents,
-	})
+	android.SetProvider(mctx, android.ApexBundleInfoProvider, android.ApexBundleInfo{})
 
 	// Create an ApexInfo for the prebuilt_apex.
 	apexVariationName := p.ApexVariationName()
 	apexInfo := android.ApexInfo{
 		ApexVariationName: apexVariationName,
 		InApexVariants:    []string{apexVariationName},
-		InApexModules:     []string{p.BaseModuleName()}, // BaseModuleName() to avoid the prebuilt_ prefix.
-		ApexContents:      []*android.ApexContents{apexContents},
 		ForPrebuiltApex:   true,
 	}
 
@@ -386,7 +375,7 @@ type Prebuilt struct {
 
 	inputApex android.Path
 
-	provenanceMetaDataFile android.OutputPath
+	provenanceMetaDataFile android.Path
 }
 
 type ApexFileProperties struct {
@@ -697,7 +686,7 @@ func (p *Prebuilt) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	ctx.SetOutputFiles(android.Paths{p.outputApex}, "")
 }
 
-func (p *Prebuilt) ProvenanceMetaDataFile() android.OutputPath {
+func (p *Prebuilt) ProvenanceMetaDataFile() android.Path {
 	return p.provenanceMetaDataFile
 }
 

@@ -285,6 +285,14 @@ func (c Config) ReleaseCreateAconfigStorageFile() bool {
 	return c.config.productVariables.GetBuildFlagBool("RELEASE_CREATE_ACONFIG_STORAGE_FILE")
 }
 
+func (c Config) ReleaseUseSystemFeatureBuildFlags() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_USE_SYSTEM_FEATURE_BUILD_FLAGS")
+}
+
+func (c Config) ReleaseFingerprintAconfigPackages() bool {
+	return c.config.productVariables.GetBuildFlagBool("RELEASE_FINGERPRINT_ACONFIG_PACKAGES")
+}
+
 // A DeviceConfig object represents the configuration for a particular device
 // being built. For now there will only be one of these, but in the future there
 // may be multiple devices being built.
@@ -867,7 +875,7 @@ func (c *config) IsEnvFalse(key string) bool {
 }
 
 func (c *config) TargetsJava21() bool {
-	return c.IsEnvTrue("EXPERIMENTAL_TARGET_JAVA_VERSION_21")
+	return c.productVariables.GetBuildFlagBool("RELEASE_TARGET_JAVA_21")
 }
 
 // EnvDeps returns the environment variables this build depends on. The first
@@ -1313,7 +1321,16 @@ func (c *config) UseRemoteBuild() bool {
 }
 
 func (c *config) RunErrorProne() bool {
-	return c.IsEnvTrue("RUN_ERROR_PRONE")
+	return c.IsEnvTrue("RUN_ERROR_PRONE") || c.RunErrorProneInline()
+}
+
+// Returns if the errorprone build should be run "inline", that is, using errorprone as part
+// of the main javac compilation instead of its own separate compilation. This is good for CI
+// but bad for local development, because if you toggle errorprone+inline on/off it will repeatedly
+// clobber java files from the old configuration.
+func (c *config) RunErrorProneInline() bool {
+	value := strings.ToLower(c.Getenv("RUN_ERROR_PRONE"))
+	return c.IsEnvTrue("RUN_ERROR_PRONE_INLINE") || value == "inline"
 }
 
 // XrefCorpusName returns the Kythe cross-reference corpus name.
@@ -1515,11 +1532,25 @@ func (c *deviceConfig) BinderBitness() string {
 	return "64"
 }
 
+func (c *deviceConfig) RecoveryPath() string {
+	if c.config.productVariables.RecoveryPath != nil {
+		return *c.config.productVariables.RecoveryPath
+	}
+	return "recovery"
+}
+
 func (c *deviceConfig) VendorPath() string {
 	if c.config.productVariables.VendorPath != nil {
 		return *c.config.productVariables.VendorPath
 	}
 	return "vendor"
+}
+
+func (c *deviceConfig) VendorDlkmPath() string {
+	if c.config.productVariables.VendorDlkmPath != nil {
+		return *c.config.productVariables.VendorDlkmPath
+	}
+	return "vendor_dlkm"
 }
 
 func (c *deviceConfig) BuildingVendorImage() bool {
@@ -1553,6 +1584,13 @@ func (c *deviceConfig) BuildingOdmImage() bool {
 	return proptools.Bool(c.config.productVariables.BuildingOdmImage)
 }
 
+func (c *deviceConfig) OdmDlkmPath() string {
+	if c.config.productVariables.OdmDlkmPath != nil {
+		return *c.config.productVariables.OdmDlkmPath
+	}
+	return "odm_dlkm"
+}
+
 func (c *deviceConfig) ProductPath() string {
 	if c.config.productVariables.ProductPath != nil {
 		return *c.config.productVariables.ProductPath
@@ -1569,6 +1607,35 @@ func (c *deviceConfig) SystemExtPath() string {
 		return *c.config.productVariables.SystemExtPath
 	}
 	return "system_ext"
+}
+
+func (c *deviceConfig) SystemDlkmPath() string {
+	if c.config.productVariables.SystemDlkmPath != nil {
+		return *c.config.productVariables.SystemDlkmPath
+	}
+	return "system_dlkm"
+}
+
+func (c *deviceConfig) OemPath() string {
+	if c.config.productVariables.OemPath != nil {
+		return *c.config.productVariables.OemPath
+	}
+	return "oem"
+}
+
+func (c *deviceConfig) UserdataPath() string {
+	if c.config.productVariables.UserdataPath != nil {
+		return *c.config.productVariables.UserdataPath
+	}
+	return "data"
+}
+
+func (c *deviceConfig) BuildingUserdataImage() bool {
+	return proptools.Bool(c.config.productVariables.BuildingUserdataImage)
+}
+
+func (c *deviceConfig) BuildingRecoveryImage() bool {
+	return proptools.Bool(c.config.productVariables.BuildingRecoveryImage)
 }
 
 func (c *deviceConfig) BtConfigIncludeDir() string {
@@ -1795,8 +1862,8 @@ func (c *config) ApexCompressionEnabled() bool {
 	return Bool(c.productVariables.CompressedApex) && !c.UnbundledBuildApps()
 }
 
-func (c *config) ApexTrimEnabled() bool {
-	return Bool(c.productVariables.TrimmedApex)
+func (c *config) DefaultApexPayloadType() string {
+	return StringDefault(c.productVariables.DefaultApexPayloadType, "ext4")
 }
 
 func (c *config) UseSoongSystemImage() bool {
@@ -2105,13 +2172,21 @@ func (c *config) UseTransitiveJarsInClasspath() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_USE_TRANSITIVE_JARS_IN_CLASSPATH")
 }
 
+func (c *config) UseR8StoreStoreFenceConstructorInlining() bool {
+	return c.productVariables.GetBuildFlagBool("RELEASE_R8_STORE_STORE_FENCE_CONSTRUCTOR_INLINING")
+}
+
+func (c *config) UseDexV41() bool {
+	return c.productVariables.GetBuildFlagBool("RELEASE_USE_DEX_V41")
+}
+
 var (
 	mainlineApexContributionBuildFlagsToApexNames = map[string]string{
 		"RELEASE_APEX_CONTRIBUTIONS_ADBD":                    "com.android.adbd",
 		"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES":              "com.android.adservices",
 		"RELEASE_APEX_CONTRIBUTIONS_APPSEARCH":               "com.android.appsearch",
 		"RELEASE_APEX_CONTRIBUTIONS_ART":                     "com.android.art",
-		"RELEASE_APEX_CONTRIBUTIONS_BLUETOOTH":               "com.android.btservices",
+		"RELEASE_APEX_CONTRIBUTIONS_BLUETOOTH":               "com.android.bt",
 		"RELEASE_APEX_CONTRIBUTIONS_CAPTIVEPORTALLOGIN":      "",
 		"RELEASE_APEX_CONTRIBUTIONS_CELLBROADCAST":           "com.android.cellbroadcast",
 		"RELEASE_APEX_CONTRIBUTIONS_CONFIGINFRASTRUCTURE":    "com.android.configinfrastructure",

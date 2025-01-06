@@ -156,11 +156,15 @@ func TestFileSystemFillsLinkerConfigWithStubLibs(t *testing.T) {
 	result := fixture.RunTestWithBp(t, `
 		android_system_image {
 			name: "myfilesystem",
+			base_dir: "system",
 			deps: [
 				"libfoo",
 				"libbar",
 			],
-			linker_config_src: "linker.config.json",
+			linker_config: {
+				gen_linker_config: true,
+				linker_config_srcs: ["linker.config.json"],
+			},
 		}
 
 		cc_library {
@@ -176,12 +180,14 @@ func TestFileSystemFillsLinkerConfigWithStubLibs(t *testing.T) {
 	`)
 
 	module := result.ModuleForTests("myfilesystem", "android_common")
-	output := module.Output("system/etc/linker.config.pb")
+	output := module.Output("out/soong/.intermediates/myfilesystem/android_common/linker.config.pb")
+
+	linkerConfigCommand := output.RuleParams.Command
 
 	android.AssertStringDoesContain(t, "linker.config.pb should have libfoo",
-		output.RuleParams.Command, "libfoo.so")
+		linkerConfigCommand, "libfoo.so")
 	android.AssertStringDoesNotContain(t, "linker.config.pb should not have libbar",
-		output.RuleParams.Command, "libbar.so")
+		linkerConfigCommand, "libbar.so")
 }
 
 func registerComponent(ctx android.RegistrationContext) {
@@ -223,7 +229,10 @@ func TestFileSystemGathersItemsOnlyInSystemPartition(t *testing.T) {
 					deps: ["foo"],
 				},
 			},
-			linker_config_src: "linker.config.json",
+			linker_config: {
+				gen_linker_config: true,
+				linker_config_srcs: ["linker.config.json"],
+			},
 		}
 		component {
 			name: "foo",
@@ -232,7 +241,7 @@ func TestFileSystemGathersItemsOnlyInSystemPartition(t *testing.T) {
 	`)
 
 	module := result.ModuleForTests("myfilesystem", "android_common").Module().(*systemImage)
-	android.AssertDeepEquals(t, "entries should have foo only", []string{"components/foo"}, module.entries)
+	android.AssertDeepEquals(t, "entries should have foo and not bar", []string{"components/foo", "etc/linker.config.pb"}, module.entries)
 }
 
 func TestAvbGenVbmetaImage(t *testing.T) {
@@ -318,7 +327,10 @@ func TestFileSystemWithCoverageVariants(t *testing.T) {
 			deps: [
 				"libfoo",
 			],
-			linker_config_src: "linker.config.json",
+			linker_config: {
+				gen_linker_config: true,
+				linker_config_srcs: ["linker.config.json"],
+			},
 		}
 
 		cc_library {
@@ -578,11 +590,40 @@ func TestErofsPartition(t *testing.T) {
 	`)
 
 	partition := result.ModuleForTests("erofs_partition", "android_common")
-	buildImageConfig := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("prop"))
+	buildImageConfig := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("prop_pre_processing"))
 	android.AssertStringDoesContain(t, "erofs fs type", buildImageConfig, "fs_type=erofs")
 	android.AssertStringDoesContain(t, "erofs fs type compress algorithm", buildImageConfig, "erofs_default_compressor=lz4hc,9")
 	android.AssertStringDoesContain(t, "erofs fs type compress hint", buildImageConfig, "erofs_default_compress_hints=compress_hints.txt")
 	android.AssertStringDoesContain(t, "erofs fs type sparse", buildImageConfig, "erofs_sparse_flag=-s")
+}
+
+func TestF2fsPartition(t *testing.T) {
+	result := fixture.RunTestWithBp(t, `
+		android_filesystem {
+			name: "f2fs_partition",
+			type: "f2fs",
+		}
+	`)
+
+	partition := result.ModuleForTests("f2fs_partition", "android_common")
+	buildImageConfig := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("prop_pre_processing"))
+	android.AssertStringDoesContain(t, "f2fs fs type", buildImageConfig, "fs_type=f2fs")
+	android.AssertStringDoesContain(t, "f2fs fs type sparse", buildImageConfig, "f2fs_sparse_flag=-S")
+}
+
+func TestFsTypesPropertyError(t *testing.T) {
+	fixture.ExtendWithErrorHandler(android.FixtureExpectsOneErrorPattern(
+		"erofs: erofs is non-empty, but FS type is f2fs\n. Please delete erofs properties if this partition should use f2fs\n")).
+		RunTestWithBp(t, `
+		android_filesystem {
+			name: "f2fs_partition",
+			type: "f2fs",
+			erofs: {
+				compressor: "lz4hc,9",
+				compress_hints: "compress_hints.txt",
+			},
+		}
+	`)
 }
 
 // If a system_ext/ module depends on system/ module, the dependency should *not*
@@ -627,7 +668,9 @@ func TestUseSharedVariationOfNativeLib(t *testing.T) {
 
 	partition := result.ModuleForTests("myfilesystem", "android_common")
 	fileList := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("fileList"))
-	android.AssertDeepEquals(t, "cc_library listed in deps", "lib64/libc++.so\nlib64/libc.so\nlib64/libdl.so\nlib64/libfoo.so\nlib64/libm.so\n", fileList)
+	android.AssertDeepEquals(t, "cc_library listed in deps",
+		"lib64/bootstrap/libc.so\nlib64/bootstrap/libdl.so\nlib64/bootstrap/libm.so\nlib64/libc++.so\nlib64/libc.so\nlib64/libdl.so\nlib64/libfoo.so\nlib64/libm.so\n",
+		fileList)
 }
 
 // binfoo1 overrides binbar. transitive deps of binbar should not be installed.
@@ -662,7 +705,9 @@ cc_library {
 
 	partition := result.ModuleForTests("myfilesystem", "android_common")
 	fileList := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("fileList"))
-	android.AssertDeepEquals(t, "Shared library dep of overridden binary should not be installed", fileList, "bin/binfoo1\nlib64/libc++.so\nlib64/libc.so\nlib64/libdl.so\nlib64/libfoo2.so\nlib64/libm.so\n")
+	android.AssertDeepEquals(t, "Shared library dep of overridden binary should not be installed",
+		"bin/binfoo1\nlib64/bootstrap/libc.so\nlib64/bootstrap/libdl.so\nlib64/bootstrap/libm.so\nlib64/libc++.so\nlib64/libc.so\nlib64/libdl.so\nlib64/libfoo2.so\nlib64/libm.so\n",
+		fileList)
 }
 
 func TestInstallLinkerConfigFile(t *testing.T) {
@@ -670,9 +715,9 @@ func TestInstallLinkerConfigFile(t *testing.T) {
 android_filesystem {
     name: "myfilesystem",
     deps: ["libfoo_has_no_stubs", "libfoo_has_stubs"],
-    linkerconfig: {
-	    gen_linker_config: true,
-	    linker_config_srcs: ["linker.config.json"],
+    linker_config: {
+        gen_linker_config: true,
+        linker_config_srcs: ["linker.config.json"],
     },
     partition_type: "vendor",
 }
@@ -687,7 +732,7 @@ cc_library {
 }
 	`)
 
-	linkerConfigCmd := result.ModuleForTests("myfilesystem", "android_common").Rule("build_filesystem_image").RuleParams.Command
+	linkerConfigCmd := result.ModuleForTests("myfilesystem", "android_common").Output("out/soong/.intermediates/myfilesystem/android_common/linker.config.pb").RuleParams.Command
 	android.AssertStringDoesContain(t, "Could not find linker.config.json file in cmd", linkerConfigCmd, "conv_linker_config proto --force -s linker.config.json")
 	android.AssertStringDoesContain(t, "Could not find stub in `provideLibs`", linkerConfigCmd, "--key provideLibs --value libfoo_has_stubs.so")
 }
@@ -714,4 +759,29 @@ func TestOverrideModulesInDeps(t *testing.T) {
 	partition := result.ModuleForTests("myfilesystem", "android_common")
 	fileList := android.ContentFromFileRuleForTests(t, result.TestContext, partition.Output("fileList"))
 	android.AssertStringEquals(t, "filesystem with override app", "app/myoverrideapp/myoverrideapp.apk\n", fileList)
+}
+
+func TestRamdiskPartitionSetsDevNodes(t *testing.T) {
+	result := android.GroupFixturePreparers(
+		fixture,
+		android.FixtureMergeMockFs(android.MockFS{
+			"ramdisk_node_list": nil,
+		}),
+	).RunTestWithBp(t, `
+		android_filesystem {
+			name: "ramdisk_filesystem",
+			partition_name: "ramdisk",
+		}
+		filegroup {
+			name: "ramdisk_node_list",
+			srcs: ["ramdisk_node_list"],
+		}
+	`)
+
+	android.AssertBoolEquals(
+		t,
+		"Generated ramdisk image expected to depend on \"ramdisk_node_list\" module",
+		true,
+		java.CheckModuleHasDependency(t, result.TestContext, "ramdisk_filesystem", "android_common", "ramdisk_node_list"),
+	)
 }

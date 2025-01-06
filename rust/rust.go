@@ -427,6 +427,7 @@ type PathDeps struct {
 	StaticLibs    android.Paths
 	ProcMacros    RustLibraries
 	AfdoProfiles  android.Paths
+	LinkerDeps    android.Paths
 
 	// depFlags and depLinkFlags are rustc and linker (clang) flags.
 	depFlags     []string
@@ -454,6 +455,9 @@ type PathDeps struct {
 	// Paths to generated source files
 	SrcDeps          android.Paths
 	srcProviderFiles android.Paths
+
+	directImplementationDeps     android.Paths
+	transitiveImplementationDeps []depset.DepSet[android.Path]
 }
 
 type RustLibraries []RustLibrary
@@ -591,7 +595,7 @@ func (mod *Module) CcLibraryInterface() bool {
 	if mod.compiler != nil {
 		// use build{Static,Shared}() instead of {static,shared}() here because this might be called before
 		// VariantIs{Static,Shared} is set.
-		if lib, ok := mod.compiler.(libraryInterface); ok && (lib.buildShared() || lib.buildStatic()) {
+		if lib, ok := mod.compiler.(libraryInterface); ok && (lib.buildShared() || lib.buildStatic() || lib.buildRlib()) {
 			return true
 		}
 	}
@@ -677,15 +681,6 @@ func (mod *Module) BuildRlibVariant() bool {
 	panic(fmt.Errorf("BuildRlibVariant called on non-library module: %q", mod.BaseModuleName()))
 }
 
-func (mod *Module) IsRustFFI() bool {
-	if mod.compiler != nil {
-		if library, ok := mod.compiler.(libraryInterface); ok {
-			return library.isFFILibrary()
-		}
-	}
-	return false
-}
-
 func (mod *Module) BuildSharedVariant() bool {
 	if mod.compiler != nil {
 		if library, ok := mod.compiler.(libraryInterface); ok {
@@ -716,6 +711,10 @@ func (mod *Module) CoverageOutputFile() android.OptionalPath {
 }
 
 func (mod *Module) IsNdk(config android.Config) bool {
+	return false
+}
+
+func (mod *Module) HasStubsVariants() bool {
 	return false
 }
 
@@ -947,7 +946,6 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 			mod.sourceProvider.setOutputFiles(sourceLib.sourceProvider.Srcs())
 		}
 		ctx.CheckbuildFile(mod.sourceProvider.Srcs()...)
-		android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: mod.sourceProvider.Srcs().Strings()})
 	}
 
 	if mod.compiler != nil && !mod.compiler.Disabled() {
@@ -991,8 +989,16 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 
 		}
 
+		android.SetProvider(ctx, cc.ImplementationDepInfoProvider, &cc.ImplementationDepInfo{
+			ImplementationDeps: depset.New(depset.PREORDER, deps.directImplementationDeps, deps.transitiveImplementationDeps),
+		})
+
 		ctx.Phony("rust", ctx.RustModule().OutputFile().Path())
 	}
+
+	android.SetProvider(ctx, cc.LinkableInfoKey, cc.LinkableInfo{
+		StaticExecutable: mod.StaticExecutable(),
+	})
 
 	mod.setOutputFiles(ctx)
 
@@ -1221,6 +1227,8 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	ctx.VisitDirectDeps(func(dep android.Module) {
 		depName := ctx.OtherModuleName(dep)
 		depTag := ctx.OtherModuleDependencyTag(dep)
+		modStdLinkage := mod.compiler.stdLinkage(ctx.Device())
+
 		if _, exists := skipModuleList[depName]; exists {
 			return
 		}
@@ -1244,6 +1252,19 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				mod.Properties.AndroidMkDylibs = append(mod.Properties.AndroidMkDylibs, makeLibName)
 				mod.Properties.SnapshotDylibs = append(mod.Properties.SnapshotDylibs, cc.BaseLibName(depName))
 
+				depPaths.directImplementationDeps = append(depPaths.directImplementationDeps, android.OutputFileForModule(ctx, dep, ""))
+				if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
+					depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
+				}
+
+				if !rustDep.compiler.noStdlibs() {
+					rustDepStdLinkage := rustDep.compiler.stdLinkage(ctx.Device())
+					if rustDepStdLinkage != modStdLinkage {
+						ctx.ModuleErrorf("Rust dependency %q has the wrong StdLinkage; expected %#v, got %#v", depName, modStdLinkage, rustDepStdLinkage)
+						return
+					}
+				}
+
 			case depTag == rlibDepTag:
 				rlib, ok := rustDep.compiler.(libraryInterface)
 				if !ok || !rlib.rlib() {
@@ -1258,6 +1279,19 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				exportedInfo, _ := android.OtherModuleProvider(ctx, dep, cc.FlagExporterInfoProvider)
 				depPaths.depIncludePaths = append(depPaths.depIncludePaths, exportedInfo.IncludeDirs...)
 				depPaths.exportedLinkDirs = append(depPaths.exportedLinkDirs, linkPathFromFilePath(rustDep.OutputFile().Path()))
+
+				// rlibs are not installed, so don't add the output file to directImplementationDeps
+				if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
+					depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
+				}
+
+				if !rustDep.compiler.noStdlibs() {
+					rustDepStdLinkage := rustDep.compiler.stdLinkage(ctx.Device())
+					if rustDepStdLinkage != modStdLinkage {
+						ctx.ModuleErrorf("Rust dependency %q has the wrong StdLinkage; expected %#v, got %#v", depName, modStdLinkage, rustDepStdLinkage)
+						return
+					}
+				}
 
 			case depTag == procMacroDepTag:
 				directProcMacroDeps = append(directProcMacroDeps, rustDep)
@@ -1390,6 +1424,13 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				// of the dependency depending on the context (e.g. if this
 				// dependency crosses the APEX boundaries).
 				sharedLibraryInfo, exportedInfo := cc.ChooseStubOrImpl(ctx, dep)
+
+				if !sharedLibraryInfo.IsStubs {
+					depPaths.directImplementationDeps = append(depPaths.directImplementationDeps, android.OutputFileForModule(ctx, dep, ""))
+					if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
+						depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
+					}
+				}
 
 				// Re-get linkObject as ChooseStubOrImpl actually tells us which
 				// object (either from stub or non-stub) to use.
@@ -1570,7 +1611,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 	}
 
 	stdLinkage := "dylib-std"
-	if mod.compiler.stdLinkage(ctx) == RlibLinkage {
+	if mod.compiler.stdLinkage(ctx.Device()) == RlibLinkage {
 		stdLinkage = "rlib-std"
 	}
 
@@ -1637,7 +1678,7 @@ func (mod *Module) DepsMutator(actx android.BottomUpMutatorContext) {
 
 	// stdlibs
 	if deps.Stdlibs != nil {
-		if mod.compiler.stdLinkage(ctx) == RlibLinkage {
+		if mod.compiler.stdLinkage(ctx.Device()) == RlibLinkage {
 			for _, lib := range deps.Stdlibs {
 				actx.AddVariationDependencies(append(commonDepVariations, []blueprint.Variation{{Mutator: "rust_libraries", Variation: "rlib"}}...),
 					rlibDepTag, lib)
@@ -1792,41 +1833,23 @@ func (mod *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVer
 }
 
 // Implements android.ApexModule
-func (mod *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
-	depTag := ctx.OtherModuleDependencyTag(dep)
-
-	if ccm, ok := dep.(*cc.Module); ok {
-		if ccm.HasStubsVariants() {
-			if cc.IsSharedDepTag(depTag) {
-				// dynamic dep to a stubs lib crosses APEX boundary
-				return false
-			}
-			if cc.IsRuntimeDepTag(depTag) {
-				// runtime dep to a stubs lib also crosses APEX boundary
-				return false
-			}
-
-			if cc.IsHeaderDepTag(depTag) {
-				return false
-			}
-		}
-		if mod.Static() && cc.IsSharedDepTag(depTag) {
-			// shared_lib dependency from a static lib is considered as crossing
-			// the APEX boundary because the dependency doesn't actually is
-			// linked; the dependency is used only during the compilation phase.
-			return false
-		}
-	}
-
+func (mod *Module) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
 	if depTag == procMacroDepTag || depTag == customBindgenDepTag {
 		return false
 	}
 
-	if rustDep, ok := dep.(*Module); ok && rustDep.ApexExclude() {
+	if mod.Static() && cc.IsSharedDepTag(depTag) {
+		// shared_lib dependency from a static lib is considered as crossing
+		// the APEX boundary because the dependency doesn't actually is
+		// linked; the dependency is used only during the compilation phase.
 		return false
 	}
 
 	return true
+}
+
+func (mod *Module) IncomingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
+	return !mod.ApexExclude()
 }
 
 // Overrides ApexModule.IsInstallabeToApex()

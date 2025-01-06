@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/gobtools"
@@ -165,6 +164,10 @@ func (p *PackagingSpec) Partition() string {
 	return p.partition
 }
 
+func (p *PackagingSpec) SetPartition(partition string) {
+	p.partition = partition
+}
+
 func (p *PackagingSpec) SkipInstall() bool {
 	return p.skipInstall
 }
@@ -186,6 +189,7 @@ type PackageModule interface {
 	// GatherPackagingSpecs gathers PackagingSpecs of transitive dependencies.
 	GatherPackagingSpecs(ctx ModuleContext) map[string]PackagingSpec
 	GatherPackagingSpecsWithFilter(ctx ModuleContext, filter func(PackagingSpec) bool) map[string]PackagingSpec
+	GatherPackagingSpecsWithFilterAndModifier(ctx ModuleContext, filter func(PackagingSpec) bool, modifier func(*PackagingSpec)) map[string]PackagingSpec
 
 	// CopyDepsToZip zips the built artifacts of the dependencies into the given zip file and
 	// returns zip entries in it. This is expected to be called in GenerateAndroidBuildActions,
@@ -405,9 +409,9 @@ func (PackagingItemAlwaysDepTag) IsPackagingItem() bool {
 	return true
 }
 
-// highPriorityDepTag provides default implementation of HighPriorityPackagingItem interface.
 type highPriorityDepTag struct {
-	blueprint.DependencyTag
+	blueprint.BaseDependencyTag
+	PackagingItemAlwaysDepTag
 }
 
 // See PackageModule.AddDeps
@@ -428,7 +432,7 @@ func (p *PackagingBase) AddDeps(ctx BottomUpMutatorContext, depTag blueprint.Dep
 		}
 		depTagToUse := depTag
 		if highPriority {
-			depTagToUse = highPriorityDepTag{depTag}
+			depTagToUse = highPriorityDepTag{}
 		}
 
 		ctx.AddFarVariationDependencies(targetVariation, depTagToUse, dep)
@@ -444,7 +448,8 @@ func (p *PackagingBase) AddDeps(ctx BottomUpMutatorContext, depTag blueprint.Dep
 	}
 }
 
-func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter func(PackagingSpec) bool) map[string]PackagingSpec {
+// See PackageModule.GatherPackagingSpecs
+func (p *PackagingBase) GatherPackagingSpecsWithFilterAndModifier(ctx ModuleContext, filter func(PackagingSpec) bool, modifier func(*PackagingSpec)) map[string]PackagingSpec {
 	// packaging specs gathered from the dep that are not high priorities.
 	var regularPriorities []PackagingSpec
 
@@ -474,7 +479,7 @@ func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter
 		return false
 	}
 
-	ctx.VisitDirectDeps(func(child Module) {
+	ctx.VisitDirectDepsProxy(func(child ModuleProxy) {
 		depTag := ctx.OtherModuleDependencyTag(child)
 		if pi, ok := depTag.(PackagingItem); !ok || !pi.IsPackagingItem() {
 			return
@@ -489,6 +494,10 @@ func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter
 				if !filter(ps) {
 					continue
 				}
+			}
+
+			if modifier != nil {
+				modifier(&ps)
 			}
 
 			if _, ok := depTag.(highPriorityDepTag); ok {
@@ -552,6 +561,11 @@ func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter
 }
 
 // See PackageModule.GatherPackagingSpecs
+func (p *PackagingBase) GatherPackagingSpecsWithFilter(ctx ModuleContext, filter func(PackagingSpec) bool) map[string]PackagingSpec {
+	return p.GatherPackagingSpecsWithFilterAndModifier(ctx, filter, nil)
+}
+
+// See PackageModule.GatherPackagingSpecs
 func (p *PackagingBase) GatherPackagingSpecs(ctx ModuleContext) map[string]PackagingSpec {
 	return p.GatherPackagingSpecsWithFilter(ctx, nil)
 }
@@ -579,10 +593,6 @@ func (p *PackagingBase) CopySpecsToDirs(ctx ModuleContext, builder *RuleBuilder,
 	}
 
 	seenDir := make(map[string]bool)
-	preparerPath := PathForModuleOut(ctx, "preparer.sh")
-	cmd := builder.Command().Tool(preparerPath)
-	var sb strings.Builder
-	sb.WriteString("set -e\n")
 
 	dirs := make([]WritablePath, 0, len(dirsToSpecs))
 	for dir, _ := range dirsToSpecs {
@@ -601,21 +611,18 @@ func (p *PackagingBase) CopySpecsToDirs(ctx ModuleContext, builder *RuleBuilder,
 			entries = append(entries, ps.relPathInPackage)
 			if _, ok := seenDir[destDir]; !ok {
 				seenDir[destDir] = true
-				sb.WriteString(fmt.Sprintf("mkdir -p %s\n", destDir))
+				builder.Command().Textf("mkdir -p %s", destDir)
 			}
 			if ps.symlinkTarget == "" {
-				cmd.Implicit(ps.srcPath)
-				sb.WriteString(fmt.Sprintf("cp %s %s\n", ps.srcPath, destPath))
+				builder.Command().Text("cp").Input(ps.srcPath).Text(destPath)
 			} else {
-				sb.WriteString(fmt.Sprintf("ln -sf %s %s\n", ps.symlinkTarget, destPath))
+				builder.Command().Textf("ln -sf %s %s", ps.symlinkTarget, destPath)
 			}
 			if ps.executable {
-				sb.WriteString(fmt.Sprintf("chmod a+x %s\n", destPath))
+				builder.Command().Textf("chmod a+x %s", destPath)
 			}
 		}
 	}
-
-	WriteExecutableFileRuleVerbatim(ctx, preparerPath, sb.String())
 
 	return entries
 }

@@ -327,21 +327,21 @@ func TestInstall(t *testing.T) {
 	outputRule := func(name string) TestingBuildParams { return module(name, false).Output(name) }
 
 	installRule := func(name string) TestingBuildParams {
-		return module(name, false).Output(filepath.Join("out/soong/target/product/test_device/system", name))
+		return module(name, false).Output(filepath.Join("out/target/product/test_device/system", name))
 	}
 
 	symlinkRule := func(name string) TestingBuildParams {
-		return module(name, false).Output(filepath.Join("out/soong/target/product/test_device/system/symlinks", name))
+		return module(name, false).Output(filepath.Join("out/target/product/test_device/system/symlinks", name))
 	}
 
 	hostOutputRule := func(name string) TestingBuildParams { return module(name, true).Output(name) }
 
 	hostInstallRule := func(name string) TestingBuildParams {
-		return module(name, true).Output(filepath.Join("out/soong/host/linux-x86", name))
+		return module(name, true).Output(filepath.Join("out/host/linux-x86", name))
 	}
 
 	hostSymlinkRule := func(name string) TestingBuildParams {
-		return module(name, true).Output(filepath.Join("out/soong/host/linux-x86/symlinks", name))
+		return module(name, true).Output(filepath.Join("out/host/linux-x86/symlinks", name))
 	}
 
 	assertInputs := func(params TestingBuildParams, inputs ...Path) {
@@ -996,6 +996,10 @@ func (p *pathContextAddMissingDependenciesWrapper) Module() Module { return nil 
 
 func (p *pathContextAddMissingDependenciesWrapper) GetOutputFiles() OutputFilesInfo {
 	return OutputFilesInfo{}
+}
+
+func (p *pathContextAddMissingDependenciesWrapper) EqualModules(m1, m2 Module) bool {
+	return m1 == m2
 }
 
 func TestOutputFileForModule(t *testing.T) {

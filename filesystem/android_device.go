@@ -22,18 +22,28 @@ import (
 )
 
 type PartitionNameProperties struct {
-	// Name of the Boot_partition_name partition filesystem module
+	// Name of the boot partition filesystem module
 	Boot_partition_name *string
-	// Name of the System partition filesystem module
+	// Name of the vendor boot partition filesystem module
+	Vendor_boot_partition_name *string
+	// Name of the init boot partition filesystem module
+	Init_boot_partition_name *string
+	// Name of the system partition filesystem module
 	System_partition_name *string
-	// Name of the System_ext partition filesystem module
+	// Name of the system_ext partition filesystem module
 	System_ext_partition_name *string
-	// Name of the Product partition filesystem module
+	// Name of the product partition filesystem module
 	Product_partition_name *string
-	// Name of the Vendor partition filesystem module
+	// Name of the vendor partition filesystem module
 	Vendor_partition_name *string
-	// Name of the Odm partition filesystem module
+	// Name of the odm partition filesystem module
 	Odm_partition_name *string
+	// Name of the recovery partition filesystem module
+	Recovery_partition_name *string
+	// The vbmeta partition and its "chained" partitions
+	Vbmeta_partitions []string
+	// Name of the userdata partition filesystem module
+	Userdata_partition_name *string
 }
 
 type androidDevice struct {
@@ -46,7 +56,6 @@ func AndroidDeviceFactory() android.Module {
 	module := &androidDevice{}
 	module.AddProperties(&module.partitionProps)
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
-
 	return module
 }
 
@@ -59,7 +68,7 @@ var filesystemDepTag partitionDepTagType
 func (a *androidDevice) DepsMutator(ctx android.BottomUpMutatorContext) {
 	addDependencyIfDefined := func(dep *string) {
 		if dep != nil {
-			ctx.AddDependency(ctx.Module(), filesystemDepTag, proptools.String(dep))
+			ctx.AddFarVariationDependencies(nil, filesystemDepTag, proptools.String(dep))
 		}
 	}
 
@@ -69,8 +78,46 @@ func (a *androidDevice) DepsMutator(ctx android.BottomUpMutatorContext) {
 	addDependencyIfDefined(a.partitionProps.Product_partition_name)
 	addDependencyIfDefined(a.partitionProps.Vendor_partition_name)
 	addDependencyIfDefined(a.partitionProps.Odm_partition_name)
+	addDependencyIfDefined(a.partitionProps.Userdata_partition_name)
+	for _, vbmetaPartition := range a.partitionProps.Vbmeta_partitions {
+		ctx.AddDependency(ctx.Module(), filesystemDepTag, vbmetaPartition)
+	}
 }
 
 func (a *androidDevice) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+	a.buildTargetFilesZip(ctx)
+}
 
+func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
+	targetFilesDir := android.PathForModuleOut(ctx, "target_files_dir")
+	targetFilesZip := android.PathForModuleOut(ctx, "target_files.zip")
+
+	builder := android.NewRuleBuilder(pctx, ctx)
+	builder.Command().Textf("rm -rf %s", targetFilesDir.String())
+	builder.Command().Textf("mkdir -p %s", targetFilesDir.String())
+	if a.partitionProps.Vendor_partition_name != nil {
+		fsInfo := a.getFilesystemInfo(ctx, *a.partitionProps.Vendor_partition_name)
+		builder.Command().Textf("mkdir -p %s/VENDOR", targetFilesDir.String())
+		builder.Command().
+			BuiltTool("acp").
+			Textf("-rd %s/. %s/VENDOR", fsInfo.RootDir, targetFilesDir).
+			Implicit(fsInfo.Output) // so that the staging dir is built
+	}
+	builder.Command().
+		BuiltTool("soong_zip").
+		Text("-d").
+		FlagWithOutput("-o ", targetFilesZip).
+		FlagWithArg("-C ", targetFilesDir.String()).
+		FlagWithArg("-D ", targetFilesDir.String()).
+		Text("-sha256")
+	builder.Build("target_files_"+ctx.ModuleName(), "Build target_files.zip")
+}
+
+func (a *androidDevice) getFilesystemInfo(ctx android.ModuleContext, depName string) FilesystemInfo {
+	fsMod := ctx.GetDirectDepWithTag(depName, filesystemDepTag)
+	fsInfo, ok := android.OtherModuleProvider(ctx, fsMod, FilesystemProvider)
+	if !ok {
+		ctx.ModuleErrorf("Expected dependency %s to be a filesystem", depName)
+	}
+	return fsInfo
 }

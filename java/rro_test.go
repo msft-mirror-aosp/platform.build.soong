@@ -216,7 +216,7 @@ func TestOverrideRuntimeResourceOverlay(t *testing.T) {
 	}{
 		{
 			variantName:       "android_common",
-			apkPath:           "out/soong/target/product/test_device/product/overlay/foo_overlay.apk",
+			apkPath:           "out/target/product/test_device/product/overlay/foo_overlay.apk",
 			overrides:         nil,
 			targetVariant:     "android_common",
 			packageFlag:       "",
@@ -224,7 +224,7 @@ func TestOverrideRuntimeResourceOverlay(t *testing.T) {
 		},
 		{
 			variantName:       "android_common_bar_overlay",
-			apkPath:           "out/soong/target/product/test_device/product/overlay/bar_overlay.apk",
+			apkPath:           "out/target/product/test_device/product/overlay/bar_overlay.apk",
 			overrides:         []string{"foo_overlay"},
 			targetVariant:     "android_common_bar",
 			packageFlag:       "com.android.bar.overlay",
@@ -252,103 +252,6 @@ func TestOverrideRuntimeResourceOverlay(t *testing.T) {
 		checkAapt2LinkFlag(t, aapt2Flags, "rename-resources-package", "")
 		checkAapt2LinkFlag(t, aapt2Flags, "rename-overlay-target-package", expected.targetPackageFlag)
 		checkAapt2LinkFlag(t, aapt2Flags, "rename-overlay-category", expected.categoryFlag)
-	}
-}
-
-func TestEnforceRRO_propagatesToDependencies(t *testing.T) {
-	testCases := []struct {
-		name              string
-		enforceRROTargets []string
-		rroDirs           map[string][]string
-	}{
-		{
-			name:              "no RRO",
-			enforceRROTargets: nil,
-			rroDirs: map[string][]string{
-				"foo": nil,
-				"bar": nil,
-			},
-		},
-		{
-			name:              "enforce RRO on all",
-			enforceRROTargets: []string{"*"},
-			rroDirs: map[string][]string{
-				"foo": {"product/vendor/blah/overlay/lib2/res"},
-				"bar": {"product/vendor/blah/overlay/lib2/res"},
-			},
-		},
-		{
-			name:              "enforce RRO on foo",
-			enforceRROTargets: []string{"foo"},
-			rroDirs: map[string][]string{
-				"foo": {"product/vendor/blah/overlay/lib2/res"},
-				"bar": nil,
-			},
-		},
-	}
-
-	productResourceOverlays := []string{
-		"product/vendor/blah/overlay",
-	}
-
-	fs := android.MockFS{
-		"lib2/res/values/strings.xml":                             nil,
-		"product/vendor/blah/overlay/lib2/res/values/strings.xml": nil,
-	}
-
-	bp := `
-			android_app {
-				name: "foo",
-				sdk_version: "current",
-				resource_dirs: [],
-				static_libs: ["lib"],
-			}
-
-			android_app {
-				name: "bar",
-				sdk_version: "current",
-				resource_dirs: [],
-				static_libs: ["lib"],
-			}
-
-			android_library {
-				name: "lib",
-				sdk_version: "current",
-				resource_dirs: [],
-				static_libs: ["lib2"],
-			}
-
-			android_library {
-				name: "lib2",
-				sdk_version: "current",
-				resource_dirs: ["lib2/res"],
-			}
-		`
-
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			result := android.GroupFixturePreparers(
-				PrepareForTestWithJavaDefaultModules,
-				fs.AddToFixture(),
-				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-					variables.ProductResourceOverlays = productResourceOverlays
-					if testCase.enforceRROTargets != nil {
-						variables.EnforceRROTargets = testCase.enforceRROTargets
-					}
-				}),
-			).RunTestWithBp(t, bp)
-
-			modules := []string{"foo", "bar"}
-			for _, moduleName := range modules {
-				module := result.ModuleForTests(moduleName, "android_common")
-				mkEntries := android.AndroidMkEntriesForTest(t, result.TestContext, module.Module())[0]
-				actualRRODirs := mkEntries.EntryMap["LOCAL_SOONG_PRODUCT_RRO_DIRS"]
-				if !reflect.DeepEqual(actualRRODirs, testCase.rroDirs[moduleName]) {
-					t.Errorf("exected %s LOCAL_SOONG_PRODUCT_RRO_DIRS entry: %v\ngot:%q",
-						moduleName, testCase.rroDirs[moduleName], actualRRODirs)
-				}
-			}
-		})
 	}
 }
 
@@ -380,23 +283,23 @@ func TestRuntimeResourceOverlayPartition(t *testing.T) {
 	}{
 		{
 			name:         "device_specific",
-			expectedPath: "out/soong/target/product/test_device/odm/overlay",
+			expectedPath: "out/target/product/test_device/odm/overlay",
 		},
 		{
 			name:         "soc_specific",
-			expectedPath: "out/soong/target/product/test_device/vendor/overlay",
+			expectedPath: "out/target/product/test_device/vendor/overlay",
 		},
 		{
 			name:         "system_ext_specific",
-			expectedPath: "out/soong/target/product/test_device/system_ext/overlay",
+			expectedPath: "out/target/product/test_device/system_ext/overlay",
 		},
 		{
 			name:         "product_specific",
-			expectedPath: "out/soong/target/product/test_device/product/overlay",
+			expectedPath: "out/target/product/test_device/product/overlay",
 		},
 		{
 			name:         "default",
-			expectedPath: "out/soong/target/product/test_device/product/overlay",
+			expectedPath: "out/target/product/test_device/product/overlay",
 		},
 	}
 	for _, testCase := range testCases {

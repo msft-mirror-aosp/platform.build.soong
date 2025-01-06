@@ -16,13 +16,13 @@ package android
 
 import (
 	"fmt"
-	"github.com/google/blueprint/depset"
 	"path"
 	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
 	"github.com/google/blueprint/proptools"
 )
 
@@ -196,6 +196,9 @@ type ModuleContext interface {
 	InstallInOdm() bool
 	InstallInProduct() bool
 	InstallInVendor() bool
+	InstallInSystemDlkm() bool
+	InstallInVendorDlkm() bool
+	InstallInOdmDlkm() bool
 	InstallForceOS() (*OsType, *ArchType)
 
 	RequiredModuleNames(ctx ConfigurableEvaluatorContext) []string
@@ -436,9 +439,28 @@ func (m *moduleContext) GetMissingDependencies() []string {
 	return missingDeps
 }
 
-func (m *moduleContext) GetDirectDepWithTag(name string, tag blueprint.DependencyTag) blueprint.Module {
-	module, _ := m.getDirectDepInternal(name, tag)
-	return module
+func (m *moduleContext) GetDirectDepWithTag(name string, tag blueprint.DependencyTag) Module {
+	deps := m.getDirectDepsInternal(name, tag)
+	if len(deps) == 1 {
+		return deps[0]
+	} else if len(deps) >= 2 {
+		panic(fmt.Errorf("Multiple dependencies having same BaseModuleName() %q found from %q",
+			name, m.ModuleName()))
+	} else {
+		return nil
+	}
+}
+
+func (m *moduleContext) GetDirectDepProxyWithTag(name string, tag blueprint.DependencyTag) *ModuleProxy {
+	deps := m.getDirectDepsProxyInternal(name, tag)
+	if len(deps) == 1 {
+		return &deps[0]
+	} else if len(deps) >= 2 {
+		panic(fmt.Errorf("Multiple dependencies having same BaseModuleName() %q found from %q",
+			name, m.ModuleName()))
+	} else {
+		return nil
+	}
 }
 
 func (m *moduleContext) ModuleSubDir() string {
@@ -491,6 +513,18 @@ func (m *moduleContext) InstallInProduct() bool {
 
 func (m *moduleContext) InstallInVendor() bool {
 	return m.module.InstallInVendor()
+}
+
+func (m *moduleContext) InstallInSystemDlkm() bool {
+	return m.module.InstallInSystemDlkm()
+}
+
+func (m *moduleContext) InstallInVendorDlkm() bool {
+	return m.module.InstallInVendorDlkm()
+}
+
+func (m *moduleContext) InstallInOdmDlkm() bool {
+	return m.module.InstallInOdmDlkm()
 }
 
 func (m *moduleContext) skipInstall() bool {
@@ -606,8 +640,10 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 
 	if m.requiresFullInstall() {
 		deps = append(deps, InstallPaths(m.TransitiveInstallFiles.ToList())...)
-		deps = append(deps, m.installedInitRcPaths...)
-		deps = append(deps, m.installedVintfFragmentsPaths...)
+		if m.config.KatiEnabled() {
+			deps = append(deps, m.installedInitRcPaths...)
+			deps = append(deps, m.installedVintfFragmentsPaths...)
+		}
 
 		var implicitDeps, orderOnlyDeps Paths
 
@@ -814,6 +850,11 @@ func (m *moduleContext) ModuleInfoJSON() *ModuleInfoJSON {
 }
 
 func (m *moduleContext) SetOutputFiles(outputFiles Paths, tag string) {
+	for _, outputFile := range outputFiles {
+		if outputFile == nil {
+			panic("outputfiles cannot be nil")
+		}
+	}
 	if tag == "" {
 		if len(m.outputFiles.DefaultOutputFiles) > 0 {
 			m.ModuleErrorf("Module %s default OutputFiles cannot be overwritten", m.ModuleName())

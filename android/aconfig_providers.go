@@ -92,11 +92,11 @@ func VerifyAconfigBuildMode(ctx ModuleContext, container string, module blueprin
 				if asError {
 					ctx.ModuleErrorf(msg)
 				} else {
-					fmt.Printf("WARNING: " + msg)
+					fmt.Print("WARNING: " + msg)
 				}
 			} else {
 				if !asError {
-					fmt.Printf("PASSED: " + msg)
+					fmt.Print("PASSED: " + msg)
 				}
 			}
 		}
@@ -107,7 +107,7 @@ func aconfigUpdateAndroidBuildActions(ctx ModuleContext) {
 	mergedAconfigFiles := make(map[string]Paths)
 	mergedModeInfos := make(map[string]ModeInfo)
 
-	ctx.VisitDirectDeps(func(module Module) {
+	ctx.VisitDirectDepsProxy(func(module ModuleProxy) {
 		if aconfig_dep, ok := OtherModuleProvider(ctx, module, CodegenInfoProvider); ok && len(aconfig_dep.ModeInfos) > 0 {
 			maps.Copy(mergedModeInfos, aconfig_dep.ModeInfos)
 		}
