@@ -95,12 +95,22 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 	builder := android.NewRuleBuilder(pctx, ctx)
 	builder.Command().Textf("rm -rf %s", targetFilesDir.String())
 	builder.Command().Textf("mkdir -p %s", targetFilesDir.String())
-	if a.partitionProps.Vendor_partition_name != nil {
-		fsInfo := a.getFilesystemInfo(ctx, *a.partitionProps.Vendor_partition_name)
-		builder.Command().Textf("mkdir -p %s/VENDOR", targetFilesDir.String())
+	partitionToSubdir := map[*string]string{
+		a.partitionProps.System_partition_name:     "SYSTEM",
+		a.partitionProps.System_ext_partition_name: "SYSTEM_EXT",
+		a.partitionProps.Product_partition_name:    "PRODUCT",
+		a.partitionProps.Vendor_partition_name:     "VENDOR",
+		a.partitionProps.Odm_partition_name:        "ODM",
+	}
+	for partition, subdir := range partitionToSubdir {
+		if partition == nil {
+			continue
+		}
+		fsInfo := a.getFilesystemInfo(ctx, *partition)
+		builder.Command().Textf("mkdir -p %s/%s", targetFilesDir.String(), subdir)
 		builder.Command().
 			BuiltTool("acp").
-			Textf("-rd %s/. %s/VENDOR", fsInfo.RootDir, targetFilesDir).
+			Textf("-rd %s/. %s/%s", fsInfo.RootDir, targetFilesDir, subdir).
 			Implicit(fsInfo.Output) // so that the staging dir is built
 	}
 	builder.Command().
