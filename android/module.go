@@ -1887,11 +1887,11 @@ type CommonModuleInfo struct {
 
 var CommonModuleInfoKey = blueprint.NewProvider[CommonModuleInfo]()
 
-type PrebuiltModuleProviderData struct {
-	// Empty for now
+type PrebuiltModuleInfo struct {
+	SourceExists bool
 }
 
-var PrebuiltModuleProviderKey = blueprint.NewProvider[PrebuiltModuleProviderData]()
+var PrebuiltModuleInfoProvider = blueprint.NewProvider[PrebuiltModuleInfo]()
 
 type HostToolProviderData struct {
 	HostToolPath OptionalPath
@@ -2193,7 +2193,9 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	}
 	SetProvider(ctx, CommonModuleInfoKey, commonData)
 	if p, ok := m.module.(PrebuiltInterface); ok && p.Prebuilt() != nil {
-		SetProvider(ctx, PrebuiltModuleProviderKey, PrebuiltModuleProviderData{})
+		SetProvider(ctx, PrebuiltModuleInfoProvider, PrebuiltModuleInfo{
+			SourceExists: p.Prebuilt().SourceExists(),
+		})
 	}
 	if h, ok := m.module.(HostToolProvider); ok {
 		SetProvider(ctx, HostToolProviderKey, HostToolProviderData{

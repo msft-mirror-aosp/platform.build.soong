@@ -85,6 +85,7 @@ type LinkerInfo struct {
 	TestBinaryInfo         *TestBinaryInfo
 	BenchmarkDecoratorInfo *BenchmarkDecoratorInfo
 	ObjectLinkerInfo       *ObjectLinkerInfo
+	StubDecoratorInfo      *StubDecoratorInfo
 }
 
 type BinaryDecoratorInfo struct{}
@@ -101,7 +102,14 @@ type TestBinaryInfo struct {
 	Gtest bool
 }
 type BenchmarkDecoratorInfo struct{}
+
+type StubDecoratorInfo struct{}
+
 type ObjectLinkerInfo struct{}
+
+type LibraryInfo struct {
+	BuildStubs bool
+}
 
 // Common info about the cc module.
 type CcInfo struct {
@@ -110,6 +118,7 @@ type CcInfo struct {
 	CompilerInfo           *CompilerInfo
 	LinkerInfo             *LinkerInfo
 	SnapshotInfo           *SnapshotInfo
+	LibraryInfo            *LibraryInfo
 }
 
 var CcInfoProvider = blueprint.NewProvider[*CcInfo]()
@@ -126,6 +135,7 @@ type LinkableInfo struct {
 	OutputFile           android.OptionalPath
 	CoverageFiles        android.Paths
 	SAbiDumpFiles        android.Paths
+	CcLibrary            bool
 	CcLibraryInterface   bool
 	RustLibraryInterface bool
 	// CrateName returns the crateName for a Rust library
@@ -145,6 +155,7 @@ type LinkableInfo struct {
 	OnlyInVendorRamdisk bool
 	InRecovery          bool
 	OnlyInRecovery      bool
+	Installable         *bool
 }
 
 var LinkableInfoProvider = blueprint.NewProvider[*LinkableInfo]()
@@ -2214,6 +2225,7 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	if c.linker != nil {
 		if library, ok := c.linker.(libraryInterface); ok {
 			linkableInfo.Static = library.static()
+			linkableInfo.Shared = library.shared()
 			linkableInfo.CoverageFiles = library.objs().coverageFiles
 			linkableInfo.SAbiDumpFiles = library.objs().sAbiDumpFiles
 		}
@@ -2264,12 +2276,19 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 			ccInfo.LinkerInfo.BenchmarkDecoratorInfo = &BenchmarkDecoratorInfo{}
 		case *objectLinker:
 			ccInfo.LinkerInfo.ObjectLinkerInfo = &ObjectLinkerInfo{}
+		case *stubDecorator:
+			ccInfo.LinkerInfo.StubDecoratorInfo = &StubDecoratorInfo{}
 		}
 
 		if s, ok := c.linker.(SnapshotInterface); ok {
 			ccInfo.SnapshotInfo = &SnapshotInfo{
 				SnapshotAndroidMkSuffix: s.SnapshotAndroidMkSuffix(),
 			}
+		}
+	}
+	if c.library != nil {
+		ccInfo.LibraryInfo = &LibraryInfo{
+			BuildStubs: c.library.buildStubs(),
 		}
 	}
 	android.SetProvider(ctx, CcInfoProvider, &ccInfo)
@@ -2288,6 +2307,7 @@ func CreateCommonLinkableInfo(mod LinkableInterface) *LinkableInfo {
 		OutputFile:           mod.OutputFile(),
 		UnstrippedOutputFile: mod.UnstrippedOutputFile(),
 		IsStubs:              mod.IsStubs(),
+		CcLibrary:            mod.CcLibrary(),
 		CcLibraryInterface:   mod.CcLibraryInterface(),
 		RustLibraryInterface: mod.RustLibraryInterface(),
 		BaseModuleName:       mod.BaseModuleName(),
@@ -2301,6 +2321,7 @@ func CreateCommonLinkableInfo(mod LinkableInterface) *LinkableInfo {
 		OnlyInVendorRamdisk:  mod.OnlyInVendorRamdisk(),
 		InRecovery:           mod.InRecovery(),
 		OnlyInRecovery:       mod.OnlyInRecovery(),
+		Installable:          mod.Installable(),
 	}
 }
 
