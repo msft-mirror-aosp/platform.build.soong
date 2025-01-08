@@ -648,7 +648,6 @@ func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) (andro
 		Input(propFile).
 		Implicits(toolDeps).
 		Implicit(fec).
-		FlagWithArg("--build_datetime_file ", ctx.Config().Getenv("BUILD_DATETIME_FILE")).
 		Output(output).
 		Text(rootDir.String()) // directory where to find fs_config_files|dirs
 
@@ -752,7 +751,10 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 	}
 	if timestamp := proptools.String(f.properties.Fake_timestamp); timestamp != "" {
 		addStr("timestamp", timestamp)
+	} else if ctx.Config().Getenv("USE_FIXED_TIMESTAMP_IMG_FILES") == "true" {
+		addStr("use_fixed_timestamp", "true")
 	}
+
 	if uuid := proptools.String(f.properties.Uuid); uuid != "" {
 		addStr("uuid", uuid)
 		addStr("hash_seed", uuid)
