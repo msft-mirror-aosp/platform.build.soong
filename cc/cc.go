@@ -78,7 +78,8 @@ type LinkerInfo struct {
 	// list of modules that should be dynamically linked into this module.
 	SharedLibs proptools.Configurable[[]string]
 	// list of modules that should only provide headers for this module.
-	HeaderLibs proptools.Configurable[[]string]
+	HeaderLibs               proptools.Configurable[[]string]
+	ImplementationModuleName *string
 
 	BinaryDecoratorInfo    *BinaryDecoratorInfo
 	LibraryDecoratorInfo   *LibraryDecoratorInfo
@@ -115,6 +116,7 @@ type LibraryInfo struct {
 type CcInfo struct {
 	IsPrebuilt             bool
 	CmakeSnapshotSupported bool
+	HasLlndkStubs          bool
 	CompilerInfo           *CompilerInfo
 	LinkerInfo             *LinkerInfo
 	SnapshotInfo           *SnapshotInfo
@@ -2237,6 +2239,7 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	ccInfo := CcInfo{
 		IsPrebuilt:             c.IsPrebuilt(),
 		CmakeSnapshotSupported: proptools.Bool(c.Properties.Cmake_snapshot_supported),
+		HasLlndkStubs:          c.HasLlndkStubs(),
 	}
 	if c.compiler != nil {
 		ccInfo.CompilerInfo = &CompilerInfo{
@@ -2286,6 +2289,10 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 			ccInfo.SnapshotInfo = &SnapshotInfo{
 				SnapshotAndroidMkSuffix: s.SnapshotAndroidMkSuffix(),
 			}
+		}
+		if v, ok := c.linker.(versionedInterface); ok {
+			name := v.implementationModuleName(ctx.OtherModuleName(c))
+			ccInfo.LinkerInfo.ImplementationModuleName = &name
 		}
 	}
 	if c.library != nil {

@@ -1075,14 +1075,14 @@ func (f *filesystemDefaults) GenerateAndroidBuildActions(ctx android.ModuleConte
 // `linkerconfig.BuildLinkerConfig` will convert these two to a linker.config.pb for the filesystem
 // (1) will be added to --provideLibs if they are C libraries with a stable interface (has stubs)
 // (2) will be added to --requireLibs if they are C libraries with a stable interface (has stubs)
-func (f *filesystem) getLibsForLinkerConfig(ctx android.ModuleContext) ([]android.Module, []android.Module) {
+func (f *filesystem) getLibsForLinkerConfig(ctx android.ModuleContext) ([]android.ModuleProxy, []android.ModuleProxy) {
 	// we need "Module"s for packaging items
-	modulesInPackageByModule := make(map[android.Module]bool)
+	modulesInPackageByModule := make(map[android.ModuleProxy]bool)
 	modulesInPackageByName := make(map[string]bool)
 
 	deps := f.gatherFilteredPackagingSpecs(ctx)
-	ctx.WalkDeps(func(child, _ android.Module) bool {
-		if !child.Enabled(ctx) {
+	ctx.WalkDepsProxy(func(child, parent android.ModuleProxy) bool {
+		if !android.OtherModuleProviderOrDefault(ctx, child, android.CommonModuleInfoKey).Enabled {
 			return false
 		}
 		for _, ps := range android.OtherModuleProviderOrDefault(
@@ -1096,14 +1096,14 @@ func (f *filesystem) getLibsForLinkerConfig(ctx android.ModuleContext) ([]androi
 		return true
 	})
 
-	provideModules := make([]android.Module, 0, len(modulesInPackageByModule))
+	provideModules := make([]android.ModuleProxy, 0, len(modulesInPackageByModule))
 	for mod := range modulesInPackageByModule {
 		provideModules = append(provideModules, mod)
 	}
 
-	var requireModules []android.Module
-	ctx.WalkDeps(func(child, parent android.Module) bool {
-		if !child.Enabled(ctx) {
+	var requireModules []android.ModuleProxy
+	ctx.WalkDepsProxy(func(child, parent android.ModuleProxy) bool {
+		if !android.OtherModuleProviderOrDefault(ctx, child, android.CommonModuleInfoKey).Enabled {
 			return false
 		}
 		_, parentInPackage := modulesInPackageByModule[parent]
