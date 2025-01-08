@@ -46,6 +46,7 @@ var (
 				`mkdir -p "$outDir" "$annoDir" "$srcJarDir" && ` +
 				`${config.ZipSyncCmd} -d $srcJarDir -l $srcJarDir/list -f "*.java" $srcJars && ` +
 				`(if [ -s $srcJarDir/list ] || [ -s $out.rsp ] ; then ` +
+				`${config.FindInputDeltaCmd} --template '' --target "$out" --inputs_file "$out.rsp" && ` +
 				`${config.SoongJavacWrapper} $javaTemplate${config.JavacCmd} ` +
 				`${config.JavacHeapFlags} ${config.JavacVmFlags} ${config.CommonJdkFlags} ` +
 				`$processorpath $processor $javacFlags $bootClasspath $classpath ` +
@@ -55,8 +56,10 @@ var (
 				`$zipTemplate${config.SoongZipCmd} -jar -o $out.tmp -C $outDir -D $outDir && ` +
 				`if ! cmp -s "$out.tmp" "$out"; then mv "$out.tmp" "$out"; fi && ` +
 				`if ! cmp -s "$annoSrcJar.tmp" "$annoSrcJar"; then mv "$annoSrcJar.tmp" "$annoSrcJar"; fi && ` +
+				`if [ -f "$out.pc_state.new" ]; then mv "$out.pc_state.new" "$out.pc_state"; fi && ` +
 				`rm -rf "$srcJarDir" "$outDir"`,
 			CommandDeps: []string{
+				"${config.FindInputDeltaCmd}",
 				"${config.JavacCmd}",
 				"${config.SoongZipCmd}",
 				"${config.ZipSyncCmd}",
@@ -165,7 +168,7 @@ var (
 				"${config.JavaCmd}",
 			},
 			Rspfile:        "$out.rsp",
-			RspfileContent: "$in",
+			RspfileContent: "$in_newline",
 			Restat:         true,
 		},
 		&remoteexec.REParams{Labels: map[string]string{"type": "tool", "name": "turbine"},
@@ -235,12 +238,12 @@ var (
 				// for newly repackaged classes. Dropping @UnsupportedAppUsage on repackaged classes
 				// avoids adding new hiddenapis after jarjar'ing.
 				" -DremoveAndroidCompatAnnotations=true" +
-				" -jar ${config.JarjarCmd} process $rulesFile $in $out && " +
+				" -jar ${config.JarjarCmd} process $rulesFile $in $out $total_shards $shard_index && " +
 				// Turn a missing output file into a ninja error
 				`[ -e ${out} ] || (echo "Missing output file"; exit 1)`,
 			CommandDeps: []string{"${config.JavaCmd}", "${config.JarjarCmd}", "$rulesFile"},
 		},
-		"rulesFile")
+		"rulesFile", "total_shards", "shard_index")
 
 	packageCheck = pctx.AndroidStaticRule("packageCheck",
 		blueprint.RuleParams{
@@ -456,7 +459,7 @@ func turbineFlags(ctx android.ModuleContext, flags javaBuilderFlags, dir string,
 	const srcJarArgsLimit = 32 * 1024
 	if len(srcJarArgs) > srcJarArgsLimit {
 		srcJarRspFile := android.PathForModuleOut(ctx, "turbine", "srcjars.rsp")
-		android.WriteFileRule(ctx, srcJarRspFile, srcJarArgs)
+		android.WriteFileRule(ctx, srcJarRspFile, strings.Join(srcJars.Strings(), "\n"))
 		srcJarArgs = "@" + srcJarRspFile.String()
 		implicits = append(implicits, srcJarRspFile)
 		rbeInputs = append(rbeInputs, srcJarRspFile)
@@ -488,7 +491,7 @@ func turbineFlags(ctx android.ModuleContext, flags javaBuilderFlags, dir string,
 	const classpathLimit = 32 * 1024
 	if len(classpathFlags) > classpathLimit {
 		classpathRspFile := android.PathForModuleOut(ctx, dir, "classpath.rsp")
-		android.WriteFileRule(ctx, classpathRspFile, classpathFlags)
+		android.WriteFileRule(ctx, classpathRspFile, strings.Join(classpath.Strings(), "\n"))
 		classpathFlags = "@" + classpathRspFile.String()
 		implicits = append(implicits, classpathRspFile)
 		rspFiles = append(rspFiles, classpathRspFile)
@@ -747,16 +750,58 @@ func convertImplementationJarToHeaderJar(ctx android.ModuleContext, implementati
 
 func TransformJarJar(ctx android.ModuleContext, outputFile android.WritablePath,
 	classesJar android.Path, rulesFile android.Path) {
+	TransformJarJarWithShards(ctx, outputFile, classesJar, rulesFile, 1)
+}
+
+func TransformJarJarWithShards(ctx android.ModuleContext, outputFile android.WritablePath,
+	classesJar android.Path, rulesFile android.Path, totalShards int) {
+
+	// If the total number of shards is 1, just run jarjar as-is, with `total_shards` = 1
+	// and `shard_index` == 0, which effectively disables sharding
+	if totalShards == 1 {
+		ctx.Build(pctx, android.BuildParams{
+			Rule:        jarjar,
+			Description: "jarjar",
+			Output:      outputFile,
+			Input:       classesJar,
+			Implicit:    rulesFile,
+			Args: map[string]string{
+				"rulesFile":    rulesFile.String(),
+				"total_shards": "1",
+				"shard_index":  "0",
+			},
+		})
+		return
+	}
+
+	// Otherwise, run multiple jarjar instances and use merge_zips to combine the output.
+	tempJars := make([]android.Path, 0)
+	totalStr := strconv.Itoa(totalShards)
+	for i := 0; i < totalShards; i++ {
+		iStr := strconv.Itoa(i)
+		tempOut := android.PathForOutput(ctx, outputFile.String()+"-"+iStr+".jar")
+		ctx.Build(pctx, android.BuildParams{
+			Rule:        jarjar,
+			Description: "jarjar (" + iStr + "/" + totalStr + ")",
+			Output:      tempOut,
+			Input:       classesJar,
+			Implicit:    rulesFile,
+			Args: map[string]string{
+				"rulesFile":    rulesFile.String(),
+				"total_shards": totalStr,
+				"shard_index":  iStr,
+			},
+		})
+		tempJars = append(tempJars, tempOut)
+	}
+
 	ctx.Build(pctx, android.BuildParams{
-		Rule:        jarjar,
-		Description: "jarjar",
+		Rule:        combineJar,
+		Description: "merge jarjar shards",
 		Output:      outputFile,
-		Input:       classesJar,
-		Implicit:    rulesFile,
-		Args: map[string]string{
-			"rulesFile": rulesFile.String(),
-		},
+		Inputs:      tempJars,
 	})
+
 }
 
 func CheckJarPackages(ctx android.ModuleContext, outputFile android.WritablePath,

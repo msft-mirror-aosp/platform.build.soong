@@ -346,7 +346,6 @@ func (m *syspropLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 			ctx.PropertyErrorf("srcs", "srcs contains non-sysprop file %q", syspropFile.String())
 		}
 	}
-	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: srcs.Strings()})
 
 	if ctx.Failed() {
 		return
@@ -680,7 +679,7 @@ func syspropLibraryHook(ctx android.LoadHookContext, m *syspropLibrary) {
 		Sysprop_srcs: m.properties.Srcs,
 		Scope:        scope,
 		Check_api:    proptools.StringPtr(ctx.ModuleName()),
-		Installable:  proptools.BoolPtr(false),
+		Installable:  m.properties.Installable,
 		Crate_name:   m.rustCrateName(),
 		Rustlibs: []string{
 			"liblog_rust",

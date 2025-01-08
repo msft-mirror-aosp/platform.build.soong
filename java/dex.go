@@ -42,11 +42,15 @@ type DexProperties struct {
 		// True if the module containing this has it set by default.
 		EnabledByDefault bool `blueprint:"mutated"`
 
+		// Whether to allow that library classes inherit from program classes.
+		// Defaults to false.
+		Ignore_library_extends_program *bool
+
 		// Whether to continue building even if warnings are emitted.  Defaults to true.
 		Ignore_warnings *bool
 
 		// If true, runs R8 in Proguard compatibility mode, otherwise runs R8 in full mode.
-		// Defaults to false for apps, true for libraries and tests.
+		// Defaults to false for apps and tests, true for libraries.
 		Proguard_compatibility *bool
 
 		// If true, optimize for size by removing unused code.  Defaults to true for apps,
@@ -136,7 +140,6 @@ var d8, d8RE = pctx.MultiCommandRemoteStaticRules("d8",
 			`rm -f "$outDir"/classes*.dex "$outDir/classes.dex.jar"`,
 		CommandDeps: []string{
 			"${config.D8Cmd}",
-			"${config.D8Jar}",
 			"${config.SoongZipCmd}",
 			"${config.MergeZipsCmd}",
 		},
@@ -357,6 +360,10 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams, 
 
 	r8Flags = append(r8Flags, opt.Proguard_flags...)
 
+	if BoolDefault(opt.Ignore_library_extends_program, false) {
+		r8Flags = append(r8Flags, "--ignore-library-extends-program")
+	}
+
 	if BoolDefault(opt.Proguard_compatibility, true) {
 		r8Flags = append(r8Flags, "--force-proguard-compatibility")
 	}
@@ -411,6 +418,10 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams, 
 		r8Flags = append(r8Flags, flags...)
 		r8Deps = append(r8Deps, deps...)
 		artProfileOutput = profileOutput
+	}
+
+	if ctx.Config().UseR8StoreStoreFenceConstructorInlining() {
+		r8Flags = append(r8Flags, "--store-store-fence-constructor-inlining")
 	}
 
 	return r8Flags, r8Deps, artProfileOutput

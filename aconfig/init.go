@@ -73,11 +73,11 @@ var (
 
 	CreateStorageRule = pctx.AndroidStaticRule("aconfig_create_storage",
 		blueprint.RuleParams{
-			Command: `${aconfig} create-storage --container ${container} --file ${file_type} --out ${out} ${cache_files}`,
+			Command: `${aconfig} create-storage --container ${container} --file ${file_type} --out ${out} ${cache_files} --version ${version}`,
 			CommandDeps: []string{
 				"${aconfig}",
 			},
-		}, "container", "file_type", "cache_files")
+		}, "container", "file_type", "cache_files", "version")
 
 	// For exported_java_aconfig_library: Generate a JAR from all
 	// java_aconfig_libraries to be consumed by apps built outside the
@@ -91,7 +91,12 @@ var (
 			Command: `rm -rf ${out}.tmp` +
 				`&& for cache in ${cache_files}; do ` +
 				`  if [ -n "$$(${aconfig} dump-cache --dedup --cache $$cache --filter=is_exported:true --format='{fully_qualified_name}')" ]; then ` +
-				`    ${aconfig} create-java-lib --cache $$cache --mode=exported --out ${out}.tmp; ` +
+				`    ${aconfig} create-java-lib` +
+				`        --cache $$cache` +
+				`        --mode=exported` +
+				`        --allow-instrumentation ${use_new_storage}` +
+				`        --new-exported ${use_new_exported}` +
+				`        --out ${out}.tmp; ` +
 				`  fi ` +
 				`done` +
 				`&& $soong_zip -write_if_changed -jar -o ${out} -C ${out}.tmp -D ${out}.tmp` +
@@ -100,7 +105,7 @@ var (
 				"$aconfig",
 				"$soong_zip",
 			},
-		}, "cache_files")
+		}, "cache_files", "use_new_storage", "use_new_exported")
 )
 
 func init() {

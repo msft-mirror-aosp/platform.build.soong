@@ -391,8 +391,9 @@ func (a *aapt) aapt2Flags(ctx android.ModuleContext, sdkContext android.SdkConte
 		versionName = proptools.NinjaEscape(versionName)
 		linkFlags = append(linkFlags, "--version-name ", versionName)
 	}
-
-	linkFlags, compileFlags = android.FilterList(linkFlags, []string{"--legacy"})
+	// Split the flags by prefix, as --png-compression-level has the "=value" suffix.
+	linkFlags, compileFlags = android.FilterListByPrefix(linkFlags,
+		[]string{"--legacy", "--png-compression-level"})
 
 	// Always set --pseudo-localize, it will be stripped out later for release
 	// builds that don't want it.
@@ -1046,6 +1047,8 @@ func (a *AndroidLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 		AconfigTextFiles: aconfigTextFilePaths,
 	})
 
+	android.SetProvider(ctx, AndroidLibraryInfoProvider, AndroidLibraryInfo{})
+
 	a.setOutputFiles(ctx)
 }
 
@@ -1574,6 +1577,8 @@ func (a *AARImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		JniPackages: a.jniPackages,
 	})
 
+	android.SetProvider(ctx, AndroidLibraryInfoProvider, AndroidLibraryInfo{})
+
 	ctx.SetOutputFiles([]android.Path{a.implementationAndResourcesJarFile}, "")
 	ctx.SetOutputFiles([]android.Path{a.aarPath}, ".aar")
 }
@@ -1603,8 +1608,8 @@ var _ UsesLibraryDependency = (*AARImport)(nil)
 var _ android.ApexModule = (*AARImport)(nil)
 
 // Implements android.ApexModule
-func (a *AARImport) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
-	return a.depIsInSameApex(ctx, dep)
+func (a *AARImport) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	return a.depIsInSameApex(tag)
 }
 
 // Implements android.ApexModule
@@ -1640,5 +1645,5 @@ func AARImportFactory() android.Module {
 }
 
 func (a *AARImport) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
-	dpInfo.Jars = append(dpInfo.Jars, a.headerJarFile.String(), a.rJar.String())
+	dpInfo.Jars = append(dpInfo.Jars, a.implementationJarFile.String(), a.rJar.String())
 }

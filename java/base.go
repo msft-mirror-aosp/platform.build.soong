@@ -109,6 +109,10 @@ type CommonProperties struct {
 	// if not blank, used as prefix to generate repackage rule
 	Jarjar_prefix *string
 
+	// Number of shards for jarjar. It needs to be an integer represented as a string.
+	// TODO(b/383559945) change it to int, once Configurable supports the type.
+	Jarjar_shards proptools.Configurable[string]
+
 	// If not blank, set the java version passed to javac as -source and -target
 	Java_version *string
 
@@ -365,13 +369,13 @@ func (e *embeddableInModuleAndImport) initModuleAndImport(module android.Module)
 	e.initSdkLibraryComponent(module)
 }
 
-// Module/Import's DepIsInSameApex(...) delegates to this method.
+// Module/Import's OutgoingDepIsInSameApex(...) delegates to this method.
 //
-// This cannot implement DepIsInSameApex(...) directly as that leads to ambiguity with
+// This cannot implement OutgoingDepIsInSameApex(...) directly as that leads to ambiguity with
 // the one provided by ApexModuleBase.
-func (e *embeddableInModuleAndImport) depIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
+func (e *embeddableInModuleAndImport) depIsInSameApex(tag blueprint.DependencyTag) bool {
 	// dependencies other than the static linkage are all considered crossing APEX boundary
-	if staticLibTag == ctx.OtherModuleDependencyTag(dep) {
+	if tag == staticLibTag {
 		return true
 	}
 	return false
@@ -838,13 +842,18 @@ func (j *Module) TargetSdkVersion(ctx android.EarlyModuleContext) android.ApiLev
 }
 
 func (j *Module) AvailableFor(what string) bool {
-	if what == android.AvailableToPlatform && Bool(j.deviceProperties.Hostdex) {
+	return android.CheckAvailableForApex(what, j.ApexAvailableFor())
+}
+
+func (j *Module) ApexAvailableFor() []string {
+	list := j.ApexModuleBase.ApexAvailable()
+	if Bool(j.deviceProperties.Hostdex) {
 		// Exception: for hostdex: true libraries, the platform variant is created
 		// even if it's not marked as available to platform. In that case, the platform
 		// variant is used only for the hostdex and not installed to the device.
-		return true
+		list = append(list, android.AvailableToPlatform)
 	}
-	return j.ApexModuleBase.AvailableFor(what)
+	return android.FirstUniqueStrings(list)
 }
 
 func (j *Module) staticLibs(ctx android.BaseModuleContext) []string {
@@ -1232,7 +1241,6 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	uniqueSrcFiles = append(uniqueSrcFiles, uniqueJavaFiles...)
 	uniqueSrcFiles = append(uniqueSrcFiles, uniqueKtFiles...)
 	j.uniqueSrcFiles = uniqueSrcFiles
-	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: uniqueSrcFiles.Strings()})
 
 	// We don't currently run annotation processors in turbine, which means we can't use turbine
 	// generated header jars when an annotation processor that generates API is enabled.  One
@@ -1268,7 +1276,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		localHeaderJars, combinedHeaderJarFile := j.compileJavaHeader(ctx, uniqueJavaFiles, srcJars, deps, flags, jarName,
 			extraCombinedJars)
 
-		combinedHeaderJarFile, jarjared := j.jarjarIfNecessary(ctx, combinedHeaderJarFile, jarName, "turbine")
+		combinedHeaderJarFile, jarjared := j.jarjarIfNecessary(ctx, combinedHeaderJarFile, jarName, "turbine", false)
 		if jarjared {
 			localHeaderJars = android.Paths{combinedHeaderJarFile}
 			transitiveStaticLibsHeaderJars = nil
@@ -1404,7 +1412,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		shardingHeaderJars = localHeaderJars
 
 		var jarjared bool
-		j.headerJarFile, jarjared = j.jarjarIfNecessary(ctx, combinedHeaderJarFile, jarName, "turbine")
+		j.headerJarFile, jarjared = j.jarjarIfNecessary(ctx, combinedHeaderJarFile, jarName, "turbine", false)
 		if jarjared {
 			// jarjar modifies transitive static dependencies, use the combined header jar and drop the transitive
 			// static libs header jars.
@@ -1437,20 +1445,27 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			// build.
 			flags = enableErrorproneFlags(flags)
 		} else if hasErrorproneableFiles && ctx.Config().RunErrorProne() && j.properties.Errorprone.Enabled == nil {
-			// Otherwise, if the RUN_ERROR_PRONE environment variable is set, create
-			// a new jar file just for compiling with the errorprone compiler to.
-			// This is because we don't want to cause the java files to get completely
-			// rebuilt every time the state of the RUN_ERROR_PRONE variable changes.
-			// We also don't want to run this if errorprone is enabled by default for
-			// this module, or else we could have duplicated errorprone messages.
-			errorproneFlags := enableErrorproneFlags(flags)
-			errorprone := android.PathForModuleOut(ctx, "errorprone", jarName)
-			errorproneAnnoSrcJar := android.PathForModuleOut(ctx, "errorprone", "anno.srcjar")
+			if ctx.Config().RunErrorProneInline() {
+				// On CI, we're not going to toggle back/forth between errorprone and non-errorprone
+				// builds, so it's faster if we don't compile the module twice and instead always
+				// compile the module with errorprone.
+				flags = enableErrorproneFlags(flags)
+			} else {
+				// Otherwise, if the RUN_ERROR_PRONE environment variable is set, create
+				// a new jar file just for compiling with the errorprone compiler to.
+				// This is because we don't want to cause the java files to get completely
+				// rebuilt every time the state of the RUN_ERROR_PRONE variable changes.
+				// We also don't want to run this if errorprone is enabled by default for
+				// this module, or else we could have duplicated errorprone messages.
+				errorproneFlags := enableErrorproneFlags(flags)
+				errorprone := android.PathForModuleOut(ctx, "errorprone", jarName)
+				errorproneAnnoSrcJar := android.PathForModuleOut(ctx, "errorprone", "anno.srcjar")
 
-			transformJavaToClasses(ctx, errorprone, -1, uniqueJavaFiles, srcJars, errorproneAnnoSrcJar, errorproneFlags, nil,
-				"errorprone", "errorprone")
+				transformJavaToClasses(ctx, errorprone, -1, uniqueJavaFiles, srcJars, errorproneAnnoSrcJar, errorproneFlags, nil,
+					"errorprone", "errorprone")
 
-			extraJarDeps = append(extraJarDeps, errorprone)
+				extraJarDeps = append(extraJarDeps, errorprone)
+			}
 		}
 
 		if enableSharding {
@@ -1631,7 +1646,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	}
 
 	// jarjar implementation jar if necessary
-	jarjarFile, jarjarred := j.jarjarIfNecessary(ctx, outputFile, jarName, "")
+	jarjarFile, jarjarred := j.jarjarIfNecessary(ctx, outputFile, jarName, "", true)
 	if jarjarred {
 		localImplementationJars = android.Paths{jarjarFile}
 		completeStaticLibsImplementationJars = depset.New(depset.PREORDER, localImplementationJars, nil)
@@ -1640,7 +1655,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 
 	// jarjar resource jar if necessary
 	if combinedResourceJar != nil {
-		resourceJarJarFile, jarjarred := j.jarjarIfNecessary(ctx, combinedResourceJar, jarName, "resource")
+		resourceJarJarFile, jarjarred := j.jarjarIfNecessary(ctx, combinedResourceJar, jarName, "resource", false)
 		combinedResourceJar = resourceJarJarFile
 		if jarjarred {
 			localResourceJars = android.Paths{resourceJarJarFile}
@@ -2209,8 +2224,8 @@ func (j *Module) hasCode(ctx android.ModuleContext) bool {
 }
 
 // Implements android.ApexModule
-func (j *Module) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
-	return j.depIsInSameApex(ctx, dep)
+func (j *Module) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	return j.depIsInSameApex(tag)
 }
 
 // Implements android.ApexModule
@@ -2628,18 +2643,11 @@ const (
 	RenameUseExclude
 )
 
-type RenameUseElement struct {
-	DepName   string
-	RenameUse DependencyUse
-	Why       string // token for determining where in the logic the decision was made.
-}
-
 type JarJarProviderData struct {
 	// Mapping of class names: original --> renamed.  If the value is "", the class will be
 	// renamed by the next rdep that has the jarjar_prefix attribute (or this module if it has
 	// attribute). Rdeps of that module will inherit the renaming.
-	Rename    map[string]string
-	RenameUse []RenameUseElement
+	Rename map[string]string
 }
 
 func (this JarJarProviderData) GetDebugString() string {
@@ -2718,33 +2726,33 @@ func collectDirectDepsProviders(ctx android.ModuleContext) (result *JarJarProvid
 		//
 		// Note well: there are probably cases that are getting to the unconditional return
 		// and are therefore wrong.
-		shouldIncludeRenames := func() (DependencyUse, string) {
+		shouldIncludeRenames := func() DependencyUse {
 			if moduleName == m.Name() {
-				return RenameUseInclude, "name" // If we have the same module name, include the renames.
+				return RenameUseInclude // If we have the same module name, include the renames.
 			}
 			if sc, ok := module.(android.SdkContext); ok {
 				if ctx.Device() {
 					sdkDep := decodeSdkDep(ctx, sc)
 					if !sdkDep.invalidVersion && sdkDep.useFiles {
-						return RenameUseExclude, "useFiles"
+						return RenameUseExclude
 					}
 				}
 			}
 			if IsJniDepTag(tag) || tag == certificateTag || tag == proguardRaiseTag {
-				return RenameUseExclude, "tags"
+				return RenameUseExclude
 			}
 			if _, ok := android.OtherModuleProvider(ctx, m, SdkLibraryInfoProvider); ok {
 				switch tag {
 				case sdkLibTag, libTag:
-					return RenameUseExclude, "sdklibdep" // matches collectDeps()
+					return RenameUseExclude // matches collectDeps()
 				}
-				return RenameUseInvalid, "sdklibdep" // dep is not used in collectDeps()
+				return RenameUseInvalid // dep is not used in collectDeps()
 			} else if ji, ok := android.OtherModuleProvider(ctx, m, JavaInfoProvider); ok {
 				switch ji.StubsLinkType {
 				case Stubs:
-					return RenameUseExclude, "info"
+					return RenameUseExclude
 				case Implementation:
-					return RenameUseInclude, "info"
+					return RenameUseInclude
 				default:
 					//fmt.Printf("collectDirectDepsProviders: %v -> %v StubsLinkType unknown\n", module, m)
 					// Fall through to the heuristic logic.
@@ -2753,58 +2761,56 @@ func collectDirectDepsProviders(ctx android.ModuleContext) (result *JarJarProvid
 				case "*java.GeneratedJavaLibraryModule":
 					// Probably a java_aconfig_library module.
 					// TODO: make this check better.
-					return RenameUseInclude, "reflect"
+					return RenameUseInclude
 				}
 				switch tag {
 				case bootClasspathTag:
-					return RenameUseExclude, "tagswitch"
+					return RenameUseExclude
 				case sdkLibTag, libTag, instrumentationForTag:
-					return RenameUseInclude, "tagswitch"
+					return RenameUseInclude
 				case java9LibTag:
-					return RenameUseExclude, "tagswitch"
+					return RenameUseExclude
 				case staticLibTag:
-					return RenameUseInclude, "tagswitch"
+					return RenameUseInclude
 				case pluginTag:
-					return RenameUseInclude, "tagswitch"
+					return RenameUseInclude
 				case errorpronePluginTag:
-					return RenameUseInclude, "tagswitch"
+					return RenameUseInclude
 				case exportedPluginTag:
-					return RenameUseInclude, "tagswitch"
+					return RenameUseInclude
 				case kotlinPluginTag:
-					return RenameUseInclude, "tagswitch"
+					return RenameUseInclude
 				default:
-					return RenameUseExclude, "tagswitch"
+					return RenameUseExclude
 				}
 			} else if _, ok := m.(android.SourceFileProducer); ok {
 				switch tag {
 				case sdkLibTag, libTag, staticLibTag:
-					return RenameUseInclude, "srcfile"
+					return RenameUseInclude
 				default:
-					return RenameUseExclude, "srcfile"
+					return RenameUseExclude
 				}
 			} else if _, ok := android.OtherModuleProvider(ctx, m, android.CodegenInfoProvider); ok {
-				return RenameUseInclude, "aconfig_declarations_group"
+				return RenameUseInclude
 			} else {
 				switch tag {
 				case bootClasspathTag:
-					return RenameUseExclude, "else"
+					return RenameUseExclude
 				case systemModulesTag:
-					return RenameUseInclude, "else"
+					return RenameUseInclude
 				}
 			}
 			// If we got here, choose the safer option, which may lead to a build failure, rather
 			// than runtime failures on the device.
-			return RenameUseExclude, "end"
+			return RenameUseExclude
 		}
 
 		if result == nil {
 			result = &JarJarProviderData{
-				Rename:    make(map[string]string),
-				RenameUse: make([]RenameUseElement, 0),
+				Rename: make(map[string]string),
 			}
 		}
-		how, why := shouldIncludeRenames()
-		result.RenameUse = append(result.RenameUse, RenameUseElement{DepName: m.Name(), RenameUse: how, Why: why})
+		how := shouldIncludeRenames()
 		if how != RenameUseInclude {
 			// Nothing to merge.
 			return
@@ -2929,12 +2935,23 @@ func (j *Module) repackageFlagsIfNecessary(ctx android.ModuleContext, infile and
 	return repackagedJarjarFile, true
 }
 
-func (j *Module) jarjarIfNecessary(ctx android.ModuleContext, infile android.Path, jarName, info string) (android.Path, bool) {
+func (j *Module) jarjarIfNecessary(ctx android.ModuleContext, infile android.Path, jarName, info string, useShards bool) (android.Path, bool) {
 	if j.expandJarjarRules == nil {
 		return infile, false
 	}
 	jarjarFile := android.PathForModuleOut(ctx, "jarjar", info, jarName)
-	TransformJarJar(ctx, jarjarFile, infile, j.expandJarjarRules)
+
+	totalShards := 1
+	if useShards {
+		totalShardsStr := j.properties.Jarjar_shards.GetOrDefault(ctx, "1")
+		ts, err := strconv.Atoi(totalShardsStr)
+		if err != nil {
+			ctx.PropertyErrorf("jarjar_shards", "jarjar_shards must be an integer represented as a string")
+			return infile, false
+		}
+		totalShards = ts
+	}
+	TransformJarJarWithShards(ctx, jarjarFile, infile, j.expandJarjarRules, totalShards)
 	return jarjarFile, true
 
 }

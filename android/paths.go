@@ -1353,7 +1353,7 @@ func PathForSource(ctx PathContext, pathComponents ...string) SourcePath {
 
 // PathForArbitraryOutput creates a path for the given components. Unlike PathForOutput,
 // the path is relative to the root of the output folder, not the out/soong folder.
-func PathForArbitraryOutput(ctx PathContext, pathComponents ...string) Path {
+func PathForArbitraryOutput(ctx PathContext, pathComponents ...string) WritablePath {
 	path, err := validatePath(pathComponents...)
 	if err != nil {
 		reportPathError(ctx, err)
@@ -1435,33 +1435,6 @@ func (p SourcePath) join(ctx PathContext, paths ...string) SourcePath {
 		reportPathError(ctx, err)
 	}
 	return p.withRel(path)
-}
-
-// OverlayPath returns the overlay for `path' if it exists. This assumes that the
-// SourcePath is the path to a resource overlay directory.
-func (p SourcePath) OverlayPath(ctx ModuleMissingDepsPathContext, path Path) OptionalPath {
-	var relDir string
-	if srcPath, ok := path.(SourcePath); ok {
-		relDir = srcPath.path
-	} else {
-		ReportPathErrorf(ctx, "Cannot find relative path for %s(%s)", reflect.TypeOf(path).Name(), path)
-		// No need to put the error message into the returned path since it has been reported already.
-		return OptionalPath{}
-	}
-	dir := filepath.Join(p.path, relDir)
-	// Use Glob so that we are run again if the directory is added.
-	if pathtools.IsGlob(dir) {
-		ReportPathErrorf(ctx, "Path may not contain a glob: %s", dir)
-	}
-	paths, err := ctx.GlobWithDeps(dir, nil)
-	if err != nil {
-		ReportPathErrorf(ctx, "glob: %s", err.Error())
-		return OptionalPath{}
-	}
-	if len(paths) == 0 {
-		return InvalidOptionalPath(dir + " does not exist")
-	}
-	return OptionalPathForPath(PathForSource(ctx, paths[0]))
 }
 
 // OutputPath is a Path representing an intermediates file path rooted from the build directory
@@ -2103,7 +2076,7 @@ func pathForInstall(ctx PathContext, os OsType, arch ArchType, partition string,
 		reportPathError(ctx, err)
 	}
 
-	base := pathForPartitionInstallDir(ctx, partition, partitionPath, ctx.Config().KatiEnabled())
+	base := pathForPartitionInstallDir(ctx, partition, partitionPath, true)
 	return base.Join(ctx, pathComponents...)
 }
 

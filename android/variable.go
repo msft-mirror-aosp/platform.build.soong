@@ -162,6 +162,7 @@ type variableProperties struct {
 			Optimize struct {
 				Enabled *bool
 			}
+			Aaptflags []string
 		}
 
 		Uml struct {
@@ -532,7 +533,8 @@ type ProductVariables struct {
 	OdmPropFiles       []string `json:",omitempty"`
 	VendorPropFiles    []string `json:",omitempty"`
 
-	EnableUffdGc *string `json:",omitempty"`
+	EnableUffdGc       *string `json:",omitempty"`
+	BoardKernelVersion *string `json:",omitempty"`
 
 	BoardAvbEnable                         *bool    `json:",omitempty"`
 	BoardAvbSystemAddHashtreeFooterArgs    []string `json:",omitempty"`
@@ -617,27 +619,32 @@ type PartitionVariables struct {
 	ProductUseDynamicPartitionSize bool   `json:",omitempty"`
 	CopyImagesForTargetFilesZip    bool   `json:",omitempty"`
 
-	VendorSecurityPatch string `json:",omitempty"`
+	VendorSecurityPatch     string `json:",omitempty"`
+	OdmSecurityPatch        string `json:",omitempty"`
+	SystemDlkmSecurityPatch string `json:",omitempty"`
+	VendorDlkmSecurityPatch string `json:",omitempty"`
+	OdmDlkmSecurityPatch    string `json:",omitempty"`
 
 	// Boot image stuff
-	BuildingRamdiskImage            bool     `json:",omitempty"`
-	ProductBuildBootImage           bool     `json:",omitempty"`
-	ProductBuildVendorBootImage     string   `json:",omitempty"`
-	ProductBuildInitBootImage       bool     `json:",omitempty"`
-	BoardUsesRecoveryAsBoot         bool     `json:",omitempty"`
-	BoardPrebuiltBootimage          string   `json:",omitempty"`
-	BoardPrebuiltInitBootimage      string   `json:",omitempty"`
-	BoardBootimagePartitionSize     string   `json:",omitempty"`
-	BoardInitBootimagePartitionSize string   `json:",omitempty"`
-	BoardBootHeaderVersion          string   `json:",omitempty"`
-	TargetKernelPath                string   `json:",omitempty"`
-	BoardUsesGenericKernelImage     bool     `json:",omitempty"`
-	BootSecurityPatch               string   `json:",omitempty"`
-	InitBootSecurityPatch           string   `json:",omitempty"`
-	BoardIncludeDtbInBootimg        bool     `json:",omitempty"`
-	InternalKernelCmdline           []string `json:",omitempty"`
-	InternalBootconfig              []string `json:",omitempty"`
-	InternalBootconfigFile          string   `json:",omitempty"`
+	BuildingRamdiskImage              bool     `json:",omitempty"`
+	ProductBuildBootImage             bool     `json:",omitempty"`
+	ProductBuildVendorBootImage       string   `json:",omitempty"`
+	ProductBuildInitBootImage         bool     `json:",omitempty"`
+	BoardUsesRecoveryAsBoot           bool     `json:",omitempty"`
+	BoardPrebuiltBootimage            string   `json:",omitempty"`
+	BoardPrebuiltInitBootimage        string   `json:",omitempty"`
+	BoardBootimagePartitionSize       string   `json:",omitempty"`
+	BoardVendorBootimagePartitionSize string   `json:",omitempty"`
+	BoardInitBootimagePartitionSize   string   `json:",omitempty"`
+	BoardBootHeaderVersion            string   `json:",omitempty"`
+	TargetKernelPath                  string   `json:",omitempty"`
+	BoardUsesGenericKernelImage       bool     `json:",omitempty"`
+	BootSecurityPatch                 string   `json:",omitempty"`
+	InitBootSecurityPatch             string   `json:",omitempty"`
+	BoardIncludeDtbInBootimg          bool     `json:",omitempty"`
+	InternalKernelCmdline             []string `json:",omitempty"`
+	InternalBootconfig                []string `json:",omitempty"`
+	InternalBootconfigFile            string   `json:",omitempty"`
 
 	// Super image stuff
 	ProductUseDynamicPartitions       bool                                     `json:",omitempty"`
@@ -688,6 +695,8 @@ type PartitionVariables struct {
 	ProductFsverityGenerateMetadata bool `json:",omitempty"`
 
 	TargetScreenDensity string `json:",omitempty"`
+
+	PrivateRecoveryUiProperties map[string]string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {

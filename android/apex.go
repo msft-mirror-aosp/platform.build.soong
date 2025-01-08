@@ -69,14 +69,14 @@ type ApexInfo struct {
 	// See Prebuilt.ApexInfoMutator for more information.
 	ForPrebuiltApex bool
 
-	// Returns the name of the test apexes that this module is included in.
-	TestApexes []string
-
 	// Returns the name of the overridden apex (com.android.foo)
 	BaseApexName string
 
 	// Returns the value of `apex_available_name`
 	ApexAvailableName string
+
+	// Returns the apex names that this module is available for
+	ApexAvailableFor []string
 }
 
 // AllApexInfo holds the ApexInfo of all apexes that include this module.
@@ -146,15 +146,25 @@ var ApexBundleInfoProvider = blueprint.NewMutatorProvider[ApexBundleInfo]("apex_
 // extracted from ApexModule to make it easier to define custom subsets of the ApexModule interface
 // and improve code navigation within the IDE.
 type DepIsInSameApex interface {
-	// DepIsInSameApex tests if the other module 'dep' is considered as part of the same APEX as
-	// this module. For example, a static lib dependency usually returns true here, while a
+	// OutgoingDepIsInSameApex tests if the module depended on via 'tag' is considered as part of
+	// the same APEX as this module. For example, a static lib dependency usually returns true here, while a
 	// shared lib dependency to a stub library returns false.
 	//
 	// This method must not be called directly without first ignoring dependencies whose tags
 	// implement ExcludeFromApexContentsTag. Calls from within the func passed to WalkPayloadDeps()
 	// are fine as WalkPayloadDeps() will ignore those dependencies automatically. Otherwise, use
 	// IsDepInSameApex instead.
-	DepIsInSameApex(ctx BaseModuleContext, dep Module) bool
+	OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool
+
+	// IncomingDepIsInSameApex tests if this module depended on via 'tag' is considered as part of
+	// the same APEX as the depending module module. For example, a static lib dependency usually
+	// returns true here, while a shared lib dependency to a stub library returns false.
+	//
+	// This method must not be called directly without first ignoring dependencies whose tags
+	// implement ExcludeFromApexContentsTag. Calls from within the func passed to WalkPayloadDeps()
+	// are fine as WalkPayloadDeps() will ignore those dependencies automatically. Otherwise, use
+	// IsDepInSameApex instead.
+	IncomingDepIsInSameApex(tag blueprint.DependencyTag) bool
 }
 
 func IsDepInSameApex(ctx BaseModuleContext, module, dep Module) bool {
@@ -164,7 +174,14 @@ func IsDepInSameApex(ctx BaseModuleContext, module, dep Module) bool {
 		// apex as the parent.
 		return false
 	}
-	return module.(DepIsInSameApex).DepIsInSameApex(ctx, dep)
+
+	if m, ok := module.(DepIsInSameApex); ok && !m.OutgoingDepIsInSameApex(depTag) {
+		return false
+	}
+	if d, ok := dep.(DepIsInSameApex); ok && !d.IncomingDepIsInSameApex(depTag) {
+		return false
+	}
+	return true
 }
 
 // ApexModule is the interface that a module type is expected to implement if the module has to be
@@ -213,6 +230,12 @@ type ApexModule interface {
 	// apex_available property of the module.
 	AvailableFor(what string) bool
 
+	// Returns the apexes that are available for this module, valid values include
+	// "//apex_available:platform", "//apex_available:anyapex" and specific apexes.
+	// There are some differences between this one and the ApexAvailable on
+	// ApexModuleBase for cc, java library and sdkLibraryXml.
+	ApexAvailableFor() []string
+
 	// AlwaysRequiresPlatformApexVariant allows the implementing module to determine whether an
 	// APEX mutator should always be created for it.
 	//
@@ -257,15 +280,9 @@ type ApexProperties struct {
 
 	// See ApexModule.UniqueApexVariants()
 	UniqueApexVariationsForDeps bool `blueprint:"mutated"`
-
-	// The test apexes that includes this apex variant
-	TestApexes []string `blueprint:"mutated"`
 }
 
 // Marker interface that identifies dependencies that are excluded from APEX contents.
-//
-// Unless the tag also implements the AlwaysRequireApexVariantTag this will prevent an apex variant
-// from being created for the module.
 //
 // At the moment the sdk.sdkRequirementsMutator relies on the fact that the existing tags which
 // implement this interface do not define dependencies onto members of an sdk_snapshot. If that
@@ -275,17 +292,6 @@ type ExcludeFromApexContentsTag interface {
 
 	// Method that differentiates this interface from others.
 	ExcludeFromApexContents()
-}
-
-// Marker interface that identifies dependencies that always requires an APEX variant to be created.
-//
-// It is possible for a dependency to require an apex variant but exclude the module from the APEX
-// contents. See sdk.sdkMemberDependencyTag.
-type AlwaysRequireApexVariantTag interface {
-	blueprint.DependencyTag
-
-	// Return true if this tag requires that the target dependency has an apex variant.
-	AlwaysRequireApexVariant() bool
 }
 
 // Interface that identifies dependencies to skip Apex dependency check
@@ -334,6 +340,10 @@ func (m *ApexModuleBase) ApexAvailable() []string {
 	return CopyOf(availableToPlatformList)
 }
 
+func (m *ApexModuleBase) ApexAvailableFor() []string {
+	return m.ApexAvailable()
+}
+
 // Implements ApexModule
 func (m *ApexModuleBase) BuildForApex(apex ApexInfo) {
 	m.apexInfosLock.Lock()
@@ -373,11 +383,6 @@ func (m *ApexModuleBase) IsInstallableToApex() bool {
 	return false
 }
 
-// Returns the test apexes that this module is included in.
-func (m *ApexModuleBase) TestApexes() []string {
-	return m.ApexProperties.TestApexes
-}
-
 // Implements ApexModule
 func (m *ApexModuleBase) UniqueApexVariations() bool {
 	// If needed, this will bel overridden by concrete types inheriting
@@ -386,7 +391,15 @@ func (m *ApexModuleBase) UniqueApexVariations() bool {
 }
 
 // Implements ApexModule
-func (m *ApexModuleBase) DepIsInSameApex(ctx BaseModuleContext, dep Module) bool {
+func (m *ApexModuleBase) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	// By default, if there is a dependency from A to B, we try to include both in the same
+	// APEX, unless B is explicitly from outside of the APEX (i.e. a stubs lib). Thus, returning
+	// true. This is overridden by some module types like apex.ApexBundle, cc.Module,
+	// java.Module, etc.
+	return true
+}
+
+func (m *ApexModuleBase) IncomingDepIsInSameApex(tag blueprint.DependencyTag) bool {
 	// By default, if there is a dependency from A to B, we try to include both in the same
 	// APEX, unless B is explicitly from outside of the APEX (i.e. a stubs lib). Thus, returning
 	// true. This is overridden by some module types like apex.ApexBundle, cc.Module,
@@ -428,13 +441,17 @@ func CheckAvailableForApex(what string, apex_available []string) bool {
 		if strings.HasSuffix(apex_name, ".*") && strings.HasPrefix(what, strings.TrimSuffix(apex_name, "*")) {
 			return true
 		}
+		// TODO b/383863941: Remove once legacy name is no longer used
+		if (apex_name == "com.android.btservices" && what == "com.android.bt") || (apex_name == "com.android.bt" && what == "com.android.btservices") {
+			return true
+		}
 	}
 	return false
 }
 
 // Implements ApexModule
 func (m *ApexModuleBase) AvailableFor(what string) bool {
-	return CheckAvailableForApex(what, m.ApexProperties.Apex_available)
+	return CheckAvailableForApex(what, m.ApexAvailableFor())
 }
 
 // Implements ApexModule
@@ -519,12 +536,10 @@ func mergeApexVariations(apexInfos []ApexInfo) (merged []ApexInfo, aliases [][2]
 			// Platform APIs is allowed for this module only when all APEXes containing
 			// the module are with `use_platform_apis: true`.
 			merged[index].UsePlatformApis = merged[index].UsePlatformApis && apexInfo.UsePlatformApis
-			merged[index].TestApexes = append(merged[index].TestApexes, apexInfo.TestApexes...)
 		} else {
 			seen[mergedName] = len(merged)
 			apexInfo.ApexVariationName = mergedName
 			apexInfo.InApexVariants = CopyOf(apexInfo.InApexVariants)
-			apexInfo.TestApexes = CopyOf(apexInfo.TestApexes)
 			merged = append(merged, apexInfo)
 		}
 		aliases = append(aliases, [2]string{variantName, mergedName})
@@ -628,18 +643,10 @@ func MutateApexTransition(ctx BaseModuleContext, variation string) {
 		} else {
 			panic(fmt.Errorf("failed to find apexInfo for incoming variation %q", variation))
 		}
+		thisApexInfo.ApexAvailableFor = module.ApexAvailableFor()
 
 		SetProvider(ctx, ApexInfoProvider, thisApexInfo)
 	}
-
-	// Set the value of TestApexes in every single apex variant.
-	// This allows each apex variant to be aware of the test apexes in the user provided apex_available.
-	var testApexes []string
-	for _, a := range apexInfos {
-		testApexes = append(testApexes, a.TestApexes...)
-	}
-	base.ApexProperties.TestApexes = testApexes
-
 }
 
 func ApexInfoMutator(ctx TopDownMutatorContext, module ApexModule) {
@@ -661,7 +668,7 @@ func ApexInfoMutator(ctx TopDownMutatorContext, module ApexModule) {
 // variant.
 func UpdateUniqueApexVariationsForDeps(mctx BottomUpMutatorContext, am ApexModule) {
 	// anyInSameApex returns true if the two ApexInfo lists contain any values in an
-	// InApexVariants list in common. It is used instead of DepIsInSameApex because it needs to
+	// InApexVariants list in common. It is used instead of OutgoingDepIsInSameApex because it needs to
 	// determine if the dep is in the same APEX due to being directly included, not only if it
 	// is included _because_ it is a dependency.
 	anyInSameApex := func(a, b ApexModule) bool {
@@ -778,7 +785,7 @@ func (d *ApexBundleDepsInfo) BuildDepsInfoLists(ctx ModuleContext, minSdkVersion
 // Function called while walking an APEX's payload dependencies.
 //
 // Return true if the `to` module should be visited, false otherwise.
-type PayloadDepsCallback func(ctx BaseModuleContext, from blueprint.Module, to ApexModule, externalDep bool) bool
+type PayloadDepsCallback func(ctx BaseModuleContext, from Module, to ApexModule, externalDep bool) bool
 type WalkPayloadDepsFunc func(ctx BaseModuleContext, do PayloadDepsCallback)
 
 // ModuleWithMinSdkVersionCheck represents a module that implements min_sdk_version checks
@@ -806,14 +813,14 @@ func CheckMinSdkVersion(ctx ModuleContext, minSdkVersion ApiLevel, walk WalkPayl
 		return
 	}
 
-	walk(ctx, func(ctx BaseModuleContext, from blueprint.Module, to ApexModule, externalDep bool) bool {
+	walk(ctx, func(ctx BaseModuleContext, from Module, to ApexModule, externalDep bool) bool {
 		if externalDep {
 			// external deps are outside the payload boundary, which is "stable"
 			// interface. We don't have to check min_sdk_version for external
 			// dependencies.
 			return false
 		}
-		if am, ok := from.(DepIsInSameApex); ok && !am.DepIsInSameApex(ctx, to) {
+		if !IsDepInSameApex(ctx, from, to) {
 			return false
 		}
 		if m, ok := to.(ModuleWithMinSdkVersionCheck); ok {

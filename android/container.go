@@ -197,6 +197,7 @@ var unstableInfoProvider = blueprint.NewProvider[unstableInfo]()
 
 func determineUnstableModule(mctx ModuleContext) bool {
 	module := mctx.Module()
+
 	unstableModule := module.Name() == "framework-minus-apex"
 	if installable, ok := module.(InstallableModule); ok {
 		for _, staticDepTag := range installable.StaticDependencyTags() {

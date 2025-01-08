@@ -147,19 +147,12 @@ type apexBundleProperties struct {
 	// Default: true.
 	Installable *bool
 
-	// Deprecated. Do not use. TODO(b/350644693) remove this after removing all usage
-	Use_vndk_as_stable *bool
-
 	// The type of filesystem to use. Either 'ext4', 'f2fs' or 'erofs'. Default 'ext4'.
 	Payload_fs_type *string
 
 	// For telling the APEX to ignore special handling for system libraries such as bionic.
 	// Default is false.
 	Ignore_system_library_special_case *bool
-
-	// Whenever apex_payload.img of the APEX should include dm-verity hashtree.
-	// Default value is true.
-	Generate_hashtree *bool
 
 	// Whenever apex_payload.img of the APEX should not be dm-verity signed. Should be only
 	// used in tests.
@@ -895,7 +888,19 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 	ctx.AddFarVariationDependencies(commonVariation, javaLibTag, a.properties.Java_libs...)
 	ctx.AddFarVariationDependencies(commonVariation, fsTag, a.properties.Filesystems...)
 	ctx.AddFarVariationDependencies(commonVariation, compatConfigTag, a.properties.Compat_configs...)
+
+	// Add a reverse dependency to all_apex_certs singleton module.
+	// all_apex_certs will use this dependency to collect the certificate of this apex.
+	ctx.AddReverseDependency(ctx.Module(), allApexCertsDepTag, "all_apex_certs")
 }
+
+type allApexCertsDependencyTag struct {
+	blueprint.DependencyTag
+}
+
+func (_ allApexCertsDependencyTag) ExcludeFromVisibilityEnforcement() {}
+
+var allApexCertsDepTag = allApexCertsDependencyTag{}
 
 // DepsMutator for the overridden properties.
 func (a *apexBundle) OverridablePropertiesDepsMutator(ctx android.BottomUpMutatorContext) {
@@ -973,21 +978,8 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 		if !ok || !am.CanHaveApexVariants() {
 			return false
 		}
-		depTag := mctx.OtherModuleDependencyTag(child)
 
-		// Check to see if the tag always requires that the child module has an apex variant for every
-		// apex variant of the parent module. If it does not then it is still possible for something
-		// else, e.g. the DepIsInSameApex(...) method to decide that a variant is required.
-		if required, ok := depTag.(android.AlwaysRequireApexVariantTag); ok && required.AlwaysRequireApexVariant() {
-			return true
-		}
-		if !android.IsDepInSameApex(mctx, parent, child) {
-			return false
-		}
-
-		// By default, all the transitive dependencies are collected, unless filtered out
-		// above.
-		return true
+		return android.IsDepInSameApex(mctx, parent, child)
 	}
 
 	android.SetProvider(mctx, android.ApexBundleInfoProvider, android.ApexBundleInfo{})
@@ -1008,17 +1000,12 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 	}
 
 	a.properties.ApexVariationName = apexVariationName
-	testApexes := []string{}
-	if a.testApex {
-		testApexes = []string{apexVariationName}
-	}
 	apexInfo := android.ApexInfo{
 		ApexVariationName: apexVariationName,
 		MinSdkVersion:     minSdkVersion,
 		Updatable:         a.Updatable(),
 		UsePlatformApis:   a.UsePlatformApis(),
 		InApexVariants:    []string{apexVariationName},
-		TestApexes:        testApexes,
 		BaseApexName:      mctx.ModuleName(),
 		ApexAvailableName: proptools.String(a.properties.Apex_available_name),
 	}
@@ -1235,7 +1222,13 @@ const (
 var _ android.DepIsInSameApex = (*apexBundle)(nil)
 
 // Implements android.DepInInSameApex
-func (a *apexBundle) DepIsInSameApex(_ android.BaseModuleContext, _ android.Module) bool {
+func (a *apexBundle) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	// direct deps of an APEX bundle are all part of the APEX bundle
+	// TODO(jiyong): shouldn't we look into the payload field of the dependencyTag?
+	return true
+}
+
+func (a *apexBundle) IncomingDepIsInSameApex(tag blueprint.DependencyTag) bool {
 	// direct deps of an APEX bundle are all part of the APEX bundle
 	// TODO(jiyong): shouldn't we look into the payload field of the dependencyTag?
 	return true
@@ -1331,11 +1324,6 @@ func (a *apexBundle) getCertString(ctx android.BaseModuleContext) string {
 // See the installable property
 func (a *apexBundle) installable() bool {
 	return !a.properties.PreventInstall && (a.properties.Installable == nil || proptools.Bool(a.properties.Installable))
-}
-
-// See the generate_hashtree property
-func (a *apexBundle) shouldGenerateHashtree() bool {
-	return proptools.BoolDefault(a.properties.Generate_hashtree, true)
 }
 
 // See the test_only_unsigned_payload property
@@ -2122,17 +2110,14 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			// like to record requiredNativeLibs even when
 			// DepIsInSameAPex is false. We also shouldn't do
 			// this for host.
-			//
-			// TODO(jiyong): explain why the same module is passed in twice.
-			// Switching the first am to parent breaks lots of tests.
-			if !android.IsDepInSameApex(ctx, am, am) {
+			if !android.IsDepInSameApex(ctx, parent, am) {
 				return false
 			}
 
 			vctx.filesInfo = append(vctx.filesInfo, af)
 			return true // track transitive dependencies
 		} else if rm, ok := child.(*rust.Module); ok {
-			if !android.IsDepInSameApex(ctx, am, am) {
+			if !android.IsDepInSameApex(ctx, parent, am) {
 				return false
 			}
 
@@ -2707,7 +2692,7 @@ func (a *apexBundle) checkApexAvailability(ctx android.ModuleContext) {
 		return
 	}
 
-	a.WalkPayloadDeps(ctx, func(ctx android.BaseModuleContext, from blueprint.Module, to android.ApexModule, externalDep bool) bool {
+	a.WalkPayloadDepsProxy(ctx, func(ctx android.BaseModuleContext, from, to android.ModuleProxy, externalDep bool) bool {
 		// As soon as the dependency graph crosses the APEX boundary, don't go further.
 		if externalDep {
 			return false
@@ -2724,17 +2709,8 @@ func (a *apexBundle) checkApexAvailability(ctx android.ModuleContext) {
 		fromName := ctx.OtherModuleName(from)
 		toName := ctx.OtherModuleName(to)
 
-		// If `to` is not actually in the same APEX as `from` then it does not need
-		// apex_available and neither do any of its dependencies.
-		//
-		// It is ok to call DepIsInSameApex() directly from within WalkPayloadDeps().
-		if am, ok := from.(android.DepIsInSameApex); ok && !am.DepIsInSameApex(ctx, to) {
-			// As soon as the dependency graph crosses the APEX boundary, don't go
-			// further.
-			return false
-		}
-
-		if to.AvailableFor(apexName) {
+		if android.CheckAvailableForApex(apexName,
+			android.OtherModuleProviderOrDefault(ctx, to, android.ApexInfoProvider).ApexAvailableFor) {
 			return true
 		}
 

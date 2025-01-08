@@ -2959,8 +2959,8 @@ func (j *Import) ClassLoaderContexts() dexpreopt.ClassLoaderContextMap {
 var _ android.ApexModule = (*Import)(nil)
 
 // Implements android.ApexModule
-func (j *Import) DepIsInSameApex(ctx android.BaseModuleContext, dep android.Module) bool {
-	return j.depIsInSameApex(ctx, dep)
+func (j *Import) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	return j.depIsInSameApex(tag)
 }
 
 // Implements android.ApexModule
@@ -3020,7 +3020,7 @@ var _ android.IDECustomizedModuleName = (*Import)(nil)
 // Collect information for opening IDE project files in java/jdeps.go.
 
 func (j *Import) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
-	dpInfo.Jars = append(dpInfo.Jars, j.combinedHeaderFile.String())
+	dpInfo.Jars = append(dpInfo.Jars, j.combinedImplementationFile.String())
 }
 
 func (j *Import) IDECustomizedModuleName() string {
