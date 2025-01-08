@@ -178,6 +178,9 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 		if bootImgInfo.Dtb != nil {
 			builder.Command().Textf("cp %s %s/VENDOR_BOOT/dtb", bootImgInfo.Dtb, targetFilesDir)
 		}
+		if bootImgInfo.Bootconfig != nil {
+			builder.Command().Textf("cp %s %s/VENDOR_BOOT/vendor_bootconfig", bootImgInfo.Bootconfig, targetFilesDir)
+		}
 	}
 	if a.partitionProps.Boot_partition_name != nil {
 		bootImg := ctx.GetDirectDepWithTag(proptools.String(a.partitionProps.Boot_partition_name), filesystemDepTag)
@@ -190,6 +193,9 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 			builder.Command().Textf("cp %s %s/BOOT/kernel", bootImgInfo.Kernel, targetFilesDir)
 			// Even though kernel is not used to build vendor_boot, copy the kernel to VENDOR_BOOT to match the behavior of make packaging.
 			builder.Command().Textf("cp %s %s/VENDOR_BOOT/kernel", bootImgInfo.Kernel, targetFilesDir)
+		}
+		if bootImgInfo.Bootconfig != nil {
+			builder.Command().Textf("cp %s %s/BOOT/bootconfig", bootImgInfo.Bootconfig, targetFilesDir)
 		}
 	}
 

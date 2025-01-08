@@ -231,18 +231,20 @@ func (b *bootimg) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Set BootimgInfo for building target_files.zip
 	android.SetProvider(ctx, BootimgInfoProvider, BootimgInfo{
-		Cmdline: b.properties.Cmdline,
-		Kernel:  b.getKernelPath(ctx),
-		Dtb:     b.getDtbPath(ctx),
+		Cmdline:    b.properties.Cmdline,
+		Kernel:     b.getKernelPath(ctx),
+		Dtb:        b.getDtbPath(ctx),
+		Bootconfig: b.getBootconfigPath(ctx),
 	})
 }
 
 var BootimgInfoProvider = blueprint.NewProvider[BootimgInfo]()
 
 type BootimgInfo struct {
-	Cmdline []string
-	Kernel  android.Path
-	Dtb     android.Path
+	Cmdline    []string
+	Kernel     android.Path
+	Dtb        android.Path
+	Bootconfig android.Path
 }
 
 func (b *bootimg) getKernelPath(ctx android.ModuleContext) android.Path {
@@ -261,6 +263,15 @@ func (b *bootimg) getDtbPath(ctx android.ModuleContext) android.Path {
 		dtbPath = android.PathForModuleSrc(ctx, dtbName)
 	}
 	return dtbPath
+}
+
+func (b *bootimg) getBootconfigPath(ctx android.ModuleContext) android.Path {
+	var bootconfigPath android.Path
+	bootconfigName := proptools.String(b.properties.Bootconfig)
+	if bootconfigName != "" {
+		bootconfigPath = android.PathForModuleSrc(ctx, bootconfigName)
+	}
+	return bootconfigPath
 }
 
 func (b *bootimg) buildBootImage(ctx android.ModuleContext, kernel android.Path) android.Path {
