@@ -1081,7 +1081,10 @@ func (f *filesystem) getLibsForLinkerConfig(ctx android.ModuleContext) ([]androi
 	modulesInPackageByName := make(map[string]bool)
 
 	deps := f.gatherFilteredPackagingSpecs(ctx)
-	ctx.WalkDeps(func(child, parent android.Module) bool {
+	ctx.WalkDeps(func(child, _ android.Module) bool {
+		if !child.Enabled(ctx) {
+			return false
+		}
 		for _, ps := range android.OtherModuleProviderOrDefault(
 			ctx, child, android.InstallFilesProvider).PackagingSpecs {
 			if _, ok := deps[ps.RelPathInPackage()]; ok && ps.Partition() == f.PartitionType() {
@@ -1100,6 +1103,9 @@ func (f *filesystem) getLibsForLinkerConfig(ctx android.ModuleContext) ([]androi
 
 	var requireModules []android.Module
 	ctx.WalkDeps(func(child, parent android.Module) bool {
+		if !child.Enabled(ctx) {
+			return false
+		}
 		_, parentInPackage := modulesInPackageByModule[parent]
 		_, childInPackageName := modulesInPackageByName[child.Name()]
 
