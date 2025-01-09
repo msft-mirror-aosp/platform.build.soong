@@ -495,18 +495,24 @@ func (a *AndroidApp) checkEmbedJnis(ctx android.BaseModuleContext) {
 // This check is enforced for "updatable" APKs (including APK-in-APEX).
 func (a *AndroidApp) checkJniLibsSdkVersion(ctx android.ModuleContext, minSdkVersion android.ApiLevel) {
 	// It's enough to check direct JNI deps' sdk_version because all transitive deps from JNI deps are checked in cc.checkLinkType()
-	ctx.VisitDirectDeps(func(m android.Module) {
+	ctx.VisitDirectDepsProxy(func(m android.ModuleProxy) {
 		if !IsJniDepTag(ctx.OtherModuleDependencyTag(m)) {
 			return
 		}
-		dep, _ := m.(*cc.Module)
+		if _, ok := android.OtherModuleProvider(ctx, m, cc.CcInfoProvider); !ok {
+			panic(fmt.Errorf("jni dependency is not a cc module: %v", m))
+		}
+		commonInfo, ok := android.OtherModuleProvider(ctx, m, android.CommonModuleInfoKey)
+		if !ok {
+			panic(fmt.Errorf("jni dependency doesn't have CommonModuleInfo provider: %v", m))
+		}
 		// The domain of cc.sdk_version is "current" and <number>
 		// We can rely on android.SdkSpec to convert it to <number> so that "current" is
 		// handled properly regardless of sdk finalization.
-		jniSdkVersion, err := android.SdkSpecFrom(ctx, dep.MinSdkVersion()).EffectiveVersion(ctx)
+		jniSdkVersion, err := android.SdkSpecFrom(ctx, commonInfo.MinSdkVersion).EffectiveVersion(ctx)
 		if err != nil || minSdkVersion.LessThan(jniSdkVersion) {
-			ctx.OtherModuleErrorf(dep, "min_sdk_version(%v) is higher than min_sdk_version(%v) of the containing android_app(%v)",
-				dep.MinSdkVersion(), minSdkVersion, ctx.ModuleName())
+			ctx.OtherModuleErrorf(m, "min_sdk_version(%v) is higher than min_sdk_version(%v) of the containing android_app(%v)",
+				commonInfo.MinSdkVersion, minSdkVersion, ctx.ModuleName())
 			return
 		}
 

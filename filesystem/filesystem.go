@@ -357,6 +357,14 @@ type FilesystemInfo struct {
 
 var FilesystemProvider = blueprint.NewProvider[FilesystemInfo]()
 
+type FilesystemDefaultsInfo struct {
+	// Identifies which partition this is for //visibility:any_system_image (and others) visibility
+	// checks, and will be used in the future for API surface checks.
+	PartitionType string
+}
+
+var FilesystemDefaultsInfoProvider = blueprint.NewProvider[FilesystemDefaultsInfo]()
+
 func GetFsTypeFromString(ctx android.EarlyModuleContext, typeStr string) fsType {
 	switch typeStr {
 	case "ext4":
@@ -524,12 +532,12 @@ func validatePartitionType(ctx android.ModuleContext, p partition) {
 		ctx.PropertyErrorf("partition_type", "partition_type must be one of %s, found: %s", validPartitions, p.PartitionType())
 	}
 
-	ctx.VisitDirectDepsWithTag(android.DefaultsDepTag, func(m android.Module) {
-		if fdm, ok := m.(*filesystemDefaults); ok {
-			if p.PartitionType() != fdm.PartitionType() {
+	ctx.VisitDirectDepsProxyWithTag(android.DefaultsDepTag, func(m android.ModuleProxy) {
+		if fdm, ok := android.OtherModuleProvider(ctx, m, FilesystemDefaultsInfoProvider); ok {
+			if p.PartitionType() != fdm.PartitionType {
 				ctx.PropertyErrorf("partition_type",
 					"%s doesn't match with the partition type %s of the filesystem default module %s",
-					p.PartitionType(), fdm.PartitionType(), m.Name())
+					p.PartitionType(), fdm.PartitionType, m.Name())
 			}
 		}
 	})
@@ -1066,6 +1074,9 @@ var _ partition = (*filesystemDefaults)(nil)
 
 func (f *filesystemDefaults) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	validatePartitionType(ctx, f)
+	android.SetProvider(ctx, FilesystemDefaultsInfoProvider, FilesystemDefaultsInfo{
+		PartitionType: f.PartitionType(),
+	})
 }
 
 // getLibsForLinkerConfig returns
