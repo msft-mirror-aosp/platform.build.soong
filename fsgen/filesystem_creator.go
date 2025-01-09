@@ -180,6 +180,26 @@ func generatedModuleNameForPartition(cfg android.Config, partitionType string) s
 	return generatedModuleName(cfg, fmt.Sprintf("%s_image", partitionType))
 }
 
+func (f *filesystemCreator) createBootloaderFilegroup(ctx android.LoadHookContext) (string, bool) {
+	bootloaderPath := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.PrebuiltBootloader
+	if len(bootloaderPath) == 0 {
+		return "", false
+	}
+
+	bootloaderFilegroupName := generatedModuleName(ctx.Config(), "bootloader")
+	filegroupProps := &struct {
+		Name       *string
+		Srcs       []string
+		Visibility []string
+	}{
+		Name:       proptools.StringPtr(bootloaderFilegroupName),
+		Srcs:       []string{bootloaderPath},
+		Visibility: []string{"//visibility:public"},
+	}
+	ctx.CreateModuleInDirectory(android.FileGroupFactory, ".", filegroupProps)
+	return bootloaderFilegroupName, true
+}
+
 func (f *filesystemCreator) createDeviceModule(
 	ctx android.LoadHookContext,
 	generatedPartitionTypes []string,
@@ -234,7 +254,12 @@ func (f *filesystemCreator) createDeviceModule(
 	}
 	partitionProps.Vbmeta_partitions = vbmetaPartitions
 
-	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
+	deviceProps := &filesystem.DeviceProperties{}
+	if bootloader, ok := f.createBootloaderFilegroup(ctx); ok {
+		deviceProps.Bootloader = proptools.StringPtr(":" + bootloader)
+	}
+
+	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps, deviceProps)
 }
 
 func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesystem.FilesystemProperties, partitionVars android.PartitionVariables, partitionType string) {
