@@ -54,15 +54,25 @@ type PartitionNameProperties struct {
 	Odm_dlkm_partition_name *string
 }
 
+type DeviceProperties struct {
+	// Path to the prebuilt bootloader that would be copied to PRODUCT_OUT
+	Bootloader *string `android:"path"`
+}
+
 type androidDevice struct {
 	android.ModuleBase
 
 	partitionProps PartitionNameProperties
+
+	deviceProps DeviceProperties
+
+	// copyToProductOutTimestamp for copying necessary files to PRODUCT_OUT
+	copyToProductOutTimestamp android.WritablePath
 }
 
 func AndroidDeviceFactory() android.Module {
 	module := &androidDevice{}
-	module.AddProperties(&module.partitionProps)
+	module.AddProperties(&module.partitionProps, &module.deviceProps)
 	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibFirst)
 	return module
 }
@@ -98,6 +108,24 @@ func (a *androidDevice) DepsMutator(ctx android.BottomUpMutatorContext) {
 	}
 }
 
+func (a *androidDevice) copyToProductOut(ctx android.ModuleContext, builder *android.RuleBuilder, src android.Path, dest string) {
+	destPath := android.PathForModuleInPartitionInstall(ctx, "").Join(ctx, dest)
+	builder.Command().Text("rsync").Flag("-a").Flag("--checksum").Input(src).Text(destPath.String())
+}
+
+func (a *androidDevice) copyFilesToProductOut(ctx android.ModuleContext) {
+	a.copyToProductOutTimestamp = android.PathForModuleOut(ctx, "timestamp")
+	builder := android.NewRuleBuilder(pctx, ctx)
+	builder.Command().Text("touch").Output(a.copyToProductOutTimestamp)
+
+	// List all individual files to be copied to PRODUCT_OUT here
+	if a.deviceProps.Bootloader != nil {
+		a.copyToProductOut(ctx, builder, android.PathForModuleSrc(ctx, proptools.String(a.deviceProps.Bootloader)), "bootloader")
+	}
+
+	builder.Build("copy_to_product_out", "Copy files to PRODUCT_OUT")
+}
+
 func (a *androidDevice) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.buildTargetFilesZip(ctx)
 	var deps []android.Path
@@ -111,11 +139,15 @@ func (a *androidDevice) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 		deps = append(deps, imageOutput.DefaultOutputFiles[0])
 	})
+
+	a.copyFilesToProductOut(ctx)
+
 	out := android.PathForModuleOut(ctx, "out")
 	ctx.Build(pctx, android.BuildParams{
-		Rule:      android.Touch,
-		Output:    out,
-		Implicits: deps,
+		Rule:       android.Touch,
+		Output:     out,
+		Implicits:  deps,
+		Validation: a.copyToProductOutTimestamp,
 	})
 	ctx.SetOutputFiles(android.Paths{out}, "")
 	ctx.CheckbuildFile(out)
