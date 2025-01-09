@@ -15,6 +15,8 @@
 package filesystem
 
 import (
+	"strings"
+
 	"android/soong/android"
 
 	"github.com/google/blueprint"
@@ -79,8 +81,8 @@ func (a *androidDevice) DepsMutator(ctx android.BottomUpMutatorContext) {
 	}
 
 	addDependencyIfDefined(a.partitionProps.Boot_partition_name)
-	addDependencyIfDefined(a.partitionProps.Vendor_boot_partition_name)
 	addDependencyIfDefined(a.partitionProps.Init_boot_partition_name)
+	addDependencyIfDefined(a.partitionProps.Vendor_boot_partition_name)
 	addDependencyIfDefined(a.partitionProps.System_partition_name)
 	addDependencyIfDefined(a.partitionProps.System_ext_partition_name)
 	addDependencyIfDefined(a.partitionProps.Product_partition_name)
@@ -90,6 +92,7 @@ func (a *androidDevice) DepsMutator(ctx android.BottomUpMutatorContext) {
 	addDependencyIfDefined(a.partitionProps.System_dlkm_partition_name)
 	addDependencyIfDefined(a.partitionProps.Vendor_dlkm_partition_name)
 	addDependencyIfDefined(a.partitionProps.Odm_dlkm_partition_name)
+	addDependencyIfDefined(a.partitionProps.Recovery_partition_name)
 	for _, vbmetaPartition := range a.partitionProps.Vbmeta_partitions {
 		ctx.AddDependency(ctx.Module(), filesystemDepTag, vbmetaPartition)
 	}
@@ -99,6 +102,11 @@ func (a *androidDevice) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.buildTargetFilesZip(ctx)
 }
 
+type targetFilesZipCopy struct {
+	srcModule  *string
+	destSubdir string
+}
+
 func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 	targetFilesDir := android.PathForModuleOut(ctx, "target_files_dir")
 	targetFilesZip := android.PathForModuleOut(ctx, "target_files.zip")
@@ -106,27 +114,55 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 	builder := android.NewRuleBuilder(pctx, ctx)
 	builder.Command().Textf("rm -rf %s", targetFilesDir.String())
 	builder.Command().Textf("mkdir -p %s", targetFilesDir.String())
-	partitionToSubdir := map[*string]string{
-		a.partitionProps.System_partition_name:      "SYSTEM",
-		a.partitionProps.System_ext_partition_name:  "SYSTEM_EXT",
-		a.partitionProps.Product_partition_name:     "PRODUCT",
-		a.partitionProps.Vendor_partition_name:      "VENDOR",
-		a.partitionProps.Odm_partition_name:         "ODM",
-		a.partitionProps.System_dlkm_partition_name: "SYSTEM_DLKM",
-		a.partitionProps.Vendor_dlkm_partition_name: "VENDOR_DLKM",
-		a.partitionProps.Odm_dlkm_partition_name:    "ODM_DLKM",
+	toCopy := []targetFilesZipCopy{
+		targetFilesZipCopy{a.partitionProps.System_partition_name, "SYSTEM"},
+		targetFilesZipCopy{a.partitionProps.System_ext_partition_name, "SYSTEM_EXT"},
+		targetFilesZipCopy{a.partitionProps.Product_partition_name, "PRODUCT"},
+		targetFilesZipCopy{a.partitionProps.Vendor_partition_name, "VENDOR"},
+		targetFilesZipCopy{a.partitionProps.Odm_partition_name, "ODM"},
+		targetFilesZipCopy{a.partitionProps.System_dlkm_partition_name, "SYSTEM_DLKM"},
+		targetFilesZipCopy{a.partitionProps.Vendor_dlkm_partition_name, "VENDOR_DLKM"},
+		targetFilesZipCopy{a.partitionProps.Odm_dlkm_partition_name, "ODM_DLKM"},
+		targetFilesZipCopy{a.partitionProps.Init_boot_partition_name, "BOOT/RAMDISK"},
+		targetFilesZipCopy{a.partitionProps.Init_boot_partition_name, "INIT_BOOT/RAMDISK"},
+		targetFilesZipCopy{a.partitionProps.Vendor_boot_partition_name, "VENDOR_BOOT/RAMDISK"},
 	}
-	for partition, subdir := range partitionToSubdir {
-		if partition == nil {
+	// TODO: Handle cases where recovery files are copied to BOOT/ or RECOVERY/
+	// https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/Makefile;l=6211-6219?q=core%2FMakefile&ss=android%2Fplatform%2Fsuperproject%2Fmain
+	if ctx.DeviceConfig().BoardMoveRecoveryResourcesToVendorBoot() {
+		toCopy = append(toCopy, targetFilesZipCopy{a.partitionProps.Recovery_partition_name, "VENDOR_BOOT/RAMDISK"})
+	}
+
+	for _, zipCopy := range toCopy {
+		if zipCopy.srcModule == nil {
 			continue
 		}
-		fsInfo := a.getFilesystemInfo(ctx, *partition)
+		fsInfo := a.getFilesystemInfo(ctx, *zipCopy.srcModule)
+		subdir := zipCopy.destSubdir
+		rootDirString := fsInfo.RootDir.String()
+		if subdir == "SYSTEM" {
+			rootDirString = rootDirString + "/system"
+		}
 		builder.Command().Textf("mkdir -p %s/%s", targetFilesDir.String(), subdir)
 		builder.Command().
 			BuiltTool("acp").
-			Textf("-rd %s/. %s/%s", fsInfo.RootDir, targetFilesDir, subdir).
+			Textf("-rd %s/. %s/%s", rootDirString, targetFilesDir, subdir).
 			Implicit(fsInfo.Output) // so that the staging dir is built
+
 	}
+	// Copy cmdline files of boot images
+	if a.partitionProps.Vendor_boot_partition_name != nil {
+		bootImg := ctx.GetDirectDepWithTag(proptools.String(a.partitionProps.Vendor_boot_partition_name), filesystemDepTag)
+		bootImgInfo, _ := android.OtherModuleProvider(ctx, bootImg, BootimgInfoProvider)
+		builder.Command().Textf("echo %s > %s/%s/cmdline", proptools.ShellEscape(strings.Join(bootImgInfo.Cmdline, " ")), targetFilesDir, "VENDOR_BOOT")
+		builder.Command().Textf("echo %s > %s/%s/vendor_cmdline", proptools.ShellEscape(strings.Join(bootImgInfo.Cmdline, " ")), targetFilesDir, "VENDOR_BOOT")
+	}
+	if a.partitionProps.Boot_partition_name != nil {
+		bootImg := ctx.GetDirectDepWithTag(proptools.String(a.partitionProps.Boot_partition_name), filesystemDepTag)
+		bootImgInfo, _ := android.OtherModuleProvider(ctx, bootImg, BootimgInfoProvider)
+		builder.Command().Textf("echo %s > %s/%s/cmdline", proptools.ShellEscape(strings.Join(bootImgInfo.Cmdline, " ")), targetFilesDir, "BOOT")
+	}
+
 	builder.Command().
 		BuiltTool("soong_zip").
 		Text("-d").
