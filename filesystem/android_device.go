@@ -100,6 +100,25 @@ func (a *androidDevice) DepsMutator(ctx android.BottomUpMutatorContext) {
 
 func (a *androidDevice) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.buildTargetFilesZip(ctx)
+	var deps []android.Path
+	ctx.VisitDirectDepsWithTag(filesystemDepTag, func(m android.Module) {
+		imageOutput, ok := android.OtherModuleProvider(ctx, m, android.OutputFilesProvider)
+		if !ok {
+			ctx.ModuleErrorf("Partition module %s doesn't set OutputfilesProvider", m.Name())
+		}
+		if len(imageOutput.DefaultOutputFiles) != 1 {
+			ctx.ModuleErrorf("Partition module %s should provide exact 1 output file", m.Name())
+		}
+		deps = append(deps, imageOutput.DefaultOutputFiles[0])
+	})
+	out := android.PathForModuleOut(ctx, "out")
+	ctx.Build(pctx, android.BuildParams{
+		Rule:      android.Touch,
+		Output:    out,
+		Implicits: deps,
+	})
+	ctx.SetOutputFiles(android.Paths{out}, "")
+	ctx.CheckbuildFile(out)
 }
 
 type targetFilesZipCopy struct {
