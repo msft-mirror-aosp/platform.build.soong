@@ -128,6 +128,8 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 			f.properties.Unsupported_partition_types = append(f.properties.Unsupported_partition_types, partitionType)
 		}
 	}
+	// Create android_info.prop
+	f.createAndroidInfo(ctx)
 
 	partitionVars := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse
 	dtbImg := createDtbImgFilegroup(ctx)
@@ -206,9 +208,11 @@ func (f *filesystemCreator) createDeviceModule(
 	vbmetaPartitions []string,
 ) {
 	baseProps := &struct {
-		Name *string
+		Name         *string
+		Android_info *string
 	}{
-		Name: proptools.StringPtr(generatedModuleName(ctx.Config(), "device")),
+		Name:         proptools.StringPtr(generatedModuleName(ctx.Config(), "device")),
+		Android_info: proptools.StringPtr(":" + generatedModuleName(ctx.Config(), "android_info.prop{.txt}")),
 	}
 
 	// Currently, only the system and system_ext partition module is created.
@@ -600,8 +604,8 @@ func (f *filesystemCreator) createPrebuiltKernelModules(ctx android.LoadHookCont
 	(*fsGenState.fsDeps[partitionType])[name] = defaultDepCandidateProps(ctx.Config())
 }
 
-// Create a build_prop and android_info module. This will be used to create /vendor/build.prop
-func (f *filesystemCreator) createVendorBuildProp(ctx android.LoadHookContext) {
+// Create an android_info module. This will be used to create /vendor/build.prop
+func (f *filesystemCreator) createAndroidInfo(ctx android.LoadHookContext) {
 	// Create a android_info for vendor
 	// The board info files might be in a directory outside the root soong namespace, so create
 	// the module in "."
@@ -625,7 +629,9 @@ func (f *filesystemCreator) createVendorBuildProp(ctx android.LoadHookContext) {
 		androidInfoProps,
 	)
 	androidInfoProp.HideFromMake()
-	// Create a build prop for vendor
+}
+
+func (f *filesystemCreator) createVendorBuildProp(ctx android.LoadHookContext) {
 	vendorBuildProps := &struct {
 		Name           *string
 		Vendor         *bool
@@ -638,7 +644,7 @@ func (f *filesystemCreator) createVendorBuildProp(ctx android.LoadHookContext) {
 		Vendor:         proptools.BoolPtr(true),
 		Stem:           proptools.StringPtr("build.prop"),
 		Product_config: proptools.StringPtr(":product_config"),
-		Android_info:   proptools.StringPtr(":" + androidInfoProp.Name()),
+		Android_info:   proptools.StringPtr(":" + generatedModuleName(ctx.Config(), "android_info.prop")),
 		Licenses:       []string{"Android-Apache-2.0"},
 	}
 	vendorBuildProp := ctx.CreateModule(

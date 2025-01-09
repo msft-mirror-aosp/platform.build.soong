@@ -57,6 +57,8 @@ type PartitionNameProperties struct {
 type DeviceProperties struct {
 	// Path to the prebuilt bootloader that would be copied to PRODUCT_OUT
 	Bootloader *string `android:"path"`
+	// Path to android-info.txt file containing board specific info.
+	Android_info *string `android:"path"`
 }
 
 type androidDevice struct {
@@ -229,6 +231,11 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 		if bootImgInfo.Bootconfig != nil {
 			builder.Command().Textf("cp %s %s/BOOT/bootconfig", bootImgInfo.Bootconfig, targetFilesDir)
 		}
+	}
+
+	if a.deviceProps.Android_info != nil {
+		builder.Command().Textf("mkdir -p %s/OTA", targetFilesDir)
+		builder.Command().Textf("cp %s %s/OTA/android-info.txt", android.PathForModuleSrc(ctx, proptools.String(a.deviceProps.Android_info)), targetFilesDir)
 	}
 
 	builder.Command().
