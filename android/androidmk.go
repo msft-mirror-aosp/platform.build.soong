@@ -800,10 +800,20 @@ func getDistContributionsFromMods(ctx fillInEntriesContext, mods []blueprint.Mod
 			continue
 		}
 		if info, ok := OtherModuleProvider(ctx, mod, AndroidMkInfoProvider); ok {
+			// Deep copy the provider info since we need to modify the info later
+			info := deepCopyAndroidMkProviderInfo(info)
+			info.PrimaryInfo.fillInEntries(ctx, mod)
+			if info.PrimaryInfo.disabled() {
+				continue
+			}
 			if contribution := info.PrimaryInfo.getDistContributions(ctx, mod); contribution != nil {
 				allDistContributions = append(allDistContributions, *contribution)
 			}
 			for _, ei := range info.ExtraInfo {
+				ei.fillInEntries(ctx, mod)
+				if ei.disabled() {
+					continue
+				}
 				if contribution := ei.getDistContributions(ctx, mod); contribution != nil {
 					allDistContributions = append(allDistContributions, *contribution)
 				}
@@ -818,6 +828,9 @@ func getDistContributionsFromMods(ctx fillInEntriesContext, mods []blueprint.Mod
 				}
 
 				data.fillInData(ctx, mod)
+				if data.Entries.disabled() {
+					continue
+				}
 				if contribution := data.Entries.getDistContributions(mod); contribution != nil {
 					allDistContributions = append(allDistContributions, *contribution)
 				}
@@ -825,6 +838,9 @@ func getDistContributionsFromMods(ctx fillInEntriesContext, mods []blueprint.Mod
 				entriesList := x.AndroidMkEntries()
 				for _, entries := range entriesList {
 					entries.fillInEntries(ctx, mod)
+					if entries.disabled() {
+						continue
+					}
 					if contribution := entries.getDistContributions(mod); contribution != nil {
 						allDistContributions = append(allDistContributions, *contribution)
 					}
