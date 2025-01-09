@@ -746,22 +746,31 @@ func (c *androidMkSingleton) soongOnlyBuildActions(ctx SingletonContext, mods []
 	distMkFile := absolutePath(filepath.Join(ctx.Config().katiPackageMkDir(), "dist.mk"))
 
 	var goalOutputPairs []string
-	var buf strings.Builder
-	buf.WriteString("DIST_SRC_DST_PAIRS := $(sort")
+	var srcDstPairs []string
 	for _, contributions := range allDistContributions {
 		for _, copiesForGoal := range contributions.copiesForGoals {
 			goals := strings.Fields(copiesForGoal.goals)
 			for _, copy := range copiesForGoal.copies {
 				for _, goal := range goals {
-					goalOutputPairs = append(goalOutputPairs, fmt.Sprintf("%s:%s", goal, copy.dest))
+					goalOutputPairs = append(goalOutputPairs, fmt.Sprintf(" %s:%s", goal, copy.dest))
 				}
-				buf.WriteString(fmt.Sprintf(" %s:%s", copy.from.String(), copy.dest))
+				srcDstPairs = append(srcDstPairs, fmt.Sprintf(" %s:%s", copy.from.String(), copy.dest))
 			}
 		}
 	}
-	buf.WriteString(")\nDIST_GOAL_OUTPUT_PAIRS := $(sort ")
-	buf.WriteString(strings.Join(goalOutputPairs, " "))
-	buf.WriteString(")\n")
+	// There are duplicates in the lists that we need to remove
+	goalOutputPairs = SortedUniqueStrings(goalOutputPairs)
+	srcDstPairs = SortedUniqueStrings(srcDstPairs)
+	var buf strings.Builder
+	buf.WriteString("DIST_SRC_DST_PAIRS :=")
+	for _, srcDstPair := range srcDstPairs {
+		buf.WriteString(srcDstPair)
+	}
+	buf.WriteString("\nDIST_GOAL_OUTPUT_PAIRS :=")
+	for _, goalOutputPair := range goalOutputPairs {
+		buf.WriteString(goalOutputPair)
+	}
+	buf.WriteString("\n")
 
 	writeValueIfChanged(ctx, distMkFile, buf.String())
 }
