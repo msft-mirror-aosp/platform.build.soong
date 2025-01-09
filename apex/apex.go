@@ -1056,7 +1056,7 @@ var (
 		"com.android.appsearch",
 		"com.android.art",
 		"com.android.art.debug",
-		"com.android.btservices",
+		"com.android.bt",
 		"com.android.cellbroadcast",
 		"com.android.configinfrastructure",
 		"com.android.conscrypt",
