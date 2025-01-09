@@ -79,6 +79,8 @@ func (a *androidDevice) DepsMutator(ctx android.BottomUpMutatorContext) {
 	}
 
 	addDependencyIfDefined(a.partitionProps.Boot_partition_name)
+	addDependencyIfDefined(a.partitionProps.Vendor_boot_partition_name)
+	addDependencyIfDefined(a.partitionProps.Init_boot_partition_name)
 	addDependencyIfDefined(a.partitionProps.System_partition_name)
 	addDependencyIfDefined(a.partitionProps.System_ext_partition_name)
 	addDependencyIfDefined(a.partitionProps.Product_partition_name)
