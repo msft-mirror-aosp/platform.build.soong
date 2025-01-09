@@ -202,6 +202,10 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 			Textf("-rd %s/. %s/%s", rootDirString, targetFilesDir, subdir).
 			Implicit(fsInfo.Output) // so that the staging dir is built
 
+		if subdir == "SYSTEM" {
+			// Create the ROOT partition in target_files.zip
+			builder.Command().Textf("rsync --links --exclude=system/* %s/ -r %s/ROOT", fsInfo.RootDir, targetFilesDir.String())
+		}
 	}
 	// Copy cmdline, kernel etc. files of boot images
 	if a.partitionProps.Vendor_boot_partition_name != nil {
