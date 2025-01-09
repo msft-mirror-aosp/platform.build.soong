@@ -161,7 +161,7 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 
 	if buildingSuperImage(partitionVars) {
 		createSuperImage(ctx, finalSoongGeneratedPartitions, partitionVars)
-		f.properties.Super_image = ":" + generatedModuleName(ctx.Config(), "super")
+		f.properties.Super_image = ":" + generatedModuleNameForPartition(ctx.Config(), "super")
 	}
 
 	ctx.Config().Get(fsGenStateOnceKey).(*FsGenState).soongGeneratedPartitions = finalSoongGeneratedPartitions
