@@ -169,17 +169,34 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 			Implicit(fsInfo.Output) // so that the staging dir is built
 
 	}
-	// Copy cmdline files of boot images
+	// Copy cmdline, kernel etc. files of boot images
 	if a.partitionProps.Vendor_boot_partition_name != nil {
 		bootImg := ctx.GetDirectDepWithTag(proptools.String(a.partitionProps.Vendor_boot_partition_name), filesystemDepTag)
 		bootImgInfo, _ := android.OtherModuleProvider(ctx, bootImg, BootimgInfoProvider)
-		builder.Command().Textf("echo %s > %s/%s/cmdline", proptools.ShellEscape(strings.Join(bootImgInfo.Cmdline, " ")), targetFilesDir, "VENDOR_BOOT")
-		builder.Command().Textf("echo %s > %s/%s/vendor_cmdline", proptools.ShellEscape(strings.Join(bootImgInfo.Cmdline, " ")), targetFilesDir, "VENDOR_BOOT")
+		builder.Command().Textf("echo %s > %s/VENDOR_BOOT/cmdline", proptools.ShellEscape(strings.Join(bootImgInfo.Cmdline, " ")), targetFilesDir)
+		builder.Command().Textf("echo %s > %s/VENDOR_BOOT/vendor_cmdline", proptools.ShellEscape(strings.Join(bootImgInfo.Cmdline, " ")), targetFilesDir)
+		if bootImgInfo.Dtb != nil {
+			builder.Command().Textf("cp %s %s/VENDOR_BOOT/dtb", bootImgInfo.Dtb, targetFilesDir)
+		}
+		if bootImgInfo.Bootconfig != nil {
+			builder.Command().Textf("cp %s %s/VENDOR_BOOT/vendor_bootconfig", bootImgInfo.Bootconfig, targetFilesDir)
+		}
 	}
 	if a.partitionProps.Boot_partition_name != nil {
 		bootImg := ctx.GetDirectDepWithTag(proptools.String(a.partitionProps.Boot_partition_name), filesystemDepTag)
 		bootImgInfo, _ := android.OtherModuleProvider(ctx, bootImg, BootimgInfoProvider)
-		builder.Command().Textf("echo %s > %s/%s/cmdline", proptools.ShellEscape(strings.Join(bootImgInfo.Cmdline, " ")), targetFilesDir, "BOOT")
+		builder.Command().Textf("echo %s > %s/BOOT/cmdline", proptools.ShellEscape(strings.Join(bootImgInfo.Cmdline, " ")), targetFilesDir)
+		if bootImgInfo.Dtb != nil {
+			builder.Command().Textf("cp %s %s/BOOT/dtb", bootImgInfo.Dtb, targetFilesDir)
+		}
+		if bootImgInfo.Kernel != nil {
+			builder.Command().Textf("cp %s %s/BOOT/kernel", bootImgInfo.Kernel, targetFilesDir)
+			// Even though kernel is not used to build vendor_boot, copy the kernel to VENDOR_BOOT to match the behavior of make packaging.
+			builder.Command().Textf("cp %s %s/VENDOR_BOOT/kernel", bootImgInfo.Kernel, targetFilesDir)
+		}
+		if bootImgInfo.Bootconfig != nil {
+			builder.Command().Textf("cp %s %s/BOOT/bootconfig", bootImgInfo.Bootconfig, targetFilesDir)
+		}
 	}
 
 	builder.Command().
