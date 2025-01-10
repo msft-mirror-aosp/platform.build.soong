@@ -156,6 +156,8 @@ type LinkableInfo struct {
 	InRecovery          bool
 	OnlyInRecovery      bool
 	Installable         *bool
+	// RelativeInstallPath returns the relative install path for this module.
+	RelativeInstallPath string
 }
 
 var LinkableInfoProvider = blueprint.NewProvider[*LinkableInfo]()
@@ -2322,6 +2324,7 @@ func CreateCommonLinkableInfo(mod LinkableInterface) *LinkableInfo {
 		InRecovery:           mod.InRecovery(),
 		OnlyInRecovery:       mod.OnlyInRecovery(),
 		Installable:          mod.Installable(),
+		RelativeInstallPath:  mod.RelativeInstallPath(),
 	}
 }
 
