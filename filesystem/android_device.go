@@ -186,6 +186,9 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 		toCopy = append(toCopy, targetFilesZipCopy{a.partitionProps.Recovery_partition_name, "VENDOR_BOOT/RAMDISK"})
 	}
 
+	// Create an IMAGES/ subdirectory
+	builder.Command().Textf("mkdir -p %s/IMAGES/", targetFilesDir.String())
+
 	for _, zipCopy := range toCopy {
 		if zipCopy.srcModule == nil {
 			continue
@@ -206,6 +209,7 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 			// Create the ROOT partition in target_files.zip
 			builder.Command().Textf("rsync --links --exclude=system/* %s/ -r %s/ROOT", fsInfo.RootDir, targetFilesDir.String())
 		}
+		builder.Command().Textf("cp %s %s/IMAGES/", fsInfo.Output, targetFilesDir.String())
 	}
 	// Copy cmdline, kernel etc. files of boot images
 	if a.partitionProps.Vendor_boot_partition_name != nil {
