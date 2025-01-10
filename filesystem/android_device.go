@@ -24,6 +24,8 @@ import (
 )
 
 type PartitionNameProperties struct {
+	// Name of the super partition filesystem module
+	Super_partition_name *string
 	// Name of the boot partition filesystem module
 	Boot_partition_name *string
 	// Name of the vendor boot partition filesystem module
@@ -81,6 +83,11 @@ type partitionDepTagType struct {
 	blueprint.BaseDependencyTag
 }
 
+type superPartitionDepTagType struct {
+	blueprint.BaseDependencyTag
+}
+
+var superPartitionDepTag superPartitionDepTagType
 var filesystemDepTag partitionDepTagType
 
 func (a *androidDevice) DepsMutator(ctx android.BottomUpMutatorContext) {
@@ -90,6 +97,9 @@ func (a *androidDevice) DepsMutator(ctx android.BottomUpMutatorContext) {
 		}
 	}
 
+	if a.partitionProps.Super_partition_name != nil {
+		ctx.AddDependency(ctx.Module(), superPartitionDepTag, *a.partitionProps.Super_partition_name)
+	}
 	addDependencyIfDefined(a.partitionProps.Boot_partition_name)
 	addDependencyIfDefined(a.partitionProps.Init_boot_partition_name)
 	addDependencyIfDefined(a.partitionProps.Vendor_boot_partition_name)
@@ -129,6 +139,44 @@ func (a *androidDevice) copyFilesToProductOut(ctx android.ModuleContext) {
 func (a *androidDevice) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.buildTargetFilesZip(ctx)
 	var deps []android.Path
+	if proptools.String(a.partitionProps.Super_partition_name) != "" {
+		superImage := ctx.GetDirectDepWithTag(*a.partitionProps.Super_partition_name, superPartitionDepTag)
+		if info, ok := android.OtherModuleProvider(ctx, superImage, SuperImageProvider); ok {
+			assertUnset := func(prop *string, propName string) {
+				if prop != nil && *prop != "" {
+					ctx.PropertyErrorf(propName, "Cannot be set because it's already part of the super image")
+				}
+			}
+			for _, subPartitionType := range android.SortedKeys(info.SubImageInfo) {
+				switch subPartitionType {
+				case "system":
+					assertUnset(a.partitionProps.System_partition_name, "system_partition_name")
+				case "system_ext":
+					assertUnset(a.partitionProps.System_ext_partition_name, "system_ext_partition_name")
+				case "system_dlkm":
+					assertUnset(a.partitionProps.System_dlkm_partition_name, "system_dlkm_partition_name")
+				case "system_other":
+					// TODO
+				case "product":
+					assertUnset(a.partitionProps.Product_partition_name, "product_partition_name")
+				case "vendor":
+					assertUnset(a.partitionProps.Vendor_partition_name, "vendor_partition_name")
+				case "vendor_dlkm":
+					assertUnset(a.partitionProps.Vendor_dlkm_partition_name, "vendor_dlkm_partition_name")
+				case "odm":
+					assertUnset(a.partitionProps.Odm_partition_name, "odm_partition_name")
+				case "odm_dlkm":
+					assertUnset(a.partitionProps.Odm_dlkm_partition_name, "odm_dlkm_partition_name")
+				default:
+					ctx.ModuleErrorf("Unsupported sub-partition of super partition: %q", subPartitionType)
+				}
+			}
+
+			deps = append(deps, info.SuperImage)
+		} else {
+			ctx.ModuleErrorf("Expected super image dep to provide SuperImageProvider")
+		}
+	}
 	ctx.VisitDirectDepsWithTag(filesystemDepTag, func(m android.Module) {
 		imageOutput, ok := android.OtherModuleProvider(ctx, m, android.OutputFilesProvider)
 		if !ok {
