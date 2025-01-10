@@ -1882,6 +1882,7 @@ type CommonModuleInfo struct {
 	UninstallableApexPlatformVariant bool
 	HideFromMake                     bool
 	SkipInstall                      bool
+	IsStubsModule                    bool
 }
 
 var CommonModuleInfoKey = blueprint.NewProvider[CommonModuleInfo]()
@@ -2189,6 +2190,9 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		commonData.CanHaveApexVariants = am.CanHaveApexVariants()
 		commonData.NotAvailableForPlatform = am.NotAvailableForPlatform()
 		commonData.NotInPlatform = am.NotInPlatform()
+	}
+	if st, ok := m.module.(StubsAvailableModule); ok {
+		commonData.IsStubsModule = st.IsStubsModule()
 	}
 	SetProvider(ctx, CommonModuleInfoKey, commonData)
 	if p, ok := m.module.(PrebuiltInterface); ok && p.Prebuilt() != nil {
