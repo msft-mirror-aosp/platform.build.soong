@@ -459,6 +459,7 @@ func (f *filesystem) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		FileListFile: fileListFile,
 		RootDir:      rootDir,
 	})
+
 	f.fileListFile = fileListFile
 
 	if proptools.Bool(f.properties.Unchecked_module) {
