@@ -20,6 +20,7 @@ import (
 	"android/soong/android"
 	"android/soong/java/config"
 	"android/soong/tradefed"
+
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 )
@@ -103,8 +104,6 @@ func (r *robolectricTest) TestSuites() []string {
 }
 
 var _ android.TestSuiteModule = (*robolectricTest)(nil)
-
-
 
 func (r *robolectricTest) DepsMutator(ctx android.BottomUpMutatorContext) {
 	r.Library.DepsMutator(ctx)
@@ -294,7 +293,7 @@ func RobolectricTestFactory() android.Module {
 		&module.testProperties)
 
 	module.Module.dexpreopter.isTest = true
-	module.Module.linter.properties.Lint.Test = proptools.BoolPtr(true)
+	module.Module.linter.properties.Lint.Test_module_type = proptools.BoolPtr(true)
 
 	module.testProperties.Test_suites = []string{"robolectric-tests"}
 
