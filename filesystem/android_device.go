@@ -213,6 +213,11 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 	if a.deviceProps.Bootloader != nil {
 		builder.Command().Textf("cp ").Input(android.PathForModuleSrc(ctx, proptools.String(a.deviceProps.Bootloader))).Textf(" %s/IMAGES/bootloader", targetFilesDir.String())
 	}
+	// Copy the vbmeta img files to IMAGES/
+	for _, vbmetaPartition := range a.partitionProps.Vbmeta_partitions {
+		vbmetaInfo, _ := android.OtherModuleProvider(ctx, ctx.GetDirectDepWithTag(vbmetaPartition, filesystemDepTag), vbmetaPartitionProvider)
+		builder.Command().Textf("cp ").Input(vbmetaInfo.Output).Textf(" %s/IMAGES/", targetFilesDir.String())
+	}
 
 	for _, zipCopy := range toCopy {
 		if zipCopy.srcModule == nil {
