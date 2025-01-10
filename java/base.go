@@ -1153,7 +1153,7 @@ func (j *Module) addGeneratedSrcJars(path android.Path) {
 	j.properties.Generated_srcjars = append(j.properties.Generated_srcjars, path)
 }
 
-func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspathJars, extraCombinedJars, extraDepCombinedJars android.Paths) {
+func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspathJars, extraCombinedJars, extraDepCombinedJars android.Paths) *JavaInfo {
 	// Auto-propagating jarjar rules
 	jarjarProviderData := j.collectJarJarRules(ctx)
 	if jarjarProviderData != nil {
@@ -1287,7 +1287,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			transitiveStaticLibsHeaderJars = nil
 		}
 		if ctx.Failed() {
-			return
+			return nil
 		}
 		j.headerJarFile = combinedHeaderJarFile
 
@@ -1302,7 +1302,8 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			ctx.CheckbuildFile(j.headerJarFile)
 		}
 
-		android.SetProvider(ctx, JavaInfoProvider, &JavaInfo{
+		j.outputFile = j.headerJarFile
+		return &JavaInfo{
 			HeaderJars:                          android.PathsIfNonNil(j.headerJarFile),
 			LocalHeaderJars:                     localHeaderJars,
 			TransitiveStaticLibsHeaderJars:      depset.New(depset.PREORDER, localHeaderJars, transitiveStaticLibsHeaderJars),
@@ -1315,10 +1316,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			StubsLinkType:                       j.stubsLinkType,
 			AconfigIntermediateCacheOutputPaths: deps.aconfigProtoFiles,
 			SdkVersion:                          j.SdkVersion(ctx),
-		})
-
-		j.outputFile = j.headerJarFile
-		return
+		}
 	}
 
 	if srcFiles.HasExt(".kt") {
@@ -1375,7 +1373,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		kotlinHeaderJar := android.PathForModuleOut(ctx, "kotlin_headers", jarName)
 		j.kotlinCompile(ctx, kotlinJar, kotlinHeaderJar, uniqueSrcFiles, kotlinCommonSrcFiles, srcJars, flags)
 		if ctx.Failed() {
-			return
+			return nil
 		}
 
 		kotlinJarPath, _ := j.repackageFlagsIfNecessary(ctx, kotlinJar, jarName, "kotlinc")
@@ -1502,7 +1500,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			localImplementationJars = append(localImplementationJars, classes)
 		}
 		if ctx.Failed() {
-			return
+			return nil
 		}
 	}
 
@@ -1542,7 +1540,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		resourceJar := android.PathForModuleOut(ctx, "res", jarName)
 		TransformResourcesToJar(ctx, resourceJar, resArgs, resDeps)
 		if ctx.Failed() {
-			return
+			return nil
 		}
 		localResourceJars = append(localResourceJars, resourceJar)
 	}
@@ -1664,7 +1662,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	}
 
 	if ctx.Failed() {
-		return
+		return nil
 	}
 
 	if j.ravenizer.enabled {
@@ -1728,7 +1726,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		CheckJarPackages(ctx, pkgckFile, outputFile, j.properties.Permitted_packages)
 
 		if ctx.Failed() {
-			return
+			return nil
 		}
 	}
 
@@ -1753,7 +1751,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 	// enforce syntax check to jacoco filters for any build (http://b/183622051)
 	specs := j.jacocoModuleToZipCommand(ctx)
 	if ctx.Failed() {
-		return
+		return nil
 	}
 
 	completeStaticLibsImplementationJarsToCombine := completeStaticLibsImplementationJars
@@ -1821,7 +1819,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 			}
 			dexOutputFile, dexArtProfileOutput := j.dexer.compileDex(ctx, params)
 			if ctx.Failed() {
-				return
+				return nil
 			}
 
 			// If r8/d8 provides a profile that matches the optimized dex, use that for dexpreopt.
@@ -1880,7 +1878,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		}
 
 		if ctx.Failed() {
-			return
+			return nil
 		}
 	}
 
@@ -1927,7 +1925,10 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		ctx.CheckbuildFile(j.headerJarFile)
 	}
 
-	android.SetProvider(ctx, JavaInfoProvider, &JavaInfo{
+	// Save the output file with no relative path so that it doesn't end up in a subdirectory when used as a resource
+	j.outputFile = outputFile.WithoutRel()
+
+	return &JavaInfo{
 		HeaderJars:           android.PathsIfNonNil(j.headerJarFile),
 		RepackagedHeaderJars: android.PathsIfNonNil(repackagedHeaderJarFile),
 
@@ -1952,10 +1953,7 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		StubsLinkType:                       j.stubsLinkType,
 		AconfigIntermediateCacheOutputPaths: j.aconfigCacheFiles,
 		SdkVersion:                          j.SdkVersion(ctx),
-	})
-
-	// Save the output file with no relative path so that it doesn't end up in a subdirectory when used as a resource
-	j.outputFile = outputFile.WithoutRel()
+	}
 }
 
 func (j *Module) useCompose(ctx android.BaseModuleContext) bool {
@@ -2220,7 +2218,7 @@ func (j *Module) CompilerDeps() []string {
 
 func (j *Module) hasCode(ctx android.ModuleContext) bool {
 	srcFiles := android.PathsForModuleSrcExcludes(ctx, j.properties.Srcs, j.properties.Exclude_srcs)
-	return len(srcFiles) > 0 || len(ctx.GetDirectDepsWithTag(staticLibTag)) > 0
+	return len(srcFiles) > 0 || len(ctx.GetDirectDepsProxyWithTag(staticLibTag)) > 0
 }
 
 // Implements android.ApexModule
