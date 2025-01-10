@@ -296,20 +296,19 @@ func compileStubLibrary(ctx ModuleContext, flags Flags, src android.Path) Object
 }
 
 func (this *stubDecorator) findImplementationLibrary(ctx ModuleContext) android.Path {
-	dep := ctx.GetDirectDepWithTag(strings.TrimSuffix(ctx.ModuleName(), ndkLibrarySuffix),
+	dep := ctx.GetDirectDepProxyWithTag(strings.TrimSuffix(ctx.ModuleName(), ndkLibrarySuffix),
 		stubImplementation)
 	if dep == nil {
-		ctx.ModuleErrorf("Could not find implementation for stub")
+		ctx.ModuleErrorf("Could not find implementation for stub: ")
 		return nil
 	}
-	impl, ok := dep.(*Module)
-	if !ok {
+	if _, ok := android.OtherModuleProvider(ctx, *dep, CcInfoProvider); !ok {
 		ctx.ModuleErrorf("Implementation for stub is not correct module type")
 		return nil
 	}
-	output := impl.UnstrippedOutputFile()
+	output := android.OtherModuleProviderOrDefault(ctx, *dep, LinkableInfoProvider).UnstrippedOutputFile
 	if output == nil {
-		ctx.ModuleErrorf("implementation module (%s) has no output", impl)
+		ctx.ModuleErrorf("implementation module (%s) has no output", *dep)
 		return nil
 	}
 

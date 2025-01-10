@@ -1195,7 +1195,7 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 	library.linkSAbiDumpFiles(ctx, deps, objs, fileName, unstrippedOutputFile)
 
 	var transitiveStaticLibrariesForOrdering depset.DepSet[android.Path]
-	if static := ctx.GetDirectDepsWithTag(staticVariantTag); len(static) > 0 {
+	if static := ctx.GetDirectDepsProxyWithTag(staticVariantTag); len(static) > 0 {
 		s, _ := android.OtherModuleProvider(ctx, static[0], StaticLibraryInfoProvider)
 		transitiveStaticLibrariesForOrdering = s.TransitiveStaticLibrariesForOrdering
 	}
@@ -1216,7 +1216,7 @@ func (library *libraryDecorator) linkShared(ctx ModuleContext,
 // Visits the stub variants of the library and returns a struct containing the stub .so paths
 func addStubDependencyProviders(ctx ModuleContext) []SharedStubLibrary {
 	stubsInfo := []SharedStubLibrary{}
-	stubs := ctx.GetDirectDepsWithTag(stubImplDepTag)
+	stubs := ctx.GetDirectDepsProxyWithTag(stubImplDepTag)
 	if len(stubs) > 0 {
 		for _, stub := range stubs {
 			stubInfo, ok := android.OtherModuleProvider(ctx, stub, SharedLibraryInfoProvider)
@@ -1225,8 +1225,11 @@ func addStubDependencyProviders(ctx ModuleContext) []SharedStubLibrary {
 				continue
 			}
 			flagInfo, _ := android.OtherModuleProvider(ctx, stub, FlagExporterInfoProvider)
+			if _, ok = android.OtherModuleProvider(ctx, stub, CcInfoProvider); !ok {
+				panic(fmt.Errorf("stub is not a cc module %s", stub))
+			}
 			stubsInfo = append(stubsInfo, SharedStubLibrary{
-				Version:           moduleLibraryInterface(stub).stubsVersion(),
+				Version:           android.OtherModuleProviderOrDefault(ctx, stub, LinkableInfoProvider).StubsVersion,
 				SharedLibraryInfo: stubInfo,
 				FlagExporterInfo:  flagInfo,
 			})
@@ -1383,6 +1386,11 @@ func (library *libraryDecorator) sourceAbiDiff(ctx android.ModuleContext,
 		extraFlags = append(extraFlags,
 			"-allow-unreferenced-changes",
 			"-allow-unreferenced-elf-symbol-changes")
+		// The functions in standard libraries are not always declared in the headers.
+		// Allow them to be added or removed without changing the symbols.
+		if isBionic(ctx.ModuleName()) {
+			extraFlags = append(extraFlags, "-allow-adding-removing-referenced-apis")
+		}
 	}
 	if isLlndk {
 		extraFlags = append(extraFlags, "-consider-opaque-types-different")
@@ -2405,13 +2413,11 @@ func maybeInjectBoringSSLHash(ctx android.ModuleContext, outputFile android.Modu
 	inject *bool, fileName string) android.ModuleOutPath {
 	// TODO(b/137267623): Remove this in favor of a cc_genrule when they support operating on shared libraries.
 	injectBoringSSLHash := Bool(inject)
-	ctx.VisitDirectDeps(func(dep android.Module) {
+	ctx.VisitDirectDepsProxy(func(dep android.ModuleProxy) {
 		if tag, ok := ctx.OtherModuleDependencyTag(dep).(libraryDependencyTag); ok && tag.static() {
-			if cc, ok := dep.(*Module); ok {
-				if library, ok := cc.linker.(*libraryDecorator); ok {
-					if Bool(library.Properties.Inject_bssl_hash) {
-						injectBoringSSLHash = true
-					}
+			if ccInfo, ok := android.OtherModuleProvider(ctx, dep, CcInfoProvider); ok && ccInfo.LinkerInfo.LibraryDecoratorInfo != nil {
+				if ccInfo.LinkerInfo.LibraryDecoratorInfo.InjectBsslHash {
+					injectBoringSSLHash = true
 				}
 			}
 		}

@@ -30,18 +30,23 @@ func TestPlatformBootclasspath(t *testing.T) {
 	preparer := android.GroupFixturePreparers(
 		prepareForTestWithPlatformBootclasspath,
 		FixtureConfigureBootJars("platform:foo", "system_ext:bar"),
+		android.FixtureMergeMockFs(android.MockFS{
+			"api/current.txt": nil,
+			"api/removed.txt": nil,
+		}),
 		android.FixtureWithRootAndroidBp(`
 			platform_bootclasspath {
 				name: "platform-bootclasspath",
 			}
 
-			java_library {
+			java_sdk_library {
 				name: "bar",
 				srcs: ["a.java"],
 				system_modules: "none",
 				sdk_version: "none",
 				compile_dex: true,
 				system_ext_specific: true,
+				unsafe_ignore_missing_latest_api: true,
 			}
 		`),
 	)
@@ -204,7 +209,7 @@ func TestPlatformBootclasspath_ClasspathFragmentPaths(t *testing.T) {
 
 	p := result.Module("platform-bootclasspath", "android_common").(*platformBootclasspathModule)
 	android.AssertStringEquals(t, "output filepath", "bootclasspath.pb", p.ClasspathFragmentBase.outputFilepath.Base())
-	android.AssertPathRelativeToTopEquals(t, "install filepath", "out/soong/target/product/test_device/system/etc/classpaths", p.ClasspathFragmentBase.installDirPath)
+	android.AssertPathRelativeToTopEquals(t, "install filepath", "out/target/product/test_device/system/etc/classpaths", p.ClasspathFragmentBase.installDirPath)
 }
 
 func TestPlatformBootclasspathModule_AndroidMkEntries(t *testing.T) {

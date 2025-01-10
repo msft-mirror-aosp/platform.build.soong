@@ -3585,7 +3585,11 @@ func TestCertificate(t *testing.T) {
 				name: "myapex.key",
 				public_key: "testkey.avbpubkey",
 				private_key: "testkey.pem",
-			}`)
+			}`,
+			android.MockFS{
+				"vendor/foo/devkeys/testkey.x509.pem": nil,
+			}.AddToFixture(),
+		)
 		rule := ctx.ModuleForTests("myapex", "android_common_myapex").Rule("signapk")
 		expected := "vendor/foo/devkeys/testkey.x509.pem vendor/foo/devkeys/testkey.pk8"
 		if actual := rule.Args["certificates"]; actual != expected {
@@ -4771,7 +4775,7 @@ func TestApexInVariousPartition(t *testing.T) {
 			`)
 
 			apex := ctx.ModuleForTests("myapex", "android_common_myapex").Module().(*apexBundle)
-			expected := "out/soong/target/product/test_device/" + tc.partition + "/apex"
+			expected := "out/target/product/test_device/" + tc.partition + "/apex"
 			actual := apex.installDir.RelativeToTop().String()
 			if actual != expected {
 				t.Errorf("wrong install path. expected %q. actual %q", expected, actual)
@@ -10164,9 +10168,9 @@ func TestStubLibrariesMultipleApexViolation(t *testing.T) {
 			expectedError: "Stub libraries should have a single apex_available.*myapex.*otherapex",
 		},
 		{
-			desc:          "stub library can be available to a core apex and a test apex",
+			desc:          "stub library can be available to a core apex and a test apex using apex_available_name",
 			hasStubs:      true,
-			apexAvailable: `["myapex", "test_myapex"]`,
+			apexAvailable: `["myapex"]`,
 		},
 	}
 	bpTemplate := `
@@ -10191,25 +10195,28 @@ func TestStubLibrariesMultipleApexViolation(t *testing.T) {
 			key: "apex.key",
 			updatable: false,
 			native_shared_libs: ["libfoo"],
+			apex_available_name: "myapex",
 		}
 		apex_key {
 			name: "apex.key",
 		}
 	`
 	for _, tc := range testCases {
-		stubs := ""
-		if tc.hasStubs {
-			stubs = `stubs: {symbol_file: "libfoo.map.txt"},`
-		}
-		bp := fmt.Sprintf(bpTemplate, stubs, tc.apexAvailable)
-		mockFsFixturePreparer := android.FixtureModifyMockFS(func(fs android.MockFS) {
-			fs["system/sepolicy/apex/test_myapex-file_contexts"] = nil
+		t.Run(tc.desc, func(t *testing.T) {
+			stubs := ""
+			if tc.hasStubs {
+				stubs = `stubs: {symbol_file: "libfoo.map.txt"},`
+			}
+			bp := fmt.Sprintf(bpTemplate, stubs, tc.apexAvailable)
+			mockFsFixturePreparer := android.FixtureModifyMockFS(func(fs android.MockFS) {
+				fs["system/sepolicy/apex/test_myapex-file_contexts"] = nil
+			})
+			if tc.expectedError == "" {
+				testApex(t, bp, mockFsFixturePreparer)
+			} else {
+				testApexError(t, tc.expectedError, bp, mockFsFixturePreparer)
+			}
 		})
-		if tc.expectedError == "" {
-			testApex(t, bp, mockFsFixturePreparer)
-		} else {
-			testApexError(t, tc.expectedError, bp, mockFsFixturePreparer)
-		}
 	}
 }
 

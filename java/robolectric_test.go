@@ -32,6 +32,11 @@ var prepareRobolectricRuntime = android.GroupFixturePreparers(
 	}
 
 	java_library {
+		name: "Robolectric_all-target",
+		srcs: ["Robo.java"]
+	}
+
+	java_library {
 		name: "mockito-robolectric-prebuilt",
 		srcs: ["Mockito.java"]
 	}
@@ -44,6 +49,12 @@ var prepareRobolectricRuntime = android.GroupFixturePreparers(
 	java_library {
 		name: "junitxml",
 		srcs: ["JUnitXml.java"]
+
+	}
+
+	java_library {
+		name: "ClearcutJunitListenerAar",
+		srcs: ["Runtime.java"]
 	}
 
 	java_library_host {

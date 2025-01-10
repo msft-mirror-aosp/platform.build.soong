@@ -88,9 +88,7 @@ func init() {
 }
 
 type SourceFileGenerator interface {
-	GeneratedSourceFiles() android.Paths
-	GeneratedHeaderDirs() android.Paths
-	GeneratedDeps() android.Paths
+	android.SourceFileGenerator
 }
 
 // Alias for android.HostToolProvider
@@ -455,7 +453,6 @@ func (g *Module) generateCommonBuildActions(ctx android.ModuleContext) {
 	srcFiles = append(srcFiles, addLabelsForInputs("device_first_srcs", g.properties.Device_first_srcs.GetOrDefault(ctx, nil), nil)...)
 	srcFiles = append(srcFiles, addLabelsForInputs("device_common_srcs", g.properties.Device_common_srcs.GetOrDefault(ctx, nil), nil)...)
 	srcFiles = append(srcFiles, addLabelsForInputs("common_os_srcs", g.properties.Common_os_srcs.GetOrDefault(ctx, nil), nil)...)
-	android.SetProvider(ctx, blueprint.SrcsFileProviderKey, blueprint.SrcsFileProviderData{SrcPaths: srcFiles.Strings()})
 
 	var copyFrom android.Paths
 	var outputFiles android.WritablePaths

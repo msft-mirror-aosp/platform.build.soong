@@ -664,17 +664,17 @@ func TestAndroidAppImport_relativeInstallPath(t *testing.T) {
 	}{
 		{
 			name:                "no_relative_install_path",
-			expectedInstallPath: "out/soong/target/product/test_device/system/app/no_relative_install_path/no_relative_install_path.apk",
+			expectedInstallPath: "out/target/product/test_device/system/app/no_relative_install_path/no_relative_install_path.apk",
 			errorMessage:        "Install path is not correct when relative_install_path is missing",
 		},
 		{
 			name:                "relative_install_path",
-			expectedInstallPath: "out/soong/target/product/test_device/system/app/my/path/relative_install_path/relative_install_path.apk",
+			expectedInstallPath: "out/target/product/test_device/system/app/my/path/relative_install_path/relative_install_path.apk",
 			errorMessage:        "Install path is not correct for app when relative_install_path is present",
 		},
 		{
 			name:                "privileged_relative_install_path",
-			expectedInstallPath: "out/soong/target/product/test_device/system/priv-app/my/path/privileged_relative_install_path/privileged_relative_install_path.apk",
+			expectedInstallPath: "out/target/product/test_device/system/priv-app/my/path/privileged_relative_install_path/privileged_relative_install_path.apk",
 			errorMessage:        "Install path is not correct for privileged app when relative_install_path is present",
 		},
 	}
@@ -737,13 +737,13 @@ func TestAndroidTestImport_NoJinUncompressForPresigned(t *testing.T) {
 	variant := ctx.ModuleForTests("foo", "android_common")
 	jniRule := variant.Output("jnis-uncompressed/foo.apk").BuildParams.Rule.String()
 	if jniRule == android.Cp.String() {
-		t.Errorf("Unexpected JNI uncompress rule command: " + jniRule)
+		t.Errorf("Unexpected JNI uncompress rule command: %s", jniRule)
 	}
 
 	variant = ctx.ModuleForTests("foo_presigned", "android_common")
 	jniRule = variant.Output("jnis-uncompressed/foo_presigned.apk").BuildParams.Rule.String()
 	if jniRule != android.Cp.String() {
-		t.Errorf("Unexpected JNI uncompress rule: " + jniRule)
+		t.Errorf("Unexpected JNI uncompress rule: %s", jniRule)
 	}
 	if variant.MaybeOutput("zip-aligned/foo_presigned.apk").Rule == nil {
 		t.Errorf("Presigned test apk should be aligned")
@@ -764,7 +764,7 @@ func TestAndroidTestImport_Preprocessed(t *testing.T) {
 	variant := ctx.ModuleForTests("foo", "android_common")
 	jniRule := variant.Output("jnis-uncompressed/" + apkName).BuildParams.Rule.String()
 	if jniRule != android.Cp.String() {
-		t.Errorf("Unexpected JNI uncompress rule: " + jniRule)
+		t.Errorf("Unexpected JNI uncompress rule: %s", jniRule)
 	}
 
 	// Make sure signing and aligning were skipped.
@@ -807,7 +807,7 @@ func TestAndroidAppImport_Preprocessed(t *testing.T) {
 			variant := result.ModuleForTests("foo", "android_common")
 			outputBuildParams := variant.Output(apkName).BuildParams
 			if outputBuildParams.Rule.String() != android.Cp.String() {
-				t.Errorf("Unexpected prebuilt android_app_import rule: " + outputBuildParams.Rule.String())
+				t.Errorf("Unexpected prebuilt android_app_import rule: %s", outputBuildParams.Rule.String())
 			}
 
 			// Make sure compression and aligning were validated.
@@ -817,7 +817,7 @@ func TestAndroidAppImport_Preprocessed(t *testing.T) {
 
 			validationBuildParams := variant.Output("validated-prebuilt/check.stamp").BuildParams
 			if validationBuildParams.Rule.String() != checkPresignedApkRule.String() {
-				t.Errorf("Unexpected validation rule: " + validationBuildParams.Rule.String())
+				t.Errorf("Unexpected validation rule: %s", validationBuildParams.Rule.String())
 			}
 
 			expectedScriptArgs := "--preprocessed"
@@ -829,7 +829,7 @@ func TestAndroidAppImport_Preprocessed(t *testing.T) {
 			variant = result.ModuleForTests("bar", "android_common")
 			outputBuildParams = variant.Output(apkName).BuildParams
 			if outputBuildParams.Rule.String() != android.Cp.String() {
-				t.Errorf("Unexpected prebuilt android_app_import rule: " + outputBuildParams.Rule.String())
+				t.Errorf("Unexpected prebuilt android_app_import rule: %s", outputBuildParams.Rule.String())
 			}
 
 			// Make sure compression and aligning were validated.
@@ -839,7 +839,7 @@ func TestAndroidAppImport_Preprocessed(t *testing.T) {
 
 			validationBuildParams = variant.Output("validated-prebuilt/check.stamp").BuildParams
 			if validationBuildParams.Rule.String() != checkPresignedApkRule.String() {
-				t.Errorf("Unexpected validation rule: " + validationBuildParams.Rule.String())
+				t.Errorf("Unexpected validation rule: %s", validationBuildParams.Rule.String())
 			}
 
 			expectedScriptArgs = "--privileged"

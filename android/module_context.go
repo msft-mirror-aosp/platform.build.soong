@@ -440,10 +440,27 @@ func (m *moduleContext) GetMissingDependencies() []string {
 }
 
 func (m *moduleContext) GetDirectDepWithTag(name string, tag blueprint.DependencyTag) Module {
-	if module, _ := m.getDirectDepInternal(name, tag); module != nil {
-		return module.(Module)
+	deps := m.getDirectDepsInternal(name, tag)
+	if len(deps) == 1 {
+		return deps[0]
+	} else if len(deps) >= 2 {
+		panic(fmt.Errorf("Multiple dependencies having same BaseModuleName() %q found from %q",
+			name, m.ModuleName()))
+	} else {
+		return nil
 	}
-	return nil
+}
+
+func (m *moduleContext) GetDirectDepProxyWithTag(name string, tag blueprint.DependencyTag) *ModuleProxy {
+	deps := m.getDirectDepsProxyInternal(name, tag)
+	if len(deps) == 1 {
+		return &deps[0]
+	} else if len(deps) >= 2 {
+		panic(fmt.Errorf("Multiple dependencies having same BaseModuleName() %q found from %q",
+			name, m.ModuleName()))
+	} else {
+		return nil
+	}
 }
 
 func (m *moduleContext) ModuleSubDir() string {
@@ -671,7 +688,6 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 				Input:       srcPath,
 				Implicits:   implicitDeps,
 				OrderOnly:   orderOnlyDeps,
-				Default:     !m.Config().KatiEnabled(),
 				Args: map[string]string{
 					"extraCmds": extraCmds,
 				},
@@ -718,7 +734,6 @@ func (m *moduleContext) InstallSymlink(installPath InstallPath, name string, src
 				Description: "install symlink " + fullInstallPath.Base(),
 				Output:      fullInstallPath,
 				Input:       srcPath,
-				Default:     !m.Config().KatiEnabled(),
 				Args: map[string]string{
 					"fromPath": relPath,
 				},
@@ -765,7 +780,6 @@ func (m *moduleContext) InstallAbsoluteSymlink(installPath InstallPath, name str
 				Rule:        Symlink,
 				Description: "install symlink " + fullInstallPath.Base() + " -> " + absPath,
 				Output:      fullInstallPath,
-				Default:     !m.Config().KatiEnabled(),
 				Args: map[string]string{
 					"fromPath": absPath,
 				},
