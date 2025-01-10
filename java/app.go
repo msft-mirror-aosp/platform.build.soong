@@ -52,12 +52,6 @@ type FlagsPackages struct {
 
 var FlagsPackagesProvider = blueprint.NewProvider[FlagsPackages]()
 
-type AndroidLibraryInfo struct {
-	// Empty for now
-}
-
-var AndroidLibraryInfoProvider = blueprint.NewProvider[AndroidLibraryInfo]()
-
 func RegisterAppBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("android_app", AndroidAppFactory)
 	ctx.RegisterModuleType("android_test", AndroidTestFactory)
@@ -429,8 +423,6 @@ func (a *AndroidApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		TestHelperApp:   false,
 		EmbeddedJNILibs: embeddedJniLibs,
 	})
-
-	android.SetProvider(ctx, AndroidLibraryInfoProvider, AndroidLibraryInfo{})
 
 	a.requiredModuleNames = a.getRequiredModuleNames(ctx)
 }
