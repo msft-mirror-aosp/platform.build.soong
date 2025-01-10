@@ -90,6 +90,10 @@ type CommonProperties struct {
 	// list of module-specific flags that will be used for kotlinc compiles
 	Kotlincflags []string `android:"arch_variant"`
 
+	// Kotlin language version to target. Currently only 1.9 and 2 are supported.
+	// See kotlinc's `-language-version` flag.
+	Kotlin_lang_version *string
+
 	// list of java libraries that will be in the classpath
 	Libs []string `android:"arch_variant"`
 
@@ -1331,6 +1335,16 @@ func (j *Module) compile(ctx android.ModuleContext, extraSrcJars, extraClasspath
 		kotlincFlags := j.properties.Kotlincflags
 		CheckKotlincFlags(ctx, kotlincFlags)
 
+		kotlin_lang_version := proptools.StringDefault(j.properties.Kotlin_lang_version, "1.9")
+		if kotlin_lang_version == "1.9" {
+			kotlincFlags = append(kotlincFlags, "-language-version 1.9")
+		} else if kotlin_lang_version == "2" {
+			kotlincFlags = append(kotlincFlags, "-Xsuppress-version-warnings", "-Xconsistent-data-class-copy-visibility")
+		} else {
+			ctx.PropertyErrorf("kotlin_lang_version", "Must be one of `1.9` or `2`")
+
+		}
+
 		// Workaround for KT-46512
 		kotlincFlags = append(kotlincFlags, "-Xsam-conversions=class")
 
@@ -2059,7 +2073,9 @@ func CheckKotlincFlags(ctx android.ModuleContext, flags []string) {
 		} else if strings.HasPrefix(flag, "-Xintellij-plugin-root") {
 			ctx.PropertyErrorf("kotlincflags",
 				"Bad flag: `%s`, only use internal compiler for consistency.", flag)
-		} else if inList(flag, config.KotlincIllegalFlags) {
+		} else if slices.ContainsFunc(config.KotlincIllegalFlags, func(f string) bool {
+			return strings.HasPrefix(flag, f)
+		}) {
 			ctx.PropertyErrorf("kotlincflags", "Flag `%s` already used by build system", flag)
 		} else if flag == "-include-runtime" {
 			ctx.PropertyErrorf("kotlincflags", "Bad flag: `%s`, do not include runtime.", flag)
