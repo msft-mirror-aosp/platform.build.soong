@@ -119,8 +119,6 @@ func (r *robolectricTest) DepsMutator(ctx android.BottomUpMutatorContext) {
 		ctx.AddVariationDependencies(nil, roboRuntimeOnlyDepTag, robolectricCurrentLib)
 	} else {
 		ctx.AddVariationDependencies(nil, staticLibTag, robolectricCurrentLib)
-		// opting out from strict mode, robolectric_non_strict_mode_permission lib should be added
-		ctx.AddVariationDependencies(nil, staticLibTag, "robolectric_non_strict_mode_permission")
 	}
 
 	ctx.AddVariationDependencies(nil, staticLibTag, robolectricDefaultLibs...)
