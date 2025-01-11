@@ -1944,7 +1944,7 @@ func (u *usesLibrary) classLoaderContextForUsesLibDeps(ctx android.ModuleContext
 		return clcMap
 	}
 
-	ctx.VisitDirectDeps(func(m android.Module) {
+	ctx.VisitDirectDepsProxy(func(m android.ModuleProxy) {
 		tag, isUsesLibTag := ctx.OtherModuleDependencyTag(m).(usesLibraryDependencyTag)
 		if !isUsesLibTag {
 			return
@@ -1952,31 +1952,35 @@ func (u *usesLibrary) classLoaderContextForUsesLibDeps(ctx android.ModuleContext
 
 		dep := android.RemoveOptionalPrebuiltPrefix(ctx.OtherModuleName(m))
 
+		javaInfo, ok := android.OtherModuleProvider(ctx, m, JavaInfoProvider)
+		if !ok {
+			return
+		}
 		// Skip stub libraries. A dependency on the implementation library has been added earlier,
 		// so it will be added to CLC, but the stub shouldn't be. Stub libraries can be distingushed
 		// from implementation libraries by their name, which is different as it has a suffix.
-		if comp, ok := m.(SdkLibraryComponentDependency); ok {
-			if impl := comp.OptionalSdkLibraryImplementation(); impl != nil && *impl != dep {
+		if comp := javaInfo.SdkLibraryComponentDependencyInfo; comp != nil {
+			if impl := comp.OptionalSdkLibraryImplementation; impl != nil && *impl != dep {
 				return
 			}
 		}
 
-		if lib, ok := m.(UsesLibraryDependency); ok {
+		if lib := javaInfo.UsesLibraryDependencyInfo; lib != nil {
 			if _, ok := android.OtherModuleProvider(ctx, m, SdkLibraryInfoProvider); ok {
 				// Skip java_sdk_library dependencies that provide stubs, but not an implementation.
 				// This will be restricted to optional_uses_libs
-				if tag == usesLibOptTag && lib.DexJarBuildPath(ctx).PathOrNil() == nil {
+				if tag == usesLibOptTag && lib.DexJarBuildPath.PathOrNil() == nil {
 					u.shouldDisableDexpreopt = true
 					return
 				}
 			}
 			libName := dep
-			if ulib, ok := m.(ProvidesUsesLib); ok && ulib.ProvidesUsesLib() != nil {
-				libName = *ulib.ProvidesUsesLib()
+			if ulib := javaInfo.ProvidesUsesLibInfo; ulib != nil && ulib.ProvidesUsesLib != nil {
+				libName = *ulib.ProvidesUsesLib
 			}
 			clcMap.AddContext(ctx, tag.sdkVersion, libName, tag.optional,
-				lib.DexJarBuildPath(ctx).PathOrNil(), lib.DexJarInstallPath(),
-				lib.ClassLoaderContexts())
+				lib.DexJarBuildPath.PathOrNil(), lib.DexJarInstallPath,
+				lib.ClassLoaderContexts)
 		} else if ctx.Config().AllowMissingDependencies() {
 			ctx.AddMissingDependencies([]string{dep})
 		} else {
