@@ -56,7 +56,7 @@ var (
 				`$zipTemplate${config.SoongZipCmd} -jar -o $out.tmp -C $outDir -D $outDir && ` +
 				`if ! cmp -s "$out.tmp" "$out"; then mv "$out.tmp" "$out"; fi && ` +
 				`if ! cmp -s "$annoSrcJar.tmp" "$annoSrcJar"; then mv "$annoSrcJar.tmp" "$annoSrcJar"; fi && ` +
-				`if [[ -f "$out.pc_state.new" ]]; then mv "$out.pc_state.new" "$out.pc_state"; fi && ` +
+				`if [ -f "$out.pc_state.new" ]; then mv "$out.pc_state.new" "$out.pc_state"; fi && ` +
 				`rm -rf "$srcJarDir" "$outDir"`,
 			CommandDeps: []string{
 				"${config.FindInputDeltaCmd}",
@@ -225,6 +225,12 @@ var (
 			RspfileContent: "$in",
 		},
 		"jarArgs")
+
+	extractR8Rules = pctx.AndroidStaticRule("extractR8Rules",
+		blueprint.RuleParams{
+			Command:     `${config.ExtractR8RulesCmd} --rules-output $out --include-origin-comments $in`,
+			CommandDeps: []string{"${config.ExtractR8RulesCmd}"},
+		})
 
 	jarjar = pctx.AndroidStaticRule("jarjar",
 		blueprint.RuleParams{
@@ -736,6 +742,16 @@ func TransformJarsToJar(ctx android.ModuleContext, outputFile android.WritablePa
 		Args: map[string]string{
 			"jarArgs": strings.Join(jarArgs, " "),
 		},
+	})
+}
+
+func TransformJarToR8Rules(ctx android.ModuleContext, outputFile android.WritablePath,
+	jar android.Path) {
+
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        extractR8Rules,
+		Output:      outputFile,
+		Input:       jar,
 	})
 }
 

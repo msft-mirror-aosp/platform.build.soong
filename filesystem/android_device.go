@@ -22,22 +22,34 @@ import (
 )
 
 type PartitionNameProperties struct {
-	// Name of the Boot_partition_name partition filesystem module
+	// Name of the boot partition filesystem module
 	Boot_partition_name *string
-	// Name of the System partition filesystem module
+	// Name of the vendor boot partition filesystem module
+	Vendor_boot_partition_name *string
+	// Name of the init boot partition filesystem module
+	Init_boot_partition_name *string
+	// Name of the system partition filesystem module
 	System_partition_name *string
-	// Name of the System_ext partition filesystem module
+	// Name of the system_ext partition filesystem module
 	System_ext_partition_name *string
-	// Name of the Product partition filesystem module
+	// Name of the product partition filesystem module
 	Product_partition_name *string
-	// Name of the Vendor partition filesystem module
+	// Name of the vendor partition filesystem module
 	Vendor_partition_name *string
-	// Name of the Odm partition filesystem module
+	// Name of the odm partition filesystem module
 	Odm_partition_name *string
+	// Name of the recovery partition filesystem module
+	Recovery_partition_name *string
 	// The vbmeta partition and its "chained" partitions
 	Vbmeta_partitions []string
-	// Name of the Userdata partition filesystem module
+	// Name of the userdata partition filesystem module
 	Userdata_partition_name *string
+	// Name of the system_dlkm partition filesystem module
+	System_dlkm_partition_name *string
+	// Name of the vendor_dlkm partition filesystem module
+	Vendor_dlkm_partition_name *string
+	// Name of the odm_dlkm partition filesystem module
+	Odm_dlkm_partition_name *string
 }
 
 type androidDevice struct {
@@ -49,7 +61,7 @@ type androidDevice struct {
 func AndroidDeviceFactory() android.Module {
 	module := &androidDevice{}
 	module.AddProperties(&module.partitionProps)
-	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibFirst)
 	return module
 }
 
@@ -67,12 +79,17 @@ func (a *androidDevice) DepsMutator(ctx android.BottomUpMutatorContext) {
 	}
 
 	addDependencyIfDefined(a.partitionProps.Boot_partition_name)
+	addDependencyIfDefined(a.partitionProps.Vendor_boot_partition_name)
+	addDependencyIfDefined(a.partitionProps.Init_boot_partition_name)
 	addDependencyIfDefined(a.partitionProps.System_partition_name)
 	addDependencyIfDefined(a.partitionProps.System_ext_partition_name)
 	addDependencyIfDefined(a.partitionProps.Product_partition_name)
 	addDependencyIfDefined(a.partitionProps.Vendor_partition_name)
 	addDependencyIfDefined(a.partitionProps.Odm_partition_name)
 	addDependencyIfDefined(a.partitionProps.Userdata_partition_name)
+	addDependencyIfDefined(a.partitionProps.System_dlkm_partition_name)
+	addDependencyIfDefined(a.partitionProps.Vendor_dlkm_partition_name)
+	addDependencyIfDefined(a.partitionProps.Odm_dlkm_partition_name)
 	for _, vbmetaPartition := range a.partitionProps.Vbmeta_partitions {
 		ctx.AddDependency(ctx.Module(), filesystemDepTag, vbmetaPartition)
 	}
@@ -89,12 +106,25 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 	builder := android.NewRuleBuilder(pctx, ctx)
 	builder.Command().Textf("rm -rf %s", targetFilesDir.String())
 	builder.Command().Textf("mkdir -p %s", targetFilesDir.String())
-	if a.partitionProps.Vendor_partition_name != nil {
-		fsInfo := a.getFilesystemInfo(ctx, *a.partitionProps.Vendor_partition_name)
-		builder.Command().Textf("mkdir -p %s/VENDOR", targetFilesDir.String())
+	partitionToSubdir := map[*string]string{
+		a.partitionProps.System_partition_name:      "SYSTEM",
+		a.partitionProps.System_ext_partition_name:  "SYSTEM_EXT",
+		a.partitionProps.Product_partition_name:     "PRODUCT",
+		a.partitionProps.Vendor_partition_name:      "VENDOR",
+		a.partitionProps.Odm_partition_name:         "ODM",
+		a.partitionProps.System_dlkm_partition_name: "SYSTEM_DLKM",
+		a.partitionProps.Vendor_dlkm_partition_name: "VENDOR_DLKM",
+		a.partitionProps.Odm_dlkm_partition_name:    "ODM_DLKM",
+	}
+	for partition, subdir := range partitionToSubdir {
+		if partition == nil {
+			continue
+		}
+		fsInfo := a.getFilesystemInfo(ctx, *partition)
+		builder.Command().Textf("mkdir -p %s/%s", targetFilesDir.String(), subdir)
 		builder.Command().
 			BuiltTool("acp").
-			Textf("-rd %s/. %s/VENDOR", fsInfo.RootDir, targetFilesDir).
+			Textf("-rd %s/. %s/%s", fsInfo.RootDir, targetFilesDir, subdir).
 			Implicit(fsInfo.Output) // so that the staging dir is built
 	}
 	builder.Command().

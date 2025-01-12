@@ -211,6 +211,27 @@ func (f *filesystemCreator) createDeviceModule(
 	if android.InList("userdata", f.properties.Generated_partition_types) {
 		partitionProps.Userdata_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "userdata"))
 	}
+	if android.InList("recovery", f.properties.Generated_partition_types) {
+		partitionProps.Recovery_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "recovery"))
+	}
+	if android.InList("system_dlkm", f.properties.Generated_partition_types) {
+		partitionProps.System_dlkm_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system_dlkm"))
+	}
+	if android.InList("vendor_dlkm", f.properties.Generated_partition_types) {
+		partitionProps.Vendor_dlkm_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "vendor_dlkm"))
+	}
+	if android.InList("odm_dlkm", f.properties.Generated_partition_types) {
+		partitionProps.Odm_dlkm_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "odm_dlkm"))
+	}
+	if f.properties.Boot_image != "" {
+		partitionProps.Boot_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "boot"))
+	}
+	if f.properties.Vendor_boot_image != "" {
+		partitionProps.Vendor_boot_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "vendor_boot"))
+	}
+	if f.properties.Init_boot_image != "" {
+		partitionProps.Init_boot_partition_name = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "init_boot"))
+	}
 	partitionProps.Vbmeta_partitions = vbmetaPartitions
 
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps)
@@ -568,7 +589,7 @@ func (f *filesystemCreator) createVendorBuildProp(ctx android.LoadHookContext) {
 	}{
 		Name:             proptools.StringPtr(generatedModuleName(ctx.Config(), "android_info.prop")),
 		Board_info_files: partitionVars.BoardInfoFiles,
-		Stem:             proptools.StringPtr("android_info.txt"),
+		Stem:             proptools.StringPtr("android-info.txt"),
 	}
 	if len(androidInfoProps.Board_info_files) == 0 {
 		androidInfoProps.Bootloader_board_name = proptools.StringPtr(partitionVars.BootLoaderBoardName)
@@ -837,8 +858,8 @@ func getAvbInfo(config android.Config, partitionType string) avbInfo {
 
 func (f *filesystemCreator) createFileListDiffTest(ctx android.ModuleContext, partitionType string) android.Path {
 	partitionModuleName := generatedModuleNameForPartition(ctx.Config(), partitionType)
-	systemImage := ctx.GetDirectDepWithTag(partitionModuleName, generatedFilesystemDepTag)
-	filesystemInfo, ok := android.OtherModuleProvider(ctx, systemImage, filesystem.FilesystemProvider)
+	partitionImage := ctx.GetDirectDepWithTag(partitionModuleName, generatedFilesystemDepTag)
+	filesystemInfo, ok := android.OtherModuleProvider(ctx, partitionImage, filesystem.FilesystemProvider)
 	if !ok {
 		ctx.ModuleErrorf("Expected module %s to provide FileysystemInfo", partitionModuleName)
 	}
@@ -893,12 +914,12 @@ func createDiffTest(ctx android.ModuleContext, diffTestResultFile android.Writab
 	builder.Build("diff test "+diffTestResultFile.String(), "diff test")
 }
 
-type systemImageDepTagType struct {
+type imageDepTagType struct {
 	blueprint.BaseDependencyTag
 }
 
-var generatedFilesystemDepTag systemImageDepTagType
-var generatedVbmetaPartitionDepTag systemImageDepTagType
+var generatedFilesystemDepTag imageDepTagType
+var generatedVbmetaPartitionDepTag imageDepTagType
 
 func (f *filesystemCreator) DepsMutator(ctx android.BottomUpMutatorContext) {
 	for _, partitionType := range f.properties.Generated_partition_types {
