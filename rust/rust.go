@@ -1120,7 +1120,7 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		ctx.Phony("rust", ctx.RustModule().OutputFile().Path())
 	}
 
-	linkableInfo := cc.CreateCommonLinkableInfo(mod)
+	linkableInfo := cc.CreateCommonLinkableInfo(ctx, mod)
 	linkableInfo.Static = mod.Static()
 	linkableInfo.Shared = mod.Shared()
 	linkableInfo.CrateName = mod.CrateName()
