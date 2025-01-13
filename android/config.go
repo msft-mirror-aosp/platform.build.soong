@@ -2286,6 +2286,10 @@ func (c *config) VendorPropFiles(ctx PathContext) Paths {
 	return PathsForSource(ctx, c.productVariables.VendorPropFiles)
 }
 
+func (c *config) ExtraAllowedDepsTxt() string {
+	return String(c.productVariables.ExtraAllowedDepsTxt)
+}
+
 func (c *config) EnableUffdGc() string {
 	return String(c.productVariables.EnableUffdGc)
 }
