@@ -100,7 +100,9 @@ func (s *apexDepsInfoSingleton) GenerateBuildActions(ctx android.SingletonContex
 			apexInfo, _ := android.OtherModuleProvider(ctx, module, android.ApexInfoProvider)
 			if path := binaryInfo.FlatListPath(); path != nil {
 				if binaryInfo.Updatable() || apexInfo.Updatable {
-					updatableFlatLists = append(updatableFlatLists, path)
+					if strings.HasPrefix(module.String(), "com.android.") {
+						updatableFlatLists = append(updatableFlatLists, path)
+					}
 				}
 			}
 		}
