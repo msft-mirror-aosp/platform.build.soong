@@ -236,10 +236,10 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 		builder.Command().Textf("echo %s > %s/VENDOR_BOOT/cmdline", proptools.ShellEscape(strings.Join(bootImgInfo.Cmdline, " ")), targetFilesDir)
 		builder.Command().Textf("echo %s > %s/VENDOR_BOOT/vendor_cmdline", proptools.ShellEscape(strings.Join(bootImgInfo.Cmdline, " ")), targetFilesDir)
 		if bootImgInfo.Dtb != nil {
-			builder.Command().Textf("cp %s %s/VENDOR_BOOT/dtb", bootImgInfo.Dtb, targetFilesDir)
+			builder.Command().Textf("cp ").Input(bootImgInfo.Dtb).Textf(" %s/VENDOR_BOOT/dtb", targetFilesDir)
 		}
 		if bootImgInfo.Bootconfig != nil {
-			builder.Command().Textf("cp %s %s/VENDOR_BOOT/vendor_bootconfig", bootImgInfo.Bootconfig, targetFilesDir)
+			builder.Command().Textf("cp ").Input(bootImgInfo.Bootconfig).Textf(" %s/VENDOR_BOOT/vendor_bootconfig", targetFilesDir)
 		}
 	}
 	if a.partitionProps.Boot_partition_name != nil {
@@ -247,21 +247,21 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 		bootImgInfo, _ := android.OtherModuleProvider(ctx, bootImg, BootimgInfoProvider)
 		builder.Command().Textf("echo %s > %s/BOOT/cmdline", proptools.ShellEscape(strings.Join(bootImgInfo.Cmdline, " ")), targetFilesDir)
 		if bootImgInfo.Dtb != nil {
-			builder.Command().Textf("cp %s %s/BOOT/dtb", bootImgInfo.Dtb, targetFilesDir)
+			builder.Command().Textf("cp ").Input(bootImgInfo.Dtb).Textf(" %s/BOOT/dtb", targetFilesDir)
 		}
 		if bootImgInfo.Kernel != nil {
-			builder.Command().Textf("cp %s %s/BOOT/kernel", bootImgInfo.Kernel, targetFilesDir)
+			builder.Command().Textf("cp ").Input(bootImgInfo.Kernel).Textf(" %s/BOOT/kernel", targetFilesDir)
 			// Even though kernel is not used to build vendor_boot, copy the kernel to VENDOR_BOOT to match the behavior of make packaging.
-			builder.Command().Textf("cp %s %s/VENDOR_BOOT/kernel", bootImgInfo.Kernel, targetFilesDir)
+			builder.Command().Textf("cp ").Input(bootImgInfo.Kernel).Textf(" %s/VENDOR_BOOT/kernel", targetFilesDir)
 		}
 		if bootImgInfo.Bootconfig != nil {
-			builder.Command().Textf("cp %s %s/BOOT/bootconfig", bootImgInfo.Bootconfig, targetFilesDir)
+			builder.Command().Textf("cp ").Input(bootImgInfo.Bootconfig).Textf(" %s/BOOT/bootconfig", targetFilesDir)
 		}
 	}
 
 	if a.deviceProps.Android_info != nil {
 		builder.Command().Textf("mkdir -p %s/OTA", targetFilesDir)
-		builder.Command().Textf("cp %s %s/OTA/android-info.txt", android.PathForModuleSrc(ctx, proptools.String(a.deviceProps.Android_info)), targetFilesDir)
+		builder.Command().Textf("cp ").Input(android.PathForModuleSrc(ctx, proptools.String(a.deviceProps.Android_info))).Textf(" %s/OTA/android-info.txt", targetFilesDir)
 	}
 
 	a.copyImagesToTargetZip(ctx, builder, targetFilesDir)
