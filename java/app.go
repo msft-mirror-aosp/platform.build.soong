@@ -1130,12 +1130,12 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 
 	var directImplementationDeps android.Paths
 	var transitiveImplementationDeps []depset.DepSet[android.Path]
-	ctx.VisitDirectDeps(func(module android.Module) {
+	ctx.VisitDirectDepsProxy(func(module android.ModuleProxy) {
 		otherName := ctx.OtherModuleName(module)
 		tag := ctx.OtherModuleDependencyTag(module)
 
 		if tag == certificateTag {
-			if dep, ok := module.(*AndroidAppCertificate); ok {
+			if dep, ok := android.OtherModuleProvider(ctx, module, AndroidAppCertificateInfoProvider); ok {
 				certificates = append(certificates, dep.Certificate)
 			} else {
 				ctx.ModuleErrorf("certificate dependency %q must be an android_app_certificate module", otherName)
@@ -1775,6 +1775,12 @@ type AndroidAppCertificateProperties struct {
 	Certificate *string
 }
 
+type AndroidAppCertificateInfo struct {
+	Certificate Certificate
+}
+
+var AndroidAppCertificateInfoProvider = blueprint.NewProvider[AndroidAppCertificateInfo]()
+
 // android_app_certificate modules can be referenced by the certificates property of android_app modules to select
 // the signing key.
 func AndroidAppCertificateFactory() android.Module {
@@ -1790,6 +1796,10 @@ func (c *AndroidAppCertificate) GenerateAndroidBuildActions(ctx android.ModuleCo
 		Pem: android.PathForModuleSrc(ctx, cert+".x509.pem"),
 		Key: android.PathForModuleSrc(ctx, cert+".pk8"),
 	}
+
+	android.SetProvider(ctx, AndroidAppCertificateInfoProvider, AndroidAppCertificateInfo{
+		Certificate: c.Certificate,
+	})
 }
 
 type OverrideAndroidApp struct {
