@@ -1850,7 +1850,7 @@ type SourceFilesInfo struct {
 	Srcs Paths
 }
 
-var SourceFilesInfoKey = blueprint.NewProvider[SourceFilesInfo]()
+var SourceFilesInfoProvider = blueprint.NewProvider[SourceFilesInfo]()
 
 // FinalModuleBuildTargetsInfo is used by buildTargetSingleton to create checkbuild and
 // per-directory build targets. Only set on the final variant of each module
@@ -2086,7 +2086,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	}
 
 	if sourceFileProducer, ok := m.module.(SourceFileProducer); ok {
-		SetProvider(ctx, SourceFilesInfoKey, SourceFilesInfo{Srcs: sourceFileProducer.Srcs()})
+		SetProvider(ctx, SourceFilesInfoProvider, SourceFilesInfo{Srcs: sourceFileProducer.Srcs()})
 	}
 
 	if ctx.IsFinalModule(m.module) {
@@ -2798,7 +2798,7 @@ func outputFilesForModule(ctx PathContext, module Module, tag string) (Paths, er
 			if sourceFileProducer, ok := module.(SourceFileProducer); ok {
 				return sourceFileProducer.Srcs(), nil
 			}
-		} else if sourceFiles, ok := OtherModuleProvider(octx, module, SourceFilesInfoKey); ok {
+		} else if sourceFiles, ok := OtherModuleProvider(octx, module, SourceFilesInfoProvider); ok {
 			if tag != "" {
 				return nil, fmt.Errorf("module %q is a SourceFileProducer, which does not support tag %q", pathContextName(ctx, module), tag)
 			}
