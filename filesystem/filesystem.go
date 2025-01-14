@@ -798,12 +798,11 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 		addStr("hash_seed", uuid)
 	}
 
-	// TODO(b/381120092): This should only be added if none of the size-related properties are set,
-	// but currently soong built partitions don't have size properties. Make code:
-	// https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/Makefile;l=2262;drc=39cd33701c9278db0e7e481a090605f428d5b12d
-	// Make uses system_disable_sparse but disable_sparse has the same effect, and we shouldn't need
-	// to qualify it because each partition gets its own property file built.
-	addStr("disable_sparse", "true")
+	// Disable sparse only when partition size is not defined. disable_sparse has the same
+	// effect as <partition name>_disable_sparse.
+	if f.properties.Partition_size == nil {
+		addStr("disable_sparse", "true")
+	}
 
 	fst := f.fsType(ctx)
 	switch fst {
