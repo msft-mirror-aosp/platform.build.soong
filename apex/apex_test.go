@@ -7090,6 +7090,34 @@ func TestApexAvailable_PrefixMatch(t *testing.T) {
 	`)
 }
 
+func TestApexValidation_UsesProperPartitionTag(t *testing.T) {
+	t.Parallel()
+	ctx := testApex(t, `
+		apex {
+			name: "myapex",
+			key: "myapex.key",
+			updatable: false,
+			vendor: true,
+		}
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+	`, android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+		// vendor path should not affect "partition tag"
+		variables.VendorPath = proptools.StringPtr("system/vendor")
+	}))
+
+	module := ctx.ModuleForTests("myapex", "android_common_myapex")
+	android.AssertStringEquals(t, "partition tag for host_apex_verifier",
+		"vendor",
+		module.Output("host_apex_verifier.timestamp").Args["partition_tag"])
+	android.AssertStringEquals(t, "partition tag for apex_sepolicy_tests",
+		"vendor",
+		module.Output("apex_sepolicy_tests.timestamp").Args["partition_tag"])
+}
+
 func TestApexValidation_TestApexCanSkipInitRcCheck(t *testing.T) {
 	t.Parallel()
 	ctx := testApex(t, `
