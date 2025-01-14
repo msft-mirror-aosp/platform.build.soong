@@ -358,6 +358,9 @@ func (a *androidDevice) copyImagesToTargetZip(ctx android.ModuleContext, builder
 	}
 	// Copy the filesystem ,boot and vbmeta img files to IMAGES/
 	ctx.VisitDirectDepsProxyWithTag(filesystemDepTag, func(child android.ModuleProxy) {
+		if strings.Contains(child.Name(), "recovery") {
+			return // skip recovery.img to match the make packaging behavior
+		}
 		if info, ok := android.OtherModuleProvider(ctx, child, BootimgInfoProvider); ok {
 			// Check Boot img first so that the boot.img is copied and not its dep ramdisk.img
 			builder.Command().Textf("cp ").Input(info.Output).Textf(" %s/IMAGES/", targetFilesDir.String())
