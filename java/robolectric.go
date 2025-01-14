@@ -20,6 +20,7 @@ import (
 	"android/soong/android"
 	"android/soong/java/config"
 	"android/soong/tradefed"
+
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 )
@@ -104,8 +105,6 @@ func (r *robolectricTest) TestSuites() []string {
 
 var _ android.TestSuiteModule = (*robolectricTest)(nil)
 
-
-
 func (r *robolectricTest) DepsMutator(ctx android.BottomUpMutatorContext) {
 	r.Library.DepsMutator(ctx)
 
@@ -121,8 +120,6 @@ func (r *robolectricTest) DepsMutator(ctx android.BottomUpMutatorContext) {
 		ctx.AddVariationDependencies(nil, roboRuntimeOnlyDepTag, robolectricCurrentLib)
 	} else {
 		ctx.AddVariationDependencies(nil, staticLibTag, robolectricCurrentLib)
-		// opting out from strict mode, robolectric_non_strict_mode_permission lib should be added
-		ctx.AddVariationDependencies(nil, staticLibTag, "robolectric_non_strict_mode_permission")
 	}
 
 	ctx.AddVariationDependencies(nil, staticLibTag, robolectricDefaultLibs...)
@@ -141,10 +138,17 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 	r.forceOSType = ctx.Config().BuildOS
 	r.forceArchType = ctx.Config().BuildArch
 
+	var options []tradefed.Option
+	options = append(options, tradefed.Option{Name: "java-flags", Value: "-Drobolectric=true"})
+	if proptools.BoolDefault(r.robolectricProperties.Strict_mode, true) {
+	    options = append(options, tradefed.Option{Name: "java-flags", Value: "-Drobolectric.strict.mode=true"})
+	}
+
 	r.testConfig = tradefed.AutoGenTestConfig(ctx, tradefed.AutoGenTestConfigOptions{
 		TestConfigProp:         r.testProperties.Test_config,
 		TestConfigTemplateProp: r.testProperties.Test_config_template,
 		TestSuites:             r.testProperties.Test_suites,
+		TestRunnerOptions:      options,
 		AutoGenConfig:          r.testProperties.Auto_gen_config,
 		DeviceTemplate:         "${RobolectricTestConfigTemplate}",
 		HostTemplate:           "${RobolectricTestConfigTemplate}",
@@ -207,7 +211,7 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 	r.stem = proptools.StringDefault(r.overridableProperties.Stem, ctx.ModuleName())
 	r.classLoaderContexts = r.usesLibrary.classLoaderContextForUsesLibDeps(ctx)
 	r.dexpreopter.disableDexpreopt()
-	r.compile(ctx, nil, nil, nil, extraCombinedJars)
+	javaInfo := r.compile(ctx, nil, nil, nil, extraCombinedJars)
 
 	installPath := android.PathForModuleInstall(ctx, r.BaseModuleName())
 	var installDeps android.InstallPaths
@@ -244,6 +248,11 @@ func (r *robolectricTest) GenerateAndroidBuildActions(ctx android.ModuleContext)
 	}
 
 	r.installFile = ctx.InstallFile(installPath, ctx.ModuleName()+".jar", r.outputFile, installDeps...)
+
+	if javaInfo != nil {
+		setExtraJavaInfo(ctx, r, javaInfo)
+		android.SetProvider(ctx, JavaInfoProvider, javaInfo)
+	}
 }
 
 func generateSameDirRoboTestConfigJar(ctx android.ModuleContext, outputFile android.ModuleOutPath) {
@@ -294,7 +303,7 @@ func RobolectricTestFactory() android.Module {
 		&module.testProperties)
 
 	module.Module.dexpreopter.isTest = true
-	module.Module.linter.properties.Lint.Test = proptools.BoolPtr(true)
+	module.Module.linter.properties.Lint.Test_module_type = proptools.BoolPtr(true)
 
 	module.testProperties.Test_suites = []string{"robolectric-tests"}
 
