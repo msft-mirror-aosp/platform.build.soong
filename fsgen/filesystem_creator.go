@@ -382,6 +382,23 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 			}
 			fsProps.Partition_size = &parsed
 		}
+		// https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/Makefile;l=2265;drc=7f50a123045520f2c5e18e9eb4e83f92244a1459
+		if s, err := strconv.ParseBool(partitionVars.ProductFsCasefold); err == nil {
+			fsProps.Support_casefolding = proptools.BoolPtr(s)
+		} else if len(partitionVars.ProductFsCasefold) > 0 {
+			ctx.ModuleErrorf("Unrecognized PRODUCT_FS_CASEFOLD value %s", partitionVars.ProductFsCasefold)
+		}
+		if s, err := strconv.ParseBool(partitionVars.ProductQuotaProjid); err == nil {
+			fsProps.Support_project_quota = proptools.BoolPtr(s)
+		} else if len(partitionVars.ProductQuotaProjid) > 0 {
+			ctx.ModuleErrorf("Unrecognized PRODUCT_QUOTA_PROJID value %s", partitionVars.ProductQuotaProjid)
+		}
+		if s, err := strconv.ParseBool(partitionVars.ProductFsCompression); err == nil {
+			fsProps.Enable_compression = proptools.BoolPtr(s)
+		} else if len(partitionVars.ProductFsCompression) > 0 {
+			ctx.ModuleErrorf("Unrecognized PRODUCT_FS_COMPRESSION value %s", partitionVars.ProductFsCompression)
+		}
+
 	case "ramdisk":
 		// Following the logic in https://cs.android.com/android/platform/superproject/main/+/c3c5063df32748a8806ce5da5dd0db158eab9ad9:build/make/core/Makefile;l=1307
 		fsProps.Dirs = android.NewSimpleConfigurable([]string{

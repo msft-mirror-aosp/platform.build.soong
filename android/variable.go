@@ -700,6 +700,10 @@ type PartitionVariables struct {
 	PrivateRecoveryUiProperties map[string]string `json:",omitempty"`
 
 	PrebuiltBootloader string `json:",omitempty"`
+
+	ProductFsCasefold    string `json:",omitempty"`
+	ProductQuotaProjid   string `json:",omitempty"`
+	ProductFsCompression string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {
