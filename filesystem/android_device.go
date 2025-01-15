@@ -378,6 +378,7 @@ func (a *androidDevice) copyImagesToTargetZip(ctx android.ModuleContext, builder
 		if info, ok := android.OtherModuleProvider(ctx, superPartition, SuperImageProvider); ok {
 			for _, partition := range android.SortedKeys(info.SubImageInfo) {
 				builder.Command().Textf("cp ").Input(info.SubImageInfo[partition].Output).Textf(" %s/IMAGES/", targetFilesDir.String())
+				builder.Command().Textf("cp ").Input(info.SubImageInfo[partition].MapFile).Textf(" %s/IMAGES/", targetFilesDir.String())
 			}
 		} else {
 			ctx.ModuleErrorf("Super partition %s does set SuperImageProvider\n", superPartition.Name())
