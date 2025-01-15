@@ -377,7 +377,7 @@ func (a *androidDevice) copyImagesToTargetZip(ctx android.ModuleContext, builder
 		superPartition := ctx.GetDirectDepProxyWithTag(*a.partitionProps.Super_partition_name, superPartitionDepTag)
 		if info, ok := android.OtherModuleProvider(ctx, superPartition, SuperImageProvider); ok {
 			for _, partition := range android.SortedKeys(info.SubImageInfo) {
-				builder.Command().Textf("cp ").Input(info.SubImageInfo[partition].Output).Textf(" %s/IMAGES/", targetFilesDir.String())
+				builder.Command().Textf("cp ").Input(info.SubImageInfo[partition].OutputHermetic).Textf(" %s/IMAGES/", targetFilesDir.String())
 				builder.Command().Textf("cp ").Input(info.SubImageInfo[partition].MapFile).Textf(" %s/IMAGES/", targetFilesDir.String())
 			}
 		} else {
