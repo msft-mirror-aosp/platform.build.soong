@@ -2384,7 +2384,7 @@ func CreateCommonLinkableInfo(ctx android.ModuleContext, mod VersionedLinkableIn
 		RelativeInstallPath:  mod.RelativeInstallPath(),
 		// TODO(b/362509506): remove this once all apex_exclude uses are switched to stubs.
 		RustApexExclude: mod.RustApexExclude(),
-		Bootstrap:            mod.Bootstrap(),
+		Bootstrap:       mod.Bootstrap(),
 	}
 }
 

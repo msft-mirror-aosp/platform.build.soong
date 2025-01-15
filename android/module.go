@@ -1891,15 +1891,16 @@ var CommonModuleInfoKey = blueprint.NewProvider[CommonModuleInfo]()
 
 type PrebuiltModuleInfo struct {
 	SourceExists bool
+	UsePrebuilt  bool
 }
 
 var PrebuiltModuleInfoProvider = blueprint.NewProvider[PrebuiltModuleInfo]()
 
-type HostToolProviderData struct {
+type HostToolProviderInfo struct {
 	HostToolPath OptionalPath
 }
 
-var HostToolProviderKey = blueprint.NewProvider[HostToolProviderData]()
+var HostToolProviderInfoProvider = blueprint.NewProvider[HostToolProviderInfo]()
 
 type SourceFileGenerator interface {
 	GeneratedSourceFiles() Paths
@@ -2212,10 +2213,11 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	if p, ok := m.module.(PrebuiltInterface); ok && p.Prebuilt() != nil {
 		SetProvider(ctx, PrebuiltModuleInfoProvider, PrebuiltModuleInfo{
 			SourceExists: p.Prebuilt().SourceExists(),
+			UsePrebuilt:  p.Prebuilt().UsePrebuilt(),
 		})
 	}
 	if h, ok := m.module.(HostToolProvider); ok {
-		SetProvider(ctx, HostToolProviderKey, HostToolProviderData{
+		SetProvider(ctx, HostToolProviderInfoProvider, HostToolProviderInfo{
 			HostToolPath: h.HostToolPath()})
 	}
 
