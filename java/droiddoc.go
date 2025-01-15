@@ -381,7 +381,7 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 				deps.classpath = append(deps.classpath, dep.HeaderJars...)
 				deps.aidlIncludeDirs = append(deps.aidlIncludeDirs, dep.AidlIncludeDirs...)
 				deps.aconfigProtoFiles = append(deps.aconfigProtoFiles, dep.AconfigIntermediateCacheOutputPaths...)
-			} else if dep, ok := android.OtherModuleProvider(ctx, module, android.SourceFilesInfoKey); ok {
+			} else if dep, ok := android.OtherModuleProvider(ctx, module, android.SourceFilesInfoProvider); ok {
 				checkProducesJars(ctx, dep, module)
 				deps.classpath = append(deps.classpath, dep.Srcs...)
 			} else {

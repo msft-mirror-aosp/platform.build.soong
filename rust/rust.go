@@ -1690,7 +1690,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			}
 		}
 
-		if srcDep, ok := android.OtherModuleProvider(ctx, dep, android.SourceFilesInfoKey); ok {
+		if srcDep, ok := android.OtherModuleProvider(ctx, dep, android.SourceFilesInfoProvider); ok {
 			if android.IsSourceDepTagWithOutputTag(depTag, "") {
 				// These are usually genrules which don't have per-target variants.
 				directSrcDeps = append(directSrcDeps, srcDep)

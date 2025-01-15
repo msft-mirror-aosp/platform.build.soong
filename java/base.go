@@ -2275,7 +2275,7 @@ func (j *Module) JacocoReportClassesFile() android.Path {
 
 func (j *Module) collectTransitiveSrcFiles(ctx android.ModuleContext, mine android.Paths) {
 	var fromDeps []depset.DepSet[android.Path]
-	ctx.VisitDirectDeps(func(module android.Module) {
+	ctx.VisitDirectDepsProxy(func(module android.ModuleProxy) {
 		tag := ctx.OtherModuleDependencyTag(module)
 		if tag == staticLibTag {
 			if depInfo, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
@@ -2550,7 +2550,7 @@ func (j *Module) collectDeps(ctx android.ModuleContext) deps {
 					JavaInfo: dep,
 				})
 			}
-		} else if dep, ok := android.OtherModuleProvider(ctx, module, android.SourceFilesInfoKey); ok {
+		} else if dep, ok := android.OtherModuleProvider(ctx, module, android.SourceFilesInfoProvider); ok {
 			switch tag {
 			case sdkLibTag, libTag:
 				checkProducesJars(ctx, dep, module)
@@ -2740,7 +2740,7 @@ func collectDirectDepsProviders(ctx android.ModuleContext) (result *JarJarProvid
 	module := ctx.Module()
 	moduleName := module.Name()
 
-	ctx.VisitDirectDeps(func(m android.Module) {
+	ctx.VisitDirectDepsProxy(func(m android.ModuleProxy) {
 		tag := ctx.OtherModuleDependencyTag(m)
 		// This logic mirrors that in (*Module).collectDeps above.  There are several places
 		// where we explicitly return RenameUseExclude, even though it is the default, to
@@ -2779,10 +2779,8 @@ func collectDirectDepsProviders(ctx android.ModuleContext) (result *JarJarProvid
 					//fmt.Printf("collectDirectDepsProviders: %v -> %v StubsLinkType unknown\n", module, m)
 					// Fall through to the heuristic logic.
 				}
-				switch reflect.TypeOf(m).String() {
-				case "*java.GeneratedJavaLibraryModule":
+				if _, ok := android.OtherModuleProvider(ctx, m, android.CodegenInfoProvider); ok {
 					// Probably a java_aconfig_library module.
-					// TODO: make this check better.
 					return RenameUseInclude
 				}
 				switch tag {
@@ -2805,7 +2803,7 @@ func collectDirectDepsProviders(ctx android.ModuleContext) (result *JarJarProvid
 				default:
 					return RenameUseExclude
 				}
-			} else if _, ok := m.(android.SourceFileProducer); ok {
+			} else if _, ok := android.OtherModuleProvider(ctx, m, android.SourceFilesInfoProvider); ok {
 				switch tag {
 				case sdkLibTag, libTag, staticLibTag:
 					return RenameUseInclude
