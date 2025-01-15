@@ -357,7 +357,7 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 		deps.aidlPreprocess = sdkDep.aidl
 	}
 
-	ctx.VisitDirectDeps(func(module android.Module) {
+	ctx.VisitDirectDepsProxy(func(module android.ModuleProxy) {
 		otherName := ctx.OtherModuleName(module)
 		tag := ctx.OtherModuleDependencyTag(module)
 
@@ -381,9 +381,9 @@ func (j *Javadoc) collectDeps(ctx android.ModuleContext) deps {
 				deps.classpath = append(deps.classpath, dep.HeaderJars...)
 				deps.aidlIncludeDirs = append(deps.aidlIncludeDirs, dep.AidlIncludeDirs...)
 				deps.aconfigProtoFiles = append(deps.aconfigProtoFiles, dep.AconfigIntermediateCacheOutputPaths...)
-			} else if dep, ok := module.(android.SourceFileProducer); ok {
-				checkProducesJars(ctx, dep)
-				deps.classpath = append(deps.classpath, dep.Srcs()...)
+			} else if dep, ok := android.OtherModuleProvider(ctx, module, android.SourceFilesInfoKey); ok {
+				checkProducesJars(ctx, dep, module)
+				deps.classpath = append(deps.classpath, dep.Srcs...)
 			} else {
 				ctx.ModuleErrorf("depends on non-java module %q", otherName)
 			}
