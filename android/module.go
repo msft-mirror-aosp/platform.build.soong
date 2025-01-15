@@ -1872,6 +1872,7 @@ type CommonModuleInfo struct {
 	BaseModuleName          string
 	CanHaveApexVariants     bool
 	MinSdkVersion           string
+	SdkVersion              string
 	NotAvailableForPlatform bool
 	// There some subtle differences between this one and the one above.
 	NotInPlatform bool
@@ -2181,6 +2182,17 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		}
 	} else if mm, ok := m.module.(interface{ MinSdkVersion() string }); ok {
 		commonData.MinSdkVersion = mm.MinSdkVersion()
+	}
+
+	if mm, ok := m.module.(interface {
+		SdkVersion(ctx EarlyModuleContext) ApiLevel
+	}); ok {
+		ver := mm.SdkVersion(ctx)
+		if !ver.IsNone() {
+			commonData.SdkVersion = ver.String()
+		}
+	} else if mm, ok := m.module.(interface{ SdkVersion() string }); ok {
+		commonData.SdkVersion = mm.SdkVersion()
 	}
 
 	if m.commonProperties.ForcedDisabled {
