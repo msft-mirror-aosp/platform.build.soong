@@ -629,14 +629,6 @@ func (d *Droidstubs) apiLevelsGenerationFlags(ctx android.ModuleContext, cmd *an
 					// `android-plus-updatable.jar` that should be used instead of `android.jar`. See
 					// AndroidPlusUpdatableJar for more information.
 					cmd.Implicit(dep)
-				} else if filename != "android.jar" && depBase == "android.jar" {
-					// Metalava implicitly searches these patterns:
-					//  prebuilts/tools/common/api-versions/android-{version:level}/android.jar
-					//  prebuilts/sdk/{version:level}/public/android.jar
-					// Add android.jar files from the api_levels_annotations_dirs directories to try
-					// to satisfy these patterns.  If Metalava can't find a match for an API level
-					// between 1 and 28 in at least one pattern it will fail.
-					cmd.Implicit(dep)
 				}
 			}
 
