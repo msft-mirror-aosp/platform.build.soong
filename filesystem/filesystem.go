@@ -222,6 +222,15 @@ type FilesystemProperties struct {
 	// The size of the partition on the device. It will be a build error if this built partition
 	// image exceeds this size.
 	Partition_size *int64
+
+	// Whether to format f2fs and ext4 in a way that supports casefolding
+	Support_casefolding *bool
+
+	// Whether to format f2fs and ext4 in a way that supports project quotas
+	Support_project_quota *bool
+
+	// Whether to enable per-file compression in f2fs
+	Enable_compression *bool
 }
 
 type AndroidFilesystemDeps struct {
@@ -819,6 +828,18 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 
 	if f.properties.Partition_size != nil {
 		addStr("partition_size", strconv.FormatInt(*f.properties.Partition_size, 10))
+	}
+
+	if proptools.BoolDefault(f.properties.Support_casefolding, false) {
+		addStr("needs_casefold", "1")
+	}
+
+	if proptools.BoolDefault(f.properties.Support_project_quota, false) {
+		addStr("needs_projid", "1")
+	}
+
+	if proptools.BoolDefault(f.properties.Enable_compression, false) {
+		addStr("needs_compress", "1")
 	}
 
 	propFilePreProcessing := android.PathForModuleOut(ctx, "prop_pre_processing")
