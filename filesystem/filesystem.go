@@ -363,6 +363,10 @@ func (fs fsType) IsUnknown() bool {
 type FilesystemInfo struct {
 	// The built filesystem image
 	Output android.Path
+	// An additional hermetic filesystem image.
+	// e.g. this will contain inodes with pinned timestamps.
+	// This will be copied to target_files.zip
+	OutputHermetic android.Path
 	// A text file containing the list of paths installed on the partition.
 	FileListFile android.Path
 	// The root staging directory used to build the output filesystem. If consuming this, make sure
@@ -460,9 +464,10 @@ func (f *filesystem) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	var rootDir android.OutputPath
 	var mapFile android.Path
+	var outputHermetic android.Path
 	switch f.fsType(ctx) {
 	case ext4Type, erofsType, f2fsType:
-		f.output, rootDir = f.buildImageUsingBuildImage(ctx)
+		f.output, outputHermetic, rootDir = f.buildImageUsingBuildImage(ctx)
 		mapFile = f.getMapFile(ctx)
 	case compressedCpioType:
 		f.output, rootDir = f.buildCpioImage(ctx, true)
@@ -490,6 +495,9 @@ func (f *filesystem) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 	if mapFile != nil {
 		fsInfo.MapFile = mapFile
+	}
+	if outputHermetic != nil {
+		fsInfo.OutputHermetic = outputHermetic
 	}
 
 	android.SetProvider(ctx, FilesystemProvider, fsInfo)
@@ -649,7 +657,7 @@ func (f *filesystem) rootDirString() string {
 	return f.partitionName()
 }
 
-func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) (android.Path, android.OutputPath) {
+func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) (android.Path, android.Path, android.OutputPath) {
 	rootDir := android.PathForModuleOut(ctx, f.rootDirString()).OutputPath
 	rebasedDir := rootDir
 	if f.properties.Base_dir != nil {
@@ -697,6 +705,21 @@ func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) (andro
 		Output(output).
 		Text(rootDir.String()) // directory where to find fs_config_files|dirs
 
+	// Add an additional cmd to create a hermetic img file. This will contain pinned timestamps e.g.
+	propFilePinnedTimestamp := android.PathForModuleOut(ctx, "for_target_files", "prop")
+	builder.Command().Textf("cat").Input(propFile).Flag(">").Output(propFilePinnedTimestamp).Textf(" && echo use_fixed_timestamp=true >> %s", propFilePinnedTimestamp)
+
+	outputHermetic := android.PathForModuleOut(ctx, "for_target_files", f.installFileName())
+	builder.Command().
+		Textf("PATH=%s:$PATH", strings.Join(pathToolDirs, ":")).
+		BuiltTool("build_image").
+		Text(rootDir.String()). // input directory
+		Flag(propFilePinnedTimestamp.String()).
+		Implicits(toolDeps).
+		Implicit(fec).
+		Output(outputHermetic).
+		Text(rootDir.String()) // directory where to find fs_config_files|dirs
+
 	if !ctx.Config().KatiEnabled() {
 		copyImageFileToProductOut(ctx, builder, f.partitionName(), output)
 	}
@@ -708,7 +731,7 @@ func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) (andro
 	// rootDir is not deleted. Might be useful for quick inspection.
 	builder.Build("build_filesystem_image", fmt.Sprintf("Creating filesystem %s", f.BaseModuleName()))
 
-	return output, rootDir
+	return output, outputHermetic, rootDir
 }
 
 func (f *filesystem) buildFileContexts(ctx android.ModuleContext) android.Path {
