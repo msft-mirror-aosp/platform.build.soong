@@ -83,6 +83,7 @@ type CmdArgs struct {
 	OutDir         string
 	SoongOutDir    string
 	SoongVariables string
+	KatiSuffix     string
 
 	ModuleGraphFile   string
 	ModuleActionsFile string
@@ -349,6 +350,7 @@ type config struct {
 	// Changes behavior based on whether Kati runs after soong_build, or if soong_build
 	// runs standalone.
 	katiEnabled bool
+	katiSuffix  string
 
 	captureBuild      bool // true for tests, saves build parameters for each module
 	ignoreEnvironment bool // true for tests, returns empty from all Getenv calls
@@ -620,6 +622,7 @@ func NewConfig(cmdArgs CmdArgs, availableEnv map[string]string) (Config, error) 
 		outDir:            cmdArgs.OutDir,
 		soongOutDir:       cmdArgs.SoongOutDir,
 		runGoTests:        cmdArgs.RunGoTests,
+		katiSuffix:        cmdArgs.KatiSuffix,
 		multilibConflicts: make(map[ArchType]bool),
 
 		moduleListFile: cmdArgs.ModuleListFile,
@@ -1512,6 +1515,10 @@ func (c *config) VendorApiLevelFrozen() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_BOARD_API_LEVEL_FROZEN")
 }
 
+func (c *config) katiPackageMkDir() string {
+	return filepath.Join(c.soongOutDir, "kati_packaging"+c.katiSuffix)
+}
+
 func (c *deviceConfig) Arches() []Arch {
 	var arches []Arch
 	for _, target := range c.config.Targets[Android] {
@@ -2168,6 +2175,10 @@ func (c *config) UseTransitiveJarsInClasspath() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_USE_TRANSITIVE_JARS_IN_CLASSPATH")
 }
 
+func (c *config) UseR8OnlyRuntimeVisibleAnnotations() bool {
+	return c.productVariables.GetBuildFlagBool("RELEASE_R8_ONLY_RUNTIME_VISIBLE_ANNOTATIONS")
+}
+
 func (c *config) UseR8StoreStoreFenceConstructorInlining() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_R8_STORE_STORE_FENCE_CONSTRUCTOR_INLINING")
 }
@@ -2182,7 +2193,7 @@ var (
 		"RELEASE_APEX_CONTRIBUTIONS_ADSERVICES":              "com.android.adservices",
 		"RELEASE_APEX_CONTRIBUTIONS_APPSEARCH":               "com.android.appsearch",
 		"RELEASE_APEX_CONTRIBUTIONS_ART":                     "com.android.art",
-		"RELEASE_APEX_CONTRIBUTIONS_BLUETOOTH":               "com.android.btservices",
+		"RELEASE_APEX_CONTRIBUTIONS_BLUETOOTH":               "com.android.bt",
 		"RELEASE_APEX_CONTRIBUTIONS_CAPTIVEPORTALLOGIN":      "",
 		"RELEASE_APEX_CONTRIBUTIONS_CELLBROADCAST":           "com.android.cellbroadcast",
 		"RELEASE_APEX_CONTRIBUTIONS_CONFIGINFRASTRUCTURE":    "com.android.configinfrastructure",
