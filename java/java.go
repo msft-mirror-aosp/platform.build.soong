@@ -640,11 +640,11 @@ type deps struct {
 	transitiveStaticLibsResourceJars       []depset.DepSet[android.Path]
 }
 
-func checkProducesJars(ctx android.ModuleContext, dep android.SourceFileProducer) {
-	for _, f := range dep.Srcs() {
+func checkProducesJars(ctx android.ModuleContext, dep android.SourceFilesInfo, module android.ModuleProxy) {
+	for _, f := range dep.Srcs {
 		if f.Ext() != ".jar" {
 			ctx.ModuleErrorf("genrule %q must generate files ending with .jar to be used as a libs or static_libs dependency",
-				ctx.OtherModuleName(dep.(blueprint.Module)))
+				ctx.OtherModuleName(module))
 		}
 	}
 }
@@ -2761,7 +2761,7 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	var staticJars android.Paths
 	var staticResourceJars android.Paths
 	var staticHeaderJars android.Paths
-	ctx.VisitDirectDeps(func(module android.Module) {
+	ctx.VisitDirectDepsProxy(func(module android.ModuleProxy) {
 		tag := ctx.OtherModuleDependencyTag(module)
 		if dep, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
 			switch tag {
@@ -3395,7 +3395,7 @@ var String = proptools.String
 var inList = android.InList[string]
 
 // Add class loader context (CLC) of a given dependency to the current CLC.
-func addCLCFromDep(ctx android.ModuleContext, depModule android.Module,
+func addCLCFromDep(ctx android.ModuleContext, depModule android.ModuleProxy,
 	clcMap dexpreopt.ClassLoaderContextMap) {
 
 	dep, ok := android.OtherModuleProvider(ctx, depModule, JavaInfoProvider)
@@ -3455,7 +3455,7 @@ func addCLCFromDep(ctx android.ModuleContext, depModule android.Module,
 	}
 }
 
-func addMissingOptionalUsesLibsFromDep(ctx android.ModuleContext, depModule android.Module,
+func addMissingOptionalUsesLibsFromDep(ctx android.ModuleContext, depModule android.ModuleProxy,
 	usesLibrary *usesLibrary) {
 
 	dep, ok := android.OtherModuleProvider(ctx, depModule, JavaInfoProvider)
