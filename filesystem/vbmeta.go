@@ -181,7 +181,6 @@ func (v *vbmeta) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		ctx.PropertyErrorf("rollback_index_location", "must be 0, 1, 2, ...")
 		return
 	}
-	cmd.FlagWithArg("--rollback_index_location ", strconv.Itoa(ril))
 
 	for _, avb_prop := range v.properties.Avb_properties {
 		key := proptools.String(avb_prop.Key)
