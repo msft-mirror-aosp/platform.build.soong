@@ -1978,7 +1978,7 @@ func (j *Module) useCompose(ctx android.BaseModuleContext) bool {
 }
 
 func collectDepProguardSpecInfo(ctx android.ModuleContext) (transitiveProguardFlags, transitiveUnconditionalExportedFlags []depset.DepSet[android.Path]) {
-	ctx.VisitDirectDeps(func(m android.Module) {
+	ctx.VisitDirectDepsProxy(func(m android.ModuleProxy) {
 		depProguardInfo, _ := android.OtherModuleProvider(ctx, m, ProguardSpecInfoProvider)
 		depTag := ctx.OtherModuleDependencyTag(m)
 

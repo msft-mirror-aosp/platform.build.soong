@@ -1040,7 +1040,7 @@ func (a *AndroidLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 	}
 
 	prebuiltJniPackages := android.Paths{}
-	ctx.VisitDirectDeps(func(module android.Module) {
+	ctx.VisitDirectDepsProxy(func(module android.ModuleProxy) {
 		if info, ok := android.OtherModuleProvider(ctx, module, JniPackageProvider); ok {
 			prebuiltJniPackages = append(prebuiltJniPackages, info.JniPackages...)
 		}
