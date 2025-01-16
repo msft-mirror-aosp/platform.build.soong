@@ -173,12 +173,6 @@ type FilesystemProperties struct {
 	// Mount point for this image. Default is "/"
 	Mount_point *string
 
-	// If set to the name of a partition ("system", "vendor", etc), this filesystem module
-	// will also include the contents of the make-built staging directories. If any soong
-	// modules would be installed to the same location as a make module, they will overwrite
-	// the make version.
-	Include_make_built_files string
-
 	// When set, builds etc/event-log-tags file by merging logtags from all dependencies.
 	// Default is false
 	Build_logtags *bool
@@ -668,7 +662,6 @@ func (f *filesystem) buildImageUsingBuildImage(ctx android.ModuleContext) (andro
 	f.entries = f.copyPackagingSpecs(ctx, builder, specs, rootDir, rebasedDir)
 
 	f.buildNonDepsFiles(ctx, builder, rootDir)
-	f.addMakeBuiltFiles(ctx, builder, rootDir)
 	f.buildFsverityMetadataFiles(ctx, builder, specs, rootDir, rebasedDir)
 	f.buildEventLogtagsFile(ctx, builder, rebasedDir)
 	f.buildAconfigFlagsFiles(ctx, builder, specs, rebasedDir)
@@ -928,10 +921,6 @@ func (f *filesystem) buildCpioImage(ctx android.ModuleContext, compressed bool) 
 		ctx.PropertyErrorf("file_contexts", "file_contexts is not supported for compressed cpio image.")
 	}
 
-	if f.properties.Include_make_built_files != "" {
-		ctx.PropertyErrorf("include_make_built_files", "include_make_built_files is not supported for compressed cpio image.")
-	}
-
 	rootDir := android.PathForModuleOut(ctx, f.rootDirString()).OutputPath
 	rebasedDir := rootDir
 	if f.properties.Base_dir != nil {
@@ -996,27 +985,6 @@ var validPartitions = []string{
 	"ramdisk",
 	"vendor_ramdisk",
 	"recovery",
-}
-
-func (f *filesystem) addMakeBuiltFiles(ctx android.ModuleContext, builder *android.RuleBuilder, rootDir android.Path) {
-	partition := f.properties.Include_make_built_files
-	if partition == "" {
-		return
-	}
-	if !slices.Contains(validPartitions, partition) {
-		ctx.PropertyErrorf("include_make_built_files", "Expected one of %#v, found %q", validPartitions, partition)
-		return
-	}
-	stampFile := fmt.Sprintf("target/product/%s/obj/PACKAGING/%s_intermediates/staging_dir.stamp", ctx.Config().DeviceName(), partition)
-	fileListFile := fmt.Sprintf("target/product/%s/obj/PACKAGING/%s_intermediates/file_list.txt", ctx.Config().DeviceName(), partition)
-	stagingDir := fmt.Sprintf("target/product/%s/%s", ctx.Config().DeviceName(), partition)
-
-	builder.Command().BuiltTool("merge_directories").
-		Implicit(android.PathForArbitraryOutput(ctx, stampFile)).
-		Text("--ignore-duplicates").
-		FlagWithInput("--file-list", android.PathForArbitraryOutput(ctx, fileListFile)).
-		Text(rootDir.String()).
-		Text(android.PathForArbitraryOutput(ctx, stagingDir).String())
 }
 
 func (f *filesystem) buildEventLogtagsFile(ctx android.ModuleContext, builder *android.RuleBuilder, rebasedDir android.OutputPath) {
