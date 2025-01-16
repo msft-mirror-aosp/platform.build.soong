@@ -156,6 +156,23 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 		}
 	}
 
+	var systemOtherImageName string
+	if buildingSystemOtherImage(partitionVars) {
+		systemModule := generatedModuleNameForPartition(ctx.Config(), "system")
+		systemOtherImageName = generatedModuleNameForPartition(ctx.Config(), "system_other")
+		ctx.CreateModule(
+			filesystem.SystemOtherImageFactory,
+			&filesystem.SystemOtherImageProperties{
+				System_image: &systemModule,
+			},
+			&struct {
+				Name *string
+			}{
+				Name: proptools.StringPtr(systemOtherImageName),
+			},
+		)
+	}
+
 	for _, x := range createVbmetaPartitions(ctx, finalSoongGeneratedPartitions) {
 		f.properties.Vbmeta_module_names = append(f.properties.Vbmeta_module_names, x.moduleName)
 		f.properties.Vbmeta_partition_names = append(f.properties.Vbmeta_partition_names, x.partitionName)
@@ -163,7 +180,7 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 
 	var superImageSubpartitions []string
 	if buildingSuperImage(partitionVars) {
-		superImageSubpartitions = createSuperImage(ctx, finalSoongGeneratedPartitions, partitionVars)
+		superImageSubpartitions = createSuperImage(ctx, finalSoongGeneratedPartitions, partitionVars, systemOtherImageName)
 		f.properties.Super_image = ":" + generatedModuleNameForPartition(ctx.Config(), "super")
 	}
 
@@ -181,6 +198,12 @@ func generatedModuleName(cfg android.Config, suffix string) string {
 
 func generatedModuleNameForPartition(cfg android.Config, partitionType string) string {
 	return generatedModuleName(cfg, fmt.Sprintf("%s_image", partitionType))
+}
+
+func buildingSystemOtherImage(partitionVars android.PartitionVariables) bool {
+	// TODO: Recreate this logic from make instead of just depending on the final result variable:
+	// https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/board_config.mk;l=429;drc=15a0df840e7093f65518003ab80cf24a3d9e8e6a
+	return partitionVars.BuildingSystemOtherImage
 }
 
 func (f *filesystemCreator) createBootloaderFilegroup(ctx android.LoadHookContext) (string, bool) {
