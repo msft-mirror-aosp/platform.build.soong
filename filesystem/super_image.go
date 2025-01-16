@@ -232,7 +232,7 @@ func (s *superImage) buildMiscInfo(ctx android.ModuleContext) (android.Path, and
 
 	} else {
 		if s.properties.Virtual_ab.Retrofit != nil {
-			ctx.PropertyErrorf("virtual_ab.retrofix", "This property cannot be set when virtual_ab is disabled")
+			ctx.PropertyErrorf("virtual_ab.retrofit", "This property cannot be set when virtual_ab is disabled")
 		}
 		if s.properties.Virtual_ab.Compression != nil {
 			ctx.PropertyErrorf("virtual_ab.compression", "This property cannot be set when virtual_ab is disabled")
