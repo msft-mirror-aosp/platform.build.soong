@@ -20,12 +20,19 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
 	"android/soong/java/config"
 	"android/soong/remoteexec"
 )
+
+type DroidStubsInfo struct {
+	CurrentApiTimestamp android.Path
+}
+
+var DroidStubsInfoProvider = blueprint.NewProvider[DroidStubsInfo]()
 
 // The values allowed for Droidstubs' Api_levels_sdk_type
 var allowedApiLevelSdkTypes = []string{"public", "system", "module-lib", "system-server"}
@@ -1339,6 +1346,10 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 		rule.Build("nullabilityWarningsCheck", "nullability warnings check")
 	}
+
+	android.SetProvider(ctx, DroidStubsInfoProvider, DroidStubsInfo{
+		CurrentApiTimestamp: d.CurrentApiTimestamp(),
+	})
 
 	d.setOutputFiles(ctx)
 }
