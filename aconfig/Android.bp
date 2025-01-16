@@ -31,4 +31,10 @@ bootstrap_go_package {
 
 all_aconfig_declarations {
     name: "all_aconfig_declarations",
+    api_files: [
+        ":frameworks-base-api-current.txt",
+        ":frameworks-base-api-system-current.txt",
+        ":frameworks-base-api-system-server-current.txt",
+        ":frameworks-base-api-module-lib-current.txt",
+    ],
 }
