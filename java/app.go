@@ -1171,6 +1171,9 @@ func collectJniDeps(ctx android.ModuleContext,
 	seenModulePaths := make(map[string]bool)
 
 	ctx.WalkDepsProxy(func(module, parent android.ModuleProxy) bool {
+		if !android.OtherModuleProviderOrDefault(ctx, module, android.CommonModuleInfoKey).Enabled {
+			return false
+		}
 		otherName := ctx.OtherModuleName(module)
 		tag := ctx.OtherModuleDependencyTag(module)
 
