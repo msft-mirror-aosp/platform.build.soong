@@ -659,6 +659,10 @@ func (d *Droidstubs) apiLevelsGenerationFlags(ctx android.ModuleContext, cmd *an
 
 			addPattern(filename)
 		}
+
+		if extensions_dir != "" {
+			cmd.FlagWithArg("--android-jar-pattern ", fmt.Sprintf("%s/{version:extension}/%s/{module}.jar", extensions_dir, sdkDir))
+		}
 	}
 
 	if d.properties.Extensions_info_file != nil {
@@ -667,7 +671,6 @@ func (d *Droidstubs) apiLevelsGenerationFlags(ctx android.ModuleContext, cmd *an
 		}
 		info_file := android.PathForModuleSrc(ctx, *d.properties.Extensions_info_file)
 		cmd.Implicit(info_file)
-		cmd.FlagWithArg("--sdk-extensions-root ", extensions_dir)
 		cmd.FlagWithArg("--sdk-extensions-info ", info_file.String())
 	}
 }
