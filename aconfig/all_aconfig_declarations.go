@@ -28,8 +28,10 @@ import (
 // Note that this is ALL aconfig_declarations modules present in the tree, not just
 // ones that are relevant to the product currently being built, so that that infra
 // doesn't need to pull from multiple builds and merge them.
-func AllAconfigDeclarationsFactory() android.Singleton {
-	return &allAconfigDeclarationsSingleton{releaseMap: make(map[string]allAconfigReleaseDeclarationsSingleton)}
+func AllAconfigDeclarationsFactory() android.SingletonModule {
+	module := &allAconfigDeclarationsSingleton{releaseMap: make(map[string]allAconfigReleaseDeclarationsSingleton)}
+	android.InitAndroidModule(module)
+	return module
 }
 
 type allAconfigReleaseDeclarationsSingleton struct {
@@ -38,6 +40,8 @@ type allAconfigReleaseDeclarationsSingleton struct {
 }
 
 type allAconfigDeclarationsSingleton struct {
+	android.SingletonModuleBase
+
 	releaseMap map[string]allAconfigReleaseDeclarationsSingleton
 }
 
@@ -50,7 +54,10 @@ func (this *allAconfigDeclarationsSingleton) sortedConfigNames() []string {
 	return names
 }
 
-func (this *allAconfigDeclarationsSingleton) GenerateBuildActions(ctx android.SingletonContext) {
+func (this *allAconfigDeclarationsSingleton) GenerateAndroidBuildActions(ctx android.ModuleContext) {
+}
+
+func (this *allAconfigDeclarationsSingleton) GenerateSingletonBuildActions(ctx android.SingletonContext) {
 	for _, rcName := range append([]string{""}, ctx.Config().ReleaseAconfigExtraReleaseConfigs()...) {
 		// Find all of the aconfig_declarations modules
 		var packages = make(map[string]int)
