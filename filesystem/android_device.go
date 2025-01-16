@@ -68,6 +68,8 @@ type DeviceProperties struct {
 	// one will be determined based on the lunch product. TODO: Figure out how to make this
 	// blueprint:"mutated" and still set it from filesystem_creator
 	Main_device *bool
+
+	Ab_ota_updater *bool
 }
 
 type androidDevice struct {
@@ -94,9 +96,13 @@ type partitionDepTagType struct {
 type superPartitionDepTagType struct {
 	blueprint.BaseDependencyTag
 }
+type targetFilesMetadataDepTagType struct {
+	blueprint.BaseDependencyTag
+}
 
 var superPartitionDepTag superPartitionDepTagType
 var filesystemDepTag partitionDepTagType
+var targetFilesMetadataDepTag targetFilesMetadataDepTagType
 
 func (a *androidDevice) DepsMutator(ctx android.BottomUpMutatorContext) {
 	addDependencyIfDefined := func(dep *string) {
@@ -124,6 +130,11 @@ func (a *androidDevice) DepsMutator(ctx android.BottomUpMutatorContext) {
 	for _, vbmetaPartition := range a.partitionProps.Vbmeta_partitions {
 		ctx.AddDependency(ctx.Module(), filesystemDepTag, vbmetaPartition)
 	}
+	a.addDepsForTargetFilesMetadata(ctx)
+}
+
+func (a *androidDevice) addDepsForTargetFilesMetadata(ctx android.BottomUpMutatorContext) {
+	ctx.AddFarVariationDependencies(ctx.Config().BuildOSTarget.Variations(), targetFilesMetadataDepTag, "liblz4") // host variant
 }
 
 func (a *androidDevice) GenerateAndroidBuildActions(ctx android.ModuleContext) {
@@ -326,6 +337,7 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 	}
 
 	a.copyImagesToTargetZip(ctx, builder, targetFilesDir)
+	a.copyMetadataToTargetZip(ctx, builder, targetFilesDir)
 
 	builder.Command().
 		BuiltTool("soong_zip").
@@ -371,6 +383,19 @@ func (a *androidDevice) copyImagesToTargetZip(ctx android.ModuleContext, builder
 			ctx.ModuleErrorf("Super partition %s does set SuperImageProvider\n", superPartition.Name())
 		}
 	}
+}
+
+func (a *androidDevice) copyMetadataToTargetZip(ctx android.ModuleContext, builder *android.RuleBuilder, targetFilesDir android.WritablePath) {
+	// Create a META/ subdirectory
+	builder.Command().Textf("mkdir -p %s/META", targetFilesDir.String())
+	if proptools.Bool(a.deviceProps.Ab_ota_updater) {
+		ctx.VisitDirectDepsProxyWithTag(targetFilesMetadataDepTag, func(child android.ModuleProxy) {
+			info, _ := android.OtherModuleProvider(ctx, child, android.OutputFilesProvider)
+			builder.Command().Textf("cp").Inputs(info.DefaultOutputFiles).Textf(" %s/META/", targetFilesDir.String())
+		})
+	}
+	builder.Command().Textf("cp").Input(android.PathForSource(ctx, "external/zucchini/version_info.h")).Textf(" %s/META/zucchini_config.txt", targetFilesDir.String())
+	builder.Command().Textf("cp").Input(android.PathForSource(ctx, "system/update_engine/update_engine.conf")).Textf(" %s/META/update_engine_config.txt", targetFilesDir.String())
 }
 
 func (a *androidDevice) getFilesystemInfo(ctx android.ModuleContext, depName string) FilesystemInfo {
