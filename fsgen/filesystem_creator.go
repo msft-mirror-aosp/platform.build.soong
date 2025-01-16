@@ -281,7 +281,7 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
 		// Identical to that of the aosp_shared_system_image
 		if partitionVars.ProductFsverityGenerateMetadata {
-			fsProps.Fsverity.Inputs = []string{
+			fsProps.Fsverity.Inputs = proptools.NewSimpleConfigurable([]string{
 				"etc/boot-image.prof",
 				"etc/dirty-image-objects",
 				"etc/preloaded-classes",
@@ -289,8 +289,8 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 				"framework/*",
 				"framework/*/*",     // framework/{arch}
 				"framework/oat/*/*", // framework/oat/{arch}
-			}
-			fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
+			})
+			fsProps.Fsverity.Libs = proptools.NewSimpleConfigurable([]string{":framework-res{.export-package.apk}"})
 		}
 		fsProps.Symlinks = commonSymlinksFromRoot
 		fsProps.Symlinks = append(fsProps.Symlinks,
@@ -331,12 +331,12 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 		fsProps.Stem = proptools.StringPtr("system.img")
 	case "system_ext":
 		if partitionVars.ProductFsverityGenerateMetadata {
-			fsProps.Fsverity.Inputs = []string{
+			fsProps.Fsverity.Inputs = proptools.NewSimpleConfigurable([]string{
 				"framework/*",
 				"framework/*/*",     // framework/{arch}
 				"framework/oat/*/*", // framework/oat/{arch}
-			}
-			fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
+			})
+			fsProps.Fsverity.Libs = proptools.NewSimpleConfigurable([]string{":framework-res{.export-package.apk}"})
 		}
 		fsProps.Security_patch = proptools.StringPtr(ctx.Config().PlatformSecurityPatch())
 		fsProps.Stem = proptools.StringPtr("system_ext.img")
