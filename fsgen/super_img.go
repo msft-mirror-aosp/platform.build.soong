@@ -58,7 +58,7 @@ func createSuperImage(ctx android.LoadHookContext, partitions []string, partitio
 		if partitionVars.ProductVirtualAbCowVersion != "" {
 			version, err := strconv.ParseInt(partitionVars.ProductVirtualAbCowVersion, 10, 32)
 			if err != nil {
-				ctx.ModuleErrorf("Compression factor must be an int, got %q", partitionVars.ProductVirtualAbCowVersion)
+				ctx.ModuleErrorf("COW version must be an int, got %q", partitionVars.ProductVirtualAbCowVersion)
 			}
 			superImageProps.Virtual_ab.Cow_version = proptools.Int64Ptr(version)
 		}
