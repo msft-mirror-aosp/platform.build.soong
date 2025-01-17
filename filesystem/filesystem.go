@@ -709,7 +709,9 @@ func (f *filesystem) buildImageUsingBuildImage(
 
 	// Add an additional cmd to create a hermetic img file. This will contain pinned timestamps e.g.
 	propFilePinnedTimestamp := android.PathForModuleOut(ctx, "for_target_files", "prop")
-	builder.Command().Textf("cat").Input(propFile).Flag(">").Output(propFilePinnedTimestamp).Textf(" && echo use_fixed_timestamp=true >> %s", propFilePinnedTimestamp)
+	builder.Command().Textf("cat").Input(propFile).Flag(">").Output(propFilePinnedTimestamp).
+		Textf(" && echo use_fixed_timestamp=true >> %s", propFilePinnedTimestamp).
+		Textf(" && echo block_list=%s >> %s", f.getMapFile(ctx).String(), propFilePinnedTimestamp) // mapfile will be an implicit output
 
 	outputHermetic := android.PathForModuleOut(ctx, "for_target_files", f.installFileName())
 	builder.Command().
@@ -769,7 +771,6 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 		}
 		panic(fmt.Errorf("unsupported fs type %v", t))
 	}
-	addStr("block_list", f.getMapFile(ctx).String()) // This will be an implicit output
 
 	addStr("fs_type", fsTypeStr(f.fsType(ctx)))
 	addStr("mount_point", proptools.StringDefault(f.properties.Mount_point, "/"))
