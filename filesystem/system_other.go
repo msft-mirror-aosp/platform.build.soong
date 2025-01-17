@@ -49,7 +49,7 @@ type systemOtherImage struct {
 func SystemOtherImageFactory() android.Module {
 	module := &systemOtherImage{}
 	module.AddProperties(&module.properties)
-	android.InitAndroidMultiTargetsArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)
 	return module
 }
@@ -89,14 +89,29 @@ func (m *systemOtherImage) GenerateAndroidBuildActions(ctx android.ModuleContext
 	builder := android.NewRuleBuilder(pctx, ctx)
 	builder.Command().Textf("rm -rf %s && mkdir -p %s", stagingDir, stagingDir)
 
+	specs := make(map[string]android.PackagingSpec)
 	for _, otherPartition := range m.properties.Preinstall_dexpreopt_files_from {
 		dexModule := ctx.GetDirectDepProxyWithTag(otherPartition, dexpreoptDependencyTag)
-		_, ok := android.OtherModuleProvider(ctx, dexModule, FilesystemProvider)
+		fsInfo, ok := android.OtherModuleProvider(ctx, dexModule, FilesystemProvider)
 		if !ok {
 			ctx.PropertyErrorf("preinstall_dexpreopt_files_from", "Expected module %q to provide FilesystemProvider", otherPartition)
 			return
 		}
-		// TODO(b/390269431): Install dex files to the staging dir
+		// Merge all the packaging specs into 1 map
+		for k := range fsInfo.SpecsForSystemOther {
+			if _, ok := specs[k]; ok {
+				ctx.ModuleErrorf("Packaging spec %s given by two different partitions", k)
+				continue
+			}
+			specs[k] = fsInfo.SpecsForSystemOther[k]
+		}
+	}
+
+	// TOOD: CopySpecsToDir only exists on PackagingBase, but doesn't use any fields from it. Clean this up.
+	(&android.PackagingBase{}).CopySpecsToDir(ctx, builder, specs, stagingDir)
+
+	if len(m.properties.Preinstall_dexpreopt_files_from) > 0 {
+		builder.Command().Textf("touch %s", filepath.Join(stagingDir.String(), "system-other-odex-marker"))
 	}
 
 	// Most of the time, if build_image were to call a host tool, it accepts the path to the
