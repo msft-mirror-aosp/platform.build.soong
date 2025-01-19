@@ -325,10 +325,25 @@ func TestAndroidAppImport_Filename(t *testing.T) {
 		}
 
 		android_app_import {
+			name: "foo_compressed",
+			apk: "prebuilts/apk/app.apk",
+			presigned: true,
+			compress_apk: true,
+		}
+
+		android_app_import {
 			name: "bar",
 			apk: "prebuilts/apk/app.apk",
 			presigned: true,
-			filename: "bar_sample.apk"
+			filename: "bar_sample.apk",
+		}
+
+		android_app_import {
+			name: "compressed_bar",
+			apk: "prebuilts/apk/app.apk",
+			presigned: true,
+			filename: "bar_sample.apk",
+			compress_apk: true,
 		}
 		`)
 
@@ -347,11 +362,25 @@ func TestAndroidAppImport_Filename(t *testing.T) {
 			expectedMetaDataPath: "out/soong/.intermediates/provenance_metadata/foo/provenance_metadata.textproto",
 		},
 		{
+			name:                 "foo_compressed",
+			expected:             "foo_compressed.apk.gz",
+			onDevice:             "/system/app/foo_compressed/foo_compressed.apk.gz",
+			expectedArtifactPath: "prebuilts/apk/app.apk",
+			expectedMetaDataPath: "out/soong/.intermediates/provenance_metadata/foo_compressed/provenance_metadata.textproto",
+		},
+		{
 			name:                 "bar",
 			expected:             "bar_sample.apk",
 			onDevice:             "/system/app/bar/bar_sample.apk",
 			expectedArtifactPath: "prebuilts/apk/app.apk",
 			expectedMetaDataPath: "out/soong/.intermediates/provenance_metadata/bar/provenance_metadata.textproto",
+		},
+		{
+			name:                 "compressed_bar",
+			expected:             "bar_sample.apk",
+			onDevice:             "/system/app/compressed_bar/bar_sample.apk",
+			expectedArtifactPath: "prebuilts/apk/app.apk",
+			expectedMetaDataPath: "out/soong/.intermediates/provenance_metadata/compressed_bar/provenance_metadata.textproto",
 		},
 	}
 
@@ -685,6 +714,22 @@ func TestAndroidAppImport_relativeInstallPath(t *testing.T) {
 	}
 }
 
+func TestAndroidAppImport_ExtractApk(t *testing.T) {
+	ctx, _ := testJava(t, `
+		android_app_import {
+			name: "foo",
+			apk: "prebuilts/apk/app.apk",
+			certificate: "platform",
+			extract_apk: "extract_path/sub_app.apk"
+		}
+		`)
+
+	variant := ctx.ModuleForTests("foo", "android_common")
+	extractRuleArgs := variant.Output("extract-apk/foo.apk").BuildParams.Args
+	if extractRuleArgs["extract_apk"] != "extract_path/sub_app.apk" {
+		t.Errorf("Unexpected extract apk args: %s", extractRuleArgs["extract_apk"])
+	}
+}
 func TestAndroidTestImport(t *testing.T) {
 	ctx, _ := testJava(t, `
 		android_test_import {

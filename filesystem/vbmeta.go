@@ -121,6 +121,9 @@ type vbmetaPartitionInfo struct {
 	// The path to the public key of the private key used to sign this partition. Derived from
 	// the private key.
 	PublicKey android.Path
+
+	// The output of the vbmeta module
+	Output android.Path
 }
 
 var vbmetaPartitionProvider = blueprint.NewProvider[vbmetaPartitionInfo]()
@@ -169,6 +172,8 @@ func (v *vbmeta) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	algorithm := proptools.StringDefault(v.properties.Algorithm, "SHA256_RSA4096")
 	cmd.FlagWithArg("--algorithm ", algorithm)
+
+	cmd.FlagWithArg("--padding_size ", "4096")
 
 	cmd.FlagWithArg("--rollback_index ", v.rollbackIndexCommand(ctx))
 	ril := proptools.IntDefault(v.properties.Rollback_index_location, 0)
@@ -281,10 +286,6 @@ func (v *vbmeta) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		FlagWithArg("-s ", strconv.Itoa(vbmetaMaxSize)).
 		Output(output)
 
-	if !ctx.Config().KatiEnabled() {
-		copyImageFileToProductOut(ctx, builder, v.partitionName(), output)
-	}
-
 	builder.Build("vbmeta", fmt.Sprintf("vbmeta %s", ctx.ModuleName()))
 
 	v.installDir = android.PathForModuleInstall(ctx, "etc")
@@ -301,6 +302,7 @@ func (v *vbmeta) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		Name:                  v.partitionName(),
 		RollbackIndexLocation: ril,
 		PublicKey:             extractedPublicKey,
+		Output:                output,
 	})
 
 	ctx.SetOutputFiles([]android.Path{output}, "")

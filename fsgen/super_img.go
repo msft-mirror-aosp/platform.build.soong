@@ -19,6 +19,7 @@ import (
 
 	"android/soong/android"
 	"android/soong/filesystem"
+
 	"github.com/google/blueprint/proptools"
 )
 
@@ -26,11 +27,11 @@ func buildingSuperImage(partitionVars android.PartitionVariables) bool {
 	return partitionVars.ProductBuildSuperPartition
 }
 
-func createSuperImage(ctx android.LoadHookContext, partitions []string, partitionVars android.PartitionVariables) {
+func createSuperImage(ctx android.LoadHookContext, partitions []string, partitionVars android.PartitionVariables) []string {
 	baseProps := &struct {
 		Name *string
 	}{
-		Name: proptools.StringPtr(generatedModuleName(ctx.Config(), "super")),
+		Name: proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "super")),
 	}
 
 	superImageProps := &filesystem.SuperImageProperties{
@@ -38,9 +39,29 @@ func createSuperImage(ctx android.LoadHookContext, partitions []string, partitio
 		Block_devices:          partitionVars.BoardSuperPartitionBlockDevices,
 		Ab_update:              proptools.BoolPtr(partitionVars.AbOtaUpdater),
 		Retrofit:               proptools.BoolPtr(partitionVars.ProductRetrofitDynamicPartitions),
-		Virtual_ab:             proptools.BoolPtr(partitionVars.ProductVirtualAbOta),
-		Virtual_ab_retrofit:    proptools.BoolPtr(partitionVars.ProductVirtualAbOtaRetrofit),
 		Use_dynamic_partitions: proptools.BoolPtr(partitionVars.ProductUseDynamicPartitions),
+	}
+	if partitionVars.ProductVirtualAbOta {
+		superImageProps.Virtual_ab.Enable = proptools.BoolPtr(true)
+		superImageProps.Virtual_ab.Retrofit = proptools.BoolPtr(partitionVars.ProductVirtualAbOtaRetrofit)
+		superImageProps.Virtual_ab.Compression = proptools.BoolPtr(partitionVars.ProductVirtualAbCompression)
+		if partitionVars.ProductVirtualAbCompressionMethod != "" {
+			superImageProps.Virtual_ab.Compression_method = proptools.StringPtr(partitionVars.ProductVirtualAbCompressionMethod)
+		}
+		if partitionVars.ProductVirtualAbCompressionFactor != "" {
+			factor, err := strconv.ParseInt(partitionVars.ProductVirtualAbCompressionFactor, 10, 32)
+			if err != nil {
+				ctx.ModuleErrorf("Compression factor must be an int, got %q", partitionVars.ProductVirtualAbCompressionFactor)
+			}
+			superImageProps.Virtual_ab.Compression_factor = proptools.Int64Ptr(factor)
+		}
+		if partitionVars.ProductVirtualAbCowVersion != "" {
+			version, err := strconv.ParseInt(partitionVars.ProductVirtualAbCowVersion, 10, 32)
+			if err != nil {
+				ctx.ModuleErrorf("Compression factor must be an int, got %q", partitionVars.ProductVirtualAbCowVersion)
+			}
+			superImageProps.Virtual_ab.Cow_version = proptools.Int64Ptr(version)
+		}
 	}
 	size, _ := strconv.ParseInt(partitionVars.BoardSuperPartitionSize, 10, 64)
 	superImageProps.Size = proptools.Int64Ptr(size)
@@ -58,34 +79,45 @@ func createSuperImage(ctx android.LoadHookContext, partitions []string, partitio
 	}
 	superImageProps.Partition_groups = partitionGroupsInfo
 
+	var superImageSubpartitions []string
 	partitionNameProps := &filesystem.SuperImagePartitionNameProperties{}
 	if android.InList("system", partitions) {
 		partitionNameProps.System_partition = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system"))
+		superImageSubpartitions = append(superImageSubpartitions, "system")
 	}
 	if android.InList("system_ext", partitions) {
 		partitionNameProps.System_ext_partition = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system_ext"))
+		superImageSubpartitions = append(superImageSubpartitions, "system_ext")
 	}
 	if android.InList("system_dlkm", partitions) {
 		partitionNameProps.System_dlkm_partition = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system_dlkm"))
+		superImageSubpartitions = append(superImageSubpartitions, "system_dlkm")
 	}
 	if android.InList("system_other", partitions) {
 		partitionNameProps.System_other_partition = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "system_other"))
+		superImageSubpartitions = append(superImageSubpartitions, "system_other")
 	}
 	if android.InList("product", partitions) {
 		partitionNameProps.Product_partition = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "product"))
+		superImageSubpartitions = append(superImageSubpartitions, "product")
 	}
 	if android.InList("vendor", partitions) {
 		partitionNameProps.Vendor_partition = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "vendor"))
+		superImageSubpartitions = append(superImageSubpartitions, "vendor")
 	}
 	if android.InList("vendor_dlkm", partitions) {
 		partitionNameProps.Vendor_dlkm_partition = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "vendor_dlkm"))
+		superImageSubpartitions = append(superImageSubpartitions, "vendor_dlkm")
 	}
 	if android.InList("odm", partitions) {
 		partitionNameProps.Odm_partition = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "odm"))
+		superImageSubpartitions = append(superImageSubpartitions, "odm")
 	}
 	if android.InList("odm_dlkm", partitions) {
 		partitionNameProps.Odm_dlkm_partition = proptools.StringPtr(generatedModuleNameForPartition(ctx.Config(), "odm_dlkm"))
+		superImageSubpartitions = append(superImageSubpartitions, "odm_dlkm")
 	}
 
 	ctx.CreateModule(filesystem.SuperImageFactory, baseProps, superImageProps, partitionNameProps)
+	return superImageSubpartitions
 }

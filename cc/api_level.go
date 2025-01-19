@@ -55,7 +55,7 @@ func nativeClampedApiLevel(ctx android.BaseModuleContext,
 	return apiLevel
 }
 
-func nativeApiLevelFromUser(ctx android.BaseModuleContext,
+func NativeApiLevelFromUser(ctx android.BaseModuleContext,
 	raw string) (android.ApiLevel, error) {
 
 	if raw == "minimum" {
@@ -73,7 +73,7 @@ func nativeApiLevelFromUser(ctx android.BaseModuleContext,
 func nativeApiLevelOrPanic(ctx android.BaseModuleContext,
 	raw string) android.ApiLevel {
 
-	value, err := nativeApiLevelFromUser(ctx, raw)
+	value, err := NativeApiLevelFromUser(ctx, raw)
 	if err != nil {
 		panic(err.Error())
 	}

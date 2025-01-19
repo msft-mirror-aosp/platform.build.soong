@@ -34,6 +34,35 @@ import (
 
 var pctx = android.NewPackageContext("android/soong/rust")
 
+type LibraryInfo struct {
+	Rlib  bool
+	Dylib bool
+}
+
+type CompilerInfo struct {
+	StdLinkageForDevice    RustLinkage
+	StdLinkageForNonDevice RustLinkage
+	NoStdlibs              bool
+	LibraryInfo            *LibraryInfo
+}
+
+type ProtobufDecoratorInfo struct{}
+
+type SourceProviderInfo struct {
+	ProtobufDecoratorInfo *ProtobufDecoratorInfo
+}
+
+type RustInfo struct {
+	AndroidMkSuffix               string
+	RustSubName                   string
+	TransitiveAndroidMkSharedLibs depset.DepSet[string]
+	CompilerInfo                  *CompilerInfo
+	SnapshotInfo                  *cc.SnapshotInfo
+	SourceProviderInfo            *SourceProviderInfo
+}
+
+var RustInfoProvider = blueprint.NewProvider[*RustInfo]()
+
 func init() {
 	android.RegisterModuleType("rust_defaults", defaultsFactory)
 	android.PreDepsMutators(registerPreDepsMutators)
@@ -133,8 +162,35 @@ type BaseProperties struct {
 	// Make this module available when building for recovery
 	Recovery_available *bool
 
-	// Minimum sdk version that the artifact should support when it runs as part of mainline modules(APEX).
+	// The API level that this module is built against. The APIs of this API level will be
+	// visible at build time, but use of any APIs newer than min_sdk_version will render the
+	// module unloadable on older devices.  In the future it will be possible to weakly-link new
+	// APIs, making the behavior match Java: such modules will load on older devices, but
+	// calling new APIs on devices that do not support them will result in a crash.
+	//
+	// This property has the same behavior as sdk_version does for Java modules. For those
+	// familiar with Android Gradle, the property behaves similarly to how compileSdkVersion
+	// does for Java code.
+	//
+	// In addition, setting this property causes two variants to be built, one for the platform
+	// and one for apps.
+	Sdk_version *string
+
+	// Minimum OS API level supported by this C or C++ module. This property becomes the value
+	// of the __ANDROID_API__ macro. When the C or C++ module is included in an APEX or an APK,
+	// this property is also used to ensure that the min_sdk_version of the containing module is
+	// not older (i.e. less) than this module's min_sdk_version. When not set, this property
+	// defaults to the value of sdk_version.  When this is set to "apex_inherit", this tracks
+	// min_sdk_version of the containing APEX. When the module
+	// is not built for an APEX, "apex_inherit" defaults to sdk_version.
 	Min_sdk_version *string
+
+	// Variant is an SDK variant created by sdkMutator
+	IsSdkVariant bool `blueprint:"mutated"`
+
+	// Set by factories of module types that can only be referenced from variants compiled against
+	// the SDK.
+	AlwaysSdk bool `blueprint:"mutated"`
 
 	HideFromMake   bool `blueprint:"mutated"`
 	PreventInstall bool `blueprint:"mutated"`
@@ -180,6 +236,9 @@ type Module struct {
 	apexSdkVersion android.ApiLevel
 
 	transitiveAndroidMkSharedLibs depset.DepSet[string]
+
+	// Shared flags among stubs build rules of this module
+	sharedFlags cc.SharedFlags
 }
 
 func (mod *Module) Header() bool {
@@ -345,7 +404,8 @@ func (mod *Module) IsVndkPrebuiltLibrary() bool {
 }
 
 func (mod *Module) IsVendorPublicLibrary() bool {
-	return mod.VendorProperties.IsVendorPublicLibrary
+	// Rust modules do not currently support vendor_public_library
+	return false
 }
 
 func (mod *Module) SdkAndPlatformVariantVisibleToMake() bool {
@@ -354,10 +414,12 @@ func (mod *Module) SdkAndPlatformVariantVisibleToMake() bool {
 }
 
 func (c *Module) IsVndkPrivate() bool {
+	// Rust modules do not currently support VNDK variants
 	return false
 }
 
 func (c *Module) IsLlndk() bool {
+	// Rust modules do not currently support LLNDK variants
 	return false
 }
 
@@ -366,35 +428,34 @@ func (mod *Module) KernelHeadersDecorator() bool {
 }
 
 func (m *Module) NeedsLlndkVariants() bool {
+	// Rust modules do not currently support LLNDK variants
 	return false
 }
 
 func (m *Module) NeedsVendorPublicLibraryVariants() bool {
+	// Rust modules do not currently support vendor_public_library
 	return false
 }
 
 func (mod *Module) HasLlndkStubs() bool {
+	// Rust modules do not currently support LLNDK stubs
 	return false
-}
-
-func (mod *Module) StubsVersion() string {
-	panic(fmt.Errorf("StubsVersion called on non-versioned module: %q", mod.BaseModuleName()))
 }
 
 func (mod *Module) SdkVersion() string {
-	return ""
+	return String(mod.Properties.Sdk_version)
 }
 
 func (mod *Module) AlwaysSdk() bool {
-	return false
+	return mod.Properties.AlwaysSdk
 }
 
 func (mod *Module) IsSdkVariant() bool {
-	return false
+	return mod.Properties.IsSdkVariant
 }
 
 func (mod *Module) SplitPerApiLevel() bool {
-	return false
+	return cc.CanUseSdk(mod) && mod.IsCrt()
 }
 
 func (mod *Module) XrefRustFiles() android.Paths {
@@ -531,6 +592,9 @@ func (mod *Module) ExportedCrateLinkDirs() []string {
 
 func (mod *Module) PreventInstall() bool {
 	return mod.Properties.PreventInstall
+}
+func (c *Module) ForceDisableSanitizers() {
+	c.sanitize.Properties.ForceDisable = true
 }
 
 func (mod *Module) MarkAsCoverageVariant(coverage bool) {
@@ -714,11 +778,51 @@ func (mod *Module) IsNdk(config android.Config) bool {
 	return false
 }
 
-func (mod *Module) HasStubsVariants() bool {
+func (mod *Module) IsStubs() bool {
+	if lib, ok := mod.compiler.(libraryInterface); ok {
+		return lib.BuildStubs()
+	}
 	return false
 }
 
-func (mod *Module) IsStubs() bool {
+func (mod *Module) HasStubsVariants() bool {
+	if lib, ok := mod.compiler.(libraryInterface); ok {
+		return lib.HasStubsVariants()
+	}
+	return false
+}
+
+func (mod *Module) ApexSdkVersion() android.ApiLevel {
+	return mod.apexSdkVersion
+}
+
+func (mod *Module) RustApexExclude() bool {
+	return mod.ApexExclude()
+}
+
+func (mod *Module) getSharedFlags() *cc.SharedFlags {
+	shared := &mod.sharedFlags
+	if shared.FlagsMap == nil {
+		shared.NumSharedFlags = 0
+		shared.FlagsMap = make(map[string]string)
+	}
+	return shared
+}
+
+func (mod *Module) ImplementationModuleNameForMake(ctx android.BaseModuleContext) string {
+	name := mod.BaseModuleName()
+	if versioned, ok := mod.compiler.(cc.VersionedInterface); ok {
+		name = versioned.ImplementationModuleName(name)
+	}
+	return name
+}
+
+func (mod *Module) Multilib() string {
+	return mod.Arch().ArchType.Multilib
+}
+
+func (mod *Module) IsCrt() bool {
+	// Rust does not currently provide any crt modules.
 	return false
 }
 
@@ -742,6 +846,7 @@ func (ctx moduleContext) apexVariationName() string {
 }
 
 var _ cc.LinkableInterface = (*Module)(nil)
+var _ cc.VersionedLinkableInterface = (*Module)(nil)
 
 func (mod *Module) Init() android.Module {
 	mod.AddProperties(&mod.Properties)
@@ -850,6 +955,25 @@ func (mod *Module) nativeCoverage() bool {
 		return false
 	}
 	return mod.compiler != nil && mod.compiler.nativeCoverage()
+}
+
+func (mod *Module) SetStl(s string) {
+	// STL is a CC concept; do nothing for Rust
+}
+
+func (mod *Module) SetSdkVersion(s string) {
+	mod.Properties.Sdk_version = StringPtr(s)
+}
+
+func (mod *Module) SetMinSdkVersion(s string) {
+	mod.Properties.Min_sdk_version = StringPtr(s)
+}
+
+func (mod *Module) VersionedInterface() cc.VersionedInterface {
+	if _, ok := mod.compiler.(cc.VersionedInterface); ok {
+		return mod.compiler.(cc.VersionedInterface)
+	}
+	return nil
 }
 
 func (mod *Module) EverInstallable() bool {
@@ -996,9 +1120,63 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		ctx.Phony("rust", ctx.RustModule().OutputFile().Path())
 	}
 
-	android.SetProvider(ctx, cc.LinkableInfoKey, cc.LinkableInfo{
-		StaticExecutable: mod.StaticExecutable(),
-	})
+	linkableInfo := cc.CreateCommonLinkableInfo(ctx, mod)
+	linkableInfo.Static = mod.Static()
+	linkableInfo.Shared = mod.Shared()
+	linkableInfo.CrateName = mod.CrateName()
+	linkableInfo.ExportedCrateLinkDirs = mod.ExportedCrateLinkDirs()
+	if lib, ok := mod.compiler.(cc.VersionedInterface); ok {
+		linkableInfo.StubsVersion = lib.StubsVersion()
+	}
+
+	android.SetProvider(ctx, cc.LinkableInfoProvider, linkableInfo)
+
+	rustInfo := &RustInfo{
+		AndroidMkSuffix:               mod.AndroidMkSuffix(),
+		RustSubName:                   mod.Properties.RustSubName,
+		TransitiveAndroidMkSharedLibs: mod.transitiveAndroidMkSharedLibs,
+	}
+	if mod.compiler != nil {
+		rustInfo.CompilerInfo = &CompilerInfo{
+			NoStdlibs:              mod.compiler.noStdlibs(),
+			StdLinkageForDevice:    mod.compiler.stdLinkage(true),
+			StdLinkageForNonDevice: mod.compiler.stdLinkage(false),
+		}
+		if lib, ok := mod.compiler.(libraryInterface); ok {
+			rustInfo.CompilerInfo.LibraryInfo = &LibraryInfo{
+				Dylib: lib.dylib(),
+				Rlib:  lib.rlib(),
+			}
+		}
+		if lib, ok := mod.compiler.(cc.SnapshotInterface); ok {
+			rustInfo.SnapshotInfo = &cc.SnapshotInfo{
+				SnapshotAndroidMkSuffix: lib.SnapshotAndroidMkSuffix(),
+			}
+		}
+	}
+	if mod.sourceProvider != nil {
+		if _, ok := mod.sourceProvider.(*protobufDecorator); ok {
+			rustInfo.SourceProviderInfo = &SourceProviderInfo{
+				ProtobufDecoratorInfo: &ProtobufDecoratorInfo{},
+			}
+		}
+	}
+	android.SetProvider(ctx, RustInfoProvider, rustInfo)
+
+	ccInfo := &cc.CcInfo{
+		IsPrebuilt: mod.IsPrebuilt(),
+	}
+
+	// Define the linker info if compiler != nil because Rust currently
+	// does compilation and linking in one step. If this changes in the future,
+	// move this as appropriate.
+	ccInfo.LinkerInfo = &cc.LinkerInfo{
+		WholeStaticLibs: mod.compiler.baseCompilerProps().Whole_static_libs,
+		StaticLibs:      mod.compiler.baseCompilerProps().Static_libs,
+		SharedLibs:      mod.compiler.baseCompilerProps().Shared_libs,
+	}
+
+	android.SetProvider(ctx, cc.CcInfoProvider, ccInfo)
 
 	mod.setOutputFiles(ctx)
 
@@ -1161,6 +1339,21 @@ func (mod *Module) begin(ctx BaseModuleContext) {
 	if mod.sanitize != nil {
 		mod.sanitize.begin(ctx)
 	}
+
+	if mod.UseSdk() && mod.IsSdkVariant() {
+		sdkVersion := ""
+		if ctx.Device() {
+			sdkVersion = mod.SdkVersion()
+		}
+		version, err := cc.NativeApiLevelFromUser(ctx, sdkVersion)
+		if err != nil {
+			ctx.PropertyErrorf("sdk_version", err.Error())
+			mod.Properties.Sdk_version = nil
+		} else {
+			mod.Properties.Sdk_version = StringPtr(version.String())
+		}
+	}
+
 }
 
 func (mod *Module) Prebuilt() *android.Prebuilt {
@@ -1175,21 +1368,21 @@ func (mod *Module) Symlinks() []string {
 	return nil
 }
 
-func rustMakeLibName(ctx android.ModuleContext, c cc.LinkableInterface, dep cc.LinkableInterface, depName string) string {
-	if rustDep, ok := dep.(*Module); ok {
+func rustMakeLibName(rustInfo *RustInfo, linkableInfo *cc.LinkableInfo, commonInfo *android.CommonModuleInfo, depName string) string {
+	if rustInfo != nil {
 		// Use base module name for snapshots when exporting to Makefile.
-		if snapshotPrebuilt, ok := rustDep.compiler.(cc.SnapshotInterface); ok {
-			baseName := rustDep.BaseModuleName()
-			return baseName + snapshotPrebuilt.SnapshotAndroidMkSuffix() + rustDep.AndroidMkSuffix()
+		if rustInfo.SnapshotInfo != nil {
+			baseName := linkableInfo.BaseModuleName
+			return baseName + rustInfo.SnapshotInfo.SnapshotAndroidMkSuffix + rustInfo.AndroidMkSuffix
 		}
 	}
-	return cc.MakeLibName(ctx, c, dep, depName)
+	return cc.MakeLibName(nil, linkableInfo, commonInfo, depName)
 }
 
-func collectIncludedProtos(mod *Module, dep *Module) {
+func collectIncludedProtos(mod *Module, rustInfo *RustInfo, linkableInfo *cc.LinkableInfo) {
 	if protoMod, ok := mod.sourceProvider.(*protobufDecorator); ok {
-		if _, ok := dep.sourceProvider.(*protobufDecorator); ok {
-			protoMod.additionalCrates = append(protoMod.additionalCrates, dep.CrateName())
+		if rustInfo.SourceProviderInfo.ProtobufDecoratorInfo != nil {
+			protoMod.additionalCrates = append(protoMod.additionalCrates, linkableInfo.CrateName)
 		}
 	}
 }
@@ -1197,13 +1390,13 @@ func collectIncludedProtos(mod *Module, dep *Module) {
 func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	var depPaths PathDeps
 
-	directRlibDeps := []*Module{}
-	directDylibDeps := []*Module{}
-	directProcMacroDeps := []*Module{}
+	directRlibDeps := []*cc.LinkableInfo{}
+	directDylibDeps := []*cc.LinkableInfo{}
+	directProcMacroDeps := []*cc.LinkableInfo{}
 	directSharedLibDeps := []cc.SharedLibraryInfo{}
-	directStaticLibDeps := [](cc.LinkableInterface){}
-	directSrcProvidersDeps := []*Module{}
-	directSrcDeps := [](android.SourceFileProducer){}
+	directStaticLibDeps := [](*cc.LinkableInfo){}
+	directSrcProvidersDeps := []*android.ModuleProxy{}
+	directSrcDeps := []android.SourceFilesInfo{}
 
 	// For the dependency from platform to apex, use the latest stubs
 	mod.apexSdkVersion = android.FutureApiLevel
@@ -1224,7 +1417,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	var transitiveAndroidMkSharedLibs []depset.DepSet[string]
 	var directAndroidMkSharedLibs []string
 
-	ctx.VisitDirectDeps(func(dep android.Module) {
+	ctx.VisitDirectDepsProxy(func(dep android.ModuleProxy) {
 		depName := ctx.OtherModuleName(dep)
 		depTag := ctx.OtherModuleDependencyTag(dep)
 		modStdLinkage := mod.compiler.stdLinkage(ctx.Device())
@@ -1237,18 +1430,22 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			return
 		}
 
-		if rustDep, ok := dep.(*Module); ok && !rustDep.Static() && !rustDep.Shared() {
+		rustInfo, hasRustInfo := android.OtherModuleProvider(ctx, dep, RustInfoProvider)
+		ccInfo, _ := android.OtherModuleProvider(ctx, dep, cc.CcInfoProvider)
+		linkableInfo, hasLinkableInfo := android.OtherModuleProvider(ctx, dep, cc.LinkableInfoProvider)
+		commonInfo := android.OtherModuleProviderOrDefault(ctx, dep, android.CommonModuleInfoKey)
+		if hasRustInfo && !linkableInfo.Static && !linkableInfo.Shared {
 			//Handle Rust Modules
-			makeLibName := rustMakeLibName(ctx, mod, rustDep, depName+rustDep.Properties.RustSubName)
+			makeLibName := rustMakeLibName(rustInfo, linkableInfo, &commonInfo, depName+rustInfo.RustSubName)
 
 			switch {
 			case depTag == dylibDepTag:
-				dylib, ok := rustDep.compiler.(libraryInterface)
-				if !ok || !dylib.dylib() {
+				dylib := rustInfo.CompilerInfo.LibraryInfo
+				if dylib == nil || !dylib.Dylib {
 					ctx.ModuleErrorf("mod %q not an dylib library", depName)
 					return
 				}
-				directDylibDeps = append(directDylibDeps, rustDep)
+				directDylibDeps = append(directDylibDeps, linkableInfo)
 				mod.Properties.AndroidMkDylibs = append(mod.Properties.AndroidMkDylibs, makeLibName)
 				mod.Properties.SnapshotDylibs = append(mod.Properties.SnapshotDylibs, cc.BaseLibName(depName))
 
@@ -1257,8 +1454,11 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
 				}
 
-				if !rustDep.compiler.noStdlibs() {
-					rustDepStdLinkage := rustDep.compiler.stdLinkage(ctx.Device())
+				if !rustInfo.CompilerInfo.NoStdlibs {
+					rustDepStdLinkage := rustInfo.CompilerInfo.StdLinkageForNonDevice
+					if ctx.Device() {
+						rustDepStdLinkage = rustInfo.CompilerInfo.StdLinkageForDevice
+					}
 					if rustDepStdLinkage != modStdLinkage {
 						ctx.ModuleErrorf("Rust dependency %q has the wrong StdLinkage; expected %#v, got %#v", depName, modStdLinkage, rustDepStdLinkage)
 						return
@@ -1266,27 +1466,30 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				}
 
 			case depTag == rlibDepTag:
-				rlib, ok := rustDep.compiler.(libraryInterface)
-				if !ok || !rlib.rlib() {
+				rlib := rustInfo.CompilerInfo.LibraryInfo
+				if rlib == nil || !rlib.Rlib {
 					ctx.ModuleErrorf("mod %q not an rlib library", makeLibName)
 					return
 				}
-				directRlibDeps = append(directRlibDeps, rustDep)
+				directRlibDeps = append(directRlibDeps, linkableInfo)
 				mod.Properties.AndroidMkRlibs = append(mod.Properties.AndroidMkRlibs, makeLibName)
 				mod.Properties.SnapshotRlibs = append(mod.Properties.SnapshotRlibs, cc.BaseLibName(depName))
 
 				// rust_ffi rlibs may export include dirs, so collect those here.
 				exportedInfo, _ := android.OtherModuleProvider(ctx, dep, cc.FlagExporterInfoProvider)
 				depPaths.depIncludePaths = append(depPaths.depIncludePaths, exportedInfo.IncludeDirs...)
-				depPaths.exportedLinkDirs = append(depPaths.exportedLinkDirs, linkPathFromFilePath(rustDep.OutputFile().Path()))
+				depPaths.exportedLinkDirs = append(depPaths.exportedLinkDirs, linkPathFromFilePath(linkableInfo.OutputFile.Path()))
 
 				// rlibs are not installed, so don't add the output file to directImplementationDeps
 				if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
 					depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
 				}
 
-				if !rustDep.compiler.noStdlibs() {
-					rustDepStdLinkage := rustDep.compiler.stdLinkage(ctx.Device())
+				if !rustInfo.CompilerInfo.NoStdlibs {
+					rustDepStdLinkage := rustInfo.CompilerInfo.StdLinkageForNonDevice
+					if ctx.Device() {
+						rustDepStdLinkage = rustInfo.CompilerInfo.StdLinkageForDevice
+					}
 					if rustDepStdLinkage != modStdLinkage {
 						ctx.ModuleErrorf("Rust dependency %q has the wrong StdLinkage; expected %#v, got %#v", depName, modStdLinkage, rustDepStdLinkage)
 						return
@@ -1294,14 +1497,14 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				}
 
 			case depTag == procMacroDepTag:
-				directProcMacroDeps = append(directProcMacroDeps, rustDep)
+				directProcMacroDeps = append(directProcMacroDeps, linkableInfo)
 				mod.Properties.AndroidMkProcMacroLibs = append(mod.Properties.AndroidMkProcMacroLibs, makeLibName)
 				// proc_macro link dirs need to be exported, so collect those here.
-				depPaths.exportedLinkDirs = append(depPaths.exportedLinkDirs, linkPathFromFilePath(rustDep.OutputFile().Path()))
+				depPaths.exportedLinkDirs = append(depPaths.exportedLinkDirs, linkPathFromFilePath(linkableInfo.OutputFile.Path()))
 
 			case depTag == sourceDepTag:
 				if _, ok := mod.sourceProvider.(*protobufDecorator); ok {
-					collectIncludedProtos(mod, rustDep)
+					collectIncludedProtos(mod, rustInfo, linkableInfo)
 				}
 			case cc.IsStaticDepTag(depTag):
 				// Rust FFI rlibs should not be declared in a Rust modules
@@ -1314,7 +1517,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 			}
 
-			transitiveAndroidMkSharedLibs = append(transitiveAndroidMkSharedLibs, rustDep.transitiveAndroidMkSharedLibs)
+			transitiveAndroidMkSharedLibs = append(transitiveAndroidMkSharedLibs, rustInfo.TransitiveAndroidMkSharedLibs)
 
 			if android.IsSourceDepTagWithOutputTag(depTag, "") {
 				// Since these deps are added in path_properties.go via AddDependencies, we need to ensure the correct
@@ -1326,14 +1529,14 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					helper = "device module defined?"
 				}
 
-				if dep.Target().Os != ctx.Os() {
+				if commonInfo.Target.Os != ctx.Os() {
 					ctx.ModuleErrorf("OS mismatch on dependency %q (%s)", dep.Name(), helper)
 					return
-				} else if dep.Target().Arch.ArchType != ctx.Arch().ArchType {
+				} else if commonInfo.Target.Arch.ArchType != ctx.Arch().ArchType {
 					ctx.ModuleErrorf("Arch mismatch on dependency %q (%s)", dep.Name(), helper)
 					return
 				}
-				directSrcProvidersDeps = append(directSrcProvidersDeps, rustDep)
+				directSrcProvidersDeps = append(directSrcProvidersDeps, &dep)
 			}
 
 			exportedInfo, _ := android.OtherModuleProvider(ctx, dep, FlagExporterInfoProvider)
@@ -1345,7 +1548,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			}
 
 			if depTag == dylibDepTag || depTag == rlibDepTag || depTag == procMacroDepTag {
-				linkFile := rustDep.UnstrippedOutputFile()
+				linkFile := linkableInfo.UnstrippedOutputFile
 				linkDir := linkPathFromFilePath(linkFile)
 				if lib, ok := mod.compiler.(exportedFlagsProducer); ok {
 					lib.exportLinkDirs(linkDir)
@@ -1354,26 +1557,26 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 			if depTag == sourceDepTag {
 				if _, ok := mod.sourceProvider.(*protobufDecorator); ok && mod.Source() {
-					if _, ok := rustDep.sourceProvider.(*protobufDecorator); ok {
+					if rustInfo.SourceProviderInfo.ProtobufDecoratorInfo != nil {
 						exportedInfo, _ := android.OtherModuleProvider(ctx, dep, cc.FlagExporterInfoProvider)
 						depPaths.depIncludePaths = append(depPaths.depIncludePaths, exportedInfo.IncludeDirs...)
 					}
 				}
 			}
-		} else if ccDep, ok := dep.(cc.LinkableInterface); ok {
+		} else if hasLinkableInfo {
 			//Handle C dependencies
-			makeLibName := cc.MakeLibName(ctx, mod, ccDep, depName)
-			if _, ok := ccDep.(*Module); !ok {
-				if ccDep.Module().Target().Os != ctx.Os() {
+			makeLibName := cc.MakeLibName(ccInfo, linkableInfo, &commonInfo, depName)
+			if !hasRustInfo {
+				if commonInfo.Target.Os != ctx.Os() {
 					ctx.ModuleErrorf("OS mismatch between %q and %q", ctx.ModuleName(), depName)
 					return
 				}
-				if ccDep.Module().Target().Arch.ArchType != ctx.Arch().ArchType {
+				if commonInfo.Target.Arch.ArchType != ctx.Arch().ArchType {
 					ctx.ModuleErrorf("Arch mismatch between %q and %q", ctx.ModuleName(), depName)
 					return
 				}
 			}
-			linkObject := ccDep.OutputFile()
+			linkObject := linkableInfo.OutputFile
 			if !linkObject.Valid() {
 				if !ctx.Config().AllowMissingDependencies() {
 					ctx.ModuleErrorf("Invalid output file when adding dep %q to %q", depName, ctx.ModuleName())
@@ -1413,7 +1616,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				depPaths.depSystemIncludePaths = append(depPaths.depSystemIncludePaths, exportedInfo.SystemIncludeDirs...)
 				depPaths.depClangFlags = append(depPaths.depClangFlags, exportedInfo.Flags...)
 				depPaths.depGeneratedHeaders = append(depPaths.depGeneratedHeaders, exportedInfo.GeneratedHeaders...)
-				directStaticLibDeps = append(directStaticLibDeps, ccDep)
+				directStaticLibDeps = append(directStaticLibDeps, linkableInfo)
 
 				// Record baseLibName for snapshots.
 				mod.Properties.SnapshotStaticLibs = append(mod.Properties.SnapshotStaticLibs, cc.BaseLibName(depName))
@@ -1426,9 +1629,12 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				sharedLibraryInfo, exportedInfo := cc.ChooseStubOrImpl(ctx, dep)
 
 				if !sharedLibraryInfo.IsStubs {
-					depPaths.directImplementationDeps = append(depPaths.directImplementationDeps, android.OutputFileForModule(ctx, dep, ""))
-					if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
-						depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
+					// TODO(b/362509506): remove this additional check once all apex_exclude uses are switched to stubs.
+					if !linkableInfo.RustApexExclude {
+						depPaths.directImplementationDeps = append(depPaths.directImplementationDeps, android.OutputFileForModule(ctx, dep, ""))
+						if info, ok := android.OtherModuleProvider(ctx, dep, cc.ImplementationDepInfoProvider); ok {
+							depPaths.transitiveImplementationDeps = append(depPaths.transitiveImplementationDeps, info.ImplementationDeps)
+						}
 					}
 				}
 
@@ -1484,7 +1690,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 			}
 		}
 
-		if srcDep, ok := dep.(android.SourceFileProducer); ok {
+		if srcDep, ok := android.OtherModuleProvider(ctx, dep, android.SourceFilesInfoProvider); ok {
 			if android.IsSourceDepTagWithOutputTag(depTag, "") {
 				// These are usually genrules which don't have per-target variants.
 				directSrcDeps = append(directSrcDeps, srcDep)
@@ -1497,32 +1703,32 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	var rlibDepFiles RustLibraries
 	aliases := mod.compiler.Aliases()
 	for _, dep := range directRlibDeps {
-		crateName := dep.CrateName()
+		crateName := dep.CrateName
 		if alias, aliased := aliases[crateName]; aliased {
 			crateName = alias
 		}
-		rlibDepFiles = append(rlibDepFiles, RustLibrary{Path: dep.UnstrippedOutputFile(), CrateName: crateName})
+		rlibDepFiles = append(rlibDepFiles, RustLibrary{Path: dep.UnstrippedOutputFile, CrateName: crateName})
 	}
 	var dylibDepFiles RustLibraries
 	for _, dep := range directDylibDeps {
-		crateName := dep.CrateName()
+		crateName := dep.CrateName
 		if alias, aliased := aliases[crateName]; aliased {
 			crateName = alias
 		}
-		dylibDepFiles = append(dylibDepFiles, RustLibrary{Path: dep.UnstrippedOutputFile(), CrateName: crateName})
+		dylibDepFiles = append(dylibDepFiles, RustLibrary{Path: dep.UnstrippedOutputFile, CrateName: crateName})
 	}
 	var procMacroDepFiles RustLibraries
 	for _, dep := range directProcMacroDeps {
-		crateName := dep.CrateName()
+		crateName := dep.CrateName
 		if alias, aliased := aliases[crateName]; aliased {
 			crateName = alias
 		}
-		procMacroDepFiles = append(procMacroDepFiles, RustLibrary{Path: dep.UnstrippedOutputFile(), CrateName: crateName})
+		procMacroDepFiles = append(procMacroDepFiles, RustLibrary{Path: dep.UnstrippedOutputFile, CrateName: crateName})
 	}
 
 	var staticLibDepFiles android.Paths
 	for _, dep := range directStaticLibDeps {
-		staticLibDepFiles = append(staticLibDepFiles, dep.OutputFile().Path())
+		staticLibDepFiles = append(staticLibDepFiles, dep.OutputFile.Path())
 	}
 
 	var sharedLibFiles android.Paths
@@ -1538,11 +1744,11 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 
 	var srcProviderDepFiles android.Paths
 	for _, dep := range directSrcProvidersDeps {
-		srcs := android.OutputFilesForModule(ctx, dep, "")
+		srcs := android.OutputFilesForModule(ctx, *dep, "")
 		srcProviderDepFiles = append(srcProviderDepFiles, srcs...)
 	}
 	for _, dep := range directSrcDeps {
-		srcs := dep.Srcs()
+		srcs := dep.Srcs
 		srcProviderDepFiles = append(srcProviderDepFiles, srcs...)
 	}
 
@@ -1796,7 +2002,7 @@ func (mod *Module) HostToolPath() android.OptionalPath {
 var _ android.ApexModule = (*Module)(nil)
 
 // If a module is marked for exclusion from apexes, don't provide apex variants.
-// TODO(b/362509506): remove this once stubs are properly supported by rust_ffi targets.
+// TODO(b/362509506): remove this once all apex_exclude usages are removed.
 func (m *Module) CanHaveApexVariants() bool {
 	if m.ApexExclude() {
 		return false
@@ -1833,6 +2039,13 @@ func (mod *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVer
 }
 
 // Implements android.ApexModule
+func (mod *Module) AlwaysRequiresPlatformApexVariant() bool {
+	// stub libraries and native bridge libraries are always available to platform
+	// TODO(b/362509506): remove the ApexExclude() check once all apex_exclude uses are switched to stubs.
+	return mod.IsStubs() || mod.Target().NativeBridge == android.NativeBridgeEnabled || mod.ApexExclude()
+}
+
+// Implements android.ApexModule
 func (mod *Module) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
 	if depTag == procMacroDepTag || depTag == customBindgenDepTag {
 		return false
@@ -1845,18 +2058,55 @@ func (mod *Module) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool 
 		return false
 	}
 
+	if depTag == cc.StubImplDepTag {
+		// We don't track from an implementation library to its stubs.
+		return false
+	}
+
+	if cc.ExcludeInApexDepTag(depTag) {
+		return false
+	}
+
+	// TODO(b/362509506): remove once all apex_exclude uses are switched to stubs.
+	if mod.ApexExclude() {
+		return false
+	}
+
 	return true
 }
 
 func (mod *Module) IncomingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
-	return !mod.ApexExclude()
+	// TODO(b/362509506): remove once all apex_exclude uses are switched to stubs.
+	if mod.ApexExclude() {
+		return false
+	}
+
+	if mod.HasStubsVariants() {
+		if cc.IsSharedDepTag(depTag) {
+			// dynamic dep to a stubs lib crosses APEX boundary
+			return false
+		}
+		if cc.IsRuntimeDepTag(depTag) {
+			// runtime dep to a stubs lib also crosses APEX boundary
+			return false
+		}
+		if cc.IsHeaderDepTag(depTag) {
+			return false
+		}
+	}
+	return true
 }
 
 // Overrides ApexModule.IsInstallabeToApex()
 func (mod *Module) IsInstallableToApex() bool {
+	// TODO(b/362509506): remove once all apex_exclude uses are switched to stubs.
+	if mod.ApexExclude() {
+		return false
+	}
+
 	if mod.compiler != nil {
-		if lib, ok := mod.compiler.(libraryInterface); ok && (lib.shared() || lib.dylib()) {
-			return true
+		if lib, ok := mod.compiler.(libraryInterface); ok {
+			return (lib.shared() || lib.dylib()) && !lib.BuildStubs()
 		}
 		if _, ok := mod.compiler.(*binaryDecorator); ok {
 			return true
