@@ -77,26 +77,27 @@ type configImpl struct {
 	logsPrefix    string
 
 	// From the arguments
-	parallel                 int
-	keepGoing                int
-	verbose                  bool
-	checkbuild               bool
-	dist                     bool
-	jsonModuleGraph          bool
-	reportMkMetrics          bool // Collect and report mk2bp migration progress metrics.
-	soongDocs                bool
-	skipConfig               bool
-	skipKati                 bool
-	skipKatiNinja            bool
-	skipSoong                bool
-	skipNinja                bool
-	skipSoongTests           bool
-	searchApiDir             bool // Scan the Android.bp files generated in out/api_surfaces
-	skipMetricsUpload        bool
-	buildStartedTime         int64 // For metrics-upload-only - manually specify a build-started time
-	buildFromSourceStub      bool
-	incrementalBuildActions  bool
-	ensureAllowlistIntegrity bool // For CI builds - make sure modules are mixed-built
+	parallel                  int
+	keepGoing                 int
+	verbose                   bool
+	checkbuild                bool
+	dist                      bool
+	jsonModuleGraph           bool
+	reportMkMetrics           bool // Collect and report mk2bp migration progress metrics.
+	soongDocs                 bool
+	skipConfig                bool
+	skipKati                  bool
+	skipKatiControlledByFlags bool
+	skipKatiNinja             bool
+	skipSoong                 bool
+	skipNinja                 bool
+	skipSoongTests            bool
+	searchApiDir              bool // Scan the Android.bp files generated in out/api_surfaces
+	skipMetricsUpload         bool
+	buildStartedTime          int64 // For metrics-upload-only - manually specify a build-started time
+	buildFromSourceStub       bool
+	incrementalBuildActions   bool
+	ensureAllowlistIntegrity  bool // For CI builds - make sure modules are mixed-built
 
 	// From the product config
 	katiArgs        []string
@@ -844,8 +845,19 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 		} else if arg == "--skip-ninja" {
 			c.skipNinja = true
 		} else if arg == "--soong-only" {
+			if c.skipKatiControlledByFlags {
+				ctx.Fatalf("Cannot specify both --soong-only and --no-soong-only")
+			}
+			c.skipKatiControlledByFlags = true
 			c.skipKati = true
 			c.skipKatiNinja = true
+		} else if arg == "--no-soong-only" {
+			if c.skipKatiControlledByFlags {
+				ctx.Fatalf("Cannot specify both --soong-only and --no-soong-only")
+			}
+			c.skipKatiControlledByFlags = true
+			c.skipKati = false
+			c.skipKatiNinja = false
 		} else if arg == "--config-only" {
 			c.skipKati = true
 			c.skipKatiNinja = true
