@@ -843,12 +843,6 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			c.emptyNinjaFile = true
 		} else if arg == "--skip-ninja" {
 			c.skipNinja = true
-		} else if arg == "--skip-make" {
-			// TODO(ccross): deprecate this, it has confusing behaviors.  It doesn't run kati,
-			//   but it does run a Kati ninja file if the .kati_enabled marker file was created
-			//   by a previous build.
-			c.skipConfig = true
-			c.skipKati = true
 		} else if arg == "--soong-only" {
 			c.skipKati = true
 			c.skipKatiNinja = true
