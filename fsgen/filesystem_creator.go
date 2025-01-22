@@ -128,6 +128,10 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 			f.properties.Unsupported_partition_types = append(f.properties.Unsupported_partition_types, partitionType)
 		}
 	}
+	finalSoongGeneratedPartitionNames := make([]string, 0, len(finalSoongGeneratedPartitions))
+	for _, partitionType := range finalSoongGeneratedPartitions {
+		finalSoongGeneratedPartitionNames = append(finalSoongGeneratedPartitionNames, generatedModuleNameForPartition(ctx.Config(), partitionType))
+	}
 	// Create android_info.prop
 	f.createAndroidInfo(ctx)
 
@@ -156,6 +160,24 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 		}
 	}
 
+	var systemOtherImageName string
+	if buildingSystemOtherImage(partitionVars) {
+		systemModule := generatedModuleNameForPartition(ctx.Config(), "system")
+		systemOtherImageName = generatedModuleNameForPartition(ctx.Config(), "system_other")
+		ctx.CreateModule(
+			filesystem.SystemOtherImageFactory,
+			&filesystem.SystemOtherImageProperties{
+				System_image:                    &systemModule,
+				Preinstall_dexpreopt_files_from: finalSoongGeneratedPartitionNames,
+			},
+			&struct {
+				Name *string
+			}{
+				Name: proptools.StringPtr(systemOtherImageName),
+			},
+		)
+	}
+
 	for _, x := range createVbmetaPartitions(ctx, finalSoongGeneratedPartitions) {
 		f.properties.Vbmeta_module_names = append(f.properties.Vbmeta_module_names, x.moduleName)
 		f.properties.Vbmeta_partition_names = append(f.properties.Vbmeta_partition_names, x.partitionName)
@@ -163,7 +185,7 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 
 	var superImageSubpartitions []string
 	if buildingSuperImage(partitionVars) {
-		superImageSubpartitions = createSuperImage(ctx, finalSoongGeneratedPartitions, partitionVars)
+		superImageSubpartitions = createSuperImage(ctx, finalSoongGeneratedPartitions, partitionVars, systemOtherImageName)
 		f.properties.Super_image = ":" + generatedModuleNameForPartition(ctx.Config(), "super")
 	}
 
@@ -181,6 +203,12 @@ func generatedModuleName(cfg android.Config, suffix string) string {
 
 func generatedModuleNameForPartition(cfg android.Config, partitionType string) string {
 	return generatedModuleName(cfg, fmt.Sprintf("%s_image", partitionType))
+}
+
+func buildingSystemOtherImage(partitionVars android.PartitionVariables) bool {
+	// TODO: Recreate this logic from make instead of just depending on the final result variable:
+	// https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/board_config.mk;l=429;drc=15a0df840e7093f65518003ab80cf24a3d9e8e6a
+	return partitionVars.BuildingSystemOtherImage
 }
 
 func (f *filesystemCreator) createBootloaderFilegroup(ctx android.LoadHookContext) (string, bool) {
@@ -264,7 +292,8 @@ func (f *filesystemCreator) createDeviceModule(
 	partitionProps.Vbmeta_partitions = vbmetaPartitions
 
 	deviceProps := &filesystem.DeviceProperties{
-		Main_device: proptools.BoolPtr(true),
+		Main_device:    proptools.BoolPtr(true),
+		Ab_ota_updater: proptools.BoolPtr(ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.AbOtaUpdater),
 	}
 	if bootloader, ok := f.createBootloaderFilegroup(ctx); ok {
 		deviceProps.Bootloader = proptools.StringPtr(":" + bootloader)
@@ -281,7 +310,7 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
 		// Identical to that of the aosp_shared_system_image
 		if partitionVars.ProductFsverityGenerateMetadata {
-			fsProps.Fsverity.Inputs = []string{
+			fsProps.Fsverity.Inputs = proptools.NewSimpleConfigurable([]string{
 				"etc/boot-image.prof",
 				"etc/dirty-image-objects",
 				"etc/preloaded-classes",
@@ -289,8 +318,8 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 				"framework/*",
 				"framework/*/*",     // framework/{arch}
 				"framework/oat/*/*", // framework/oat/{arch}
-			}
-			fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
+			})
+			fsProps.Fsverity.Libs = proptools.NewSimpleConfigurable([]string{":framework-res{.export-package.apk}"})
 		}
 		fsProps.Symlinks = commonSymlinksFromRoot
 		fsProps.Symlinks = append(fsProps.Symlinks,
@@ -331,12 +360,12 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 		fsProps.Stem = proptools.StringPtr("system.img")
 	case "system_ext":
 		if partitionVars.ProductFsverityGenerateMetadata {
-			fsProps.Fsverity.Inputs = []string{
+			fsProps.Fsverity.Inputs = proptools.NewSimpleConfigurable([]string{
 				"framework/*",
 				"framework/*/*",     // framework/{arch}
 				"framework/oat/*/*", // framework/oat/{arch}
-			}
-			fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
+			})
+			fsProps.Fsverity.Libs = proptools.NewSimpleConfigurable([]string{":framework-res{.export-package.apk}"})
 		}
 		fsProps.Security_patch = proptools.StringPtr(ctx.Config().PlatformSecurityPatch())
 		fsProps.Stem = proptools.StringPtr("system_ext.img")

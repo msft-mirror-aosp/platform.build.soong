@@ -360,6 +360,9 @@ type JavaInfo struct {
 
 	SdkVersion android.SdkSpec
 
+	// output file of the module, which may be a classes jar or a dex jar
+	OutputFile android.Path
+
 	AndroidLibraryDependencyInfo *AndroidLibraryDependencyInfo
 
 	UsesLibraryDependencyInfo *UsesLibraryDependencyInfo
@@ -1658,17 +1661,17 @@ func (j *Test) generateAndroidBuildActionsWithConfig(ctx android.ModuleContext, 
 
 	j.extraTestConfigs = android.PathsForModuleSrc(ctx, j.testProperties.Test_options.Extra_test_configs)
 
-	ctx.VisitDirectDepsWithTag(dataNativeBinsTag, func(dep android.Module) {
+	ctx.VisitDirectDepsProxyWithTag(dataNativeBinsTag, func(dep android.ModuleProxy) {
 		j.data = append(j.data, android.OutputFileForModule(ctx, dep, ""))
 	})
 
-	ctx.VisitDirectDepsWithTag(dataDeviceBinsTag, func(dep android.Module) {
+	ctx.VisitDirectDepsProxyWithTag(dataDeviceBinsTag, func(dep android.ModuleProxy) {
 		j.data = append(j.data, android.OutputFileForModule(ctx, dep, ""))
 	})
 
 	var directImplementationDeps android.Paths
 	var transitiveImplementationDeps []depset.DepSet[android.Path]
-	ctx.VisitDirectDepsWithTag(jniLibTag, func(dep android.Module) {
+	ctx.VisitDirectDepsProxyWithTag(jniLibTag, func(dep android.ModuleProxy) {
 		sharedLibInfo, _ := android.OtherModuleProvider(ctx, dep, cc.SharedLibraryInfoProvider)
 		if sharedLibInfo.SharedLibrary != nil {
 			// Copy to an intermediate output directory to append "lib[64]" to the path,
@@ -1958,13 +1961,13 @@ func (j *Binary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// Set the jniLibs of this binary.
 	// These will be added to `LOCAL_REQUIRED_MODULES`, and the kati packaging system will
 	// install these alongside the java binary.
-	ctx.VisitDirectDepsWithTag(jniInstallTag, func(jni android.Module) {
+	ctx.VisitDirectDepsProxyWithTag(jniInstallTag, func(jni android.ModuleProxy) {
 		// Use the BaseModuleName of the dependency (without any prebuilt_ prefix)
-		bmn, _ := jni.(interface{ BaseModuleName() string })
-		j.androidMkNamesOfJniLibs = append(j.androidMkNamesOfJniLibs, bmn.BaseModuleName()+":"+jni.Target().Arch.ArchType.Bitness())
+		commonInfo, _ := android.OtherModuleProvider(ctx, jni, android.CommonModuleInfoKey)
+		j.androidMkNamesOfJniLibs = append(j.androidMkNamesOfJniLibs, commonInfo.BaseModuleName+":"+commonInfo.Target.Arch.ArchType.Bitness())
 	})
 	// Check that native libraries are not listed in `required`. Prompt users to use `jni_libs` instead.
-	ctx.VisitDirectDepsWithTag(android.RequiredDepTag, func(dep android.Module) {
+	ctx.VisitDirectDepsProxyWithTag(android.RequiredDepTag, func(dep android.ModuleProxy) {
 		if _, hasSharedLibraryInfo := android.OtherModuleProvider(ctx, dep, cc.SharedLibraryInfoProvider); hasSharedLibraryInfo {
 			ctx.ModuleErrorf("cc_library %s is no longer supported in `required` of java_binary modules. Please use jni_libs instead.", dep.Name())
 		}
@@ -2355,7 +2358,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	var bootclassPaths android.Paths
 	var staticLibs android.Paths
 	var systemModulesPaths android.Paths
-	ctx.VisitDirectDeps(func(dep android.Module) {
+	ctx.VisitDirectDepsProxy(func(dep android.ModuleProxy) {
 		tag := ctx.OtherModuleDependencyTag(dep)
 		switch tag {
 		case javaApiContributionTag:
@@ -2384,8 +2387,8 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 				systemModulesPaths = append(systemModulesPaths, sm.HeaderJars...)
 			}
 		case metalavaCurrentApiTimestampTag:
-			if currentApiTimestampProvider, ok := dep.(currentApiTimestampProvider); ok {
-				al.validationPaths = append(al.validationPaths, currentApiTimestampProvider.CurrentApiTimestamp())
+			if currentApiTimestampProvider, ok := android.OtherModuleProvider(ctx, dep, DroidStubsInfoProvider); ok {
+				al.validationPaths = append(al.validationPaths, currentApiTimestampProvider.CurrentApiTimestamp)
 			}
 		case aconfigDeclarationTag:
 			if provider, ok := android.OtherModuleProvider(ctx, dep, android.AconfigDeclarationsProviderKey); ok {
@@ -3358,6 +3361,8 @@ func DefaultsFactory() android.Module {
 		&bootclasspathFragmentProperties{},
 		&SourceOnlyBootclasspathProperties{},
 		&ravenwoodTestProperties{},
+		&AndroidAppImportProperties{},
+		&UsesLibraryProperties{},
 	)
 
 	android.InitDefaultsModule(module)

@@ -27,7 +27,12 @@ func buildingSuperImage(partitionVars android.PartitionVariables) bool {
 	return partitionVars.ProductBuildSuperPartition
 }
 
-func createSuperImage(ctx android.LoadHookContext, partitions []string, partitionVars android.PartitionVariables) []string {
+func createSuperImage(
+	ctx android.LoadHookContext,
+	partitions []string,
+	partitionVars android.PartitionVariables,
+	systemOtherImageName string,
+) []string {
 	baseProps := &struct {
 		Name *string
 	}{
@@ -58,7 +63,7 @@ func createSuperImage(ctx android.LoadHookContext, partitions []string, partitio
 		if partitionVars.ProductVirtualAbCowVersion != "" {
 			version, err := strconv.ParseInt(partitionVars.ProductVirtualAbCowVersion, 10, 32)
 			if err != nil {
-				ctx.ModuleErrorf("Compression factor must be an int, got %q", partitionVars.ProductVirtualAbCowVersion)
+				ctx.ModuleErrorf("COW version must be an int, got %q", partitionVars.ProductVirtualAbCowVersion)
 			}
 			superImageProps.Virtual_ab.Cow_version = proptools.Int64Ptr(version)
 		}
@@ -78,6 +83,10 @@ func createSuperImage(ctx android.LoadHookContext, partitions []string, partitio
 		partitionGroupsInfo = append(partitionGroupsInfo, info)
 	}
 	superImageProps.Partition_groups = partitionGroupsInfo
+
+	if systemOtherImageName != "" {
+		superImageProps.System_other_partition = proptools.StringPtr(systemOtherImageName)
+	}
 
 	var superImageSubpartitions []string
 	partitionNameProps := &filesystem.SuperImagePartitionNameProperties{}
