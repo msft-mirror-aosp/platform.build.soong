@@ -2230,6 +2230,8 @@ func (j *Module) ClassLoaderContexts() dexpreopt.ClassLoaderContextMap {
 func (j *Module) IDEInfo(ctx android.BaseModuleContext, dpInfo *android.IdeInfo) {
 	if j.expandJarjarRules != nil {
 		dpInfo.Jarjar_rules = append(dpInfo.Jarjar_rules, j.expandJarjarRules.String())
+	}
+	if j.headerJarFile != nil {
 		// Add the header jar so that the rdeps can be resolved to the repackaged classes.
 		dpInfo.Jars = append(dpInfo.Jars, j.headerJarFile.String())
 	}
