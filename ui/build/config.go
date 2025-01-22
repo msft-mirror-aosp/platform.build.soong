@@ -63,6 +63,7 @@ const (
 	NINJA_NINJA
 	NINJA_N2
 	NINJA_SISO
+	NINJA_NINJAGO
 )
 
 type Config struct{ *configImpl }
@@ -324,6 +325,8 @@ func NewConfig(ctx Context, args ...string) Config {
 		ret.ninjaCommand = NINJA_N2
 	case "siso":
 		ret.ninjaCommand = NINJA_SISO
+	case "ninjago":
+		ret.ninjaCommand = NINJA_NINJAGO
 	default:
 		if os.Getenv("SOONG_USE_N2") == "true" {
 			ret.ninjaCommand = NINJA_N2
@@ -1345,6 +1348,10 @@ func (c *configImpl) canSupportRBE() bool {
 }
 
 func (c *configImpl) UseABFS() bool {
+	if c.ninjaCommand == NINJA_NINJAGO {
+		return true
+	}
+
 	if v, ok := c.environ.Get("NO_ABFS"); ok {
 		v = strings.ToLower(strings.TrimSpace(v))
 		if v == "true" || v == "1" {
