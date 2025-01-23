@@ -94,7 +94,6 @@ type Module interface {
 	ReplacedByPrebuilt()
 	IsReplacedByPrebuilt() bool
 	ExportedToMake() bool
-	EffectiveLicenseKinds() []string
 	EffectiveLicenseFiles() Paths
 
 	AddProperties(props ...interface{})
@@ -315,8 +314,6 @@ type commonProperties struct {
 	// Describes the licenses applicable to this module. Must reference license modules.
 	Licenses []string
 
-	// Flattened from direct license dependencies. Equal to Licenses unless particular module adds more.
-	Effective_licenses []string `blueprint:"mutated"`
 	// Override of module name when reporting licenses
 	Effective_package_name *string `blueprint:"mutated"`
 	// Notice files
@@ -1457,10 +1454,6 @@ func (m *ModuleBase) IsReplacedByPrebuilt() bool {
 
 func (m *ModuleBase) ExportedToMake() bool {
 	return m.commonProperties.NamespaceExportedToMake
-}
-
-func (m *ModuleBase) EffectiveLicenseKinds() []string {
-	return m.commonProperties.Effective_license_kinds
 }
 
 func (m *ModuleBase) EffectiveLicenseFiles() Paths {
