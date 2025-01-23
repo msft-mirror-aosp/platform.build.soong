@@ -555,6 +555,7 @@ type ProductVariables struct {
 
 type PartitionQualifiedVariablesType struct {
 	BuildingImage               bool   `json:",omitempty"`
+	PrebuiltImage               bool   `json:",omitempty"`
 	BoardErofsCompressor        string `json:",omitempty"`
 	BoardErofsCompressHints     string `json:",omitempty"`
 	BoardErofsPclusterSize      string `json:",omitempty"`
