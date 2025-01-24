@@ -28,17 +28,27 @@ import (
 	"android/soong/remoteexec"
 )
 
-type StubsArtifactsInfo struct {
-	ApiVersionsXml android.WritablePath
+type StubsInfo struct {
+	ApiVersionsXml android.Path
+	AnnotationsZip android.Path
+	ApiFile        android.Path
+	RemovedApiFile android.Path
 }
 
 type DroidStubsInfo struct {
 	CurrentApiTimestamp android.Path
-	EverythingArtifacts StubsArtifactsInfo
-	ExportableArtifacts StubsArtifactsInfo
+	EverythingStubsInfo StubsInfo
+	ExportableStubsInfo StubsInfo
 }
 
 var DroidStubsInfoProvider = blueprint.NewProvider[DroidStubsInfo]()
+
+type StubsSrcInfo struct {
+	EverythingStubsSrcJar android.Path
+	ExportableStubsSrcJar android.Path
+}
+
+var StubsSrcInfoProvider = blueprint.NewProvider[StubsSrcInfo]()
 
 // The values allowed for Droidstubs' Api_levels_sdk_type
 var allowedApiLevelSdkTypes = []string{"public", "system", "module-lib", "system-server"}
@@ -541,9 +551,9 @@ func (d *Droidstubs) apiLevelsAnnotationsFlags(ctx android.ModuleContext, cmd *a
 		ctx.VisitDirectDepsProxyWithTag(metalavaAPILevelsModuleTag, func(m android.ModuleProxy) {
 			if s, ok := android.OtherModuleProvider(ctx, m, DroidStubsInfoProvider); ok {
 				if stubsType == Everything {
-					apiVersions = s.EverythingArtifacts.ApiVersionsXml
+					apiVersions = s.EverythingStubsInfo.ApiVersionsXml
 				} else if stubsType == Exportable {
-					apiVersions = s.ExportableArtifacts.ApiVersionsXml
+					apiVersions = s.ExportableStubsInfo.ApiVersionsXml
 				} else {
 					ctx.ModuleErrorf("%s stubs type does not generate api-versions.xml file", stubsType.String())
 				}
@@ -1390,19 +1400,39 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		rule.Build("metalavaCurrentApiUpdate", "update current API")
 	}
 
-	android.SetProvider(ctx, DroidStubsInfoProvider, DroidStubsInfo{
+	droidInfo := DroidStubsInfo{
 		CurrentApiTimestamp: d.CurrentApiTimestamp(),
-		EverythingArtifacts: StubsArtifactsInfo{
-			ApiVersionsXml: d.everythingArtifacts.apiVersionsXml,
-		},
-		ExportableArtifacts: StubsArtifactsInfo{
-			ApiVersionsXml: d.exportableArtifacts.apiVersionsXml,
-		},
+		EverythingStubsInfo: StubsInfo{},
+		ExportableStubsInfo: StubsInfo{},
+	}
+	setDroidInfo(ctx, d, &droidInfo.EverythingStubsInfo, Everything)
+	setDroidInfo(ctx, d, &droidInfo.ExportableStubsInfo, Exportable)
+	android.SetProvider(ctx, DroidStubsInfoProvider, droidInfo)
+
+	android.SetProvider(ctx, StubsSrcInfoProvider, StubsSrcInfo{
+		EverythingStubsSrcJar: d.stubsSrcJar,
+		ExportableStubsSrcJar: d.exportableStubsSrcJar,
 	})
 
 	d.setOutputFiles(ctx)
 
 	d.setPhonyRules(ctx)
+}
+
+func setDroidInfo(ctx android.ModuleContext, d *Droidstubs, info *StubsInfo, typ StubsType) {
+	if typ == Everything {
+		info.ApiFile = d.apiFile
+		info.RemovedApiFile = d.removedApiFile
+		info.AnnotationsZip = d.everythingArtifacts.annotationsZip
+		info.ApiVersionsXml = d.everythingArtifacts.apiVersionsXml
+	} else if typ == Exportable {
+		info.ApiFile = d.exportableApiFile
+		info.RemovedApiFile = d.exportableRemovedApiFile
+		info.AnnotationsZip = d.exportableArtifacts.annotationsZip
+		info.ApiVersionsXml = d.exportableArtifacts.apiVersionsXml
+	} else {
+		ctx.ModuleErrorf("failed to set ApiVersionsXml, stubs type not supported: %d", typ)
+	}
 }
 
 // This method sets the outputFiles property, which is used to set the
@@ -1569,6 +1599,11 @@ func (p *PrebuiltStubsSources) GenerateAndroidBuildActions(ctx android.ModuleCon
 		rule.Build("zip src", "Create srcjar from prebuilt source")
 		p.stubsSrcJar = outPath
 	}
+
+	android.SetProvider(ctx, StubsSrcInfoProvider, StubsSrcInfo{
+		EverythingStubsSrcJar: p.stubsSrcJar,
+		ExportableStubsSrcJar: p.stubsSrcJar,
+	})
 
 	ctx.SetOutputFiles(android.Paths{p.stubsSrcJar}, "")
 	// prebuilt droidstubs does not output "exportable" stubs.
