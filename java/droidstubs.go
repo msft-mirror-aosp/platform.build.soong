@@ -710,7 +710,8 @@ func metalavaUseRbe(ctx android.ModuleContext) bool {
 }
 
 func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, srcs android.Paths,
-	srcJarList android.Path, homeDir android.WritablePath, params stubsCommandConfigParams, configFiles android.Paths) *android.RuleBuilderCommand {
+	srcJarList android.Path, homeDir android.WritablePath, params stubsCommandConfigParams,
+	configFiles android.Paths, apiSurface *string) *android.RuleBuilderCommand {
 	rule.Command().Text("rm -rf").Flag(homeDir.String())
 	rule.Command().Text("mkdir -p").Flag(homeDir.String())
 
@@ -756,6 +757,8 @@ func metalavaCmd(ctx android.ModuleContext, rule *android.RuleBuilder, srcs andr
 
 	addMetalavaConfigFilesToCmd(cmd, configFiles)
 
+	addOptionalApiSurfaceToCmd(cmd, apiSurface)
+
 	return cmd
 }
 
@@ -772,6 +775,14 @@ func getMetalavaConfigFilegroupReference() []string {
 // MetalavaConfigFilegroup filegroup.
 func addMetalavaConfigFilesToCmd(cmd *android.RuleBuilderCommand, configFiles android.Paths) {
 	cmd.FlagForEachInput("--config-file ", configFiles)
+}
+
+// addOptionalApiSurfaceToCmd adds --api-surface option is apiSurface is not `nil`.
+func addOptionalApiSurfaceToCmd(cmd *android.RuleBuilderCommand, apiSurface *string) {
+	if apiSurface != nil {
+		cmd.Flag("--api-surface")
+		cmd.Flag(*apiSurface)
+	}
 }
 
 // Pass flagged apis related flags to metalava. When aconfig_declarations property is not
@@ -848,7 +859,8 @@ func (d *Droidstubs) commonMetalavaStubCmd(ctx android.ModuleContext, rule *andr
 
 	configFiles := android.PathsForModuleSrc(ctx, d.properties.ConfigFiles)
 
-	cmd := metalavaCmd(ctx, rule, d.Javadoc.srcFiles, srcJarList, homeDir, params.stubConfig, configFiles)
+	cmd := metalavaCmd(ctx, rule, d.Javadoc.srcFiles, srcJarList, homeDir, params.stubConfig,
+		configFiles, d.properties.Api_surface)
 	cmd.Implicits(d.Javadoc.implicits)
 
 	d.stubsFlags(ctx, cmd, params.stubsDir, params.stubConfig.stubsType, params.stubConfig.checkApi)
