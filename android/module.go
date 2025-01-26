@@ -990,8 +990,9 @@ func (m *ModuleBase) baseDepsMutator(ctx BottomUpMutatorContext) {
 	// 2. `boot_signer` is `required` by modules like `build_image` which is explicitly list as
 	// the top-level build goal (in the shell file that invokes Soong).
 	// 3. `boot_signer` depends on `bouncycastle-unbundled` which is in the missing git project.
-	// 4. aosp_kernel-build-tools invokes soong with `--skip-make`. Therefore, the absence of
-	// ALLOW_MISSING_DEPENDENCIES didn't cause a problem.
+	// 4. aosp_kernel-build-tools invokes soong with `--soong-only`. Therefore, the absence of
+	// ALLOW_MISSING_DEPENDENCIES didn't cause a problem, as previously only make processed required
+	// dependencies.
 	// 5. Now, since Soong understands `required` deps, it tries to build `boot_signer` and the
 	// absence of external/bouncycastle fails the build.
 	//
@@ -1654,6 +1655,7 @@ func (m *ModuleBase) generateVariantTarget(ctx *moduleContext) {
 func (m *ModuleBase) generateModuleTarget(ctx *moduleContext) {
 	var allInstalledFiles InstallPaths
 	var allCheckbuildTargets Paths
+	var alloutputFiles Paths
 	ctx.VisitAllModuleVariantProxies(func(module ModuleProxy) {
 		var checkbuildTarget Path
 		var uncheckedModule bool
@@ -1669,6 +1671,9 @@ func (m *ModuleBase) generateModuleTarget(ctx *moduleContext) {
 			checkbuildTarget = info.CheckbuildTarget
 			uncheckedModule = info.UncheckedModule
 			skipAndroidMkProcessing = OtherModuleProviderOrDefault(ctx, module, CommonModuleInfoKey).SkipAndroidMkProcessing
+		}
+		if outputFiles, err := outputFilesForModule(ctx, module, ""); err == nil {
+			alloutputFiles = append(alloutputFiles, outputFiles...)
 		}
 		// A module's -checkbuild phony targets should
 		// not be created if the module is not exported to make.
@@ -1698,6 +1703,12 @@ func (m *ModuleBase) generateModuleTarget(ctx *moduleContext) {
 	if len(allCheckbuildTargets) > 0 {
 		name := namespacePrefix + ctx.ModuleName() + "-checkbuild"
 		ctx.Phony(name, allCheckbuildTargets...)
+		deps = append(deps, PathForPhony(ctx, name))
+	}
+
+	if len(alloutputFiles) > 0 {
+		name := namespacePrefix + ctx.ModuleName() + "-outputs"
+		ctx.Phony(name, alloutputFiles...)
 		deps = append(deps, PathForPhony(ctx, name))
 	}
 

@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
@@ -874,6 +875,13 @@ type ExportedDroiddocDirProperties struct {
 	Path *string
 }
 
+type ExportedDroiddocDirInfo struct {
+	Deps android.Paths
+	Dir  android.Path
+}
+
+var ExportedDroiddocDirInfoProvider = blueprint.NewProvider[ExportedDroiddocDirInfo]()
+
 type ExportedDroiddocDir struct {
 	android.ModuleBase
 
@@ -897,6 +905,11 @@ func (d *ExportedDroiddocDir) GenerateAndroidBuildActions(ctx android.ModuleCont
 	path := String(d.properties.Path)
 	d.dir = android.PathForModuleSrc(ctx, path)
 	d.deps = android.PathsForModuleSrc(ctx, []string{filepath.Join(path, "**/*")})
+
+	android.SetProvider(ctx, ExportedDroiddocDirInfoProvider, ExportedDroiddocDirInfo{
+		Dir:  d.dir,
+		Deps: d.deps,
+	})
 }
 
 // Defaults

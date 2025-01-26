@@ -128,6 +128,10 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 			f.properties.Unsupported_partition_types = append(f.properties.Unsupported_partition_types, partitionType)
 		}
 	}
+	finalSoongGeneratedPartitionNames := make([]string, 0, len(finalSoongGeneratedPartitions))
+	for _, partitionType := range finalSoongGeneratedPartitions {
+		finalSoongGeneratedPartitionNames = append(finalSoongGeneratedPartitionNames, generatedModuleNameForPartition(ctx.Config(), partitionType))
+	}
 	// Create android_info.prop
 	f.createAndroidInfo(ctx)
 
@@ -156,14 +160,32 @@ func (f *filesystemCreator) createInternalModules(ctx android.LoadHookContext) {
 		}
 	}
 
-	for _, x := range createVbmetaPartitions(ctx, finalSoongGeneratedPartitions) {
+	var systemOtherImageName string
+	if buildingSystemOtherImage(partitionVars) {
+		systemModule := generatedModuleNameForPartition(ctx.Config(), "system")
+		systemOtherImageName = generatedModuleNameForPartition(ctx.Config(), "system_other")
+		ctx.CreateModule(
+			filesystem.SystemOtherImageFactory,
+			&filesystem.SystemOtherImageProperties{
+				System_image:                    &systemModule,
+				Preinstall_dexpreopt_files_from: finalSoongGeneratedPartitionNames,
+			},
+			&struct {
+				Name *string
+			}{
+				Name: proptools.StringPtr(systemOtherImageName),
+			},
+		)
+	}
+
+	for _, x := range f.createVbmetaPartitions(ctx, finalSoongGeneratedPartitions) {
 		f.properties.Vbmeta_module_names = append(f.properties.Vbmeta_module_names, x.moduleName)
 		f.properties.Vbmeta_partition_names = append(f.properties.Vbmeta_partition_names, x.partitionName)
 	}
 
 	var superImageSubpartitions []string
 	if buildingSuperImage(partitionVars) {
-		superImageSubpartitions = createSuperImage(ctx, finalSoongGeneratedPartitions, partitionVars)
+		superImageSubpartitions = createSuperImage(ctx, finalSoongGeneratedPartitions, partitionVars, systemOtherImageName)
 		f.properties.Super_image = ":" + generatedModuleNameForPartition(ctx.Config(), "super")
 	}
 
@@ -181,6 +203,12 @@ func generatedModuleName(cfg android.Config, suffix string) string {
 
 func generatedModuleNameForPartition(cfg android.Config, partitionType string) string {
 	return generatedModuleName(cfg, fmt.Sprintf("%s_image", partitionType))
+}
+
+func buildingSystemOtherImage(partitionVars android.PartitionVariables) bool {
+	// TODO: Recreate this logic from make instead of just depending on the final result variable:
+	// https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/board_config.mk;l=429;drc=15a0df840e7093f65518003ab80cf24a3d9e8e6a
+	return partitionVars.BuildingSystemOtherImage
 }
 
 func (f *filesystemCreator) createBootloaderFilegroup(ctx android.LoadHookContext) (string, bool) {
@@ -264,7 +292,8 @@ func (f *filesystemCreator) createDeviceModule(
 	partitionProps.Vbmeta_partitions = vbmetaPartitions
 
 	deviceProps := &filesystem.DeviceProperties{
-		Main_device: proptools.BoolPtr(true),
+		Main_device:    proptools.BoolPtr(true),
+		Ab_ota_updater: proptools.BoolPtr(ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.AbOtaUpdater),
 	}
 	if bootloader, ok := f.createBootloaderFilegroup(ctx); ok {
 		deviceProps.Bootloader = proptools.StringPtr(":" + bootloader)
@@ -281,7 +310,7 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
 		// Identical to that of the aosp_shared_system_image
 		if partitionVars.ProductFsverityGenerateMetadata {
-			fsProps.Fsverity.Inputs = []string{
+			fsProps.Fsverity.Inputs = proptools.NewSimpleConfigurable([]string{
 				"etc/boot-image.prof",
 				"etc/dirty-image-objects",
 				"etc/preloaded-classes",
@@ -289,8 +318,8 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 				"framework/*",
 				"framework/*/*",     // framework/{arch}
 				"framework/oat/*/*", // framework/oat/{arch}
-			}
-			fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
+			})
+			fsProps.Fsverity.Libs = proptools.NewSimpleConfigurable([]string{":framework-res{.export-package.apk}"})
 		}
 		fsProps.Symlinks = commonSymlinksFromRoot
 		fsProps.Symlinks = append(fsProps.Symlinks,
@@ -331,12 +360,12 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, fsProps *filesyste
 		fsProps.Stem = proptools.StringPtr("system.img")
 	case "system_ext":
 		if partitionVars.ProductFsverityGenerateMetadata {
-			fsProps.Fsverity.Inputs = []string{
+			fsProps.Fsverity.Inputs = proptools.NewSimpleConfigurable([]string{
 				"framework/*",
 				"framework/*/*",     // framework/{arch}
 				"framework/oat/*/*", // framework/oat/{arch}
-			}
-			fsProps.Fsverity.Libs = []string{":framework-res{.export-package.apk}"}
+			})
+			fsProps.Fsverity.Libs = proptools.NewSimpleConfigurable([]string{":framework-res{.export-package.apk}"})
 		}
 		fsProps.Security_patch = proptools.StringPtr(ctx.Config().PlatformSecurityPatch())
 		fsProps.Stem = proptools.StringPtr("system_ext.img")
@@ -836,6 +865,8 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 	fsProps.Avb_algorithm = avbInfo.avbAlgorithm
 	// BOARD_AVB_SYSTEM_ROLLBACK_INDEX
 	fsProps.Rollback_index = avbInfo.avbRollbackIndex
+	// BOARD_AVB_SYSTEM_ROLLBACK_INDEX_LOCATION
+	fsProps.Rollback_index_location = avbInfo.avbRollbackIndexLocation
 	fsProps.Avb_hash_algorithm = avbInfo.avbHashAlgorithm
 
 	fsProps.Partition_name = proptools.StringPtr(partitionType)
@@ -864,13 +895,14 @@ func generateFsProps(ctx android.EarlyModuleContext, partitionType string) (*fil
 }
 
 type avbInfo struct {
-	avbEnable        *bool
-	avbKeyPath       *string
-	avbkeyFilegroup  *string
-	avbAlgorithm     *string
-	avbRollbackIndex *int64
-	avbMode          *string
-	avbHashAlgorithm *string
+	avbEnable                *bool
+	avbKeyPath               *string
+	avbkeyFilegroup          *string
+	avbAlgorithm             *string
+	avbRollbackIndex         *int64
+	avbRollbackIndexLocation *int64
+	avbMode                  *string
+	avbHashAlgorithm         *string
 }
 
 func getAvbInfo(config android.Config, partitionType string) avbInfo {
@@ -916,6 +948,13 @@ func getAvbInfo(config android.Config, partitionType string) avbInfo {
 				panic(fmt.Sprintf("Rollback index must be an int, got %s", specificPartitionVars.BoardAvbRollbackIndex))
 			}
 			result.avbRollbackIndex = &parsed
+		}
+		if specificPartitionVars.BoardAvbRollbackIndexLocation != "" {
+			parsed, err := strconv.ParseInt(specificPartitionVars.BoardAvbRollbackIndexLocation, 10, 64)
+			if err != nil {
+				panic(fmt.Sprintf("Rollback index location must be an int, got %s", specificPartitionVars.BoardAvbRollbackIndexLocation))
+			}
+			result.avbRollbackIndexLocation = &parsed
 		}
 
 		// Make allows you to pass arbitrary arguments to avbtool via this variable, but in practice

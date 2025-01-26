@@ -148,8 +148,8 @@ var vbmetaPartitionDep = vbmetaDep{}
 var vbmetaChainedPartitionDep = chainedPartitionDep{}
 
 func (v *vbmeta) DepsMutator(ctx android.BottomUpMutatorContext) {
-	ctx.AddDependency(ctx.Module(), vbmetaPartitionDep, v.properties.Partitions.GetOrDefault(ctx, nil)...)
-	ctx.AddDependency(ctx.Module(), vbmetaChainedPartitionDep, v.properties.Chained_partitions...)
+	ctx.AddVariationDependencies(ctx.Config().AndroidFirstDeviceTarget.Variations(), vbmetaPartitionDep, v.properties.Partitions.GetOrDefault(ctx, nil)...)
+	ctx.AddVariationDependencies(ctx.Config().AndroidFirstDeviceTarget.Variations(), vbmetaChainedPartitionDep, v.properties.Chained_partitions...)
 }
 
 func (v *vbmeta) installFileName() string {
@@ -181,7 +181,6 @@ func (v *vbmeta) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		ctx.PropertyErrorf("rollback_index_location", "must be 0, 1, 2, ...")
 		return
 	}
-	cmd.FlagWithArg("--rollback_index_location ", strconv.Itoa(ril))
 
 	for _, avb_prop := range v.properties.Avb_properties {
 		key := proptools.String(avb_prop.Key)

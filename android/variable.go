@@ -555,6 +555,7 @@ type ProductVariables struct {
 
 type PartitionQualifiedVariablesType struct {
 	BuildingImage               bool   `json:",omitempty"`
+	PrebuiltImage               bool   `json:",omitempty"`
 	BoardErofsCompressor        string `json:",omitempty"`
 	BoardErofsCompressHints     string `json:",omitempty"`
 	BoardErofsPclusterSize      string `json:",omitempty"`
@@ -622,6 +623,8 @@ type PartitionVariables struct {
 	SystemDlkmSecurityPatch string `json:",omitempty"`
 	VendorDlkmSecurityPatch string `json:",omitempty"`
 	OdmDlkmSecurityPatch    string `json:",omitempty"`
+
+	BuildingSystemOtherImage bool `json:",omitempty"`
 
 	// Boot image stuff
 	BuildingRamdiskImage              bool     `json:",omitempty"`

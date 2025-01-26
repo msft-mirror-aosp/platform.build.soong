@@ -2409,7 +2409,7 @@ func (c *Module) setOutputFiles(ctx ModuleContext) {
 func buildComplianceMetadataInfo(ctx ModuleContext, c *Module, deps PathDeps) {
 	// Dump metadata that can not be done in android/compliance-metadata.go
 	complianceMetadataInfo := ctx.ComplianceMetadataInfo()
-	complianceMetadataInfo.SetStringValue(android.ComplianceMetadataProp.IS_STATIC_LIB, strconv.FormatBool(ctx.static()))
+	complianceMetadataInfo.SetStringValue(android.ComplianceMetadataProp.IS_STATIC_LIB, strconv.FormatBool(ctx.static() || ctx.ModuleType() == "cc_object"))
 	complianceMetadataInfo.SetStringValue(android.ComplianceMetadataProp.BUILT_FILES, c.outputFile.String())
 
 	// Static deps
@@ -2418,9 +2418,26 @@ func buildComplianceMetadataInfo(ctx ModuleContext, c *Module, deps PathDeps) {
 	for _, dep := range staticDeps {
 		staticDepNames = append(staticDepNames, dep.Name())
 	}
+	// Process CrtBegin and CrtEnd as static libs
+	ctx.VisitDirectDeps(func(dep android.Module) {
+		depName := ctx.OtherModuleName(dep)
+		depTag := ctx.OtherModuleDependencyTag(dep)
+		switch depTag {
+		case CrtBeginDepTag:
+			staticDepNames = append(staticDepNames, depName)
+		case CrtEndDepTag:
+			staticDepNames = append(staticDepNames, depName)
+		}
+	})
 
-	staticDepPaths := make([]string, 0, len(deps.StaticLibs))
+	staticDepPaths := make([]string, 0, len(deps.StaticLibs)+len(deps.CrtBegin)+len(deps.CrtEnd))
 	for _, dep := range deps.StaticLibs {
+		staticDepPaths = append(staticDepPaths, dep.String())
+	}
+	for _, dep := range deps.CrtBegin {
+		staticDepPaths = append(staticDepPaths, dep.String())
+	}
+	for _, dep := range deps.CrtEnd {
 		staticDepPaths = append(staticDepPaths, dep.String())
 	}
 	complianceMetadataInfo.SetListValue(android.ComplianceMetadataProp.STATIC_DEPS, android.FirstUniqueStrings(staticDepNames))
@@ -2439,6 +2456,14 @@ func buildComplianceMetadataInfo(ctx ModuleContext, c *Module, deps PathDeps) {
 	}
 	complianceMetadataInfo.SetListValue(android.ComplianceMetadataProp.WHOLE_STATIC_DEPS, android.FirstUniqueStrings(wholeStaticDepNames))
 	complianceMetadataInfo.SetListValue(android.ComplianceMetadataProp.WHOLE_STATIC_DEP_FILES, android.FirstUniqueStrings(wholeStaticDepPaths))
+
+	// Header libs
+	headerLibDeps := ctx.GetDirectDepsProxyWithTag(HeaderDepTag())
+	headerLibDepNames := make([]string, 0, len(headerLibDeps))
+	for _, dep := range headerLibDeps {
+		headerLibDepNames = append(headerLibDepNames, dep.Name())
+	}
+	complianceMetadataInfo.SetListValue(android.ComplianceMetadataProp.HEADER_LIBS, android.FirstUniqueStrings(headerLibDepNames))
 }
 
 func (c *Module) maybeUnhideFromMake() {
