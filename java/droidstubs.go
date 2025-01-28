@@ -1187,6 +1187,40 @@ func (d *Droidstubs) optionalStubCmd(ctx android.ModuleContext, params stubsComm
 	rule.Build(fmt.Sprintf("metalava_%s", params.stubConfig.stubsType.String()), "metalava merged")
 }
 
+func (d *Droidstubs) setPhonyRules(ctx android.ModuleContext) {
+	if d.apiFile != nil {
+		ctx.Phony(d.Name(), d.apiFile)
+		ctx.Phony(fmt.Sprintf("%s.txt", d.Name()), d.apiFile)
+	}
+	if d.removedApiFile != nil {
+		ctx.Phony(d.Name(), d.removedApiFile)
+		ctx.Phony(fmt.Sprintf("%s.txt", d.Name()), d.removedApiFile)
+	}
+	if d.checkCurrentApiTimestamp != nil {
+		ctx.Phony(fmt.Sprintf("%s-check-current-api", d.Name()), d.checkCurrentApiTimestamp)
+		ctx.Phony("checkapi", d.checkCurrentApiTimestamp)
+		ctx.Phony("droidcore", d.checkCurrentApiTimestamp)
+	}
+	if d.updateCurrentApiTimestamp != nil {
+		ctx.Phony(fmt.Sprintf("%s-update-current-api", d.Name()), d.updateCurrentApiTimestamp)
+		ctx.Phony("update-api", d.updateCurrentApiTimestamp)
+	}
+	if d.checkLastReleasedApiTimestamp != nil {
+		ctx.Phony(fmt.Sprintf("%s-check-last-released-api", d.Name()), d.checkLastReleasedApiTimestamp)
+		ctx.Phony("checkapi", d.checkLastReleasedApiTimestamp)
+		ctx.Phony("droidcore", d.checkLastReleasedApiTimestamp)
+	}
+	if d.apiLintTimestamp != nil {
+		ctx.Phony(fmt.Sprintf("%s-api-lint", d.Name()), d.apiLintTimestamp)
+		ctx.Phony("checkapi", d.apiLintTimestamp)
+		ctx.Phony("droidcore", d.apiLintTimestamp)
+	}
+	if d.checkNullabilityWarningsTimestamp != nil {
+		ctx.Phony(fmt.Sprintf("%s-check-nullability-warnings", d.Name()), d.checkNullabilityWarningsTimestamp)
+		ctx.Phony("droidcore", d.checkNullabilityWarningsTimestamp)
+	}
+}
+
 func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	deps := d.Javadoc.collectDeps(ctx)
 
@@ -1361,6 +1395,8 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	})
 
 	d.setOutputFiles(ctx)
+
+	d.setPhonyRules(ctx)
 }
 
 // This method sets the outputFiles property, which is used to set the
