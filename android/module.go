@@ -2134,63 +2134,84 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	SetProvider(ctx, InstallFilesProvider, installFiles)
 	buildLicenseMetadata(ctx, ctx.licenseMetadataFile)
 
-	if ctx.moduleInfoJSON != nil {
-		var installed InstallPaths
-		installed = append(installed, ctx.katiInstalls.InstallPaths()...)
-		installed = append(installed, ctx.katiSymlinks.InstallPaths()...)
-		installed = append(installed, ctx.katiInitRcInstalls.InstallPaths()...)
-		installed = append(installed, ctx.katiVintfInstalls.InstallPaths()...)
-		installedStrings := installed.Strings()
+	if len(ctx.moduleInfoJSON) > 0 {
+		for _, moduleInfoJSON := range ctx.moduleInfoJSON {
+			if moduleInfoJSON.Disabled {
+				continue
+			}
+			var installed InstallPaths
+			installed = append(installed, ctx.katiInstalls.InstallPaths()...)
+			installed = append(installed, ctx.katiSymlinks.InstallPaths()...)
+			installed = append(installed, ctx.katiInitRcInstalls.InstallPaths()...)
+			installed = append(installed, ctx.katiVintfInstalls.InstallPaths()...)
+			installedStrings := installed.Strings()
 
-		var targetRequired, hostRequired []string
-		if ctx.Host() {
-			targetRequired = m.baseProperties.Target_required
-		} else {
-			hostRequired = m.baseProperties.Host_required
-		}
+			var targetRequired, hostRequired []string
+			if ctx.Host() {
+				targetRequired = m.baseProperties.Target_required
+			} else {
+				hostRequired = m.baseProperties.Host_required
+			}
 
-		var data []string
-		for _, d := range ctx.testData {
-			data = append(data, d.ToRelativeInstallPath())
-		}
+			var data []string
+			for _, d := range ctx.testData {
+				data = append(data, d.ToRelativeInstallPath())
+			}
 
-		if ctx.moduleInfoJSON.Uninstallable {
-			installedStrings = nil
-			if len(ctx.moduleInfoJSON.CompatibilitySuites) == 1 && ctx.moduleInfoJSON.CompatibilitySuites[0] == "null-suite" {
-				ctx.moduleInfoJSON.CompatibilitySuites = nil
-				ctx.moduleInfoJSON.TestConfig = nil
-				ctx.moduleInfoJSON.AutoTestConfig = nil
-				data = nil
+			if moduleInfoJSON.Uninstallable {
+				installedStrings = nil
+				if len(moduleInfoJSON.CompatibilitySuites) == 1 && moduleInfoJSON.CompatibilitySuites[0] == "null-suite" {
+					moduleInfoJSON.CompatibilitySuites = nil
+					moduleInfoJSON.TestConfig = nil
+					moduleInfoJSON.AutoTestConfig = nil
+					data = nil
+				}
+			}
+
+			// M(C)TS supports a full test suite and partial per-module MTS test suites, with naming mts-${MODULE}.
+			// To reduce repetition, if we find a partial M(C)TS test suite without an full M(C)TS test suite,
+			// we add the full test suite to our list. This was inherited from
+			// AndroidMkEntries.AddCompatibilityTestSuites.
+			suites := moduleInfoJSON.CompatibilitySuites
+			if PrefixInList(suites, "mts-") && !InList("mts", suites) {
+				suites = append(suites, "mts")
+			}
+			if PrefixInList(suites, "mcts-") && !InList("mcts", suites) {
+				suites = append(suites, "mcts")
+			}
+			moduleInfoJSON.CompatibilitySuites = suites
+
+			required := append(m.RequiredModuleNames(ctx), m.VintfFragmentModuleNames(ctx)...)
+			required = append(required, moduleInfoJSON.ExtraRequired...)
+
+			registerName := moduleInfoJSON.RegisterNameOverride
+			if len(registerName) == 0 {
+				registerName = m.moduleInfoRegisterName(ctx, moduleInfoJSON.SubName)
+			}
+
+			moduleName := moduleInfoJSON.ModuleNameOverride
+			if len(moduleName) == 0 {
+				moduleName = m.BaseModuleName() + moduleInfoJSON.SubName
+			}
+
+			supportedVariants := moduleInfoJSON.SupportedVariantsOverride
+			if moduleInfoJSON.SupportedVariantsOverride == nil {
+				supportedVariants = []string{m.moduleInfoVariant(ctx)}
+			}
+
+			moduleInfoJSON.core = CoreModuleInfoJSON{
+				RegisterName:       registerName,
+				Path:               []string{ctx.ModuleDir()},
+				Installed:          installedStrings,
+				ModuleName:         moduleName,
+				SupportedVariants:  supportedVariants,
+				TargetDependencies: targetRequired,
+				HostDependencies:   hostRequired,
+				Data:               data,
+				Required:           required,
 			}
 		}
 
-		// M(C)TS supports a full test suite and partial per-module MTS test suites, with naming mts-${MODULE}.
-		// To reduce repetition, if we find a partial M(C)TS test suite without an full M(C)TS test suite,
-		// we add the full test suite to our list. This was inherited from
-		// AndroidMkEntries.AddCompatibilityTestSuites.
-		suites := ctx.moduleInfoJSON.CompatibilitySuites
-		if PrefixInList(suites, "mts-") && !InList("mts", suites) {
-			suites = append(suites, "mts")
-		}
-		if PrefixInList(suites, "mcts-") && !InList("mcts", suites) {
-			suites = append(suites, "mcts")
-		}
-		ctx.moduleInfoJSON.CompatibilitySuites = suites
-
-		required := append(m.RequiredModuleNames(ctx), m.VintfFragmentModuleNames(ctx)...)
-		required = append(required, ctx.moduleInfoJSON.ExtraRequired...)
-
-		ctx.moduleInfoJSON.core = CoreModuleInfoJSON{
-			RegisterName:       m.moduleInfoRegisterName(ctx, ctx.moduleInfoJSON.SubName),
-			Path:               []string{ctx.ModuleDir()},
-			Installed:          installedStrings,
-			ModuleName:         m.BaseModuleName() + ctx.moduleInfoJSON.SubName,
-			SupportedVariants:  []string{m.moduleInfoVariant(ctx)},
-			TargetDependencies: targetRequired,
-			HostDependencies:   hostRequired,
-			Data:               data,
-			Required:           required,
-		}
 		SetProvider(ctx, ModuleInfoJSONProvider, ctx.moduleInfoJSON)
 	}
 
