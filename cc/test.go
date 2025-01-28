@@ -406,7 +406,7 @@ func (test *testBinary) install(ctx ModuleContext, file android.Path) {
 		}
 		testCases := android.PathForModuleInPartitionInstall(ctx, "testcases", ctx.ModuleName()+c.SubName())
 		if test.testConfig != nil {
-			ctx.InstallFile(testCases, test.testConfig.Base(), test.testConfig)
+			ctx.InstallFile(testCases, ctx.ModuleName()+".config", test.testConfig)
 		}
 		for _, extraTestConfig := range test.extraTestConfigs {
 			ctx.InstallFile(testCases, extraTestConfig.Base(), extraTestConfig)
