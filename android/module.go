@@ -257,6 +257,8 @@ type nameProperties struct {
 	Name *string
 }
 
+// Properties common to all modules inheriting from ModuleBase. These properties are automatically
+// inherited by sub-modules created with ctx.CreateModule()
 type commonProperties struct {
 	// emit build rules for this module
 	//
@@ -409,15 +411,6 @@ type commonProperties struct {
 	// VINTF manifest fragments to be installed if this module is installed
 	Vintf_fragments proptools.Configurable[[]string] `android:"path"`
 
-	// names of other modules to install if this module is installed
-	Required proptools.Configurable[[]string] `android:"arch_variant"`
-
-	// names of other modules to install on host if this module is installed
-	Host_required []string `android:"arch_variant"`
-
-	// names of other modules to install on target if this module is installed
-	Target_required []string `android:"arch_variant"`
-
 	// The OsType of artifacts that this module variant is responsible for creating.
 	//
 	// Set by osMutator
@@ -516,6 +509,19 @@ type commonProperties struct {
 	// List of module names that are prevented from being installed when this module gets
 	// installed.
 	Overrides []string
+}
+
+// Properties common to all modules inheriting from ModuleBase. Unlike commonProperties, these
+// properties are NOT automatically inherited by sub-modules created with ctx.CreateModule()
+type baseProperties struct {
+	// names of other modules to install if this module is installed
+	Required proptools.Configurable[[]string] `android:"arch_variant"`
+
+	// names of other modules to install on host if this module is installed
+	Host_required []string `android:"arch_variant"`
+
+	// names of other modules to install on target if this module is installed
+	Target_required []string `android:"arch_variant"`
 }
 
 type distProperties struct {
@@ -716,6 +722,7 @@ func InitAndroidModule(m Module) {
 	m.AddProperties(
 		&base.nameProperties,
 		&base.commonProperties,
+		&base.baseProperties,
 		&base.distProperties)
 
 	initProductVariableModule(m)
@@ -834,6 +841,7 @@ type ModuleBase struct {
 
 	nameProperties          nameProperties
 	commonProperties        commonProperties
+	baseProperties          baseProperties
 	distProperties          distProperties
 	variableProperties      interface{}
 	hostAndDeviceProperties hostAndDeviceProperties
@@ -1619,15 +1627,15 @@ func (m *ModuleBase) InRecovery() bool {
 }
 
 func (m *ModuleBase) RequiredModuleNames(ctx ConfigurableEvaluatorContext) []string {
-	return m.base().commonProperties.Required.GetOrDefault(m.ConfigurableEvaluator(ctx), nil)
+	return m.base().baseProperties.Required.GetOrDefault(m.ConfigurableEvaluator(ctx), nil)
 }
 
 func (m *ModuleBase) HostRequiredModuleNames() []string {
-	return m.base().commonProperties.Host_required
+	return m.base().baseProperties.Host_required
 }
 
 func (m *ModuleBase) TargetRequiredModuleNames() []string {
-	return m.base().commonProperties.Target_required
+	return m.base().baseProperties.Target_required
 }
 
 func (m *ModuleBase) VintfFragmentModuleNames(ctx ConfigurableEvaluatorContext) []string {
@@ -2136,9 +2144,9 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 
 		var targetRequired, hostRequired []string
 		if ctx.Host() {
-			targetRequired = m.commonProperties.Target_required
+			targetRequired = m.baseProperties.Target_required
 		} else {
-			hostRequired = m.commonProperties.Host_required
+			hostRequired = m.baseProperties.Host_required
 		}
 
 		var data []string
