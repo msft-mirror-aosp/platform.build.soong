@@ -1187,6 +1187,34 @@ func (d *Droidstubs) optionalStubCmd(ctx android.ModuleContext, params stubsComm
 	rule.Build(fmt.Sprintf("metalava_%s", params.stubConfig.stubsType.String()), "metalava merged")
 }
 
+func (d *Droidstubs) setPhonyRules(ctx android.ModuleContext) {
+	if d.apiFile != nil {
+		ctx.Phony(d.Name(), d.apiFile)
+		ctx.Phony(fmt.Sprintf("%s.txt", d.Name()), d.apiFile)
+	}
+	if d.removedApiFile != nil {
+		ctx.Phony(d.Name(), d.removedApiFile)
+		ctx.Phony(fmt.Sprintf("%s.txt", d.Name()), d.removedApiFile)
+	}
+	if d.checkCurrentApiTimestamp != nil {
+		ctx.Phony(fmt.Sprintf("%s-check-current-api", d.Name()), d.checkCurrentApiTimestamp)
+		ctx.Phony("checkapi", d.checkCurrentApiTimestamp)
+	}
+	if d.updateCurrentApiTimestamp != nil {
+		ctx.Phony(fmt.Sprintf("%s-update-current-api", d.Name()), d.updateCurrentApiTimestamp)
+		ctx.Phony("update-api", d.updateCurrentApiTimestamp)
+	}
+	if d.checkLastReleasedApiTimestamp != nil {
+		ctx.Phony(fmt.Sprintf("%s-check-last-released-api", d.Name()), d.checkLastReleasedApiTimestamp)
+	}
+	if d.apiLintTimestamp != nil {
+		ctx.Phony(fmt.Sprintf("%s-api-lint", d.Name()), d.apiLintTimestamp)
+	}
+	if d.checkNullabilityWarningsTimestamp != nil {
+		ctx.Phony(fmt.Sprintf("%s-check-nullability-warnings", d.Name()), d.checkNullabilityWarningsTimestamp)
+	}
+}
+
 func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	deps := d.Javadoc.collectDeps(ctx)
 
@@ -1229,6 +1257,41 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	// strips all flagged apis to generate the "exportable" stubs
 	stubCmdParams.stubsType = Exportable
 	d.exportableStubCmd(ctx, stubCmdParams)
+
+	if String(d.properties.Check_nullability_warnings) != "" {
+		if d.everythingArtifacts.nullabilityWarningsFile == nil {
+			ctx.PropertyErrorf("check_nullability_warnings",
+				"Cannot specify check_nullability_warnings unless validating nullability")
+		}
+
+		checkNullabilityWarningsPath := android.PathForModuleSrc(ctx, String(d.properties.Check_nullability_warnings))
+
+		d.checkNullabilityWarningsTimestamp = android.PathForModuleOut(ctx, Everything.String(), "check_nullability_warnings.timestamp")
+
+		msg := fmt.Sprintf(`\n******************************\n`+
+			`The warnings encountered during nullability annotation validation did\n`+
+			`not match the checked in file of expected warnings. The diffs are shown\n`+
+			`above. You have two options:\n`+
+			`   1. Resolve the differences by editing the nullability annotations.\n`+
+			`   2. Update the file of expected warnings by running:\n`+
+			`         cp %s %s\n`+
+			`       and submitting the updated file as part of your change.`,
+			d.everythingArtifacts.nullabilityWarningsFile, checkNullabilityWarningsPath)
+
+		rule := android.NewRuleBuilder(pctx, ctx)
+
+		rule.Command().
+			Text("(").
+			Text("diff").Input(checkNullabilityWarningsPath).Input(d.everythingArtifacts.nullabilityWarningsFile).
+			Text("&&").
+			Text("touch").Output(d.checkNullabilityWarningsTimestamp).
+			Text(") || (").
+			Text("echo").Flag("-e").Flag(`"` + msg + `"`).
+			Text("; exit 38").
+			Text(")")
+
+		rule.Build("nullabilityWarningsCheck", "nullability warnings check")
+	}
 
 	if apiCheckEnabled(ctx, d.properties.Check_api.Current, "current") {
 
@@ -1279,12 +1342,24 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 			`Note that DISABLE_STUB_VALIDATION=true does not bypass checkapi.\n`+
 			`******************************\n`, ctx.ModuleName())
 
-		rule.Command().
+		cmd := rule.Command().
 			Text("touch").Output(d.checkCurrentApiTimestamp).
 			Text(") || (").
 			Text("echo").Flag("-e").Flag(`"` + msg + `"`).
 			Text("; exit 38").
 			Text(")")
+
+		if d.apiLintTimestamp != nil {
+			cmd.Validation(d.apiLintTimestamp)
+		}
+
+		if d.checkLastReleasedApiTimestamp != nil {
+			cmd.Validation(d.checkLastReleasedApiTimestamp)
+		}
+
+		if d.checkNullabilityWarningsTimestamp != nil {
+			cmd.Validation(d.checkNullabilityWarningsTimestamp)
+		}
 
 		rule.Build("metalavaCurrentApiCheck", "check current API")
 
@@ -1315,41 +1390,6 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		rule.Build("metalavaCurrentApiUpdate", "update current API")
 	}
 
-	if String(d.properties.Check_nullability_warnings) != "" {
-		if d.everythingArtifacts.nullabilityWarningsFile == nil {
-			ctx.PropertyErrorf("check_nullability_warnings",
-				"Cannot specify check_nullability_warnings unless validating nullability")
-		}
-
-		checkNullabilityWarnings := android.PathForModuleSrc(ctx, String(d.properties.Check_nullability_warnings))
-
-		d.checkNullabilityWarningsTimestamp = android.PathForModuleOut(ctx, Everything.String(), "check_nullability_warnings.timestamp")
-
-		msg := fmt.Sprintf(`\n******************************\n`+
-			`The warnings encountered during nullability annotation validation did\n`+
-			`not match the checked in file of expected warnings. The diffs are shown\n`+
-			`above. You have two options:\n`+
-			`   1. Resolve the differences by editing the nullability annotations.\n`+
-			`   2. Update the file of expected warnings by running:\n`+
-			`         cp %s %s\n`+
-			`       and submitting the updated file as part of your change.`,
-			d.everythingArtifacts.nullabilityWarningsFile, checkNullabilityWarnings)
-
-		rule := android.NewRuleBuilder(pctx, ctx)
-
-		rule.Command().
-			Text("(").
-			Text("diff").Input(checkNullabilityWarnings).Input(d.everythingArtifacts.nullabilityWarningsFile).
-			Text("&&").
-			Text("touch").Output(d.checkNullabilityWarningsTimestamp).
-			Text(") || (").
-			Text("echo").Flag("-e").Flag(`"` + msg + `"`).
-			Text("; exit 38").
-			Text(")")
-
-		rule.Build("nullabilityWarningsCheck", "nullability warnings check")
-	}
-
 	android.SetProvider(ctx, DroidStubsInfoProvider, DroidStubsInfo{
 		CurrentApiTimestamp: d.CurrentApiTimestamp(),
 		EverythingArtifacts: StubsArtifactsInfo{
@@ -1361,6 +1401,8 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	})
 
 	d.setOutputFiles(ctx)
+
+	d.setPhonyRules(ctx)
 }
 
 // This method sets the outputFiles property, which is used to set the
