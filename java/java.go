@@ -1070,6 +1070,10 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	setOutputFiles(ctx, j.Module)
 
+	j.javaLibraryModuleInfoJSON(ctx)
+}
+
+func (j *Library) javaLibraryModuleInfoJSON(ctx android.ModuleContext) *android.ModuleInfoJSON {
 	moduleInfoJSON := ctx.ModuleInfoJSON()
 	moduleInfoJSON.Class = []string{"JAVA_LIBRARIES"}
 	if j.implementationAndResourcesJar != nil {
@@ -1092,6 +1096,7 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		moduleInfoJSON.Disabled = true
 		j.dexpreopter.ModuleInfoJSONForApex(ctx)
 	}
+	return moduleInfoJSON
 }
 
 func (j *Library) getJarInstallDir(ctx android.ModuleContext) android.InstallPath {
