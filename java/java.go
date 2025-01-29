@@ -2263,7 +2263,7 @@ func (al *ApiLibrary) StubsJar() android.Path {
 
 func metalavaStubCmd(ctx android.ModuleContext, rule *android.RuleBuilder,
 	srcs android.Paths, homeDir android.WritablePath,
-	classpath android.Paths, configFiles android.Paths) *android.RuleBuilderCommand {
+	classpath android.Paths, configFiles android.Paths, apiSurface *string) *android.RuleBuilderCommand {
 	rule.Command().Text("rm -rf").Flag(homeDir.String())
 	rule.Command().Text("mkdir -p").Flag(homeDir.String())
 
@@ -2303,6 +2303,8 @@ func metalavaStubCmd(ctx android.ModuleContext, rule *android.RuleBuilder,
 		FlagWithArg("--hide ", "ChangedDefault")
 
 	addMetalavaConfigFilesToCmd(cmd, configFiles)
+
+	addOptionalApiSurfaceToCmd(cmd, apiSurface)
 
 	if len(classpath) == 0 {
 		// The main purpose of the `--api-class-resolution api` option is to force metalava to ignore
@@ -2508,7 +2510,7 @@ func (al *ApiLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	combinedPaths := append(([]android.Path)(nil), systemModulesPaths...)
 	combinedPaths = append(combinedPaths, classPaths...)
 	combinedPaths = append(combinedPaths, bootclassPaths...)
-	cmd := metalavaStubCmd(ctx, rule, srcFiles, homeDir, combinedPaths, configFiles)
+	cmd := metalavaStubCmd(ctx, rule, srcFiles, homeDir, combinedPaths, configFiles, al.properties.Api_surface)
 
 	al.stubsFlags(ctx, cmd, stubsDir)
 
