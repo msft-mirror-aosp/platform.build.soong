@@ -363,6 +363,8 @@ type JavaInfo struct {
 	// output file of the module, which may be a classes jar or a dex jar
 	OutputFile android.Path
 
+	ExtraOutputFiles android.Paths
+
 	AndroidLibraryDependencyInfo *AndroidLibraryDependencyInfo
 
 	UsesLibraryDependencyInfo *UsesLibraryDependencyInfo
@@ -374,6 +376,62 @@ type JavaInfo struct {
 	ModuleWithUsesLibraryInfo *ModuleWithUsesLibraryInfo
 
 	ModuleWithSdkDepInfo *ModuleWithSdkDepInfo
+
+	// output file containing classes.dex and resources
+	DexJarFile OptionalDexJarPath
+
+	// installed file for binary dependency
+	InstallFile android.Path
+
+	// The path to the dex jar that is in the boot class path. If this is unset then the associated
+	// module is not a boot jar, but could be one of the <x>-hiddenapi modules that provide additional
+	// annotations for the <x> boot dex jar but which do not actually provide a boot dex jar
+	// themselves.
+	//
+	// This must be the path to the unencoded dex jar as the encoded dex jar indirectly depends on
+	// this file so using the encoded dex jar here would result in a cycle in the ninja rules.
+	BootDexJarPath OptionalDexJarPath
+
+	// The compressed state of the dex file being encoded. This is used to ensure that the encoded
+	// dex file has the same state.
+	UncompressDexState *bool
+
+	// True if the module containing this structure contributes to the hiddenapi information or has
+	// that information encoded within it.
+	Active bool
+
+	BuiltInstalled string
+
+	BuiltInstalledForApex []dexpreopterInstall
+
+	// The config is used for two purposes:
+	// - Passing dexpreopt information about libraries from Soong to Make. This is needed when
+	//   a <uses-library> is defined in Android.bp, but used in Android.mk (see dex_preopt_config_merger.py).
+	//   Note that dexpreopt.config might be needed even if dexpreopt is disabled for the library itself.
+	// - Dexpreopt post-processing (using dexpreopt artifacts from a prebuilt system image to incrementally
+	//   dexpreopt another partition).
+	ConfigPath android.WritablePath
+
+	// The path to the profile on host that dexpreopter generates. This is used as the input for
+	// dex2oat.
+	OutputProfilePathOnHost android.Path
+
+	LogtagsSrcs android.Paths
+
+	ProguardDictionary android.OptionalPath
+
+	ProguardUsageZip android.OptionalPath
+
+	LinterReports android.Paths
+
+	// installed file for hostdex copy
+	HostdexInstallFile android.InstallPath
+
+	// Additional srcJars tacked in by GeneratedJavaLibraryModule
+	GeneratedSrcjars []android.Path
+
+	// True if profile-guided optimization is actually enabled.
+	ProfileGuided bool
 }
 
 var JavaInfoProvider = blueprint.NewProvider[*JavaInfo]()
@@ -1065,6 +1123,24 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	if javaInfo != nil {
 		setExtraJavaInfo(ctx, j, javaInfo)
+		javaInfo.ExtraOutputFiles = j.extraOutputFiles
+		javaInfo.DexJarFile = j.dexJarFile
+		javaInfo.InstallFile = j.installFile
+		javaInfo.BootDexJarPath = j.bootDexJarPath
+		javaInfo.UncompressDexState = j.uncompressDexState
+		javaInfo.Active = j.active
+		javaInfo.BuiltInstalledForApex = j.builtInstalledForApex
+		javaInfo.BuiltInstalled = j.builtInstalled
+		javaInfo.ConfigPath = j.configPath
+		javaInfo.OutputProfilePathOnHost = j.outputProfilePathOnHost
+		javaInfo.LogtagsSrcs = j.logtagsSrcs
+		javaInfo.ProguardDictionary = j.proguardDictionary
+		javaInfo.ProguardUsageZip = j.proguardUsageZip
+		javaInfo.LinterReports = j.reports
+		javaInfo.HostdexInstallFile = j.hostdexInstallFile
+		javaInfo.GeneratedSrcjars = j.properties.Generated_srcjars
+		javaInfo.ProfileGuided = j.dexpreopter.dexpreoptProperties.Dex_preopt_result.Profile_guided
+
 		android.SetProvider(ctx, JavaInfoProvider, javaInfo)
 	}
 
