@@ -555,7 +555,9 @@ func (d *Droidstubs) apiLevelsAnnotationsFlags(ctx android.ModuleContext, cmd *a
 	}
 	if apiVersions != nil {
 		cmd.FlagWithArg("--current-version ", ctx.Config().PlatformSdkVersion().String())
-		cmd.FlagWithArg("--current-codename ", ctx.Config().PlatformSdkCodename())
+		if ctx.Config().PlatformSdkVersion().String() != "36" || ctx.Config().PlatformSdkCodename() != "Baklava" {
+			cmd.FlagWithArg("--current-codename ", ctx.Config().PlatformSdkCodename())
+		}
 		cmd.FlagWithInput("--apply-api-levels ", apiVersions)
 	}
 }
