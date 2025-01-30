@@ -51,12 +51,11 @@ var (
 				` && ${aconfig} create-cpp-lib` +
 				`    --mode ${mode}` +
 				`    --cache ${in}` +
-				`    --out ${gendir}` +
-				`    --allow-instrumentation ${debug}`,
+				`    --out ${gendir}`,
 			CommandDeps: []string{
 				"$aconfig",
 			},
-		}, "gendir", "mode", "debug")
+		}, "gendir", "mode")
 
 	// For rust_aconfig_library: Generate Rust library
 	rustRule = pctx.AndroidStaticRule("rust_aconfig_library",
@@ -66,12 +65,11 @@ var (
 				` && ${aconfig} create-rust-lib` +
 				`    --mode ${mode}` +
 				`    --cache ${in}` +
-				`    --allow-instrumentation ${debug}` +
 				`    --out ${gendir}`,
 			CommandDeps: []string{
 				"$aconfig",
 			},
-		}, "gendir", "mode", "debug")
+		}, "gendir", "mode")
 )
 
 func init() {
