@@ -639,6 +639,7 @@ func buildConfig(config Config) *smpb.BuildConfig {
 		UseRbe:                proto.Bool(config.UseRBE()),
 		NinjaWeightListSource: getNinjaWeightListSourceInMetric(config.NinjaWeightListSource()),
 		SoongEnvVars:          soongEnvVars,
+		SoongOnly:             proto.Bool(config.soongOnlyRequested),
 	}
 	c.Targets = append(c.Targets, config.arguments...)
 
