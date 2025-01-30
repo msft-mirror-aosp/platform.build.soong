@@ -195,6 +195,27 @@ func (test *testDecorator) install(ctx ModuleContext) {
 	if ctx.Host() && test.Properties.Test_options.Unit_test == nil {
 		test.Properties.Test_options.Unit_test = proptools.BoolPtr(true)
 	}
+
+	if !ctx.Config().KatiEnabled() { // TODO(spandandas): Remove the special case for kati
+		// Install the test config in testcases/ directory for atest.
+		r, ok := ctx.Module().(*Module)
+		if !ok {
+			ctx.ModuleErrorf("Not a rust test module")
+		}
+		// Install configs in the root of $PRODUCT_OUT/testcases/$module
+		testCases := android.PathForModuleInPartitionInstall(ctx, "testcases", ctx.ModuleName()+r.SubName())
+		if ctx.PrimaryArch() {
+			if test.testConfig != nil {
+				ctx.InstallFile(testCases, ctx.ModuleName()+".config", test.testConfig)
+			}
+		}
+		// Install tests and data in arch specific subdir $PRODUCT_OUT/testcases/$module/$arch
+		testCases = testCases.Join(ctx, ctx.Target().Arch.ArchType.String())
+		ctx.InstallTestData(testCases, test.data)
+		testPath := ctx.RustModule().OutputFile().Path()
+		ctx.InstallFile(testCases, testPath.Base(), testPath)
+	}
+
 	test.binaryDecorator.installTestData(ctx, test.data)
 	test.binaryDecorator.install(ctx)
 }
