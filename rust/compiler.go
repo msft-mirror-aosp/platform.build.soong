@@ -477,6 +477,11 @@ func (compiler *baseCompiler) compilerFlags(ctx ModuleContext, flags Flags) Flag
 		}
 	}
 
+	// Enable LTO for non-engineering builds if the module supports and requests it.
+	if !ctx.Config().Eng() && !(ctx.RustModule().Rlib() || ctx.RustModule().ProcMacro()) && ctx.RustModule().compiler.Thinlto() {
+		flags.GlobalRustFlags = append(flags.GlobalRustFlags, "-C lto=thin")
+	}
+
 	flags.RustFlags = append(flags.RustFlags, lintFlags)
 	flags.RustFlags = append(flags.RustFlags, compiler.Properties.Flags...)
 	flags.RustFlags = append(flags.RustFlags, "--edition="+compiler.edition())
