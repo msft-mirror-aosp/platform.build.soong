@@ -19,6 +19,8 @@ import (
 	"slices"
 
 	"android/soong/android"
+
+	"github.com/google/blueprint/proptools"
 )
 
 // A singleton module that collects all of the aconfig flags declared in the
@@ -40,18 +42,9 @@ type allAconfigReleaseDeclarationsSingleton struct {
 	intermediateTextProtoPath   android.OutputPath
 }
 
-type apiSurfaceContributorStruct struct {
-	Api_signature_files  []string `android:"arch_variant,path"`
-	Finalized_flags_file string   `android:"arch_variant,path"`
-}
-
-type apiSurfacesStruct struct {
-	Platform apiSurfaceContributorStruct
-	Wear     apiSurfaceContributorStruct
-}
-
 type allAconfigReleaseDeclarationsProperties struct {
-	Api_surfaces apiSurfacesStruct
+	Api_signature_files  proptools.Configurable[[]string] `android:"arch_variant,path"`
+	Finalized_flags_file string                           `android:"arch_variant,path"`
 }
 
 type allAconfigDeclarationsSingleton struct {
@@ -71,26 +64,16 @@ func (this *allAconfigDeclarationsSingleton) sortedConfigNames() []string {
 }
 
 func (this *allAconfigDeclarationsSingleton) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	// PLATFORM API surface (android platform: API surface provided via android.jar)
-	platformOutput := this.GenerateFinalizedFlagsForApiSurfaces(ctx, this.properties.Api_surfaces.Platform, "platform")
-	// WEAR API surface (wear-os platform: API surface provided via wear-sdk.jar)
-	wearOutput := this.GenerateFinalizedFlagsForApiSurfaces(ctx, this.properties.Api_surfaces.Wear, "wear")
-
-	ctx.Phony("all_aconfig_declarations", platformOutput, wearOutput)
-}
-
-func (this *allAconfigDeclarationsSingleton) GenerateFinalizedFlagsForApiSurfaces(ctx android.ModuleContext, apiSurface apiSurfaceContributorStruct, surfaceName string) android.Path {
 	apiSignatureFiles := android.Paths{}
-	for _, apiSignatureFile := range apiSurface.Api_signature_files {
+	for _, apiSignatureFile := range this.properties.Api_signature_files.GetOrDefault(ctx, nil) {
 		if path := android.PathForModuleSrc(ctx, apiSignatureFile); path != nil {
 			apiSignatureFiles = append(apiSignatureFiles, path)
 		}
 	}
-	finalizedFlagsFile := android.PathForModuleSrc(ctx, apiSurface.Finalized_flags_file)
-	// parsed flags file is a universal blob, used by all API surfaces (contains all known flags)
+	finalizedFlagsFile := android.PathForModuleSrc(ctx, this.properties.Finalized_flags_file)
 	parsedFlagsFile := android.PathForIntermediates(ctx, "all_aconfig_declarations.pb")
 
-	output := android.PathForIntermediates(ctx, "finalized-flags-"+surfaceName+".txt")
+	output := android.PathForIntermediates(ctx, "finalized-flags.txt")
 
 	ctx.Build(pctx, android.BuildParams{
 		Rule:   RecordFinalizedFlagsRule,
@@ -102,8 +85,7 @@ func (this *allAconfigDeclarationsSingleton) GenerateFinalizedFlagsForApiSurface
 			"parsed_flags_file":    "--parsed-flags-file " + parsedFlagsFile.String(),
 		},
 	})
-
-	return output
+	ctx.Phony("all_aconfig_declarations", output)
 }
 
 func (this *allAconfigDeclarationsSingleton) GenerateSingletonBuildActions(ctx android.SingletonContext) {
@@ -172,6 +154,5 @@ func (this *allAconfigDeclarationsSingleton) MakeVars(ctx android.MakeVarsContex
 			ctx.DistForGoalWithFilename(goal, this.releaseMap[rcName].intermediateTextProtoPath, assembleFileName(rcName, "flags.textproto"))
 		}
 	}
-	ctx.DistForGoalWithFilename("sdk", android.PathForIntermediates(ctx, "finalized-flags-platform.txt"), "finalized-flags.txt")
-	ctx.DistForGoalWithFilename("sdk", android.PathForIntermediates(ctx, "finalized-flags-wear.txt"), "apistubs/clockwork/finalized-flags.txt")
+	ctx.DistForGoalWithFilename("sdk", android.PathForIntermediates(ctx, "finalized-flags.txt"), "finalized-flags.txt")
 }
