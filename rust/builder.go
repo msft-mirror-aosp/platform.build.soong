@@ -159,10 +159,6 @@ func getTransformProperties(ctx ModuleContext, crateType string) transformProper
 
 func TransformSrcToBinary(ctx ModuleContext, mainSrc android.Path, deps PathDeps, flags Flags,
 	outputFile android.WritablePath) buildOutput {
-	if ctx.RustModule().compiler.Thinlto() {
-		flags.GlobalRustFlags = append(flags.GlobalRustFlags, "-C lto=thin")
-	}
-
 	return transformSrctoCrate(ctx, mainSrc, deps, flags, outputFile, getTransformProperties(ctx, "bin"))
 }
 
@@ -209,7 +205,10 @@ func TransformRlibstoStaticlib(ctx android.ModuleContext, mainSrc android.Path, 
 
 	rustFlags = CommonDefaultFlags(ctx, toolchain, rustFlags)
 	rustFlags = CommonLibraryCompilerFlags(ctx, rustFlags)
-	rustFlags.GlobalRustFlags = append(rustFlags.GlobalRustFlags, "-C lto=thin")
+
+	if !ctx.Config().Eng() {
+		rustFlags.GlobalRustFlags = append(rustFlags.GlobalRustFlags, "-C lto=thin")
+	}
 
 	rustFlags.EmitXrefs = false
 
@@ -218,28 +217,16 @@ func TransformRlibstoStaticlib(ctx android.ModuleContext, mainSrc android.Path, 
 
 func TransformSrctoDylib(ctx ModuleContext, mainSrc android.Path, deps PathDeps, flags Flags,
 	outputFile android.WritablePath) buildOutput {
-	if ctx.RustModule().compiler.Thinlto() {
-		flags.GlobalRustFlags = append(flags.GlobalRustFlags, "-C lto=thin")
-	}
-
 	return transformSrctoCrate(ctx, mainSrc, deps, flags, outputFile, getTransformProperties(ctx, "dylib"))
 }
 
 func TransformSrctoStatic(ctx ModuleContext, mainSrc android.Path, deps PathDeps, flags Flags,
 	outputFile android.WritablePath) buildOutput {
-	if ctx.RustModule().compiler.Thinlto() {
-		flags.GlobalRustFlags = append(flags.GlobalRustFlags, "-C lto=thin")
-	}
-
 	return transformSrctoCrate(ctx, mainSrc, deps, flags, outputFile, getTransformProperties(ctx, "staticlib"))
 }
 
 func TransformSrctoShared(ctx ModuleContext, mainSrc android.Path, deps PathDeps, flags Flags,
 	outputFile android.WritablePath) buildOutput {
-	if ctx.RustModule().compiler.Thinlto() {
-		flags.GlobalRustFlags = append(flags.GlobalRustFlags, "-C lto=thin")
-	}
-
 	return transformSrctoCrate(ctx, mainSrc, deps, flags, outputFile, getTransformProperties(ctx, "cdylib"))
 }
 
