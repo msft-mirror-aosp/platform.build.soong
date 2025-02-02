@@ -78,15 +78,19 @@ type configImpl struct {
 	logsPrefix    string
 
 	// From the arguments
-	parallel                  int
-	keepGoing                 int
-	verbose                   bool
-	checkbuild                bool
-	dist                      bool
-	jsonModuleGraph           bool
-	reportMkMetrics           bool // Collect and report mk2bp migration progress metrics.
-	soongDocs                 bool
-	skipConfig                bool
+	parallel        int
+	keepGoing       int
+	verbose         bool
+	checkbuild      bool
+	dist            bool
+	jsonModuleGraph bool
+	reportMkMetrics bool // Collect and report mk2bp migration progress metrics.
+	soongDocs       bool
+	skipConfig      bool
+	// Either the user or product config requested that we skip soong (for the banner). The other
+	// skip flags tell whether *this* soong_ui invocation will skip kati - which will be true
+	// during lunch.
+	soongOnlyRequested        bool
 	skipKati                  bool
 	skipKatiControlledByFlags bool
 	skipKatiNinja             bool
@@ -252,6 +256,19 @@ func NewConfig(ctx Context, args ...string) Config {
 	}
 	ret.parseArgs(ctx, args)
 
+	if value, ok := ret.environ.Get("SOONG_ONLY"); ok && !ret.skipKatiControlledByFlags {
+		if value == "true" || value == "1" || value == "y" || value == "yes" {
+			ret.soongOnlyRequested = true
+			ret.skipKatiControlledByFlags = true
+			ret.skipKati = true
+			ret.skipKatiNinja = true
+		} else {
+			ret.skipKatiControlledByFlags = true
+			ret.skipKati = false
+			ret.skipKatiNinja = false
+		}
+	}
+
 	if ret.ninjaWeightListSource == HINT_FROM_SOONG {
 		ret.environ.Set("SOONG_GENERATES_NINJA_HINT", "always")
 	} else if ret.ninjaWeightListSource == DEFAULT {
@@ -393,6 +410,9 @@ func NewConfig(ctx Context, args ...string) Config {
 		// Use config.ninjaCommand instead.
 		"SOONG_NINJA",
 		"SOONG_USE_N2",
+
+		// Already incorporated into the config object
+		"SOONG_ONLY",
 	)
 
 	if ret.UseGoma() || ret.ForceUseGoma() {
@@ -851,6 +871,7 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			if c.skipKatiControlledByFlags {
 				ctx.Fatalf("Cannot specify both --soong-only and --no-soong-only")
 			}
+			c.soongOnlyRequested = true
 			c.skipKatiControlledByFlags = true
 			c.skipKati = true
 			c.skipKatiNinja = true

@@ -708,7 +708,7 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 	if library.stubs() {
 		ccFlags := library.getApiStubsCcFlags(ctx)
 		stubObjs := library.compileModuleLibApiStubs(ctx, ccFlags)
-		cc.BuildRustStubs(ctx, outputFile, deps.CrtBegin, deps.CrtEnd, stubObjs, ccFlags)
+		cc.BuildRustStubs(ctx, outputFile, stubObjs, ccFlags)
 	} else if library.rlib() {
 		ret.kytheFile = TransformSrctoRlib(ctx, crateRootPath, deps, flags, outputFile).kytheFile
 	} else if library.dylib() {
@@ -856,6 +856,20 @@ func (library *libraryDecorator) Disabled() bool {
 
 func (library *libraryDecorator) SetDisabled() {
 	library.MutatedProperties.VariantIsDisabled = true
+}
+
+func (library *libraryDecorator) moduleInfoJSON(ctx ModuleContext, moduleInfoJSON *android.ModuleInfoJSON) {
+	library.baseCompiler.moduleInfoJSON(ctx, moduleInfoJSON)
+
+	if library.rlib() {
+		moduleInfoJSON.Class = []string{"RLIB_LIBRARIES"}
+	} else if library.dylib() {
+		moduleInfoJSON.Class = []string{"DYLIB_LIBRARIES"}
+	} else if library.static() {
+		moduleInfoJSON.Class = []string{"STATIC_LIBRARIES"}
+	} else if library.shared() {
+		moduleInfoJSON.Class = []string{"SHARED_LIBRARIES"}
+	}
 }
 
 var validCrateName = regexp.MustCompile("[^a-zA-Z0-9_]+")
