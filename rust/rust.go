@@ -2085,7 +2085,7 @@ func (mod *Module) IncomingDepIsInSameApex(depTag blueprint.DependencyTag) bool 
 	}
 
 	if mod.HasStubsVariants() {
-		if cc.IsSharedDepTag(depTag) {
+		if cc.IsSharedDepTag(depTag) && !cc.IsExplicitImplSharedDepTag(depTag) {
 			// dynamic dep to a stubs lib crosses APEX boundary
 			return false
 		}
