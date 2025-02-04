@@ -73,30 +73,38 @@ import "github.com/google/blueprint"
 // two systems: when creating new variations, Soong clones the old module and
 // thus some way is needed to change it state whereas Bazel creates each
 // configuration of a given configured target anew.
-type TransitionMutator interface {
+type TransitionMutator[T blueprint.TransitionInfo] interface {
 	// Split returns the set of variations that should be created for a module no
 	// matter who depends on it. Used when Make depends on a particular variation
 	// or when the module knows its variations just based on information given to
 	// it in the Blueprint file. This method should not mutate the module it is
 	// called on.
-	Split(ctx BaseModuleContext) []string
+	Split(ctx BaseModuleContext) []T
 
 	// OutgoingTransition is called on a module to determine which variation it wants
 	// from its direct dependencies. The dependency itself can override this decision.
 	// This method should not mutate the module itself.
-	OutgoingTransition(ctx OutgoingTransitionContext, sourceVariation string) string
+	OutgoingTransition(ctx OutgoingTransitionContext, sourceTransitionInfo T) T
 
 	// IncomingTransition is called on a module to determine which variation it should
 	// be in based on the variation modules that depend on it want. This gives the module
 	// a final say about its own variations. This method should not mutate the module
 	// itself.
-	IncomingTransition(ctx IncomingTransitionContext, incomingVariation string) string
+	IncomingTransition(ctx IncomingTransitionContext, incomingTransitionInfo T) T
 
 	// Mutate is called after a module was split into multiple variations on each variation.
 	// It should not split the module any further but adding new dependencies is
 	// fine. Unlike all the other methods on TransitionMutator, this method is
 	// allowed to mutate the module.
-	Mutate(ctx BottomUpMutatorContext, variation string)
+	Mutate(ctx BottomUpMutatorContext, transitionInfo T)
+
+	// TransitionInfoFromVariation is called when adding dependencies with an explicit variation after the
+	// TransitionMutator has already run.  It takes a variation name and returns a TransitionInfo for that
+	// variation.  It may not be possible for some TransitionMutators to generate an appropriate TransitionInfo
+	// if the variation does not contain all the information from the TransitionInfo, in which case the
+	// TransitionMutator can panic in TransitionInfoFromVariation, and adding dependencies with explicit variations
+	// for this TransitionMutator is not supported.
+	TransitionInfoFromVariation(variation string) T
 }
 
 // androidTransitionMutator is a copy of blueprint.TransitionMutator with the context argument types changed
@@ -107,6 +115,15 @@ type androidTransitionMutator interface {
 	IncomingTransition(ctx IncomingTransitionContext, incomingTransitionInfo blueprint.TransitionInfo) blueprint.TransitionInfo
 	Mutate(ctx BottomUpMutatorContext, transitionInfo blueprint.TransitionInfo)
 	TransitionInfoFromVariation(variation string) blueprint.TransitionInfo
+}
+
+// VariationTransitionMutator is a simpler version of androidTransitionMutator that passes variation strings instead
+// of a blueprint.TransitionInfo object.
+type VariationTransitionMutator interface {
+	Split(ctx BaseModuleContext) []string
+	OutgoingTransition(ctx OutgoingTransitionContext, sourceVariation string) string
+	IncomingTransition(ctx IncomingTransitionContext, incomingVariation string) string
+	Mutate(ctx BottomUpMutatorContext, variation string)
 }
 
 type IncomingTransitionContext interface {
@@ -221,11 +238,11 @@ func (a *androidTransitionMutatorAdapter) TransitionInfoFromVariation(variation 
 	return a.mutator.TransitionInfoFromVariation(variation)
 }
 
-// variationTransitionMutatorAdapter wraps a TransitionMutator to convert it to an androidTransitionMutator
-// by wrapping the string info object used by TransitionMutator with variationTransitionInfo to convert it into
+// variationTransitionMutatorAdapter wraps a VariationTransitionMutator to convert it to an androidTransitionMutator
+// by wrapping the string info object used by VariationTransitionMutator with variationTransitionInfo to convert it into
 // blueprint.TransitionInfo.
 type variationTransitionMutatorAdapter struct {
-	m TransitionMutator
+	m VariationTransitionMutator
 }
 
 func (v variationTransitionMutatorAdapter) Split(ctx BaseModuleContext) []blueprint.TransitionInfo {
@@ -269,6 +286,53 @@ type variationTransitionInfo struct {
 
 func (v variationTransitionInfo) Variation() string {
 	return v.variation
+}
+
+// genericTransitionMutatorAdapter wraps a TransitionMutator to convert it to an androidTransitionMutator
+type genericTransitionMutatorAdapter[T blueprint.TransitionInfo] struct {
+	m TransitionMutator[T]
+}
+
+// NewGenericTransitionMutatorAdapter is used to convert a generic TransitionMutator[T] into an androidTransitionMutator
+// that can be passed to RegisterMutatorsContext.InfoBasedTransition.
+func NewGenericTransitionMutatorAdapter[T blueprint.TransitionInfo](m TransitionMutator[T]) androidTransitionMutator {
+	return &genericTransitionMutatorAdapter[T]{m}
+}
+
+func (g *genericTransitionMutatorAdapter[T]) convertTransitionInfoToT(transitionInfo blueprint.TransitionInfo) T {
+	if transitionInfo == nil {
+		var zero T
+		return zero
+	}
+	return transitionInfo.(T)
+}
+
+func (g *genericTransitionMutatorAdapter[T]) Split(ctx BaseModuleContext) []blueprint.TransitionInfo {
+	transitionInfos := g.m.Split(ctx)
+	bpTransitionInfos := make([]blueprint.TransitionInfo, 0, len(transitionInfos))
+	for _, transitionInfo := range transitionInfos {
+		bpTransitionInfos = append(bpTransitionInfos, transitionInfo)
+	}
+	return bpTransitionInfos
+}
+
+func (g *genericTransitionMutatorAdapter[T]) OutgoingTransition(ctx OutgoingTransitionContext, sourceTransitionInfo blueprint.TransitionInfo) blueprint.TransitionInfo {
+	sourceTransitionInfoT := g.convertTransitionInfoToT(sourceTransitionInfo)
+	return g.m.OutgoingTransition(ctx, sourceTransitionInfoT)
+}
+
+func (g *genericTransitionMutatorAdapter[T]) IncomingTransition(ctx IncomingTransitionContext, incomingTransitionInfo blueprint.TransitionInfo) blueprint.TransitionInfo {
+	incomingTransitionInfoT := g.convertTransitionInfoToT(incomingTransitionInfo)
+	return g.m.IncomingTransition(ctx, incomingTransitionInfoT)
+}
+
+func (g *genericTransitionMutatorAdapter[T]) Mutate(ctx BottomUpMutatorContext, transitionInfo blueprint.TransitionInfo) {
+	transitionInfoT := g.convertTransitionInfoToT(transitionInfo)
+	g.m.Mutate(ctx, transitionInfoT)
+}
+
+func (g *genericTransitionMutatorAdapter[T]) TransitionInfoFromVariation(variation string) blueprint.TransitionInfo {
+	return g.m.TransitionInfoFromVariation(variation)
 }
 
 // incomingTransitionContextImpl wraps a blueprint.IncomingTransitionContext to convert it to an
