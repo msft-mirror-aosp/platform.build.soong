@@ -338,9 +338,9 @@ func (x *registerMutatorsContext) BottomUpBlueprint(name string, m blueprint.Bot
 }
 
 func (x *registerMutatorsContext) Transition(name string, m TransitionMutator) TransitionMutatorHandle {
-	atm := &androidTransitionMutator{
+	atm := &androidTransitionMutatorAdapter{
 		finalPhase: x.finalPhase,
-		mutator:    m,
+		mutator:    variationTransitionMutatorAdapter{m},
 		name:       name,
 	}
 	mutator := &mutator{
