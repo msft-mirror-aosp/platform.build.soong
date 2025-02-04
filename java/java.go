@@ -1883,8 +1883,8 @@ func (j *Test) generateAndroidBuildActionsWithConfig(ctx android.ModuleContext, 
 			dataPath := android.DataPath{SrcPath: data}
 			ctx.InstallTestData(pathInTestCases, []android.DataPath{dataPath})
 		}
-		if j.installFile != nil {
-			ctx.InstallFile(pathInTestCases, ctx.ModuleName()+".jar", j.installFile)
+		if j.outputFile != nil {
+			ctx.InstallFile(pathInTestCases, ctx.ModuleName()+".jar", j.outputFile)
 		}
 	}
 }
