@@ -99,6 +99,16 @@ type TransitionMutator interface {
 	Mutate(ctx BottomUpMutatorContext, variation string)
 }
 
+// androidTransitionMutator is a copy of blueprint.TransitionMutator with the context argument types changed
+// from blueprint.BaseModuleContext to BaseModuleContext, etc.
+type androidTransitionMutator interface {
+	Split(ctx BaseModuleContext) []blueprint.TransitionInfo
+	OutgoingTransition(ctx OutgoingTransitionContext, sourceTransitionInfo blueprint.TransitionInfo) blueprint.TransitionInfo
+	IncomingTransition(ctx IncomingTransitionContext, incomingTransitionInfo blueprint.TransitionInfo) blueprint.TransitionInfo
+	Mutate(ctx BottomUpMutatorContext, transitionInfo blueprint.TransitionInfo)
+	TransitionInfoFromVariation(variation string) blueprint.TransitionInfo
+}
+
 type IncomingTransitionContext interface {
 	ArchModuleContext
 	ModuleProviderContext
@@ -150,68 +160,119 @@ type OutgoingTransitionContext interface {
 	DeviceConfig() DeviceConfig
 }
 
-type androidTransitionMutator struct {
+// androidTransitionMutatorAdapter wraps an androidTransitionMutator to convert it to a blueprint.TransitionInfo
+// by converting the blueprint.*Context objects into android.*Context objects.
+type androidTransitionMutatorAdapter struct {
 	finalPhase bool
-	mutator    TransitionMutator
+	mutator    androidTransitionMutator
 	name       string
 }
 
-func (a *androidTransitionMutator) Split(ctx blueprint.BaseModuleContext) []string {
+func (a *androidTransitionMutatorAdapter) Split(ctx blueprint.BaseModuleContext) []blueprint.TransitionInfo {
 	if a.finalPhase {
 		panic("TransitionMutator not allowed in FinalDepsMutators")
 	}
-	if m, ok := ctx.Module().(Module); ok {
-		moduleContext := m.base().baseModuleContextFactory(ctx)
-		return a.mutator.Split(&moduleContext)
-	} else {
-		return []string{""}
-	}
+	m := ctx.Module().(Module)
+	moduleContext := m.base().baseModuleContextFactory(ctx)
+	return a.mutator.Split(&moduleContext)
 }
 
-func (a *androidTransitionMutator) OutgoingTransition(bpctx blueprint.OutgoingTransitionContext, sourceVariation string) string {
-	if m, ok := bpctx.Module().(Module); ok {
-		ctx := outgoingTransitionContextPool.Get().(*outgoingTransitionContextImpl)
-		defer outgoingTransitionContextPool.Put(ctx)
-		*ctx = outgoingTransitionContextImpl{
-			archModuleContext: m.base().archModuleContextFactory(bpctx),
-			bp:                bpctx,
-		}
-		return a.mutator.OutgoingTransition(ctx, sourceVariation)
-	} else {
-		return ""
+func (a *androidTransitionMutatorAdapter) OutgoingTransition(bpctx blueprint.OutgoingTransitionContext,
+	sourceTransitionInfo blueprint.TransitionInfo) blueprint.TransitionInfo {
+	m := bpctx.Module().(Module)
+	ctx := outgoingTransitionContextPool.Get().(*outgoingTransitionContextImpl)
+	defer outgoingTransitionContextPool.Put(ctx)
+	*ctx = outgoingTransitionContextImpl{
+		archModuleContext: m.base().archModuleContextFactory(bpctx),
+		bp:                bpctx,
 	}
+	return a.mutator.OutgoingTransition(ctx, sourceTransitionInfo)
 }
 
-func (a *androidTransitionMutator) IncomingTransition(bpctx blueprint.IncomingTransitionContext, incomingVariation string) string {
-	if m, ok := bpctx.Module().(Module); ok {
-		ctx := incomingTransitionContextPool.Get().(*incomingTransitionContextImpl)
-		defer incomingTransitionContextPool.Put(ctx)
-		*ctx = incomingTransitionContextImpl{
-			archModuleContext: m.base().archModuleContextFactory(bpctx),
-			bp:                bpctx,
-		}
-		return a.mutator.IncomingTransition(ctx, incomingVariation)
-	} else {
-		return ""
+func (a *androidTransitionMutatorAdapter) IncomingTransition(bpctx blueprint.IncomingTransitionContext,
+	incomingTransitionInfo blueprint.TransitionInfo) blueprint.TransitionInfo {
+	m := bpctx.Module().(Module)
+	ctx := incomingTransitionContextPool.Get().(*incomingTransitionContextImpl)
+	defer incomingTransitionContextPool.Put(ctx)
+	*ctx = incomingTransitionContextImpl{
+		archModuleContext: m.base().archModuleContextFactory(bpctx),
+		bp:                bpctx,
 	}
+	return a.mutator.IncomingTransition(ctx, incomingTransitionInfo)
 }
 
-func (a *androidTransitionMutator) Mutate(ctx blueprint.BottomUpMutatorContext, variation string) {
-	if am, ok := ctx.Module().(Module); ok {
-		if variation != "" {
-			// TODO: this should really be checking whether the TransitionMutator affected this module, not
-			//  the empty variant, but TransitionMutator has no concept of skipping a module.
-			base := am.base()
-			base.commonProperties.DebugMutators = append(base.commonProperties.DebugMutators, a.name)
-			base.commonProperties.DebugVariations = append(base.commonProperties.DebugVariations, variation)
-		}
-
-		mctx := bottomUpMutatorContextFactory(ctx, am, a.finalPhase)
-		defer bottomUpMutatorContextPool.Put(mctx)
-		a.mutator.Mutate(mctx, variation)
+func (a *androidTransitionMutatorAdapter) Mutate(ctx blueprint.BottomUpMutatorContext, transitionInfo blueprint.TransitionInfo) {
+	am := ctx.Module().(Module)
+	variation := transitionInfo.Variation()
+	if variation != "" {
+		// TODO: this should really be checking whether the TransitionMutator affected this module, not
+		//  the empty variant, but TransitionMutator has no concept of skipping a module.
+		base := am.base()
+		base.commonProperties.DebugMutators = append(base.commonProperties.DebugMutators, a.name)
+		base.commonProperties.DebugVariations = append(base.commonProperties.DebugVariations, variation)
 	}
+
+	mctx := bottomUpMutatorContextFactory(ctx, am, a.finalPhase)
+	defer bottomUpMutatorContextPool.Put(mctx)
+	a.mutator.Mutate(mctx, transitionInfo)
 }
 
+func (a *androidTransitionMutatorAdapter) TransitionInfoFromVariation(variation string) blueprint.TransitionInfo {
+	return a.mutator.TransitionInfoFromVariation(variation)
+}
+
+// variationTransitionMutatorAdapter wraps a TransitionMutator to convert it to an androidTransitionMutator
+// by wrapping the string info object used by TransitionMutator with variationTransitionInfo to convert it into
+// blueprint.TransitionInfo.
+type variationTransitionMutatorAdapter struct {
+	m TransitionMutator
+}
+
+func (v variationTransitionMutatorAdapter) Split(ctx BaseModuleContext) []blueprint.TransitionInfo {
+	variations := v.m.Split(ctx)
+	transitionInfos := make([]blueprint.TransitionInfo, 0, len(variations))
+	for _, variation := range variations {
+		transitionInfos = append(transitionInfos, variationTransitionInfo{variation})
+	}
+	return transitionInfos
+}
+
+func (v variationTransitionMutatorAdapter) OutgoingTransition(ctx OutgoingTransitionContext,
+	sourceTransitionInfo blueprint.TransitionInfo) blueprint.TransitionInfo {
+
+	sourceVariationTransitionInfo, _ := sourceTransitionInfo.(variationTransitionInfo)
+	outgoingVariation := v.m.OutgoingTransition(ctx, sourceVariationTransitionInfo.variation)
+	return variationTransitionInfo{outgoingVariation}
+}
+
+func (v variationTransitionMutatorAdapter) IncomingTransition(ctx IncomingTransitionContext,
+	incomingTransitionInfo blueprint.TransitionInfo) blueprint.TransitionInfo {
+
+	incomingVariationTransitionInfo, _ := incomingTransitionInfo.(variationTransitionInfo)
+	variation := v.m.IncomingTransition(ctx, incomingVariationTransitionInfo.variation)
+	return variationTransitionInfo{variation}
+}
+
+func (v variationTransitionMutatorAdapter) Mutate(ctx BottomUpMutatorContext, transitionInfo blueprint.TransitionInfo) {
+	variationTransitionInfo, _ := transitionInfo.(variationTransitionInfo)
+	v.m.Mutate(ctx, variationTransitionInfo.variation)
+}
+
+func (v variationTransitionMutatorAdapter) TransitionInfoFromVariation(variation string) blueprint.TransitionInfo {
+	return variationTransitionInfo{variation}
+}
+
+// variationTransitionInfo is a blueprint.TransitionInfo that contains a single variation string.
+type variationTransitionInfo struct {
+	variation string
+}
+
+func (v variationTransitionInfo) Variation() string {
+	return v.variation
+}
+
+// incomingTransitionContextImpl wraps a blueprint.IncomingTransitionContext to convert it to an
+// IncomingTransitionContext.
 type incomingTransitionContextImpl struct {
 	archModuleContext
 	bp blueprint.IncomingTransitionContext
@@ -253,6 +314,8 @@ func (c *incomingTransitionContextImpl) PropertyErrorf(property, fmt string, arg
 	c.bp.PropertyErrorf(property, fmt, args)
 }
 
+// outgoingTransitionContextImpl wraps a blueprint.OutgoingTransitionContext to convert it to an
+// OutgoingTransitionContext.
 type outgoingTransitionContextImpl struct {
 	archModuleContext
 	bp blueprint.OutgoingTransitionContext
