@@ -527,19 +527,18 @@ func (b *BootclasspathFragmentModule) getProfileProviderApex(ctx android.BaseMod
 	}
 
 	// Bootclasspath fragment modules that are for the platform do not produce boot related files.
-	apexInfos, _ := android.ModuleProvider(ctx, android.AllApexInfoProvider)
-	if apexInfos == nil {
+	apexInfo, _ := android.ModuleProvider(ctx, android.ApexInfoProvider)
+	if apexInfo.IsForPlatform() {
 		return ""
 	}
 
-	for _, apexInfo := range apexInfos.ApexInfos {
-		for _, apex := range apexInfo.InApexVariants {
-			if isProfileProviderApex(ctx, apex) {
-				return apex
+	for _, config := range genBootImageConfigs(ctx) {
+		if config.profileProviderModule == b.BaseModuleName() {
+			if len(config.profileImports) > 0 {
+				return config.profileImports[0]
 			}
 		}
 	}
-
 	return ""
 }
 

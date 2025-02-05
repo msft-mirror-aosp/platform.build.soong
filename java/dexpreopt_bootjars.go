@@ -293,6 +293,9 @@ type bootImageConfig struct {
 	// Profiles imported from APEXes, in addition to the profile at the default path. Each entry must
 	// be the name of an APEX module.
 	profileImports []string
+
+	// The name of the module that provides boot image profiles, if any.
+	profileProviderModule string
 }
 
 // Target-dependent description of a boot image.
