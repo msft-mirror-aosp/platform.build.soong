@@ -101,7 +101,7 @@ func (g *GoBinary) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Modules in an unexported namespace have no install rule, only add modules in the exported namespaces
 	// to the blueprint_tools phony rules.
-	if (!ctx.Config().KatiEnabled() || g.ExportedToMake()) && !usedByBootstrap(ctx.ModuleName()) {
+	if g.ExportedToMake() && !usedByBootstrap(ctx.ModuleName()) {
 		// Don't add the installed file of bootstrap tools to the deps of `blueprint_tools`.
 		// The install command line will differ from what was used during bootstrap,
 		// which will cause ninja to rebuild the module on the next run,
