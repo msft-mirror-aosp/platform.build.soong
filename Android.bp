@@ -177,11 +177,10 @@ build_prop {
     ],
     // Currently, only microdroid, Ravenwood, and cf system image can refer to system-build.prop
     visibility: [
-        "//build/make/target/product/generic",
-        "//build/make/target/product/gsi",
         "//build/soong/fsgen",
         "//packages/modules/Virtualization/build/microdroid",
         "//frameworks/base/ravenwood",
+        "//visibility:any_system_partition",
     ],
 }
 
@@ -256,5 +255,8 @@ build_prop {
 
 all_apex_certs {
     name: "all_apex_certs",
-    visibility: ["//cts/tests/tests/security"],
+    visibility: [
+        "//cts/tests/tests/security",
+        "//cts/hostsidetests/appsecurity",
+    ],
 }

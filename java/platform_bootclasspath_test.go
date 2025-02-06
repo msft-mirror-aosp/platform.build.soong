@@ -27,21 +27,27 @@ var prepareForTestWithPlatformBootclasspath = android.GroupFixturePreparers(
 )
 
 func TestPlatformBootclasspath(t *testing.T) {
+	t.Parallel()
 	preparer := android.GroupFixturePreparers(
 		prepareForTestWithPlatformBootclasspath,
 		FixtureConfigureBootJars("platform:foo", "system_ext:bar"),
+		android.FixtureMergeMockFs(android.MockFS{
+			"api/current.txt": nil,
+			"api/removed.txt": nil,
+		}),
 		android.FixtureWithRootAndroidBp(`
 			platform_bootclasspath {
 				name: "platform-bootclasspath",
 			}
 
-			java_library {
+			java_sdk_library {
 				name: "bar",
 				srcs: ["a.java"],
 				system_modules: "none",
 				sdk_version: "none",
 				compile_dex: true,
 				system_ext_specific: true,
+				unsafe_ignore_missing_latest_api: true,
 			}
 		`),
 	)
@@ -76,6 +82,7 @@ func TestPlatformBootclasspath(t *testing.T) {
 	`)
 
 	t.Run("missing", func(t *testing.T) {
+		t.Parallel()
 		preparer.
 			ExtendWithErrorHandler(android.FixtureExpectsAtLeastOneErrorMatchingPattern(`"platform-bootclasspath" depends on undefined module "foo"`)).
 			RunTest(t)
@@ -91,6 +98,7 @@ func TestPlatformBootclasspath(t *testing.T) {
 		android.AssertArrayString(t, "srcjar inputs", expected, srcjar.Implicits.Strings())
 	}
 	t.Run("source", func(t *testing.T) {
+		t.Parallel()
 		result := android.GroupFixturePreparers(
 			preparer,
 			addSourceBootclassPathModule,
@@ -107,6 +115,7 @@ func TestPlatformBootclasspath(t *testing.T) {
 	})
 
 	t.Run("prebuilt", func(t *testing.T) {
+		t.Parallel()
 		result := android.GroupFixturePreparers(
 			preparer,
 			addPrebuiltBootclassPathModule,
@@ -123,6 +132,7 @@ func TestPlatformBootclasspath(t *testing.T) {
 	})
 
 	t.Run("source+prebuilt - source preferred", func(t *testing.T) {
+		t.Parallel()
 		result := android.GroupFixturePreparers(
 			preparer,
 			addSourceBootclassPathModule,
@@ -140,6 +150,7 @@ func TestPlatformBootclasspath(t *testing.T) {
 	})
 
 	t.Run("source+prebuilt - prebuilt preferred", func(t *testing.T) {
+		t.Parallel()
 		result := android.GroupFixturePreparers(
 			preparer,
 			addSourceBootclassPathModule,
@@ -157,6 +168,7 @@ func TestPlatformBootclasspath(t *testing.T) {
 	})
 
 	t.Run("dex import", func(t *testing.T) {
+		t.Parallel()
 		result := android.GroupFixturePreparers(
 			preparer,
 			android.FixtureAddTextFile("deximport/Android.bp", `
@@ -179,6 +191,7 @@ func TestPlatformBootclasspath(t *testing.T) {
 }
 
 func TestPlatformBootclasspathVariant(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		prepareForTestWithPlatformBootclasspath,
 		android.FixtureWithRootAndroidBp(`
@@ -193,6 +206,7 @@ func TestPlatformBootclasspathVariant(t *testing.T) {
 }
 
 func TestPlatformBootclasspath_ClasspathFragmentPaths(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		prepareForTestWithPlatformBootclasspath,
 		android.FixtureWithRootAndroidBp(`
@@ -208,6 +222,7 @@ func TestPlatformBootclasspath_ClasspathFragmentPaths(t *testing.T) {
 }
 
 func TestPlatformBootclasspathModule_AndroidMkEntries(t *testing.T) {
+	t.Parallel()
 	preparer := android.GroupFixturePreparers(
 		prepareForTestWithPlatformBootclasspath,
 		android.FixtureWithRootAndroidBp(`
@@ -218,6 +233,7 @@ func TestPlatformBootclasspathModule_AndroidMkEntries(t *testing.T) {
 	)
 
 	t.Run("AndroidMkEntries", func(t *testing.T) {
+		t.Parallel()
 		result := preparer.RunTest(t)
 
 		p := result.Module("platform-bootclasspath", "android_common").(*platformBootclasspathModule)
@@ -227,6 +243,7 @@ func TestPlatformBootclasspathModule_AndroidMkEntries(t *testing.T) {
 	})
 
 	t.Run("hiddenapi-flags-entry", func(t *testing.T) {
+		t.Parallel()
 		result := preparer.RunTest(t)
 
 		p := result.Module("platform-bootclasspath", "android_common").(*platformBootclasspathModule)
@@ -238,6 +255,7 @@ func TestPlatformBootclasspathModule_AndroidMkEntries(t *testing.T) {
 	})
 
 	t.Run("classpath-fragment-entry", func(t *testing.T) {
+		t.Parallel()
 		result := preparer.RunTest(t)
 
 		want := map[string][]string{
@@ -262,6 +280,7 @@ func TestPlatformBootclasspathModule_AndroidMkEntries(t *testing.T) {
 }
 
 func TestPlatformBootclasspath_Dist(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		prepareForTestWithPlatformBootclasspath,
 		FixtureConfigureBootJars("platform:foo", "platform:bar"),
@@ -305,6 +324,7 @@ func TestPlatformBootclasspath_Dist(t *testing.T) {
 }
 
 func TestPlatformBootclasspath_HiddenAPIMonolithicFiles(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		hiddenApiFixtureFactory,
 		PrepareForTestWithJavaSdkLibraryFiles,

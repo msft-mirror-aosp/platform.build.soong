@@ -63,6 +63,7 @@ const (
 	NINJA_NINJA
 	NINJA_N2
 	NINJA_SISO
+	NINJA_NINJAGO
 )
 
 type Config struct{ *configImpl }
@@ -77,26 +78,31 @@ type configImpl struct {
 	logsPrefix    string
 
 	// From the arguments
-	parallel                 int
-	keepGoing                int
-	verbose                  bool
-	checkbuild               bool
-	dist                     bool
-	jsonModuleGraph          bool
-	reportMkMetrics          bool // Collect and report mk2bp migration progress metrics.
-	soongDocs                bool
-	skipConfig               bool
-	skipKati                 bool
-	skipKatiNinja            bool
-	skipSoong                bool
-	skipNinja                bool
-	skipSoongTests           bool
-	searchApiDir             bool // Scan the Android.bp files generated in out/api_surfaces
-	skipMetricsUpload        bool
-	buildStartedTime         int64 // For metrics-upload-only - manually specify a build-started time
-	buildFromSourceStub      bool
-	incrementalBuildActions  bool
-	ensureAllowlistIntegrity bool // For CI builds - make sure modules are mixed-built
+	parallel        int
+	keepGoing       int
+	verbose         bool
+	checkbuild      bool
+	dist            bool
+	jsonModuleGraph bool
+	reportMkMetrics bool // Collect and report mk2bp migration progress metrics.
+	soongDocs       bool
+	skipConfig      bool
+	// Either the user or product config requested that we skip soong (for the banner). The other
+	// skip flags tell whether *this* soong_ui invocation will skip kati - which will be true
+	// during lunch.
+	soongOnlyRequested        bool
+	skipKati                  bool
+	skipKatiControlledByFlags bool
+	skipKatiNinja             bool
+	skipSoong                 bool
+	skipNinja                 bool
+	skipSoongTests            bool
+	searchApiDir              bool // Scan the Android.bp files generated in out/api_surfaces
+	skipMetricsUpload         bool
+	buildStartedTime          int64 // For metrics-upload-only - manually specify a build-started time
+	buildFromSourceStub       bool
+	incrementalBuildActions   bool
+	ensureAllowlistIntegrity  bool // For CI builds - make sure modules are mixed-built
 
 	// From the product config
 	katiArgs        []string
@@ -250,6 +256,19 @@ func NewConfig(ctx Context, args ...string) Config {
 	}
 	ret.parseArgs(ctx, args)
 
+	if value, ok := ret.environ.Get("SOONG_ONLY"); ok && !ret.skipKatiControlledByFlags {
+		if value == "true" || value == "1" || value == "y" || value == "yes" {
+			ret.soongOnlyRequested = true
+			ret.skipKatiControlledByFlags = true
+			ret.skipKati = true
+			ret.skipKatiNinja = true
+		} else {
+			ret.skipKatiControlledByFlags = true
+			ret.skipKati = false
+			ret.skipKatiNinja = false
+		}
+	}
+
 	if ret.ninjaWeightListSource == HINT_FROM_SOONG {
 		ret.environ.Set("SOONG_GENERATES_NINJA_HINT", "always")
 	} else if ret.ninjaWeightListSource == DEFAULT {
@@ -323,6 +342,8 @@ func NewConfig(ctx Context, args ...string) Config {
 		ret.ninjaCommand = NINJA_N2
 	case "siso":
 		ret.ninjaCommand = NINJA_SISO
+	case "ninjago":
+		ret.ninjaCommand = NINJA_NINJAGO
 	default:
 		if os.Getenv("SOONG_USE_N2") == "true" {
 			ret.ninjaCommand = NINJA_N2
@@ -389,6 +410,9 @@ func NewConfig(ctx Context, args ...string) Config {
 		// Use config.ninjaCommand instead.
 		"SOONG_NINJA",
 		"SOONG_USE_N2",
+
+		// Already incorporated into the config object
+		"SOONG_ONLY",
 	)
 
 	if ret.UseGoma() || ret.ForceUseGoma() {
@@ -615,6 +639,7 @@ func buildConfig(config Config) *smpb.BuildConfig {
 		UseRbe:                proto.Bool(config.UseRBE()),
 		NinjaWeightListSource: getNinjaWeightListSourceInMetric(config.NinjaWeightListSource()),
 		SoongEnvVars:          soongEnvVars,
+		SoongOnly:             proto.Bool(config.soongOnlyRequested),
 	}
 	c.Targets = append(c.Targets, config.arguments...)
 
@@ -843,15 +868,21 @@ func (c *configImpl) parseArgs(ctx Context, args []string) {
 			c.emptyNinjaFile = true
 		} else if arg == "--skip-ninja" {
 			c.skipNinja = true
-		} else if arg == "--skip-make" {
-			// TODO(ccross): deprecate this, it has confusing behaviors.  It doesn't run kati,
-			//   but it does run a Kati ninja file if the .kati_enabled marker file was created
-			//   by a previous build.
-			c.skipConfig = true
-			c.skipKati = true
 		} else if arg == "--soong-only" {
+			if c.skipKatiControlledByFlags {
+				ctx.Fatalf("Cannot specify both --soong-only and --no-soong-only")
+			}
+			c.soongOnlyRequested = true
+			c.skipKatiControlledByFlags = true
 			c.skipKati = true
 			c.skipKatiNinja = true
+		} else if arg == "--no-soong-only" {
+			if c.skipKatiControlledByFlags {
+				ctx.Fatalf("Cannot specify both --soong-only and --no-soong-only")
+			}
+			c.skipKatiControlledByFlags = true
+			c.skipKati = false
+			c.skipKatiNinja = false
 		} else if arg == "--config-only" {
 			c.skipKati = true
 			c.skipKatiNinja = true
@@ -1070,7 +1101,7 @@ func (c *configImpl) RealDistDir() string {
 
 func (c *configImpl) NinjaArgs() []string {
 	if c.skipKati {
-		return c.arguments
+		return append(c.arguments, c.ninjaArgs...)
 	}
 	return c.ninjaArgs
 }
@@ -1339,6 +1370,10 @@ func (c *configImpl) canSupportRBE() bool {
 }
 
 func (c *configImpl) UseABFS() bool {
+	if c.ninjaCommand == NINJA_NINJAGO {
+		return true
+	}
+
 	if v, ok := c.environ.Get("NO_ABFS"); ok {
 		v = strings.ToLower(strings.TrimSpace(v))
 		if v == "true" || v == "1" {
@@ -1592,6 +1627,10 @@ func (c *configImpl) KatiPackageNinjaFile() string {
 	return filepath.Join(c.OutDir(), "build"+c.KatiSuffix()+katiPackageSuffix+".ninja")
 }
 
+func (c *configImpl) KatiSoongOnlyPackageNinjaFile() string {
+	return filepath.Join(c.OutDir(), "build"+c.KatiSuffix()+katiSoongOnlyPackageSuffix+".ninja")
+}
+
 func (c *configImpl) SoongVarsFile() string {
 	targetProduct, err := c.TargetProductOrErr()
 	if err != nil {
@@ -1647,7 +1686,7 @@ func (c *configImpl) DevicePreviousProductConfig() string {
 }
 
 func (c *configImpl) KatiPackageMkDir() string {
-	return filepath.Join(c.ProductOut(), "obj", "CONFIG", "kati_packaging")
+	return filepath.Join(c.SoongOutDir(), "kati_packaging"+c.KatiSuffix())
 }
 
 func (c *configImpl) hostOutRoot() string {

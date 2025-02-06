@@ -29,8 +29,8 @@ type TestLinkerProperties struct {
 	// if set, build against the gtest library. Defaults to true.
 	Gtest *bool
 
-	// if set, use the isolated gtest runner. Defaults to true if gtest is also true and the arch is Windows, false
-	// otherwise.
+	// if set, use the isolated gtest runner. Defaults to false.
+	// Isolation is not supported on Windows.
 	Isolated *bool
 }
 
@@ -198,8 +198,8 @@ func (test *testDecorator) gtest() bool {
 	return BoolDefault(test.LinkerProperties.Gtest, true)
 }
 
-func (test *testDecorator) isolated(ctx android.EarlyModuleContext) bool {
-	return BoolDefault(test.LinkerProperties.Isolated, false)
+func (test *testDecorator) isolated(ctx android.BaseModuleContext) bool {
+	return BoolDefault(test.LinkerProperties.Isolated, false) && !ctx.Windows()
 }
 
 // NOTE: Keep this in sync with cc/cc_test.bzl#gtest_copts
@@ -342,28 +342,28 @@ func (test *testBinary) install(ctx ModuleContext, file android.Path) {
 		test.data = append(test.data, android.DataPath{SrcPath: dataSrcPath})
 	}
 
-	ctx.VisitDirectDepsWithTag(dataLibDepTag, func(dep android.Module) {
+	ctx.VisitDirectDepsProxyWithTag(dataLibDepTag, func(dep android.ModuleProxy) {
 		depName := ctx.OtherModuleName(dep)
-		linkableDep, ok := dep.(LinkableInterface)
+		linkableDep, ok := android.OtherModuleProvider(ctx, dep, LinkableInfoProvider)
 		if !ok {
 			ctx.ModuleErrorf("data_lib %q is not a LinkableInterface module", depName)
 		}
-		if linkableDep.OutputFile().Valid() {
+		if linkableDep.OutputFile.Valid() {
 			test.data = append(test.data,
-				android.DataPath{SrcPath: linkableDep.OutputFile().Path(),
-					RelativeInstallPath: linkableDep.RelativeInstallPath()})
+				android.DataPath{SrcPath: linkableDep.OutputFile.Path(),
+					RelativeInstallPath: linkableDep.RelativeInstallPath})
 		}
 	})
-	ctx.VisitDirectDepsWithTag(dataBinDepTag, func(dep android.Module) {
+	ctx.VisitDirectDepsProxyWithTag(dataBinDepTag, func(dep android.ModuleProxy) {
 		depName := ctx.OtherModuleName(dep)
-		linkableDep, ok := dep.(LinkableInterface)
+		linkableDep, ok := android.OtherModuleProvider(ctx, dep, LinkableInfoProvider)
 		if !ok {
 			ctx.ModuleErrorf("data_bin %q is not a LinkableInterface module", depName)
 		}
-		if linkableDep.OutputFile().Valid() {
+		if linkableDep.OutputFile.Valid() {
 			test.data = append(test.data,
-				android.DataPath{SrcPath: linkableDep.OutputFile().Path(),
-					RelativeInstallPath: linkableDep.RelativeInstallPath()})
+				android.DataPath{SrcPath: linkableDep.OutputFile.Path(),
+					RelativeInstallPath: linkableDep.RelativeInstallPath})
 		}
 	})
 
@@ -395,6 +395,28 @@ func (test *testBinary) install(ctx ModuleContext, file android.Path) {
 
 	if ctx.Host() && test.gtest() && test.Properties.Test_options.Unit_test == nil {
 		test.Properties.Test_options.Unit_test = proptools.BoolPtr(true)
+	}
+
+	if !ctx.Config().KatiEnabled() { // TODO(spandandas): Remove the special case for kati
+		// Install the test config in testcases/ directory for atest.
+		c, ok := ctx.Module().(*Module)
+		if !ok {
+			ctx.ModuleErrorf("Not a cc_test module")
+		}
+		// Install configs in the root of $PRODUCT_OUT/testcases/$module
+		testCases := android.PathForModuleInPartitionInstall(ctx, "testcases", ctx.ModuleName()+c.SubName())
+		if ctx.PrimaryArch() {
+			if test.testConfig != nil {
+				ctx.InstallFile(testCases, ctx.ModuleName()+".config", test.testConfig)
+			}
+			for _, extraTestConfig := range test.extraTestConfigs {
+				ctx.InstallFile(testCases, extraTestConfig.Base(), extraTestConfig)
+			}
+		}
+		// Install tests and data in arch specific subdir $PRODUCT_OUT/testcases/$module/$arch
+		testCases = testCases.Join(ctx, ctx.Target().Arch.ArchType.String())
+		ctx.InstallTestData(testCases, test.data)
+		ctx.InstallFile(testCases, file.Base(), file)
 	}
 
 	test.binaryDecorator.baseInstaller.installTestData(ctx, test.data)

@@ -338,7 +338,7 @@ func dumpVar(ctx build.Context, config build.Config, args []string) {
 			ctx.Fatal(err)
 		}
 
-		fmt.Println(build.Banner(varData))
+		fmt.Println(build.Banner(config, varData))
 	} else {
 		varData, err := build.DumpMakeVars(ctx, config, nil, []string{varName})
 		if err != nil {
@@ -414,7 +414,7 @@ func dumpVars(ctx build.Context, config build.Config, args []string) {
 
 	for _, name := range vars {
 		if name == "report_config" {
-			fmt.Printf("%sreport_config='%s'\n", *varPrefix, build.Banner(varData))
+			fmt.Printf("%sreport_config='%s'\n", *varPrefix, build.Banner(config, varData))
 		} else {
 			fmt.Printf("%s%s='%s'\n", *varPrefix, name, varData[name])
 		}
@@ -470,20 +470,6 @@ func buildActionConfig(ctx build.Context, args ...string) build.Config {
 		name:        "all-modules",
 		description: "Build action: build from the top of the source tree.",
 		action:      build.BUILD_MODULES,
-	}, {
-		// This is redirecting to mma build command behaviour. Once it has soaked for a
-		// while, the build command is deleted from here once it has been removed from the
-		// envsetup.sh.
-		name:        "modules-in-a-dir-no-deps",
-		description: "Build action: builds all of the modules in the current directory without their dependencies.",
-		action:      build.BUILD_MODULES_IN_A_DIRECTORY,
-	}, {
-		// This is redirecting to mmma build command behaviour. Once it has soaked for a
-		// while, the build command is deleted from here once it has been removed from the
-		// envsetup.sh.
-		name:        "modules-in-dirs-no-deps",
-		description: "Build action: builds all of the modules in the supplied directories without their dependencies.",
-		action:      build.BUILD_MODULES_IN_DIRECTORIES,
 	}, {
 		name:        "modules-in-a-dir",
 		description: "Build action: builds all of the modules in the current directory and their dependencies.",

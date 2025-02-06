@@ -20,12 +20,14 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 
 	"android/soong/aconfig"
 	"android/soong/android"
+	"android/soong/dexpreopt"
 	"android/soong/java"
 
 	"github.com/google/blueprint"
@@ -73,6 +75,7 @@ func init() {
 	pctx.HostBinToolVariable("make_erofs", "mkfs.erofs")
 	pctx.HostBinToolVariable("apex_compression_tool", "apex_compression_tool")
 	pctx.HostBinToolVariable("dexdeps", "dexdeps")
+	pctx.HostBinToolVariable("apex_ls", "apex-ls")
 	pctx.HostBinToolVariable("apex_sepolicy_tests", "apex_sepolicy_tests")
 	pctx.HostBinToolVariable("deapexer", "deapexer")
 	pctx.HostBinToolVariable("debugfs_static", "debugfs_static")
@@ -210,11 +213,11 @@ var (
 	}, "image_dir", "readelf")
 
 	apexSepolicyTestsRule = pctx.StaticRule("apexSepolicyTestsRule", blueprint.RuleParams{
-		Command: `${deapexer} --debugfs_path ${debugfs_static} list -Z ${in} > ${out}.fc` +
-			` && ${apex_sepolicy_tests} -f ${out}.fc && touch ${out}`,
-		CommandDeps: []string{"${apex_sepolicy_tests}", "${deapexer}", "${debugfs_static}"},
+		Command: `${apex_ls} -Z ${in} > ${out}.fc` +
+			` && ${apex_sepolicy_tests} -f ${out}.fc --partition ${partition_tag} && touch ${out}`,
+		CommandDeps: []string{"${apex_sepolicy_tests}", "${apex_ls}"},
 		Description: "run apex_sepolicy_tests",
-	})
+	}, "partition_tag")
 
 	apexLinkerconfigValidationRule = pctx.StaticRule("apexLinkerconfigValidationRule", blueprint.RuleParams{
 		Command:     `${conv_linker_config} validate --type apex ${image_dir} && touch ${out}`,
@@ -541,6 +544,64 @@ func runAssembleVintf(ctx android.ModuleContext, vintfFragment android.Path) and
 	return processed
 }
 
+// installApexSystemServerFiles installs dexpreopt and dexjar files for system server classpath entries
+// provided by the apex.  They are installed here instead of in library module because there may be multiple
+// variants of the library, generally one for the "main" apex and another with a different min_sdk_version
+// for the Android Go version of the apex.  Both variants would attempt to install to the same locations,
+// and the library variants cannot determine which one should.  The apex module is better equipped to determine
+// if it is "selected".
+// This assumes that the jars produced by different min_sdk_version values are identical, which is currently
+// true but may not be true if the min_sdk_version difference between the variants spans version that changed
+// the dex format.
+func (a *apexBundle) installApexSystemServerFiles(ctx android.ModuleContext) {
+	// If performInstalls is set this module is responsible for creating the install rules.
+	performInstalls := a.GetOverriddenBy() == "" && !a.testApex && a.installable()
+	// TODO(b/234351700): Remove once ART does not have separated debug APEX, or make the selection
+	// explicit in the ART Android.bp files.
+	if ctx.Config().UseDebugArt() {
+		if ctx.ModuleName() == "com.android.art" {
+			performInstalls = false
+		}
+	} else {
+		if ctx.ModuleName() == "com.android.art.debug" {
+			performInstalls = false
+		}
+	}
+
+	psi := android.PrebuiltSelectionInfoMap{}
+	ctx.VisitDirectDeps(func(am android.Module) {
+		if info, exists := android.OtherModuleProvider(ctx, am, android.PrebuiltSelectionInfoProvider); exists {
+			psi = info
+		}
+	})
+
+	if len(psi.GetSelectedModulesForApiDomain(ctx.ModuleName())) > 0 {
+		performInstalls = false
+	}
+
+	for _, fi := range a.filesInfo {
+		for _, install := range fi.systemServerDexpreoptInstalls {
+			var installedFile android.InstallPath
+			if performInstalls {
+				installedFile = ctx.InstallFile(install.InstallDirOnDevice, install.InstallFileOnDevice, install.OutputPathOnHost)
+			} else {
+				// Another module created the install rules, but this module should still depend on
+				// the installed locations.
+				installedFile = install.InstallDirOnDevice.Join(ctx, install.InstallFileOnDevice)
+			}
+			a.extraInstalledFiles = append(a.extraInstalledFiles, installedFile)
+			a.extraInstalledPairs = append(a.extraInstalledPairs, installPair{install.OutputPathOnHost, installedFile})
+		}
+		if performInstalls {
+			for _, dexJar := range fi.systemServerDexJars {
+				// Copy the system server dex jar to a predefined location where dex2oat will find it.
+				android.CopyFileRule(ctx, dexJar,
+					android.PathForOutput(ctx, dexpreopt.SystemServerDexjarsDir, dexJar.Base()))
+			}
+		}
+	}
+}
+
 // buildApex creates build rules to build an APEX using apexer.
 func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 	suffix := imageApexSuffix
@@ -551,7 +612,7 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 
 	imageDir := android.PathForModuleOut(ctx, "image"+suffix)
 
-	installSymbolFiles := (ctx.Config().KatiEnabled() && a.ExportedToMake()) && a.installable()
+	installSymbolFiles := a.ExportedToMake() && a.installable()
 
 	// set of dependency module:location mappings
 	installMapSet := make(map[string]bool)
@@ -602,7 +663,7 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 			} else {
 				if installSymbolFiles {
 					// store installedPath. symlinks might be created if required.
-					installedPath = apexDir.Join(ctx, fi.installDir, fi.stem())
+					installedPath = ctx.InstallFile(apexDir.Join(ctx, fi.installDir), fi.stem(), fi.builtFile)
 				}
 			}
 
@@ -918,9 +979,8 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 	}
 	var validations android.Paths
 	validations = append(validations, runApexLinkerconfigValidation(ctx, unsignedOutputFile, imageDir))
-	// TODO(b/279688635) deapexer supports [ext4]
-	if !a.skipValidation(apexSepolicyTests) && suffix == imageApexSuffix && ext4 == a.payloadFsType {
-		validations = append(validations, runApexSepolicyTests(ctx, unsignedOutputFile))
+	if !a.skipValidation(apexSepolicyTests) && android.InList(a.payloadFsType, []fsType{ext4, erofs}) {
+		validations = append(validations, runApexSepolicyTests(ctx, a, unsignedOutputFile))
 	}
 	if !a.testApex && len(a.properties.Unwanted_transitive_deps) > 0 {
 		validations = append(validations,
@@ -985,9 +1045,9 @@ func (a *apexBundle) buildApex(ctx android.ModuleContext) {
 		a.SkipInstall()
 	}
 
+	installDeps := slices.Concat(a.compatSymlinks, a.extraInstalledFiles)
 	// Install to $OUT/soong/{target,host}/.../apex.
-	a.installedFile = ctx.InstallFile(a.installDir, a.Name()+installSuffix, a.outputFile,
-		a.compatSymlinks...)
+	a.installedFile = ctx.InstallFile(a.installDir, a.Name()+installSuffix, a.outputFile, installDeps...)
 
 	// installed-files.txt is dist'ed
 	a.installedFilesFile = a.buildInstalledFilesFile(ctx, a.outputFile, imageDir)
@@ -1202,16 +1262,35 @@ func runApexLinkerconfigValidation(ctx android.ModuleContext, apexFile android.P
 	return timestamp
 }
 
+// Can't use PartitionTag() because PartitionTag() returns the partition this module is actually
+// installed (e.g. PartitionTag() may return "system" for vendor apex when vendor is linked to /system/vendor)
+func (a *apexBundle) partition() string {
+	if a.SocSpecific() {
+		return "vendor"
+	} else if a.DeviceSpecific() {
+		return "odm"
+	} else if a.ProductSpecific() {
+		return "product"
+	} else if a.SystemExtSpecific() {
+		return "system_ext"
+	} else {
+		return "system"
+	}
+}
+
 // Runs apex_sepolicy_tests
 //
-// $ deapexer list -Z {apex_file} > {file_contexts}
+// $ apex-ls -Z {apex_file} > {file_contexts}
 // $ apex_sepolicy_tests -f {file_contexts}
-func runApexSepolicyTests(ctx android.ModuleContext, apexFile android.Path) android.Path {
+func runApexSepolicyTests(ctx android.ModuleContext, a *apexBundle, apexFile android.Path) android.Path {
 	timestamp := android.PathForModuleOut(ctx, "apex_sepolicy_tests.timestamp")
 	ctx.Build(pctx, android.BuildParams{
 		Rule:   apexSepolicyTestsRule,
 		Input:  apexFile,
 		Output: timestamp,
+		Args: map[string]string{
+			"partition_tag": a.partition(),
+		},
 	})
 	return timestamp
 }
@@ -1237,7 +1316,7 @@ func runApexHostVerifier(ctx android.ModuleContext, a *apexBundle, apexFile andr
 		Input:  apexFile,
 		Output: timestamp,
 		Args: map[string]string{
-			"partition_tag": a.PartitionTag(ctx.DeviceConfig()),
+			"partition_tag": a.partition(),
 		},
 	})
 	return timestamp

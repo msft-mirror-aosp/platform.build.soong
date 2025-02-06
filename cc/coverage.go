@@ -273,8 +273,6 @@ type Coverage interface {
 
 type coverageTransitionMutator struct{}
 
-var _ android.TransitionMutator = (*coverageTransitionMutator)(nil)
-
 func (c coverageTransitionMutator) Split(ctx android.BaseModuleContext) []string {
 	if c, ok := ctx.Module().(*Module); ok && c.coverage != nil {
 		if c.coverage.Properties.NeedCoverageVariant {
@@ -354,10 +352,10 @@ func (c coverageTransitionMutator) Mutate(ctx android.BottomUpMutatorContext, va
 	}
 }
 
-func parseSymbolFileForAPICoverage(ctx ModuleContext, symbolFile string) android.ModuleOutPath {
+func ParseSymbolFileForAPICoverage(ctx android.ModuleContext, symbolFile string) android.ModuleOutPath {
 	apiLevelsJson := android.GetApiLevelsJson(ctx)
 	symbolFilePath := android.PathForModuleSrc(ctx, symbolFile)
-	outputFile := ctx.baseModuleName() + ".xml"
+	outputFile := ctx.Module().(LinkableInterface).BaseModuleName() + ".xml"
 	parsedApiCoveragePath := android.PathForModuleOut(ctx, outputFile)
 	rule := android.NewRuleBuilder(pctx, ctx)
 	rule.Command().

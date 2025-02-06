@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -41,6 +42,7 @@ func testApp(t *testing.T, bp string) *android.TestContext {
 }
 
 func TestApp(t *testing.T) {
+	t.Parallel()
 	resourceFiles := []string{
 		"res/layout/layout.xml",
 		"res/values/strings.xml",
@@ -55,6 +57,7 @@ func TestApp(t *testing.T) {
 
 	for _, moduleType := range []string{"android_app", "android_library"} {
 		t.Run(moduleType, func(t *testing.T) {
+			t.Parallel()
 			result := android.GroupFixturePreparers(
 				prepareForJavaTest,
 				android.FixtureModifyMockFS(func(fs android.MockFS) {
@@ -100,6 +103,7 @@ func TestApp(t *testing.T) {
 }
 
 func TestAppSplits(t *testing.T) {
+	t.Parallel()
 	ctx := testApp(t, `
 				android_app {
 					name: "foo",
@@ -124,6 +128,7 @@ func TestAppSplits(t *testing.T) {
 }
 
 func TestPlatformAPIs(t *testing.T) {
+	t.Parallel()
 	testJava(t, `
 		android_app {
 			name: "foo",
@@ -158,6 +163,7 @@ func TestPlatformAPIs(t *testing.T) {
 }
 
 func TestAndroidAppLinkType(t *testing.T) {
+	t.Parallel()
 	testJava(t, `
 		android_app {
 			name: "foo",
@@ -247,6 +253,7 @@ func TestAndroidAppLinkType(t *testing.T) {
 }
 
 func TestUpdatableApps(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name          string
 		bp            string
@@ -358,6 +365,7 @@ func TestUpdatableApps(t *testing.T) {
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			errorHandler := android.FixtureExpectsNoErrors
 			if test.expectedError != "" {
 				errorHandler = android.FixtureExpectsAtLeastOneErrorMatchingPattern(test.expectedError)
@@ -372,6 +380,7 @@ func TestUpdatableApps(t *testing.T) {
 }
 
 func TestUpdatableApps_TransitiveDepsShouldSetMinSdkVersion(t *testing.T) {
+	t.Parallel()
 	testJavaError(t, `module "bar".*: should support min_sdk_version\(29\)`, cc.GatherRequiredDepsForTest(android.Android)+`
 		android_app {
 			name: "foo",
@@ -390,6 +399,7 @@ func TestUpdatableApps_TransitiveDepsShouldSetMinSdkVersion(t *testing.T) {
 }
 
 func TestUpdatableApps_JniLibsShouldShouldSupportMinSdkVersion(t *testing.T) {
+	t.Parallel()
 	testJava(t, cc.GatherRequiredDepsForTest(android.Android)+`
 		android_app {
 			name: "foo",
@@ -410,6 +420,7 @@ func TestUpdatableApps_JniLibsShouldShouldSupportMinSdkVersion(t *testing.T) {
 }
 
 func TestUpdatableApps_JniLibShouldBeBuiltAgainstMinSdkVersion(t *testing.T) {
+	t.Parallel()
 	bp := cc.GatherRequiredDepsForTest(android.Android) + `
 		android_app {
 			name: "foo",
@@ -465,6 +476,7 @@ func TestUpdatableApps_JniLibShouldBeBuiltAgainstMinSdkVersion(t *testing.T) {
 }
 
 func TestUpdatableApps_ErrorIfJniLibDoesntSupportMinSdkVersion(t *testing.T) {
+	t.Parallel()
 	bp := cc.GatherRequiredDepsForTest(android.Android) + `
 		android_app {
 			name: "foo",
@@ -486,6 +498,7 @@ func TestUpdatableApps_ErrorIfJniLibDoesntSupportMinSdkVersion(t *testing.T) {
 }
 
 func TestUpdatableApps_ErrorIfDepMinSdkVersionIsHigher(t *testing.T) {
+	t.Parallel()
 	bp := cc.GatherRequiredDepsForTest(android.Android) + `
 		android_app {
 			name: "foo",
@@ -517,6 +530,7 @@ func TestUpdatableApps_ErrorIfDepMinSdkVersionIsHigher(t *testing.T) {
 }
 
 func TestUpdatableApps_ApplyDefaultUpdatableModuleVersion(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		PrepareForTestWithJavaDefaultModules,
 	).RunTestWithBp(t, `
@@ -537,6 +551,7 @@ func TestUpdatableApps_ApplyDefaultUpdatableModuleVersion(t *testing.T) {
 }
 
 func TestUpdatableApps_ApplyOverrideApexManifestDefaultVersion(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		PrepareForTestWithJavaDefaultModules,
 		android.FixtureMergeEnv(map[string]string{
@@ -560,6 +575,7 @@ func TestUpdatableApps_ApplyOverrideApexManifestDefaultVersion(t *testing.T) {
 }
 
 func TestResourceDirs(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name      string
 		prop      string
@@ -596,6 +612,7 @@ func TestResourceDirs(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 			result := android.GroupFixturePreparers(
 				PrepareForTestWithJavaDefaultModules,
 				fs.AddToFixture(),
@@ -617,6 +634,7 @@ func TestResourceDirs(t *testing.T) {
 }
 
 func TestLibraryAssets(t *testing.T) {
+	t.Parallel()
 	bp := `
 			android_app {
 				name: "foo",
@@ -711,6 +729,7 @@ func TestLibraryAssets(t *testing.T) {
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			m := ctx.ModuleForTests(test.name, "android_common")
 
 			// Check asset flag in aapt2 link flags
@@ -746,6 +765,7 @@ func TestLibraryAssets(t *testing.T) {
 }
 
 func TestAppJavaResources(t *testing.T) {
+	t.Parallel()
 	bp := `
 			android_app {
 				name: "foo",
@@ -791,6 +811,7 @@ func TestAppJavaResources(t *testing.T) {
 }
 
 func TestAndroidResourceProcessor(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name                            string
 		appUsesRP                       bool
@@ -1223,6 +1244,7 @@ func TestAndroidResourceProcessor(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 			bp := fmt.Sprintf(`
 				android_app {
 					name: "app",
@@ -1419,6 +1441,7 @@ func TestAndroidResourceProcessor(t *testing.T) {
 }
 
 func TestAndroidResourceOverlays(t *testing.T) {
+	t.Parallel()
 	type moduleAndVariant struct {
 		module  string
 		variant string
@@ -1615,6 +1638,7 @@ func TestAndroidResourceOverlays(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 			result := android.GroupFixturePreparers(
 				PrepareForTestWithJavaDefaultModules,
 				fs.AddToFixture(),
@@ -1724,6 +1748,7 @@ func checkSdkVersion(t *testing.T, result *android.TestResult, expectedSdkVersio
 }
 
 func TestAppSdkVersion(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name                  string
 		sdkVersion            string
@@ -1791,6 +1816,7 @@ func TestAppSdkVersion(t *testing.T) {
 	for _, moduleType := range []string{"android_app", "android_library"} {
 		for _, test := range testCases {
 			t.Run(moduleType+" "+test.name, func(t *testing.T) {
+				t.Parallel()
 				platformApiProp := ""
 				if test.platformApis {
 					platformApiProp = "platform_apis: true,"
@@ -1827,6 +1853,7 @@ func TestAppSdkVersion(t *testing.T) {
 }
 
 func TestVendorAppSdkVersion(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name                                  string
 		sdkVersion                            string
@@ -1869,6 +1896,7 @@ func TestVendorAppSdkVersion(t *testing.T) {
 		for _, sdkKind := range []string{"", "system_"} {
 			for _, test := range testCases {
 				t.Run(moduleType+" "+test.name, func(t *testing.T) {
+					t.Parallel()
 					bp := fmt.Sprintf(`%s {
 						name: "foo",
 						srcs: ["a.java"],
@@ -1900,6 +1928,7 @@ func TestVendorAppSdkVersion(t *testing.T) {
 }
 
 func TestJNIABI(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, cc.GatherRequiredDepsForTest(android.Android)+`
 		cc_library {
 			name: "libjni",
@@ -1956,6 +1985,7 @@ func TestJNIABI(t *testing.T) {
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			app := ctx.ModuleForTests(test.name, "android_common")
 			jniLibZip := app.Output("jnilibs.zip")
 			var abis []string
@@ -1974,6 +2004,7 @@ func TestJNIABI(t *testing.T) {
 }
 
 func TestAppSdkVersionByPartition(t *testing.T) {
+	t.Parallel()
 	testJavaError(t, "sdk_version must have a value when the module is located at vendor or product", `
 		android_app {
 			name: "foo",
@@ -2018,6 +2049,7 @@ func TestAppSdkVersionByPartition(t *testing.T) {
 }
 
 func TestJNIPackaging(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, cc.GatherRequiredDepsForTest(android.Android)+`
 		cc_library {
 			name: "libjni",
@@ -2089,6 +2121,7 @@ func TestJNIPackaging(t *testing.T) {
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			app := ctx.ModuleForTests(test.name, "android_common")
 			jniLibZip := app.MaybeOutput("jnilibs.zip")
 			if g, w := (jniLibZip.Rule != nil), test.packaged; g != w {
@@ -2109,6 +2142,7 @@ func TestJNIPackaging(t *testing.T) {
 }
 
 func TestJNISDK(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, cc.GatherRequiredDepsForTest(android.Android)+`
 		cc_library {
 			name: "libjni",
@@ -2179,6 +2213,7 @@ func TestJNISDK(t *testing.T) {
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			app := ctx.ModuleForTests(test.name, "android_common")
 
 			jniLibZip := app.MaybeOutput("jnilibs.zip")
@@ -2204,6 +2239,7 @@ func TestJNISDK(t *testing.T) {
 	}
 
 	t.Run("jni_uses_platform_apis_error", func(t *testing.T) {
+		t.Parallel()
 		testJavaError(t, `jni_uses_platform_apis: can only be set for modules that set sdk_version`, `
 			android_test {
 				name: "app_platform",
@@ -2214,6 +2250,7 @@ func TestJNISDK(t *testing.T) {
 	})
 
 	t.Run("jni_uses_sdk_apis_error", func(t *testing.T) {
+		t.Parallel()
 		testJavaError(t, `jni_uses_sdk_apis: can only be set for modules that do not set sdk_version`, `
 			android_test {
 				name: "app_sdk",
@@ -2226,6 +2263,7 @@ func TestJNISDK(t *testing.T) {
 }
 
 func TestCertificates(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name                     string
 		bp                       string
@@ -2363,6 +2401,7 @@ func TestCertificates(t *testing.T) {
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			result := android.GroupFixturePreparers(
 				PrepareForTestWithJavaDefaultModules,
 				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
@@ -2400,6 +2439,7 @@ func TestCertificates(t *testing.T) {
 }
 
 func TestRequestV4SigningFlag(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name     string
 		bp       string
@@ -2444,6 +2484,7 @@ func TestRequestV4SigningFlag(t *testing.T) {
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			result := android.GroupFixturePreparers(
 				PrepareForTestWithJavaDefaultModules,
 			).RunTestWithBp(t, test.bp)
@@ -2458,6 +2499,7 @@ func TestRequestV4SigningFlag(t *testing.T) {
 }
 
 func TestPackageNameOverride(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name                string
 		bp                  string
@@ -2515,6 +2557,7 @@ func TestPackageNameOverride(t *testing.T) {
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			result := android.GroupFixturePreparers(
 				PrepareForTestWithJavaDefaultModules,
 				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
@@ -2543,6 +2586,7 @@ func TestPackageNameOverride(t *testing.T) {
 }
 
 func TestInstrumentationTargetOverridden(t *testing.T) {
+	t.Parallel()
 	bp := `
 		android_app {
 			name: "foo",
@@ -2574,6 +2618,7 @@ func TestInstrumentationTargetOverridden(t *testing.T) {
 }
 
 func TestOverrideAndroidApp(t *testing.T) {
+	t.Parallel()
 	result := PrepareForTestWithJavaDefaultModules.RunTestWithBp(
 		t, `
 		android_app {
@@ -2756,6 +2801,7 @@ func TestOverrideAndroidApp(t *testing.T) {
 }
 
 func TestOverrideAndroidAppOverrides(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(
 		t, `
 		android_app {
@@ -2814,6 +2860,7 @@ func TestOverrideAndroidAppOverrides(t *testing.T) {
 }
 
 func TestOverrideAndroidAppWithPrebuilt(t *testing.T) {
+	t.Parallel()
 	result := PrepareForTestWithJavaDefaultModules.RunTestWithBp(
 		t, `
 		android_app {
@@ -2849,6 +2896,7 @@ func TestOverrideAndroidAppWithPrebuilt(t *testing.T) {
 }
 
 func TestOverrideAndroidAppStem(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, `
 		android_app {
 			name: "foo",
@@ -2923,6 +2971,7 @@ func TestOverrideAndroidAppStem(t *testing.T) {
 }
 
 func TestOverrideAndroidAppDependency(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, `
 		android_app {
 			name: "foo",
@@ -3158,6 +3207,7 @@ func TestInstrumentationTargetPrebuilt(t *testing.T) {
 }
 
 func TestStl(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, cc.GatherRequiredDepsForTest(android.Android)+`
 		cc_library {
 			name: "libjni",
@@ -3200,6 +3250,7 @@ func TestStl(t *testing.T) {
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			app := ctx.ModuleForTests(test.name, "android_common")
 			jniLibZip := app.Output("jnilibs.zip")
 			var jnis []string
@@ -3430,6 +3481,7 @@ func TestUsesLibraries(t *testing.T) {
 }
 
 func TestDexpreoptBcp(t *testing.T) {
+	t.Parallel()
 	bp := `
 		java_sdk_library {
 			name: "foo",
@@ -3472,6 +3524,7 @@ func TestDexpreoptBcp(t *testing.T) {
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			result := android.GroupFixturePreparers(
 				prepareForJavaTest,
 				PrepareForTestWithJavaSdkLibraryFiles,
@@ -3490,6 +3543,7 @@ func TestDexpreoptBcp(t *testing.T) {
 }
 
 func TestCodelessApp(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name   string
 		bp     string
@@ -3554,6 +3608,7 @@ func TestCodelessApp(t *testing.T) {
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := testApp(t, test.bp)
 
 			foo := ctx.ModuleForTests("foo", "android_common")
@@ -3566,6 +3621,7 @@ func TestCodelessApp(t *testing.T) {
 }
 
 func TestUncompressDex(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name string
 		bp   string
@@ -3665,10 +3721,13 @@ func TestUncompressDex(t *testing.T) {
 
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			t.Run("platform", func(t *testing.T) {
+				t.Parallel()
 				test(t, tt.bp, tt.uncompressedPlatform, false)
 			})
 			t.Run("unbundled", func(t *testing.T) {
+				t.Parallel()
 				test(t, tt.bp, tt.uncompressedUnbundled, true)
 			})
 		})
@@ -3690,6 +3749,7 @@ func checkAapt2LinkFlag(t *testing.T, aapt2Flags, flagName, expectedValue string
 }
 
 func TestExportedProguardFlagFiles(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, `
 		android_app {
 			name: "foo",
@@ -3751,6 +3811,7 @@ func TestExportedProguardFlagFiles(t *testing.T) {
 }
 
 func TestTargetSdkVersionManifestFixer(t *testing.T) {
+	t.Parallel()
 	platform_sdk_codename := "Tiramisu"
 	platform_sdk_version := 33
 	testCases := []struct {
@@ -3803,43 +3864,47 @@ func TestTargetSdkVersionManifestFixer(t *testing.T) {
 		},
 	}
 	for _, testCase := range testCases {
-		targetSdkVersionTemplate := ""
-		if testCase.targetSdkVersionInBp != "" {
-			targetSdkVersionTemplate = fmt.Sprintf(`target_sdk_version: "%s",`, testCase.targetSdkVersionInBp)
-		}
-		bp := fmt.Sprintf(`
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			targetSdkVersionTemplate := ""
+			if testCase.targetSdkVersionInBp != "" {
+				targetSdkVersionTemplate = fmt.Sprintf(`target_sdk_version: "%s",`, testCase.targetSdkVersionInBp)
+			}
+			bp := fmt.Sprintf(`
 			android_app {
 				name: "foo",
 				sdk_version: "current",
 				%s
 			}
 			`, targetSdkVersionTemplate)
-		fixture := android.GroupFixturePreparers(
-			prepareForJavaTest,
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				if testCase.platformSdkFinal {
-					variables.Platform_sdk_final = proptools.BoolPtr(true)
-				}
-				// explicitly set platform_sdk_codename to make the test deterministic
-				variables.Platform_sdk_codename = &platform_sdk_codename
-				variables.Platform_sdk_version = &platform_sdk_version
-				variables.Platform_version_active_codenames = []string{platform_sdk_codename}
-				// create a non-empty list if unbundledBuild==true
-				if testCase.unbundledBuild {
-					variables.Unbundled_build_apps = []string{"apex_a", "apex_b"}
-				}
-			}),
-		)
+			fixture := android.GroupFixturePreparers(
+				prepareForJavaTest,
+				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+					if testCase.platformSdkFinal {
+						variables.Platform_sdk_final = proptools.BoolPtr(true)
+					}
+					// explicitly set platform_sdk_codename to make the test deterministic
+					variables.Platform_sdk_codename = &platform_sdk_codename
+					variables.Platform_sdk_version = &platform_sdk_version
+					variables.Platform_version_active_codenames = []string{platform_sdk_codename}
+					// create a non-empty list if unbundledBuild==true
+					if testCase.unbundledBuild {
+						variables.Unbundled_build_apps = []string{"apex_a", "apex_b"}
+					}
+				}),
+			)
 
-		result := fixture.RunTestWithBp(t, bp)
-		foo := result.ModuleForTests("foo", "android_common")
+			result := fixture.RunTestWithBp(t, bp)
+			foo := result.ModuleForTests("foo", "android_common")
 
-		manifestFixerArgs := foo.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
-		android.AssertStringDoesContain(t, testCase.name, manifestFixerArgs, "--targetSdkVersion  "+testCase.targetSdkVersionExpected)
+			manifestFixerArgs := foo.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
+			android.AssertStringDoesContain(t, testCase.name, manifestFixerArgs, "--targetSdkVersion  "+testCase.targetSdkVersionExpected)
+		})
 	}
 }
 
 func TestDefaultAppTargetSdkVersionForUpdatableModules(t *testing.T) {
+	t.Parallel()
 	platform_sdk_codename := "Tiramisu"
 	platform_sdk_version := 33
 	testCases := []struct {
@@ -3895,11 +3960,13 @@ func TestDefaultAppTargetSdkVersionForUpdatableModules(t *testing.T) {
 		},
 	}
 	for _, testCase := range testCases {
-		targetSdkVersionTemplate := ""
-		if testCase.targetSdkVersionInBp != nil {
-			targetSdkVersionTemplate = fmt.Sprintf(`target_sdk_version: "%s",`, *testCase.targetSdkVersionInBp)
-		}
-		bp := fmt.Sprintf(`
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			targetSdkVersionTemplate := ""
+			if testCase.targetSdkVersionInBp != nil {
+				targetSdkVersionTemplate = fmt.Sprintf(`target_sdk_version: "%s",`, *testCase.targetSdkVersionInBp)
+			}
+			bp := fmt.Sprintf(`
 			android_app {
 				name: "foo",
 				sdk_version: "current",
@@ -3910,30 +3977,32 @@ func TestDefaultAppTargetSdkVersionForUpdatableModules(t *testing.T) {
 			}
 			`, targetSdkVersionTemplate, testCase.updatable, testCase.updatable) // enforce default target sdk version if app is updatable
 
-		fixture := android.GroupFixturePreparers(
-			PrepareForTestWithJavaDefaultModules,
-			android.PrepareForTestWithAllowMissingDependencies,
-			android.PrepareForTestWithAndroidMk,
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				// explicitly set following platform variables to make the test deterministic
-				variables.Platform_sdk_final = &testCase.platform_sdk_final
-				variables.Platform_sdk_version = &platform_sdk_version
-				variables.Platform_sdk_codename = &platform_sdk_codename
-				variables.Platform_version_active_codenames = []string{platform_sdk_codename}
-				variables.Unbundled_build = proptools.BoolPtr(true)
-				variables.Unbundled_build_apps = []string{"sampleModule"}
-			}),
-		)
+			fixture := android.GroupFixturePreparers(
+				PrepareForTestWithJavaDefaultModules,
+				android.PrepareForTestWithAllowMissingDependencies,
+				android.PrepareForTestWithAndroidMk,
+				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+					// explicitly set following platform variables to make the test deterministic
+					variables.Platform_sdk_final = &testCase.platform_sdk_final
+					variables.Platform_sdk_version = &platform_sdk_version
+					variables.Platform_sdk_codename = &platform_sdk_codename
+					variables.Platform_version_active_codenames = []string{platform_sdk_codename}
+					variables.Unbundled_build = proptools.BoolPtr(true)
+					variables.Unbundled_build_apps = []string{"sampleModule"}
+				}),
+			)
 
-		result := fixture.RunTestWithBp(t, bp)
-		foo := result.ModuleForTests("foo", "android_common")
+			result := fixture.RunTestWithBp(t, bp)
+			foo := result.ModuleForTests("foo", "android_common")
 
-		manifestFixerArgs := foo.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
-		android.AssertStringDoesContain(t, testCase.name, manifestFixerArgs, "--targetSdkVersion  "+*testCase.targetSdkVersionExpected)
+			manifestFixerArgs := foo.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
+			android.AssertStringDoesContain(t, testCase.name, manifestFixerArgs, "--targetSdkVersion  "+*testCase.targetSdkVersionExpected)
+		})
 	}
 }
 
 func TestEnforceDefaultAppTargetSdkVersionFlag(t *testing.T) {
+	t.Parallel()
 	platform_sdk_codename := "Tiramisu"
 	platform_sdk_version := 33
 	testCases := []struct {
@@ -3978,8 +4047,10 @@ func TestEnforceDefaultAppTargetSdkVersionFlag(t *testing.T) {
 		},
 	}
 	for _, testCase := range testCases {
-		errExpected := testCase.expectedError != ""
-		bp := fmt.Sprintf(`
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			errExpected := testCase.expectedError != ""
+			bp := fmt.Sprintf(`
 			android_app {
 				name: "foo",
 				enforce_default_target_sdk_version: %t,
@@ -3990,35 +4061,37 @@ func TestEnforceDefaultAppTargetSdkVersionFlag(t *testing.T) {
 			}
 			`, testCase.enforceDefaultTargetSdkVersion, testCase.targetSdkVersionInBp, testCase.updatable)
 
-		fixture := android.GroupFixturePreparers(
-			PrepareForTestWithJavaDefaultModules,
-			android.PrepareForTestWithAllowMissingDependencies,
-			android.PrepareForTestWithAndroidMk,
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				// explicitly set following platform variables to make the test deterministic
-				variables.Platform_sdk_final = &testCase.platform_sdk_final
-				variables.Platform_sdk_version = &platform_sdk_version
-				variables.Platform_sdk_codename = &platform_sdk_codename
-				variables.Unbundled_build = proptools.BoolPtr(true)
-				variables.Unbundled_build_apps = []string{"sampleModule"}
-			}),
-		)
+			fixture := android.GroupFixturePreparers(
+				PrepareForTestWithJavaDefaultModules,
+				android.PrepareForTestWithAllowMissingDependencies,
+				android.PrepareForTestWithAndroidMk,
+				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+					// explicitly set following platform variables to make the test deterministic
+					variables.Platform_sdk_final = &testCase.platform_sdk_final
+					variables.Platform_sdk_version = &platform_sdk_version
+					variables.Platform_sdk_codename = &platform_sdk_codename
+					variables.Unbundled_build = proptools.BoolPtr(true)
+					variables.Unbundled_build_apps = []string{"sampleModule"}
+				}),
+			)
 
-		errorHandler := android.FixtureExpectsNoErrors
-		if errExpected {
-			errorHandler = android.FixtureExpectsAtLeastOneErrorMatchingPattern(testCase.expectedError)
-		}
-		result := fixture.ExtendWithErrorHandler(errorHandler).RunTestWithBp(t, bp)
+			errorHandler := android.FixtureExpectsNoErrors
+			if errExpected {
+				errorHandler = android.FixtureExpectsAtLeastOneErrorMatchingPattern(testCase.expectedError)
+			}
+			result := fixture.ExtendWithErrorHandler(errorHandler).RunTestWithBp(t, bp)
 
-		if !errExpected {
-			foo := result.ModuleForTests("foo", "android_common")
-			manifestFixerArgs := foo.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
-			android.AssertStringDoesContain(t, testCase.name, manifestFixerArgs, "--targetSdkVersion  "+testCase.targetSdkVersionExpected)
-		}
+			if !errExpected {
+				foo := result.ModuleForTests("foo", "android_common")
+				manifestFixerArgs := foo.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
+				android.AssertStringDoesContain(t, testCase.name, manifestFixerArgs, "--targetSdkVersion  "+testCase.targetSdkVersionExpected)
+			}
+		})
 	}
 }
 
 func TestEnforceDefaultAppTargetSdkVersionFlagForTests(t *testing.T) {
+	t.Parallel()
 	platform_sdk_codename := "Tiramisu"
 	platform_sdk_version := 33
 	testCases := []struct {
@@ -4051,8 +4124,10 @@ func TestEnforceDefaultAppTargetSdkVersionFlagForTests(t *testing.T) {
 		},
 	}
 	for _, testCase := range testCases {
-		errExpected := testCase.expectedError != ""
-		bp := fmt.Sprintf(`
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			errExpected := testCase.expectedError != ""
+			bp := fmt.Sprintf(`
 			android_test {
 				name: "foo",
 				enforce_default_target_sdk_version: %t,
@@ -4061,35 +4136,37 @@ func TestEnforceDefaultAppTargetSdkVersionFlagForTests(t *testing.T) {
 			}
 		`, testCase.enforceDefaultTargetSdkVersion, testCase.targetSdkVersionInBp)
 
-		fixture := android.GroupFixturePreparers(
-			PrepareForTestWithJavaDefaultModules,
-			android.PrepareForTestWithAllowMissingDependencies,
-			android.PrepareForTestWithAndroidMk,
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				// explicitly set following platform variables to make the test deterministic
-				variables.Platform_sdk_final = &testCase.platform_sdk_final
-				variables.Platform_sdk_version = &platform_sdk_version
-				variables.Platform_sdk_codename = &platform_sdk_codename
-				variables.Unbundled_build = proptools.BoolPtr(true)
-				variables.Unbundled_build_apps = []string{"sampleModule"}
-			}),
-		)
+			fixture := android.GroupFixturePreparers(
+				PrepareForTestWithJavaDefaultModules,
+				android.PrepareForTestWithAllowMissingDependencies,
+				android.PrepareForTestWithAndroidMk,
+				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+					// explicitly set following platform variables to make the test deterministic
+					variables.Platform_sdk_final = &testCase.platform_sdk_final
+					variables.Platform_sdk_version = &platform_sdk_version
+					variables.Platform_sdk_codename = &platform_sdk_codename
+					variables.Unbundled_build = proptools.BoolPtr(true)
+					variables.Unbundled_build_apps = []string{"sampleModule"}
+				}),
+			)
 
-		errorHandler := android.FixtureExpectsNoErrors
-		if errExpected {
-			errorHandler = android.FixtureExpectsAtLeastOneErrorMatchingPattern(testCase.expectedError)
-		}
-		result := fixture.ExtendWithErrorHandler(errorHandler).RunTestWithBp(t, bp)
+			errorHandler := android.FixtureExpectsNoErrors
+			if errExpected {
+				errorHandler = android.FixtureExpectsAtLeastOneErrorMatchingPattern(testCase.expectedError)
+			}
+			result := fixture.ExtendWithErrorHandler(errorHandler).RunTestWithBp(t, bp)
 
-		if !errExpected {
-			foo := result.ModuleForTests("foo", "android_common")
-			manifestFixerArgs := foo.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
-			android.AssertStringDoesContain(t, testCase.name, manifestFixerArgs, "--targetSdkVersion  "+testCase.targetSdkVersionExpected)
-		}
+			if !errExpected {
+				foo := result.ModuleForTests("foo", "android_common")
+				manifestFixerArgs := foo.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
+				android.AssertStringDoesContain(t, testCase.name, manifestFixerArgs, "--targetSdkVersion  "+testCase.targetSdkVersionExpected)
+			}
+		})
 	}
 }
 
 func TestAppMissingCertificateAllowMissingDependencies(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		PrepareForTestWithJavaDefaultModules,
 		android.PrepareForTestWithAllowMissingDependencies,
@@ -4119,6 +4196,7 @@ func TestAppMissingCertificateAllowMissingDependencies(t *testing.T) {
 }
 
 func TestAppIncludesJniPackages(t *testing.T) {
+	t.Parallel()
 	ctx := android.GroupFixturePreparers(
 		PrepareForTestWithJavaDefaultModules,
 	).RunTestWithBp(t, `
@@ -4181,6 +4259,7 @@ func TestAppIncludesJniPackages(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			app := ctx.ModuleForTests(tc.name, "android_common")
 
 			outputFile := "jnilibs.zip"
@@ -4205,6 +4284,7 @@ func TestAppIncludesJniPackages(t *testing.T) {
 }
 
 func TestTargetSdkVersionMtsTests(t *testing.T) {
+	t.Parallel()
 	platformSdkCodename := "Tiramisu"
 	android_test := "android_test"
 	android_test_helper_app := "android_test_helper_app"
@@ -4260,14 +4340,18 @@ func TestTargetSdkVersionMtsTests(t *testing.T) {
 		}),
 	)
 	for _, testCase := range testCases {
-		result := fixture.RunTestWithBp(t, fmt.Sprintf(bpTemplate, testCase.moduleType, testCase.targetSdkVersionInBp, testCase.testSuites))
-		mytest := result.ModuleForTests("mytest", "android_common")
-		manifestFixerArgs := mytest.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
-		android.AssertStringDoesContain(t, testCase.desc, manifestFixerArgs, "--targetSdkVersion  "+testCase.targetSdkVersionExpected)
+		t.Run(testCase.desc, func(t *testing.T) {
+			t.Parallel()
+			result := fixture.RunTestWithBp(t, fmt.Sprintf(bpTemplate, testCase.moduleType, testCase.targetSdkVersionInBp, testCase.testSuites))
+			mytest := result.ModuleForTests("mytest", "android_common")
+			manifestFixerArgs := mytest.Output("manifest_fixer/AndroidManifest.xml").Args["args"]
+			android.AssertStringDoesContain(t, testCase.desc, manifestFixerArgs, "--targetSdkVersion  "+testCase.targetSdkVersionExpected)
+		})
 	}
 }
 
 func TestPrivappAllowlist(t *testing.T) {
+	t.Parallel()
 	testJavaError(t, "privileged must be set in order to use privapp_allowlist", `
 		android_app {
 			name: "foo",
@@ -4310,6 +4394,7 @@ func TestPrivappAllowlist(t *testing.T) {
 }
 
 func TestPrivappAllowlistAndroidMk(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		PrepareForTestWithJavaDefaultModules,
 		android.PrepareForTestWithAndroidMk,
@@ -4389,6 +4474,7 @@ func TestPrivappAllowlistAndroidMk(t *testing.T) {
 }
 
 func TestAppFlagsPackages(t *testing.T) {
+	t.Parallel()
 	ctx := android.GroupFixturePreparers(
 		prepareForJavaTest,
 		android.FixtureMergeMockFs(
@@ -4453,6 +4539,7 @@ func TestAppFlagsPackages(t *testing.T) {
 }
 
 func TestAppFlagsPackagesPropagation(t *testing.T) {
+	t.Parallel()
 	ctx := testApp(t, `
 		aconfig_declarations {
 			name: "foo",
@@ -4530,6 +4617,7 @@ func TestAppFlagsPackagesPropagation(t *testing.T) {
 
 // Test that dexpreopt is disabled if an optional_uses_libs exists, but does not provide an implementation.
 func TestNoDexpreoptOptionalUsesLibDoesNotHaveImpl(t *testing.T) {
+	t.Parallel()
 	bp := `
 		java_sdk_library_import {
 			name: "sdklib_noimpl",
@@ -4589,7 +4677,77 @@ func TestTestOnlyApp(t *testing.T) {
 	assertTestOnlyAndTopLevel(t, ctx, expectedTestOnly, expectedTopLevel)
 }
 
+func TestTestConfigTemplate(t *testing.T) {
+	t.Parallel()
+	ctx := android.GroupFixturePreparers(
+		prepareForJavaTest,
+	).RunTestWithBp(t, `
+		android_test {
+			name: "android-test",
+			test_config_template: "AndroidTestTemplate.xml",
+			test_options: {
+				tradefed_options: [
+					{
+						name: "name1",
+						key: "key1",
+						value: "value1",
+					},
+					{
+						name: "name2",
+						key: "key2",
+						value: "value2",
+					},
+				],
+				test_runner_options: [
+					{
+						name: "name3",
+						key: "key3",
+						value: "value3",
+					},
+					{
+						name: "name4",
+						key: "key4",
+						value: "value4",
+					},
+				],
+			},
+		}
+	`)
+	type option struct {
+		name  string
+		key   string
+		value string
+	}
+	re := regexp.MustCompile(`<option name="(.*)" key="(.*)" value="(.*)" />`)
+	parse_options := func(optionsString string) []option {
+		lines := strings.Split(optionsString, `\n`)
+		var ret []option
+		for _, l := range lines {
+			sm := re.FindStringSubmatch(l)
+			if sm == nil {
+				continue
+			}
+			ret = append(ret, option{sm[1], sm[2], sm[3]})
+		}
+		return ret
+	}
+	rule := ctx.ModuleForTests("android-test", "android_common").Rule("autogenInstrumentationTest")
+	android.AssertSameArray(t, "extraConfigs mismatch",
+		[]option{
+			{"name1", "key1", "value1"},
+			{"name2", "key2", "value2"},
+		},
+		parse_options(rule.Args["extraConfigs"]))
+	android.AssertSameArray(t, "extraTestRunnerConfigs mismatch",
+		[]option{
+			{"name3", "key3", "value3"},
+			{"name4", "key4", "value4"},
+		},
+		parse_options(rule.Args["extraTestRunnerConfigs"]))
+}
+
 func TestAppStem(t *testing.T) {
+	t.Parallel()
 	ctx := testApp(t, `
 				android_app {
 					name: "foo",
@@ -4607,6 +4765,7 @@ func TestAppStem(t *testing.T) {
 }
 
 func TestAppMinSdkVersionOverride(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		PrepareForTestWithJavaDefaultModules,
 	).RunTestWithBp(t, `
@@ -4640,6 +4799,7 @@ func TestAppMinSdkVersionOverride(t *testing.T) {
 }
 
 func TestNotApplyDefaultUpdatableModuleVersion(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		PrepareForTestWithJavaDefaultModules,
 	).RunTestWithBp(t, `
@@ -4659,6 +4819,7 @@ func TestNotApplyDefaultUpdatableModuleVersion(t *testing.T) {
 }
 
 func TestNotApplyOverrideApexManifestDefaultVersion(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		PrepareForTestWithJavaDefaultModules,
 		android.FixtureMergeEnv(map[string]string{
@@ -4681,6 +4842,7 @@ func TestNotApplyOverrideApexManifestDefaultVersion(t *testing.T) {
 }
 
 func TestResourcesWithFlagDirectories(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		PrepareForTestWithJavaDefaultModules,
 		android.FixtureMergeMockFs(android.MockFS{
@@ -4785,17 +4947,20 @@ override_android_app {
 		},
 	}
 	for _, tc := range testCases {
-		result := android.GroupFixturePreparers(
-			PrepareForTestWithJavaDefaultModules,
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.EnforceRROTargets = []string{"*"}
-			}),
-			android.OptionalFixturePreparer(tc.preparer),
-		).RunTestWithBp(t, bp)
-		vendorOverlayApk := result.ModuleForTests("foo__test_product__auto_generated_rro_vendor", "android_arm64_armv8-a").MaybeOutput("foo__test_product__auto_generated_rro_vendor.apk")
-		android.AssertBoolEquals(t, tc.desc, tc.overlayApkExpected, vendorOverlayApk.Rule != nil)
-		overrideVendorOverlayApk := result.ModuleForTests("override_foo__test_product__auto_generated_rro_vendor", "android_arm64_armv8-a").MaybeOutput("override_foo__test_product__auto_generated_rro_vendor.apk")
-		android.AssertBoolEquals(t, tc.desc, tc.overlayApkExpected, overrideVendorOverlayApk.Rule != nil)
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+			result := android.GroupFixturePreparers(
+				PrepareForTestWithJavaDefaultModules,
+				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+					variables.EnforceRROTargets = []string{"*"}
+				}),
+				android.OptionalFixturePreparer(tc.preparer),
+			).RunTestWithBp(t, bp)
+			vendorOverlayApk := result.ModuleForTests("foo__test_product__auto_generated_rro_vendor", "android_arm64_armv8-a").MaybeOutput("foo__test_product__auto_generated_rro_vendor.apk")
+			android.AssertBoolEquals(t, tc.desc, tc.overlayApkExpected, vendorOverlayApk.Rule != nil)
+			overrideVendorOverlayApk := result.ModuleForTests("override_foo__test_product__auto_generated_rro_vendor", "android_arm64_armv8-a").MaybeOutput("override_foo__test_product__auto_generated_rro_vendor.apk")
+			android.AssertBoolEquals(t, tc.desc, tc.overlayApkExpected, overrideVendorOverlayApk.Rule != nil)
+		})
 	}
 }
 
@@ -4852,22 +5017,25 @@ my_custom_override_android_app {
 		},
 	}
 	for _, tc := range testCases {
-		result := android.GroupFixturePreparers(
-			PrepareForTestWithJavaDefaultModules,
-			android.PrepareForTestWithSoongConfigModuleBuildComponents,
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.EnforceRROTargets = []string{"*"}
-			}),
-			android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-				variables.DeviceResourceOverlays = []string{"device/company/test_product"}
-			}),
-			android.MockFS{
-				"res/foo.xml": nil,
-				"device/company/test_product/res/foo.xml": nil,
-			}.AddToFixture(),
-			android.OptionalFixturePreparer(tc.preparer),
-		).RunTestWithBp(t, bp)
-		overrideVendorOverlayApk := result.ModuleForTests("override_foo__test_product__auto_generated_rro_vendor", "android_arm64_armv8-a").Module().(*AutogenRuntimeResourceOverlay)
-		android.AssertBoolEquals(t, tc.desc, tc.overlayApkExpected, overrideVendorOverlayApk.exportPackage != nil)
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+			result := android.GroupFixturePreparers(
+				PrepareForTestWithJavaDefaultModules,
+				android.PrepareForTestWithSoongConfigModuleBuildComponents,
+				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+					variables.EnforceRROTargets = []string{"*"}
+				}),
+				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
+					variables.DeviceResourceOverlays = []string{"device/company/test_product"}
+				}),
+				android.MockFS{
+					"res/foo.xml": nil,
+					"device/company/test_product/res/foo.xml": nil,
+				}.AddToFixture(),
+				android.OptionalFixturePreparer(tc.preparer),
+			).RunTestWithBp(t, bp)
+			overrideVendorOverlayApk := result.ModuleForTests("override_foo__test_product__auto_generated_rro_vendor", "android_arm64_armv8-a").Module().(*AutogenRuntimeResourceOverlay)
+			android.AssertBoolEquals(t, tc.desc, tc.overlayApkExpected, overrideVendorOverlayApk.exportPackage != nil)
+		})
 	}
 }

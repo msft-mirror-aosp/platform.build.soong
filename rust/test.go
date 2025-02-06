@@ -148,35 +148,36 @@ func (test *testDecorator) install(ctx ModuleContext) {
 	dataSrcPaths := android.PathsForModuleSrc(ctx, test.Properties.Data)
 	dataSrcPaths = append(dataSrcPaths, android.PathsForModuleSrc(ctx, test.Properties.Device_common_data)...)
 
-	ctx.VisitDirectDepsWithTag(dataLibDepTag, func(dep android.Module) {
+	ctx.VisitDirectDepsProxyWithTag(dataLibDepTag, func(dep android.ModuleProxy) {
 		depName := ctx.OtherModuleName(dep)
-		linkableDep, ok := dep.(cc.LinkableInterface)
+		linkableDep, ok := android.OtherModuleProvider(ctx, dep, cc.LinkableInfoProvider)
 		if !ok {
 			ctx.ModuleErrorf("data_lib %q is not a linkable module", depName)
 		}
-		if linkableDep.OutputFile().Valid() {
+		if linkableDep.OutputFile.Valid() {
 			// Copy the output in "lib[64]" so that it's compatible with
 			// the default rpath values.
+			commonInfo := android.OtherModuleProviderOrDefault(ctx, dep, android.CommonModuleInfoKey)
 			libDir := "lib"
-			if linkableDep.Target().Arch.ArchType.Multilib == "lib64" {
+			if commonInfo.Target.Arch.ArchType.Multilib == "lib64" {
 				libDir = "lib64"
 			}
 			test.data = append(test.data,
-				android.DataPath{SrcPath: linkableDep.OutputFile().Path(),
-					RelativeInstallPath: filepath.Join(libDir, linkableDep.RelativeInstallPath())})
+				android.DataPath{SrcPath: linkableDep.OutputFile.Path(),
+					RelativeInstallPath: filepath.Join(libDir, linkableDep.RelativeInstallPath)})
 		}
 	})
 
-	ctx.VisitDirectDepsWithTag(dataBinDepTag, func(dep android.Module) {
+	ctx.VisitDirectDepsProxyWithTag(dataBinDepTag, func(dep android.ModuleProxy) {
 		depName := ctx.OtherModuleName(dep)
-		linkableDep, ok := dep.(cc.LinkableInterface)
+		linkableDep, ok := android.OtherModuleProvider(ctx, dep, cc.LinkableInfoProvider)
 		if !ok {
 			ctx.ModuleErrorf("data_bin %q is not a linkable module", depName)
 		}
-		if linkableDep.OutputFile().Valid() {
+		if linkableDep.OutputFile.Valid() {
 			test.data = append(test.data,
-				android.DataPath{SrcPath: linkableDep.OutputFile().Path(),
-					RelativeInstallPath: linkableDep.RelativeInstallPath()})
+				android.DataPath{SrcPath: linkableDep.OutputFile.Path(),
+					RelativeInstallPath: linkableDep.RelativeInstallPath})
 		}
 	})
 
@@ -194,6 +195,27 @@ func (test *testDecorator) install(ctx ModuleContext) {
 	if ctx.Host() && test.Properties.Test_options.Unit_test == nil {
 		test.Properties.Test_options.Unit_test = proptools.BoolPtr(true)
 	}
+
+	if !ctx.Config().KatiEnabled() { // TODO(spandandas): Remove the special case for kati
+		// Install the test config in testcases/ directory for atest.
+		r, ok := ctx.Module().(*Module)
+		if !ok {
+			ctx.ModuleErrorf("Not a rust test module")
+		}
+		// Install configs in the root of $PRODUCT_OUT/testcases/$module
+		testCases := android.PathForModuleInPartitionInstall(ctx, "testcases", ctx.ModuleName()+r.SubName())
+		if ctx.PrimaryArch() {
+			if test.testConfig != nil {
+				ctx.InstallFile(testCases, ctx.ModuleName()+".config", test.testConfig)
+			}
+		}
+		// Install tests and data in arch specific subdir $PRODUCT_OUT/testcases/$module/$arch
+		testCases = testCases.Join(ctx, ctx.Target().Arch.ArchType.String())
+		ctx.InstallTestData(testCases, test.data)
+		testPath := ctx.RustModule().OutputFile().Path()
+		ctx.InstallFile(testCases, testPath.Base(), testPath)
+	}
+
 	test.binaryDecorator.installTestData(ctx, test.data)
 	test.binaryDecorator.install(ctx)
 }
@@ -202,6 +224,7 @@ func (test *testDecorator) compilerFlags(ctx ModuleContext, flags Flags) Flags {
 	flags = test.binaryDecorator.compilerFlags(ctx, flags)
 	if test.testHarness() {
 		flags.RustFlags = append(flags.RustFlags, "--test")
+		flags.RustFlags = append(flags.RustFlags, "-A missing-docs")
 	}
 	if ctx.Device() {
 		flags.RustFlags = append(flags.RustFlags, "-Z panic_abort_tests")
@@ -255,6 +278,32 @@ func (test *testDecorator) compilerDeps(ctx DepsContext, deps Deps) Deps {
 
 func (test *testDecorator) testBinary() bool {
 	return true
+}
+
+func (test *testDecorator) moduleInfoJSON(ctx ModuleContext, moduleInfoJSON *android.ModuleInfoJSON) {
+	test.binaryDecorator.moduleInfoJSON(ctx, moduleInfoJSON)
+	moduleInfoJSON.Class = []string{"NATIVE_TESTS"}
+	if Bool(test.Properties.Test_options.Unit_test) {
+		moduleInfoJSON.IsUnitTest = "true"
+		if ctx.Host() {
+			moduleInfoJSON.CompatibilitySuites = append(moduleInfoJSON.CompatibilitySuites, "host-unit-tests")
+		}
+	}
+	moduleInfoJSON.TestOptionsTags = append(moduleInfoJSON.TestOptionsTags, test.Properties.Test_options.Tags...)
+	if test.testConfig != nil {
+		if _, ok := test.testConfig.(android.WritablePath); ok {
+			moduleInfoJSON.AutoTestConfig = []string{"true"}
+		}
+		moduleInfoJSON.TestConfig = append(moduleInfoJSON.TestConfig, test.testConfig.String())
+	}
+
+	moduleInfoJSON.DataDependencies = append(moduleInfoJSON.DataDependencies, test.Properties.Data_bins...)
+
+	if len(test.Properties.Test_suites) > 0 {
+		moduleInfoJSON.CompatibilitySuites = append(moduleInfoJSON.CompatibilitySuites, test.Properties.Test_suites...)
+	} else {
+		moduleInfoJSON.CompatibilitySuites = append(moduleInfoJSON.CompatibilitySuites, "null-suite")
+	}
 }
 
 func rustTestHostMultilib(ctx android.LoadHookContext) {

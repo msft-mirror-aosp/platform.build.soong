@@ -20,6 +20,8 @@ import (
 	"strings"
 
 	"android/soong/android"
+
+	"github.com/google/blueprint/proptools"
 )
 
 type fsverityProperties struct {
@@ -27,10 +29,10 @@ type fsverityProperties struct {
 	// will be generated and included to the filesystem image.
 	// etc/security/fsverity/BuildManifest.apk will also be generated which contains information
 	// about generated .fsv_meta files.
-	Inputs []string
+	Inputs proptools.Configurable[[]string]
 
 	// APK libraries to link against, for etc/security/fsverity/BuildManifest.apk
-	Libs []string `android:"path"`
+	Libs proptools.Configurable[[]string] `android:"path"`
 }
 
 func (f *filesystem) writeManifestGeneratorListFile(ctx android.ModuleContext, outputPath android.WritablePath, matchedSpecs []android.PackagingSpec, rebasedDir android.OutputPath) {
@@ -42,9 +44,16 @@ func (f *filesystem) writeManifestGeneratorListFile(ctx android.ModuleContext, o
 	android.WriteFileRuleVerbatim(ctx, outputPath, buf.String())
 }
 
-func (f *filesystem) buildFsverityMetadataFiles(ctx android.ModuleContext, builder *android.RuleBuilder, specs map[string]android.PackagingSpec, rootDir android.OutputPath, rebasedDir android.OutputPath) {
+func (f *filesystem) buildFsverityMetadataFiles(
+	ctx android.ModuleContext,
+	builder *android.RuleBuilder,
+	specs map[string]android.PackagingSpec,
+	rootDir android.OutputPath,
+	rebasedDir android.OutputPath,
+	fullInstallPaths *[]FullInstallPathInfo,
+) {
 	match := func(path string) bool {
-		for _, pattern := range f.properties.Fsverity.Inputs {
+		for _, pattern := range f.properties.Fsverity.Inputs.GetOrDefault(ctx, nil) {
 			if matched, err := filepath.Match(pattern, path); matched {
 				return true
 			} else if err != nil {
@@ -80,9 +89,13 @@ func (f *filesystem) buildFsverityMetadataFiles(ctx android.ModuleContext, build
 			FlagWithInput("--fsverity-path ", fsverityPath).
 			FlagWithArg("--signature ", "none").
 			FlagWithArg("--hash-alg ", "sha256").
-			FlagWithArg("--output ", destPath.String()).
+			FlagWithOutput("--output ", destPath).
 			Text(srcPath.String())
 		f.appendToEntry(ctx, destPath)
+		*fullInstallPaths = append(*fullInstallPaths, FullInstallPathInfo{
+			SourcePath:      destPath,
+			FullInstallPath: android.PathForModuleInPartitionInstall(ctx, f.PartitionType(), spec.RelPathInPackage()+".fsv_meta"),
+		})
 	}
 
 	fsVerityBaseDir := rootDir.String()
@@ -124,7 +137,7 @@ func (f *filesystem) buildFsverityMetadataFiles(ctx android.ModuleContext, build
 	apkPath := rebasedDir.Join(ctx, "etc", "security", "fsverity", fmt.Sprintf("BuildManifest%s.apk", apkNameSuffix))
 	idsigPath := rebasedDir.Join(ctx, "etc", "security", "fsverity", fmt.Sprintf("BuildManifest%s.apk.idsig", apkNameSuffix))
 	manifestTemplatePath := android.PathForSource(ctx, "system/security/fsverity/AndroidManifest.xml")
-	libs := android.PathsForModuleSrc(ctx, f.properties.Fsverity.Libs)
+	libs := android.PathsForModuleSrc(ctx, f.properties.Fsverity.Libs.GetOrDefault(ctx, nil))
 
 	minSdkVersion := ctx.Config().PlatformSdkCodename()
 	if minSdkVersion == "REL" {
@@ -146,6 +159,10 @@ func (f *filesystem) buildFsverityMetadataFiles(ctx android.ModuleContext, build
 		FlagWithArg("--version-name ", ctx.Config().AppsDefaultVersionName()).
 		FlagWithInput("--manifest ", manifestTemplatePath).
 		Text(" --rename-manifest-package com.android.security.fsverity_metadata." + f.partitionName())
+	*fullInstallPaths = append(*fullInstallPaths, FullInstallPathInfo{
+		SourcePath:      apkPath,
+		FullInstallPath: android.PathForModuleInPartitionInstall(ctx, f.PartitionType(), fmt.Sprintf("etc/security/fsverity/BuildManifest%s.apk", apkNameSuffix)),
+	})
 
 	f.appendToEntry(ctx, apkPath)
 
@@ -158,6 +175,10 @@ func (f *filesystem) buildFsverityMetadataFiles(ctx android.ModuleContext, build
 		FlagWithInput("--cert ", pemPath).
 		FlagWithInput("--key ", keyPath).
 		ImplicitOutput(idsigPath)
+	*fullInstallPaths = append(*fullInstallPaths, FullInstallPathInfo{
+		SourcePath:      idsigPath,
+		FullInstallPath: android.PathForModuleInPartitionInstall(ctx, f.PartitionType(), fmt.Sprintf("etc/security/fsverity/BuildManifest%s.apk.idsig", apkNameSuffix)),
+	})
 
 	f.appendToEntry(ctx, idsigPath)
 }

@@ -22,6 +22,7 @@ import (
 )
 
 func TestJavaLintDoesntUseBaselineImplicitly(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJavaWithFS(t, `
 		java_library {
 			name: "foo",
@@ -46,6 +47,7 @@ func TestJavaLintDoesntUseBaselineImplicitly(t *testing.T) {
 }
 
 func TestJavaLintRequiresCustomLintFileToExist(t *testing.T) {
+	t.Parallel()
 	android.GroupFixturePreparers(
 		PrepareForTestWithJavaDefaultModules,
 		android.PrepareForTestDisallowNonExistentPaths,
@@ -65,6 +67,7 @@ func TestJavaLintRequiresCustomLintFileToExist(t *testing.T) {
 }
 
 func TestJavaLintUsesCorrectBpConfig(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJavaWithFS(t, `
 		java_library {
 			name: "foo",
@@ -101,6 +104,7 @@ func TestJavaLintUsesCorrectBpConfig(t *testing.T) {
 }
 
 func TestJavaLintBypassUpdatableChecks(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name  string
 		bp    string
@@ -144,6 +148,7 @@ func TestJavaLintBypassUpdatableChecks(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 			errorHandler := android.FixtureExpectsAtLeastOneErrorMatchingPattern(testCase.error)
 			android.GroupFixturePreparers(PrepareForTestWithJavaDefaultModules).
 				ExtendWithErrorHandler(errorHandler).
@@ -153,6 +158,7 @@ func TestJavaLintBypassUpdatableChecks(t *testing.T) {
 }
 
 func TestJavaLintStrictUpdatabilityLinting(t *testing.T) {
+	t.Parallel()
 	bp := `
 		java_library {
 			name: "foo",
@@ -275,4 +281,51 @@ func TestCantControlCheckSeverityWithFlags(t *testing.T) {
 	PrepareForTestWithJavaDefaultModules.
 		ExtendWithErrorHandler(android.FixtureExpectsOneErrorPattern("Don't use --disable, --enable, or --check in the flags field, instead use the dedicated disabled_checks, warning_checks, error_checks, or fatal_checks fields")).
 		RunTestWithBp(t, bp)
+}
+
+// b/358643466
+func TestNotTestViaDefault(t *testing.T) {
+	bp := `
+		java_defaults {
+			name: "mydefaults",
+			lint: {
+				test: false,
+			},
+		}
+		android_test {
+			name: "foo",
+			srcs: [
+				"a.java",
+			],
+			min_sdk_version: "29",
+			sdk_version: "current",
+			defaults: ["mydefaults"],
+		}
+		android_test {
+			name: "foo2",
+			srcs: [
+				"a.java",
+			],
+			min_sdk_version: "29",
+			sdk_version: "current",
+		}
+	`
+	result := PrepareForTestWithJavaDefaultModules.RunTestWithBp(t, bp)
+	ctx := result.TestContext
+
+	foo := ctx.ModuleForTests("foo", "android_common")
+	sboxProto := android.RuleBuilderSboxProtoForTests(t, ctx, foo.Output("lint.sbox.textproto"))
+	command := *sboxProto.Commands[0].Command
+
+	if strings.Contains(command, "--test") {
+		t.Fatalf("Expected command to not contain --test")
+	}
+
+	foo2 := ctx.ModuleForTests("foo2", "android_common")
+	sboxProto2 := android.RuleBuilderSboxProtoForTests(t, ctx, foo2.Output("lint.sbox.textproto"))
+	command2 := *sboxProto2.Commands[0].Command
+
+	if !strings.Contains(command2, "--test") {
+		t.Fatalf("Expected command to contain --test")
+	}
 }

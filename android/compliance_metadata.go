@@ -43,6 +43,7 @@ var (
 		STATIC_DEP_FILES       string
 		WHOLE_STATIC_DEPS      string
 		WHOLE_STATIC_DEP_FILES string
+		HEADER_LIBS            string
 		LICENSES               string
 
 		// module_type=package
@@ -71,6 +72,7 @@ var (
 		"static_dep_files",
 		"whole_static_deps",
 		"whole_static_dep_files",
+		"header_libs",
 		"licenses",
 
 		"pkg_default_applicable_licenses",
@@ -106,6 +108,8 @@ var (
 		ComplianceMetadataProp.WHOLE_STATIC_DEPS,
 		// Space separated file paths of whole static dependencies
 		ComplianceMetadataProp.WHOLE_STATIC_DEP_FILES,
+		// Space separated modules name of header libs
+		ComplianceMetadataProp.HEADER_LIBS,
 		ComplianceMetadataProp.LICENSES,
 		// module_type=package
 		ComplianceMetadataProp.PKG_DEFAULT_APPLICABLE_LICENSES,
@@ -240,6 +244,18 @@ var (
 				`${sqlite3} $out ".import --csv ${make_modules} make_modules"`,
 			CommandDeps: []string{"${sqlite3}"},
 		}, "make_metadata", "make_modules")
+
+	buildMakeMetadataCsv = pctx.AndroidStaticRule("buildMakeMetadataCsv",
+		blueprint.RuleParams{
+			Command: `rm -rf $out && ` +
+				`echo "installed_file,module_path,is_soong_module,is_prebuilt_make_module,product_copy_files,kernel_module_copy_files,is_platform_generated,static_libs,whole_static_libs,license_text" > $out`,
+		})
+
+	buildMakeModulesCsv = pctx.AndroidStaticRule("buildMakeModulesCsv",
+		blueprint.RuleParams{
+			Command: `rm -rf $out && ` +
+				`echo "name,module_path,module_class,module_type,static_libs,whole_static_libs,built_files,installed_files" > $out`,
+		})
 )
 
 func complianceMetadataSingletonFactory() Singleton {
@@ -310,6 +326,17 @@ func (c *complianceMetadataSingleton) GenerateBuildActions(ctx SingletonContext)
 	// Metadata generated in Make
 	makeMetadataCsv := PathForOutput(ctx, "compliance-metadata", deviceProduct, "make-metadata.csv")
 	makeModulesCsv := PathForOutput(ctx, "compliance-metadata", deviceProduct, "make-modules.csv")
+
+	if !ctx.Config().KatiEnabled() {
+		ctx.Build(pctx, BuildParams{
+			Rule:   buildMakeMetadataCsv,
+			Output: makeMetadataCsv,
+		})
+		ctx.Build(pctx, BuildParams{
+			Rule:   buildMakeModulesCsv,
+			Output: makeModulesCsv,
+		})
+	}
 
 	// Import metadata from Make and Soong to sqlite3 database
 	complianceMetadataDb := PathForOutput(ctx, "compliance-metadata", deviceProduct, "compliance-metadata.db")
