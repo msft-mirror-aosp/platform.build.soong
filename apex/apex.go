@@ -415,6 +415,30 @@ type overridableProperties struct {
 	Min_sdk_version *string
 }
 
+// installPair stores a path to a built object and its install location.  It is used for holding
+// the installation location of the dexpreopt artifacts for system server jars in apexes that need
+// to be installed when the apex is installed.
+type installPair struct {
+	from android.Path
+	to   android.InstallPath
+}
+
+type installPairs []installPair
+
+// String converts a list of installPair structs to the form accepted by LOCAL_SOONG_INSTALL_PAIRS.
+func (p installPairs) String() string {
+	sb := &strings.Builder{}
+	for i, pair := range p {
+		if i != 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(pair.from.String())
+		sb.WriteByte(':')
+		sb.WriteString(pair.to.String())
+	}
+	return sb.String()
+}
+
 type apexBundle struct {
 	// Inherited structs
 	android.ModuleBase
@@ -496,6 +520,12 @@ type apexBundle struct {
 	// Path where this APEX was installed.
 	installedFile android.InstallPath
 
+	// Extra files that are installed alongside this APEX.
+	extraInstalledFiles android.InstallPaths
+
+	// The source and install locations for extraInstalledFiles for use in LOCAL_SOONG_INSTALL_PAIRS.
+	extraInstalledPairs installPairs
+
 	// fragment for this apex for apexkeys.txt
 	apexKeysPath android.WritablePath
 
@@ -570,13 +600,15 @@ type apexFile struct {
 	// Info for Android.mk Module name of `module` in AndroidMk. Note the generated AndroidMk
 	// module for apexFile is named something like <AndroidMk module name>.<apex name>[<apex
 	// suffix>]
-	androidMkModuleName       string             // becomes LOCAL_MODULE
-	class                     apexFileClass      // becomes LOCAL_MODULE_CLASS
-	moduleDir                 string             // becomes LOCAL_PATH
-	requiredModuleNames       []string           // becomes LOCAL_REQUIRED_MODULES
-	targetRequiredModuleNames []string           // becomes LOCAL_TARGET_REQUIRED_MODULES
-	hostRequiredModuleNames   []string           // becomes LOCAL_HOST_REQUIRED_MODULES
-	dataPaths                 []android.DataPath // becomes LOCAL_TEST_DATA
+	androidMkModuleName string             // becomes LOCAL_MODULE
+	class               apexFileClass      // becomes LOCAL_MODULE_CLASS
+	moduleDir           string             // becomes LOCAL_PATH
+	dataPaths           []android.DataPath // becomes LOCAL_TEST_DATA
+
+	// systemServerDexpreoptInstalls stores the list of dexpreopt artifacts for a system server jar.
+	systemServerDexpreoptInstalls []java.DexpreopterInstall
+	// systemServerDexJars stores the list of dexjars for a system server jar.
+	systemServerDexJars android.Paths
 
 	jacocoReportClassesFile android.Path     // only for javalibs and apps
 	lintInfo                *java.LintInfo   // only for javalibs and apps
@@ -892,6 +924,12 @@ func (a *apexBundle) DepsMutator(ctx android.BottomUpMutatorContext) {
 	// Add a reverse dependency to all_apex_certs singleton module.
 	// all_apex_certs will use this dependency to collect the certificate of this apex.
 	ctx.AddReverseDependency(ctx.Module(), allApexCertsDepTag, "all_apex_certs")
+
+	// TODO: When all branches contain this singleton module, make this strict
+	// TODO: Add this dependency only for mainline prebuilts and not every prebuilt module
+	if ctx.OtherModuleExists("all_apex_contributions") {
+		ctx.AddDependency(ctx.Module(), android.AcDepTag, "all_apex_contributions")
+	}
 }
 
 type allApexCertsDependencyTag struct {
@@ -994,9 +1032,9 @@ func (a *apexBundle) ApexInfoMutator(mctx android.TopDownMutatorContext) {
 	// be built for this apexBundle.
 
 	apexVariationName := mctx.ModuleName() // could be com.android.foo
-	if overridable, ok := mctx.Module().(android.OverridableModule); ok && overridable.GetOverriddenBy() != "" {
+	if a.GetOverriddenBy() != "" {
 		// use the overridden name com.mycompany.android.foo
-		apexVariationName = overridable.GetOverriddenBy()
+		apexVariationName = a.GetOverriddenBy()
 	}
 
 	a.properties.ApexVariationName = apexVariationName
@@ -1164,8 +1202,6 @@ func (a *apexTransitionMutator) Split(ctx android.BaseModuleContext) []string {
 			return []string{overridable.GetOverriddenBy()}
 		}
 		return []string{ai.ApexVariationName()}
-	} else if _, ok := ctx.Module().(*OverrideApex); ok {
-		return []string{ctx.ModuleName()}
 	}
 	return []string{""}
 }
@@ -1182,8 +1218,6 @@ func (a *apexTransitionMutator) IncomingTransition(ctx android.IncomingTransitio
 			return overridable.GetOverriddenBy()
 		}
 		return ai.ApexVariationName()
-	} else if _, ok := ctx.Module().(*OverrideApex); ok {
-		return ctx.Module().Name()
 	}
 
 	return ""
@@ -1501,16 +1535,15 @@ func apexFileForJavaModuleWithFile(ctx android.ModuleContext, module javaModule,
 		af.lintInfo = lintInfo
 	}
 	af.customStem = module.Stem() + ".jar"
+	// Collect any system server dex jars and dexpreopt artifacts for installation alongside the apex.
 	// TODO: b/338641779 - Remove special casing of sdkLibrary once bcpf and sscpf depends
 	// on the implementation library
 	if sdkLib, ok := module.(*java.SdkLibrary); ok {
-		for _, install := range sdkLib.BuiltInstalledForApex() {
-			af.requiredModuleNames = append(af.requiredModuleNames, install.FullModuleName())
-		}
+		af.systemServerDexpreoptInstalls = append(af.systemServerDexpreoptInstalls, sdkLib.ApexSystemServerDexpreoptInstalls()...)
+		af.systemServerDexJars = append(af.systemServerDexJars, sdkLib.ApexSystemServerDexJars()...)
 	} else if dexpreopter, ok := module.(java.DexpreopterInterface); ok {
-		for _, install := range dexpreopter.DexpreoptBuiltInstalledForApex() {
-			af.requiredModuleNames = append(af.requiredModuleNames, install.FullModuleName())
-		}
+		af.systemServerDexpreoptInstalls = append(af.systemServerDexpreoptInstalls, dexpreopter.ApexSystemServerDexpreoptInstalls()...)
+		af.systemServerDexJars = append(af.systemServerDexJars, dexpreopter.ApexSystemServerDexJars()...)
 	}
 	return af
 }
@@ -1626,6 +1659,10 @@ func apexFileForFilesystem(ctx android.BaseModuleContext, buildFile android.Path
 // to the child modules. Returning false makes the visit to continue in the sibling or the parent
 // modules. This is used in check* functions below.
 func (a *apexBundle) WalkPayloadDeps(ctx android.BaseModuleContext, do android.PayloadDepsCallback) {
+	apexVariationName := ctx.ModuleName()
+	if overrideName := a.GetOverriddenBy(); overrideName != "" {
+		apexVariationName = overrideName
+	}
 	ctx.WalkDeps(func(child, parent android.Module) bool {
 		am, ok := child.(android.ApexModule)
 		if !ok || !am.CanHaveApexVariants() {
@@ -1645,7 +1682,7 @@ func (a *apexBundle) WalkPayloadDeps(ctx android.BaseModuleContext, do android.P
 		}
 
 		ai, _ := android.OtherModuleProvider(ctx, child, android.ApexInfoProvider)
-		externalDep := !android.InList(ctx.ModuleName(), ai.InApexVariants)
+		externalDep := !android.InList(apexVariationName, ai.InApexVariants)
 
 		// Visit actually
 		return do(ctx, parent, am, externalDep)
@@ -2258,6 +2295,7 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	////////////////////////////////////////////////////////////////////////////////////////////
 	// 4) generate the build rules to create the APEX. This is done in builder.go.
 	a.buildManifest(ctx, vctx.provideNativeLibs, vctx.requireNativeLibs)
+	a.installApexSystemServerFiles(ctx)
 	a.buildApex(ctx)
 	a.buildApexDependencyInfo(ctx)
 	a.buildLintReports(ctx)
