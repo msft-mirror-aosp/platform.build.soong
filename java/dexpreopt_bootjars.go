@@ -566,6 +566,9 @@ func addDependenciesOntoSelectedBootImageApexes(ctx android.BottomUpMutatorConte
 				// The prebuilt might have been renamed by prebuilt_rename mutator if the source module does not exist.
 				// Remove the prebuilt_ prefix.
 				ctx.AddFarVariationDependencies(apexVariationOfSelected, dexpreoptBootJarDepTag, android.RemoveOptionalPrebuiltPrefix(selected))
+			} else {
+				// Couldn't find a dependency, do it again to report an error.
+				ctx.AddFarVariationDependencies(apexVariationOfSelected, dexpreoptBootJarDepTag, selected)
 			}
 		}
 	}

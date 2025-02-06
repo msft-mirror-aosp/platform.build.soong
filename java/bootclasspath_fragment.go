@@ -290,6 +290,10 @@ func testBootclasspathFragmentFactory() android.Module {
 	return m
 }
 
+func (m *BootclasspathFragmentModule) UniqueApexVariations() bool {
+	return true
+}
+
 func (m *BootclasspathFragmentModule) bootclasspathFragmentPropertyCheck(ctx android.ModuleContext) {
 	contents := m.properties.Contents.GetOrDefault(ctx, nil)
 	if len(contents) == 0 {
