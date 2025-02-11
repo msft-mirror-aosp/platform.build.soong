@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,7 +28,6 @@ import (
 	"android/soong/aconfig/codegen"
 
 	"github.com/google/blueprint"
-	"github.com/google/blueprint/bpmodify"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
@@ -1249,12 +1247,12 @@ func TestApexCanUsePrivateApis(t *testing.T) {
 
 	// Ensure that we are using non-stub variants of mylib2 and libfoo.shared_from_rust (because
 	// of the platform_apis: true)
-	mylibLdFlags := ctx.ModuleForTests("mylib", "android_arm64_armv8-a_shared_apex10000").Rule("ld").Args["libFlags"]
+	mylibLdFlags := ctx.ModuleForTests("mylib", "android_arm64_armv8-a_shared_apex10000_p").Rule("ld").Args["libFlags"]
 	ensureNotContains(t, mylibLdFlags, "mylib2/android_arm64_armv8-a_shared_current/mylib2.so")
 	ensureContains(t, mylibLdFlags, "mylib2/android_arm64_armv8-a_shared/mylib2.so")
 	ensureNotContains(t, mylibLdFlags, "libmylib2_rust/android_arm64_armv8-a_shared_current/unstripped/libmylib2_rust.so")
 	ensureContains(t, mylibLdFlags, "libmylib2_rust/android_arm64_armv8-a_shared/unstripped/libmylib2_rust.so")
-	rustDeps := ctx.ModuleForTests("foo.rust", "android_arm64_armv8-a_apex10000").Rule("rustc").Args["linkFlags"]
+	rustDeps := ctx.ModuleForTests("foo.rust", "android_arm64_armv8-a_apex10000_p").Rule("rustc").Args["linkFlags"]
 	ensureNotContains(t, rustDeps, "libfoo.shared_from_rust/android_arm64_armv8-a_shared_current/libfoo.shared_from_rust.so")
 	ensureContains(t, rustDeps, "libfoo.shared_from_rust/android_arm64_armv8-a_shared/libfoo.shared_from_rust.so")
 	ensureNotContains(t, rustDeps, "libmylib_rust.shared_from_rust/android_arm64_armv8-a_shared_current/unstripped/libmylib_rust.shared_from_rust.so")
@@ -2421,7 +2419,87 @@ func TestApexMinSdkVersion_InVendorApex(t *testing.T) {
 	android.AssertStringDoesContain(t, "cflags", cflags, "-target aarch64-linux-android29")
 }
 
-func TestTrackAllowedDeps(t *testing.T) {
+func TestTrackAllowedDepsForAndroidApex(t *testing.T) {
+	t.Parallel()
+	ctx := testApex(t, `
+		apex {
+			name: "com.android.myapex",
+			key: "myapex.key",
+			updatable: true,
+			native_shared_libs: [
+				"mylib",
+				"yourlib",
+			],
+			min_sdk_version: "29",
+		}
+
+		apex {
+			name: "myapex2",
+			key: "myapex.key",
+			updatable: false,
+			native_shared_libs: ["yourlib"],
+		}
+
+		apex_key {
+			name: "myapex.key",
+			public_key: "testkey.avbpubkey",
+			private_key: "testkey.pem",
+		}
+
+		cc_library {
+			name: "mylib",
+			srcs: ["mylib.cpp"],
+			shared_libs: ["libbar", "libbar_rs"],
+			min_sdk_version: "29",
+			apex_available: ["com.android.myapex"],
+		}
+
+		cc_library {
+			name: "libbar",
+			stubs: { versions: ["29", "30"] },
+		}
+
+		rust_ffi {
+			name: "libbar_rs",
+			crate_name: "bar_rs",
+			srcs: ["bar.rs"],
+			stubs: { versions: ["29", "30"] },
+		}
+
+		cc_library {
+			name: "yourlib",
+			srcs: ["mylib.cpp"],
+			min_sdk_version: "29",
+			apex_available: ["com.android.myapex", "myapex2", "//apex_available:platform"],
+		}
+	`, withFiles(android.MockFS{
+		"packages/modules/common/build/allowed_deps.txt": nil,
+	}),
+		android.FixtureMergeMockFs(android.MockFS{
+			"system/sepolicy/apex/com.android.myapex-file_contexts": nil,
+		}))
+
+	depsinfo := ctx.SingletonForTests("apex_depsinfo_singleton")
+	inputs := depsinfo.Rule("generateApexDepsInfoFilesRule").BuildParams.Inputs.Strings()
+	android.AssertStringListContains(t, "updatable com.android.myapex should generate depsinfo file", inputs,
+		"out/soong/.intermediates/com.android.myapex/android_common_com.android.myapex/depsinfo/flatlist.txt")
+	android.AssertStringListDoesNotContain(t, "non-updatable myapex2 should not generate depsinfo file", inputs,
+		"out/soong/.intermediates/myapex2/android_common_myapex2/depsinfo/flatlist.txt")
+
+	myapex := ctx.ModuleForTests("com.android.myapex", "android_common_com.android.myapex")
+	flatlist := strings.Split(android.ContentFromFileRuleForTests(t, ctx,
+		myapex.Output("depsinfo/flatlist.txt")), "\n")
+	android.AssertStringListContains(t, "deps with stubs should be tracked in depsinfo as external dep",
+		flatlist, "libbar(minSdkVersion:(no version)) (external)")
+	android.AssertStringListContains(t, "deps with stubs should be tracked in depsinfo as external dep",
+		flatlist, "libbar_rs(minSdkVersion:(no version)) (external)")
+	android.AssertStringListDoesNotContain(t, "do not track if not available for platform",
+		flatlist, "mylib:(minSdkVersion:29)")
+	android.AssertStringListContains(t, "track platform-available lib",
+		flatlist, "yourlib(minSdkVersion:29)")
+}
+
+func TestNotTrackAllowedDepsForNonAndroidApex(t *testing.T) {
 	t.Parallel()
 	ctx := testApex(t, `
 		apex {
@@ -2451,20 +2529,13 @@ func TestTrackAllowedDeps(t *testing.T) {
 		cc_library {
 			name: "mylib",
 			srcs: ["mylib.cpp"],
-			shared_libs: ["libbar", "libbar_rs"],
+			shared_libs: ["libbar"],
 			min_sdk_version: "29",
 			apex_available: ["myapex"],
 		}
 
 		cc_library {
 			name: "libbar",
-			stubs: { versions: ["29", "30"] },
-		}
-
-		rust_ffi {
-			name: "libbar_rs",
-			crate_name: "bar_rs",
-			srcs: ["bar.rs"],
 			stubs: { versions: ["29", "30"] },
 		}
 
@@ -2480,194 +2551,17 @@ func TestTrackAllowedDeps(t *testing.T) {
 
 	depsinfo := ctx.SingletonForTests("apex_depsinfo_singleton")
 	inputs := depsinfo.Rule("generateApexDepsInfoFilesRule").BuildParams.Inputs.Strings()
-	android.AssertStringListContains(t, "updatable myapex should generate depsinfo file", inputs,
+	android.AssertStringListDoesNotContain(t, "updatable myapex should generate depsinfo file", inputs,
 		"out/soong/.intermediates/myapex/android_common_myapex/depsinfo/flatlist.txt")
 	android.AssertStringListDoesNotContain(t, "non-updatable myapex2 should not generate depsinfo file", inputs,
 		"out/soong/.intermediates/myapex2/android_common_myapex2/depsinfo/flatlist.txt")
-
-	myapex := ctx.ModuleForTests("myapex", "android_common_myapex")
-	flatlist := strings.Split(android.ContentFromFileRuleForTests(t, ctx,
-		myapex.Output("depsinfo/flatlist.txt")), "\n")
-	android.AssertStringListContains(t, "deps with stubs should be tracked in depsinfo as external dep",
-		flatlist, "libbar(minSdkVersion:(no version)) (external)")
-	android.AssertStringListContains(t, "deps with stubs should be tracked in depsinfo as external dep",
-		flatlist, "libbar_rs(minSdkVersion:(no version)) (external)")
-	android.AssertStringListDoesNotContain(t, "do not track if not available for platform",
-		flatlist, "mylib:(minSdkVersion:29)")
-	android.AssertStringListContains(t, "track platform-available lib",
-		flatlist, "yourlib(minSdkVersion:29)")
-}
-
-func TestTrackCustomAllowedDepsInvalidDefaultTxt(t *testing.T) {
-	t.Parallel()
-	ctx := testApex(t, `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			updatable: true,
-			native_shared_libs: [
-				"mylib",
-				"yourlib",
-			],
-			min_sdk_version: "29",
-		}
-
-		apex {
-			name: "myapex2",
-			key: "myapex.key",
-			updatable: false,
-			native_shared_libs: ["yourlib"],
-		}
-
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-
-		cc_library {
-			name: "mylib",
-			srcs: ["mylib.cpp"],
-			shared_libs: ["libbar", "libbar_rs",],
-			min_sdk_version: "29",
-			apex_available: ["myapex"],
-		}
-
-		cc_library {
-			name: "libbar",
-			stubs: { versions: ["29", "30"] },
-		}
-
-		rust_ffi {
-			name: "libbar_rs",
-			crate_name: "bar_rs",
-			srcs: ["bar.rs"],
-			stubs: { versions: ["29", "30"] },
-		}
-
-		cc_library {
-			name: "yourlib",
-			srcs: ["mylib.cpp"],
-			min_sdk_version: "29",
-			apex_available: ["myapex", "myapex2", "//apex_available:platform"],
-		}
-	`, withFiles(android.MockFS{
-		"packages/modules/common/build/custom_allowed_deps.txt": nil,
-	}),
-		android.FixtureModifyProductVariables(
-			func(variables android.FixtureProductVariables) {
-				variables.ExtraAllowedDepsTxt = proptools.StringPtr("packages/modules/common/build/custom_allowed_deps.txt")
-			},
-		))
-
-	depsinfo := ctx.SingletonForTests("apex_depsinfo_singleton")
-	inputs := depsinfo.Rule("generateApexDepsInfoFilesRule").BuildParams.Inputs.Strings()
-	android.AssertStringListContains(t, "updatable myapex should generate depsinfo file", inputs,
-		"out/soong/.intermediates/myapex/android_common_myapex/depsinfo/flatlist.txt")
-	android.AssertStringListDoesNotContain(t, "non-updatable myapex2 should not generate depsinfo file", inputs,
-		"out/soong/.intermediates/myapex2/android_common_myapex2/depsinfo/flatlist.txt")
-
-	myapex := ctx.ModuleForTests("myapex", "android_common_myapex")
-	flatlist := strings.Split(android.ContentFromFileRuleForTests(t, ctx,
-		myapex.Output("depsinfo/flatlist.txt")), "\n")
-	android.AssertStringListContains(t, "deps with stubs should be tracked in depsinfo as external dep",
-		flatlist, "libbar(minSdkVersion:(no version)) (external)")
-	android.AssertStringListContains(t, "deps with stubs should be tracked in depsinfo as external dep",
-		flatlist, "libbar_rs(minSdkVersion:(no version)) (external)")
-	android.AssertStringListDoesNotContain(t, "do not track if not available for platform",
-		flatlist, "mylib:(minSdkVersion:29)")
-	android.AssertStringListContains(t, "track platform-available lib",
-		flatlist, "yourlib(minSdkVersion:29)")
-}
-
-func TestTrackCustomAllowedDepsWithDefaultTxt(t *testing.T) {
-	t.Parallel()
-	ctx := testApex(t, `
-		apex {
-			name: "myapex",
-			key: "myapex.key",
-			updatable: true,
-			native_shared_libs: [
-				"mylib",
-				"yourlib",
-			],
-			min_sdk_version: "29",
-		}
-
-		apex {
-			name: "myapex2",
-			key: "myapex.key",
-			updatable: false,
-			native_shared_libs: ["yourlib"],
-		}
-
-		apex_key {
-			name: "myapex.key",
-			public_key: "testkey.avbpubkey",
-			private_key: "testkey.pem",
-		}
-
-		cc_library {
-			name: "mylib",
-			srcs: ["mylib.cpp"],
-			shared_libs: ["libbar", "libbar_rs"],
-			min_sdk_version: "29",
-			apex_available: ["myapex"],
-		}
-
-		cc_library {
-			name: "libbar",
-			stubs: { versions: ["29", "30"] },
-		}
-
-		rust_ffi {
-			name: "libbar_rs",
-			crate_name: "bar_rs",
-			srcs: ["bar.rs"],
-			stubs: { versions: ["29", "30"] },
-		}
-
-		cc_library {
-			name: "yourlib",
-			srcs: ["mylib.cpp"],
-			min_sdk_version: "29",
-			apex_available: ["myapex", "myapex2", "//apex_available:platform"],
-		}
-	`, withFiles(android.MockFS{
-		"packages/modules/common/build/custom_allowed_deps.txt": nil,
-		"packages/modules/common/build/allowed_deps.txt":        nil,
-	}),
-		android.FixtureModifyProductVariables(
-			func(variables android.FixtureProductVariables) {
-				variables.ExtraAllowedDepsTxt = proptools.StringPtr("packages/modules/common/build/custom_allowed_deps.txt")
-			},
-		))
-
-	depsinfo := ctx.SingletonForTests("apex_depsinfo_singleton")
-	inputs := depsinfo.Rule("generateApexDepsInfoFilesRule").BuildParams.Inputs.Strings()
-	android.AssertStringListContains(t, "updatable myapex should generate depsinfo file", inputs,
-		"out/soong/.intermediates/myapex/android_common_myapex/depsinfo/flatlist.txt")
-	android.AssertStringListDoesNotContain(t, "non-updatable myapex2 should not generate depsinfo file", inputs,
-		"out/soong/.intermediates/myapex2/android_common_myapex2/depsinfo/flatlist.txt")
-
-	myapex := ctx.ModuleForTests("myapex", "android_common_myapex")
-	flatlist := strings.Split(android.ContentFromFileRuleForTests(t, ctx,
-		myapex.Output("depsinfo/flatlist.txt")), "\n")
-	android.AssertStringListContains(t, "deps with stubs should be tracked in depsinfo as external dep",
-		flatlist, "libbar(minSdkVersion:(no version)) (external)")
-	android.AssertStringListContains(t, "deps with stubs should be tracked in depsinfo as external dep",
-		flatlist, "libbar_rs(minSdkVersion:(no version)) (external)")
-	android.AssertStringListDoesNotContain(t, "do not track if not available for platform",
-		flatlist, "mylib:(minSdkVersion:29)")
-	android.AssertStringListContains(t, "track platform-available lib",
-		flatlist, "yourlib(minSdkVersion:29)")
 }
 
 func TestTrackAllowedDeps_SkipWithoutAllowedDepsTxt(t *testing.T) {
 	t.Parallel()
 	ctx := testApex(t, `
 		apex {
-			name: "myapex",
+			name: "com.android.myapex",
 			key: "myapex.key",
 			updatable: true,
 			min_sdk_version: "29",
@@ -2678,7 +2572,10 @@ func TestTrackAllowedDeps_SkipWithoutAllowedDepsTxt(t *testing.T) {
 			public_key: "testkey.avbpubkey",
 			private_key: "testkey.pem",
 		}
-	`)
+	`,
+		android.FixtureMergeMockFs(android.MockFS{
+			"system/sepolicy/apex/com.android.myapex-file_contexts": nil,
+		}))
 	depsinfo := ctx.SingletonForTests("apex_depsinfo_singleton")
 	if nil != depsinfo.MaybeRule("generateApexDepsInfoFilesRule").Output {
 		t.Error("apex_depsinfo_singleton shouldn't run when allowed_deps.txt doesn't exist")
@@ -5576,7 +5473,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkHiddenAPIIndexFromFlagsInputs(t, ctx, `
 			my-bootclasspath-fragment/index.csv
 			out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
-			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_apex10000/modular-hiddenapi/index.csv
+			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_com.android.art/modular-hiddenapi/index.csv
 		`)
 	})
 
@@ -5649,7 +5546,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkHiddenAPIIndexFromFlagsInputs(t, ctx, `
 			my-bootclasspath-fragment/index.csv
 			out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
-			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_apex10000/modular-hiddenapi/index.csv
+			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_com.android.art/modular-hiddenapi/index.csv
 		`)
 
 		myApex := ctx.ModuleForTests("myapex", "android_common_myapex").Module()
@@ -5844,7 +5741,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkHiddenAPIIndexFromFlagsInputs(t, ctx, `
 			my-bootclasspath-fragment/index.csv
 			out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
-			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_apex10000/modular-hiddenapi/index.csv
+			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_com.android.art/modular-hiddenapi/index.csv
 		`)
 	})
 
@@ -5943,7 +5840,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkHiddenAPIIndexFromFlagsInputs(t, ctx, `
 			out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
 			out/soong/.intermediates/my-bootclasspath-fragment/android_common_myapex/modular-hiddenapi/index.csv
-			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_apex10000/modular-hiddenapi/index.csv
+			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_com.android.art/modular-hiddenapi/index.csv
 		`)
 	})
 
@@ -6055,7 +5952,7 @@ func TestBootDexJarsFromSourcesAndPrebuilts(t *testing.T) {
 		checkHiddenAPIIndexFromFlagsInputs(t, ctx, `
 			my-bootclasspath-fragment/index.csv
 			out/soong/.intermediates/frameworks/base/boot/platform-bootclasspath/android_common/hiddenapi-monolithic/index-from-classes.csv
-			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_apex10000/modular-hiddenapi/index.csv
+			out/soong/.intermediates/packages/modules/com.android.art/art-bootclasspath-fragment/android_common_com.android.art/modular-hiddenapi/index.csv
 		`)
 	})
 
@@ -9904,7 +9801,16 @@ func TestAndroidMk_DexpreoptBuiltInstalledForApex(t *testing.T) {
 	var builder strings.Builder
 	data.Custom(&builder, apexBundle.BaseModuleName(), "TARGET_", "", data)
 	androidMk := builder.String()
-	ensureContains(t, androidMk, "LOCAL_REQUIRED_MODULES := foo.myapex foo-dexpreopt-arm64-apex@myapex@javalib@foo.jar@classes.odex foo-dexpreopt-arm64-apex@myapex@javalib@foo.jar@classes.vdex\n")
+	out := ctx.Config().OutDir()
+	ensureContains(t, androidMk, "LOCAL_SOONG_INSTALL_PAIRS += "+
+		filepath.Join(out, "soong/.intermediates/foo/android_common_apex10000/dexpreopt/foo/oat/arm64/javalib.odex")+
+		":"+
+		filepath.Join(out, "target/product/test_device/system/framework/oat/arm64/apex@myapex@javalib@foo.jar@classes.odex")+
+		" "+
+		filepath.Join(out, "soong/.intermediates/foo/android_common_apex10000/dexpreopt/foo/oat/arm64/javalib.vdex")+
+		":"+
+		filepath.Join(out, "target/product/test_device/system/framework/oat/arm64/apex@myapex@javalib@foo.jar@classes.vdex")+
+		"\n")
 }
 
 func TestAndroidMk_RequiredModules(t *testing.T) {
@@ -10924,15 +10830,6 @@ func TestAconfigFilesRustDeps(t *testing.T) {
 		}
 
 		rust_library {
-			name: "libflags_rust", // test mock
-			crate_name: "flags_rust",
-			srcs: ["lib.rs"],
-			apex_available: [
-				"myapex",
-			],
-		}
-
-		rust_library {
 			name: "liblazy_static", // test mock
 			crate_name: "lazy_static",
 			srcs: ["src/lib.rs"],
@@ -11052,8 +10949,8 @@ func TestAconfigFilesRustDeps(t *testing.T) {
 	mod := ctx.ModuleForTests("myapex", "android_common_myapex")
 	s := mod.Rule("apexRule").Args["copy_commands"]
 	copyCmds := regexp.MustCompile(" *&& *").Split(s, -1)
-	if len(copyCmds) != 34 {
-		t.Fatalf("Expected 34 commands, got %d in:\n%s", len(copyCmds), s)
+	if len(copyCmds) != 32 {
+		t.Fatalf("Expected 32 commands, got %d in:\n%s", len(copyCmds), s)
 	}
 
 	ensureListContainsMatch(t, copyCmds, "^cp -f .*/aconfig_flags.pb .*/image.apex/etc/aconfig_flags.pb")
@@ -11403,7 +11300,7 @@ func TestBootDexJarsMultipleApexPrebuilts(t *testing.T) {
 		{
 			desc:                      "Source apex com.android.foo is selected, bootjar should come from source java library",
 			selectedApexContributions: "foo.source.contributions",
-			expectedBootJar:           "out/soong/.intermediates/foo-bootclasspath-fragment/android_common_apex10000/hiddenapi-modular/encoded/framework-foo.jar",
+			expectedBootJar:           "out/soong/.intermediates/foo-bootclasspath-fragment/android_common_com.android.foo/hiddenapi-modular/encoded/framework-foo.jar",
 		},
 		{
 			desc:                      "Prebuilt apex prebuilt_com.android.foo is selected, profile should come from .prof deapexed from the prebuilt",
@@ -11460,7 +11357,7 @@ func TestInstallationRulesForMultipleApexPrebuilts(t *testing.T) {
 		variation := func(moduleName string) string {
 			ret := "android_common_com.android.foo"
 			if moduleName == "com.google.android.foo" {
-				ret = "android_common_com.google.android.foo_com.google.android.foo"
+				ret = "android_common_com.google.android.foo"
 			}
 			return ret
 		}
@@ -11975,7 +11872,7 @@ func TestOverrideApexWithPrebuiltApexPreferred(t *testing.T) {
 		}
 	`)
 
-	java.CheckModuleHasDependency(t, res.TestContext, "myoverrideapex", "android_common_myoverrideapex_myoverrideapex", "foo")
+	java.CheckModuleHasDependency(t, res.TestContext, "myoverrideapex", "android_common_myoverrideapex", "foo")
 }
 
 func TestUpdatableApexMinSdkVersionCurrent(t *testing.T) {
@@ -12310,397 +12207,4 @@ func TestFilesystemWithApexDeps(t *testing.T) {
 	partition := result.ModuleForTests("myfilesystem", "android_common")
 	fileList := android.ContentFromFileRuleForTests(t, result, partition.Output("fileList"))
 	android.AssertDeepEquals(t, "filesystem with apex", "apex/myapex.apex\n", fileList)
-}
-
-func TestApexVerifyNativeImplementationLibs(t *testing.T) {
-	t.Parallel()
-
-	extractDepenencyPathFromErrors := func(errs []error) []string {
-		i := slices.IndexFunc(errs, func(err error) bool {
-			return strings.Contains(err.Error(), "dependency path:")
-		})
-		if i < 0 {
-			return nil
-		}
-		var dependencyPath []string
-		for _, err := range errs[i+1:] {
-			s := err.Error()
-			lastSpace := strings.LastIndexByte(s, ' ')
-			if lastSpace >= 0 {
-				dependencyPath = append(dependencyPath, s[lastSpace+1:])
-			}
-		}
-		return dependencyPath
-	}
-
-	checkErrors := func(wantDependencyPath []string) func(t *testing.T, result *android.TestResult) {
-		return func(t *testing.T, result *android.TestResult) {
-			t.Helper()
-			if len(result.Errs) == 0 {
-				t.Fatalf("expected errors")
-			}
-			t.Log("found errors:")
-			for _, err := range result.Errs {
-				t.Log(err)
-			}
-			if g, w := result.Errs[0].Error(), "library in apex transitively linked against implementation library"; !strings.Contains(g, w) {
-				t.Fatalf("expected error %q, got %q", w, g)
-			}
-			dependencyPath := extractDepenencyPathFromErrors(result.Errs)
-			if g, w := dependencyPath, wantDependencyPath; !slices.Equal(g, w) {
-				t.Errorf("expected dependency path %q, got %q", w, g)
-			}
-		}
-	}
-
-	addToSharedLibs := func(module, lib string) func(bp *bpmodify.Blueprint) {
-		return func(bp *bpmodify.Blueprint) {
-			m := bp.ModulesByName(module)
-			props, err := m.GetOrCreateProperty(bpmodify.List, "shared_libs")
-			if err != nil {
-				panic(err)
-			}
-			props.AddStringToList(lib)
-		}
-	}
-
-	bpTemplate := `
-	apex {
-		name: "myapex",
-		key: "myapex.key",
-		native_shared_libs: ["mylib"],
-		rust_dyn_libs: ["libmyrust"],
-		binaries: ["mybin", "myrustbin"],
-		jni_libs: ["libjni"],
-		apps: ["myapp"],
-		updatable: false,
-	}
-
-	apex {
-		name: "otherapex",
-		key: "myapex.key",
-		native_shared_libs: ["libotherapex"],
-		updatable: false,
-	}
-
-	apex_key {
-		name: "myapex.key",
-		public_key: "testkey.avbpubkey",
-		private_key: "testkey.pem",
-	}
-
-	cc_library {
-		name: "mylib",
-		srcs: ["foo.cpp"],
-		apex_available: ["myapex"],
-	}
-
-	cc_binary {
-		name: "mybin",
-		srcs: ["foo.cpp"],
-		apex_available: ["myapex"],
-	}
-
-	rust_library {
-		name: "libmyrust",
-		crate_name: "myrust",
-		srcs: ["src/lib.rs"],
-		rustlibs: ["libmyrust_transitive_dylib"],
-		rlibs: ["libmyrust_transitive_rlib"],
-		apex_available: ["myapex"],
-	}
-
-	rust_library{
-		name: "libmyrust_transitive_dylib",
-		crate_name: "myrust_transitive_dylib",
-		srcs: ["src/lib.rs"],
-		apex_available: ["myapex"],
-	}
-
-	rust_library {
-		name: "libmyrust_transitive_rlib",
-		crate_name: "myrust_transitive_rlib",
-		srcs: ["src/lib.rs"],
-		apex_available: ["myapex"],
-	}
-
-	rust_binary {
-		name: "myrustbin",
-		srcs: ["src/main.rs"],
-		apex_available: ["myapex"],
-	}
-
-	cc_library {
-		name: "libbar",
-		sdk_version: "current",
-		srcs: ["bar.cpp"],
-		apex_available: ["myapex"],
-		stl: "none",
-	}
-
-	android_app {
-		name: "myapp",
-		jni_libs: ["libembeddedjni"],
-		use_embedded_native_libs: true,
-		sdk_version: "current",
-		apex_available: ["myapex"],
-	}
-
-	cc_library {
-		name: "libembeddedjni",
-		sdk_version: "current",
-		srcs: ["bar.cpp"],
-		apex_available: ["myapex"],
-		stl: "none",
-	}
-
-	cc_library {
-		name: "libjni",
-		sdk_version: "current",
-		srcs: ["bar.cpp"],
-		apex_available: ["myapex"],
-		stl: "none",
-	}
-
-	cc_library {
-		name: "libotherapex",
-		sdk_version: "current",
-		srcs: ["otherapex.cpp"],
-		apex_available: ["otherapex"],
-		stubs: {
-			symbol_file: "libotherapex.map.txt",
-			versions: ["1", "2", "3"],
-		},
-		stl: "none",
-	}
-
-	cc_library {
-		name: "libplatform",
-		sdk_version: "current",
-		srcs: ["libplatform.cpp"],
-		stubs: {
-			symbol_file: "libplatform.map.txt",
-			versions: ["1", "2", "3"],
-		},
-		stl: "none",
-		system_shared_libs: [],
-	}
-	`
-
-	testCases := []struct {
-		name           string
-		bpModifier     func(bp *bpmodify.Blueprint)
-		dependencyPath []string
-	}{
-		{
-			name:           "library dependency in other apex",
-			bpModifier:     addToSharedLibs("mylib", "libotherapex#impl"),
-			dependencyPath: []string{"myapex", "mylib", "libotherapex"},
-		},
-		{
-			name: "transitive library dependency in other apex",
-			bpModifier: func(bp *bpmodify.Blueprint) {
-				addToSharedLibs("mylib", "libbar")(bp)
-				addToSharedLibs("libbar", "libotherapex#impl")(bp)
-			},
-			dependencyPath: []string{"myapex", "mylib", "libbar", "libotherapex"},
-		},
-		{
-			name:           "library dependency in platform",
-			bpModifier:     addToSharedLibs("mylib", "libplatform#impl"),
-			dependencyPath: []string{"myapex", "mylib", "libplatform"},
-		},
-		{
-			name:           "jni library dependency in other apex",
-			bpModifier:     addToSharedLibs("libjni", "libotherapex#impl"),
-			dependencyPath: []string{"myapex", "libjni", "libotherapex"},
-		},
-		{
-			name: "transitive jni library dependency in other apex",
-			bpModifier: func(bp *bpmodify.Blueprint) {
-				addToSharedLibs("libjni", "libbar")(bp)
-				addToSharedLibs("libbar", "libotherapex#impl")(bp)
-			},
-			dependencyPath: []string{"myapex", "libjni", "libbar", "libotherapex"},
-		},
-		{
-			name:           "jni library dependency in platform",
-			bpModifier:     addToSharedLibs("libjni", "libplatform#impl"),
-			dependencyPath: []string{"myapex", "libjni", "libplatform"},
-		},
-		{
-			name: "transitive jni library dependency in platform",
-			bpModifier: func(bp *bpmodify.Blueprint) {
-				addToSharedLibs("libjni", "libbar")(bp)
-				addToSharedLibs("libbar", "libplatform#impl")(bp)
-			},
-			dependencyPath: []string{"myapex", "libjni", "libbar", "libplatform"},
-		},
-		{
-			name:           "app jni library dependency in other apex",
-			bpModifier:     addToSharedLibs("libembeddedjni", "libotherapex#impl"),
-			dependencyPath: []string{"myapex", "myapp", "libembeddedjni", "libotherapex"},
-		},
-		{
-			name: "transitive app jni library dependency in other apex",
-			bpModifier: func(bp *bpmodify.Blueprint) {
-				addToSharedLibs("libembeddedjni", "libbar")(bp)
-				addToSharedLibs("libbar", "libotherapex#impl")(bp)
-			},
-			dependencyPath: []string{"myapex", "myapp", "libembeddedjni", "libbar", "libotherapex"},
-		},
-		{
-			name:           "app jni library dependency in platform",
-			bpModifier:     addToSharedLibs("libembeddedjni", "libplatform#impl"),
-			dependencyPath: []string{"myapex", "myapp", "libembeddedjni", "libplatform"},
-		},
-		{
-			name: "transitive app jni library dependency in platform",
-			bpModifier: func(bp *bpmodify.Blueprint) {
-				addToSharedLibs("libembeddedjni", "libbar")(bp)
-				addToSharedLibs("libbar", "libplatform#impl")(bp)
-			},
-			dependencyPath: []string{"myapex", "myapp", "libembeddedjni", "libbar", "libplatform"},
-		},
-		{
-			name:           "binary dependency in other apex",
-			bpModifier:     addToSharedLibs("mybin", "libotherapex#impl"),
-			dependencyPath: []string{"myapex", "mybin", "libotherapex"},
-		},
-		{
-			name: "transitive binary dependency in other apex",
-			bpModifier: func(bp *bpmodify.Blueprint) {
-				addToSharedLibs("mybin", "libbar")(bp)
-				addToSharedLibs("libbar", "libotherapex#impl")(bp)
-			},
-			dependencyPath: []string{"myapex", "mybin", "libbar", "libotherapex"},
-		},
-		{
-			name:           "binary dependency in platform",
-			bpModifier:     addToSharedLibs("mybin", "libplatform#impl"),
-			dependencyPath: []string{"myapex", "mybin", "libplatform"},
-		},
-		{
-			name: "transitive binary dependency in platform",
-			bpModifier: func(bp *bpmodify.Blueprint) {
-				addToSharedLibs("mybin", "libbar")(bp)
-				addToSharedLibs("libbar", "libplatform#impl")(bp)
-			},
-			dependencyPath: []string{"myapex", "mybin", "libbar", "libplatform"},
-		},
-
-		{
-			name:           "rust library dependency in other apex",
-			bpModifier:     addToSharedLibs("libmyrust", "libotherapex#impl"),
-			dependencyPath: []string{"myapex", "libmyrust", "libotherapex"},
-		},
-		{
-			name: "transitive rust library dependency in other apex",
-			bpModifier: func(bp *bpmodify.Blueprint) {
-				addToSharedLibs("libmyrust", "libbar")(bp)
-				addToSharedLibs("libbar", "libotherapex#impl")(bp)
-			},
-			dependencyPath: []string{"myapex", "libmyrust", "libbar", "libotherapex"},
-		},
-		{
-			name:           "rust library dependency in platform",
-			bpModifier:     addToSharedLibs("libmyrust", "libplatform#impl"),
-			dependencyPath: []string{"myapex", "libmyrust", "libplatform"},
-		},
-		{
-			name: "transitive rust library dependency in platform",
-			bpModifier: func(bp *bpmodify.Blueprint) {
-				addToSharedLibs("libmyrust", "libbar")(bp)
-				addToSharedLibs("libbar", "libplatform#impl")(bp)
-			},
-			dependencyPath: []string{"myapex", "libmyrust", "libbar", "libplatform"},
-		},
-		{
-			name: "transitive rust library dylib dependency in other apex",
-			bpModifier: func(bp *bpmodify.Blueprint) {
-				addToSharedLibs("libmyrust_transitive_dylib", "libotherapex#impl")(bp)
-			},
-			dependencyPath: []string{"myapex", "libmyrust", "libmyrust_transitive_dylib", "libotherapex"},
-		},
-		{
-			name: "transitive rust library dylib dependency in platform",
-			bpModifier: func(bp *bpmodify.Blueprint) {
-				addToSharedLibs("libmyrust_transitive_dylib", "libplatform#impl")(bp)
-			},
-			dependencyPath: []string{"myapex", "libmyrust", "libmyrust_transitive_dylib", "libplatform"},
-		},
-		{
-			name: "transitive rust library rlib dependency in other apex",
-			bpModifier: func(bp *bpmodify.Blueprint) {
-				addToSharedLibs("libmyrust_transitive_rlib", "libotherapex#impl")(bp)
-			},
-			dependencyPath: []string{"myapex", "libmyrust", "libmyrust_transitive_rlib", "libotherapex"},
-		},
-		{
-			name: "transitive rust library rlib dependency in platform",
-			bpModifier: func(bp *bpmodify.Blueprint) {
-				addToSharedLibs("libmyrust_transitive_rlib", "libplatform#impl")(bp)
-			},
-			dependencyPath: []string{"myapex", "libmyrust", "libmyrust_transitive_rlib", "libplatform"},
-		},
-		{
-			name:           "rust binary dependency in other apex",
-			bpModifier:     addToSharedLibs("myrustbin", "libotherapex#impl"),
-			dependencyPath: []string{"myapex", "myrustbin", "libotherapex"},
-		},
-		{
-			name: "transitive rust binary dependency in other apex",
-			bpModifier: func(bp *bpmodify.Blueprint) {
-				addToSharedLibs("myrustbin", "libbar")(bp)
-				addToSharedLibs("libbar", "libotherapex#impl")(bp)
-			},
-			dependencyPath: []string{"myapex", "myrustbin", "libbar", "libotherapex"},
-		},
-		{
-			name:           "rust binary dependency in platform",
-			bpModifier:     addToSharedLibs("myrustbin", "libplatform#impl"),
-			dependencyPath: []string{"myapex", "myrustbin", "libplatform"},
-		},
-		{
-			name: "transitive rust binary dependency in platform",
-			bpModifier: func(bp *bpmodify.Blueprint) {
-				addToSharedLibs("myrustbin", "libbar")(bp)
-				addToSharedLibs("libbar", "libplatform#impl")(bp)
-			},
-			dependencyPath: []string{"myapex", "myrustbin", "libbar", "libplatform"},
-		},
-	}
-
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			bp, err := bpmodify.NewBlueprint("", []byte(bpTemplate))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if testCase.bpModifier != nil {
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							t.Fatalf("panic in bpModifier: %v", r)
-						}
-					}()
-					testCase.bpModifier(bp)
-				}()
-			}
-			android.GroupFixturePreparers(
-				android.PrepareForTestWithAndroidBuildComponents,
-				cc.PrepareForTestWithCcBuildComponents,
-				java.PrepareForTestWithDexpreopt,
-				rust.PrepareForTestWithRustDefaultModules,
-				PrepareForTestWithApexBuildComponents,
-				prepareForTestWithMyapex,
-				prepareForTestWithOtherapex,
-				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
-					variables.BuildId = proptools.StringPtr("TEST.BUILD_ID")
-				}),
-			).ExtendWithErrorHandler(android.FixtureCustomErrorHandler(checkErrors(testCase.dependencyPath))).
-				RunTestWithBp(t, bp.String())
-		})
-	}
 }

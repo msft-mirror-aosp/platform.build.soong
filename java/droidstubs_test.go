@@ -27,6 +27,7 @@ import (
 )
 
 func TestDroidstubs(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJavaWithFS(t, `
 		droiddoc_exported_dir {
 			name: "droiddoc-templates-sdk",
@@ -88,7 +89,7 @@ func TestDroidstubs(t *testing.T) {
 		cmdline := String(sboxProto.Commands[0].Command)
 		android.AssertStringContainsEquals(t, "api-versions generation flag", cmdline, "--generate-api-levels", c.generate_xml)
 		if c.expectedJarFilename != "" {
-			expected := "--android-jar-pattern ./{version:level}/public/" + c.expectedJarFilename
+			expected := "--android-jar-pattern ./{version:major.minor?}/public/" + c.expectedJarFilename
 			if !strings.Contains(cmdline, expected) {
 				t.Errorf("For %q, expected metalava argument %q, but was not found %q", c.moduleName, expected, cmdline)
 			}
@@ -139,35 +140,38 @@ func getAndroidJarPatternsForDroidstubs(t *testing.T, sdkType string) []string {
 }
 
 func TestPublicDroidstubs(t *testing.T) {
+	t.Parallel()
 	patterns := getAndroidJarPatternsForDroidstubs(t, "public")
 
 	android.AssertArrayString(t, "order of patterns", []string{
-		"--android-jar-pattern somedir/{version:level}/public/android.jar",
-		"--android-jar-pattern someotherdir/{version:level}/public/android.jar",
+		"--android-jar-pattern somedir/{version:major.minor?}/public/android.jar",
+		"--android-jar-pattern someotherdir/{version:major.minor?}/public/android.jar",
 	}, patterns)
 }
 
 func TestSystemDroidstubs(t *testing.T) {
+	t.Parallel()
 	patterns := getAndroidJarPatternsForDroidstubs(t, "system")
 
 	android.AssertArrayString(t, "order of patterns", []string{
-		"--android-jar-pattern somedir/{version:level}/system/android.jar",
-		"--android-jar-pattern someotherdir/{version:level}/system/android.jar",
-		"--android-jar-pattern somedir/{version:level}/public/android.jar",
-		"--android-jar-pattern someotherdir/{version:level}/public/android.jar",
+		"--android-jar-pattern somedir/{version:major.minor?}/system/android.jar",
+		"--android-jar-pattern someotherdir/{version:major.minor?}/system/android.jar",
+		"--android-jar-pattern somedir/{version:major.minor?}/public/android.jar",
+		"--android-jar-pattern someotherdir/{version:major.minor?}/public/android.jar",
 	}, patterns)
 }
 
 func TestModuleLibDroidstubs(t *testing.T) {
+	t.Parallel()
 	patterns := getAndroidJarPatternsForDroidstubs(t, "module-lib")
 
 	android.AssertArrayString(t, "order of patterns", []string{
-		"--android-jar-pattern somedir/{version:level}/module-lib/android.jar",
-		"--android-jar-pattern someotherdir/{version:level}/module-lib/android.jar",
-		"--android-jar-pattern somedir/{version:level}/system/android.jar",
-		"--android-jar-pattern someotherdir/{version:level}/system/android.jar",
-		"--android-jar-pattern somedir/{version:level}/public/android.jar",
-		"--android-jar-pattern someotherdir/{version:level}/public/android.jar",
+		"--android-jar-pattern somedir/{version:major.minor?}/module-lib/android.jar",
+		"--android-jar-pattern someotherdir/{version:major.minor?}/module-lib/android.jar",
+		"--android-jar-pattern somedir/{version:major.minor?}/system/android.jar",
+		"--android-jar-pattern someotherdir/{version:major.minor?}/system/android.jar",
+		"--android-jar-pattern somedir/{version:major.minor?}/public/android.jar",
+		"--android-jar-pattern someotherdir/{version:major.minor?}/public/android.jar",
 	}, patterns)
 }
 
@@ -175,14 +179,14 @@ func TestSystemServerDroidstubs(t *testing.T) {
 	patterns := getAndroidJarPatternsForDroidstubs(t, "system-server")
 
 	android.AssertArrayString(t, "order of patterns", []string{
-		"--android-jar-pattern somedir/{version:level}/system-server/android.jar",
-		"--android-jar-pattern someotherdir/{version:level}/system-server/android.jar",
-		"--android-jar-pattern somedir/{version:level}/module-lib/android.jar",
-		"--android-jar-pattern someotherdir/{version:level}/module-lib/android.jar",
-		"--android-jar-pattern somedir/{version:level}/system/android.jar",
-		"--android-jar-pattern someotherdir/{version:level}/system/android.jar",
-		"--android-jar-pattern somedir/{version:level}/public/android.jar",
-		"--android-jar-pattern someotherdir/{version:level}/public/android.jar",
+		"--android-jar-pattern somedir/{version:major.minor?}/system-server/android.jar",
+		"--android-jar-pattern someotherdir/{version:major.minor?}/system-server/android.jar",
+		"--android-jar-pattern somedir/{version:major.minor?}/module-lib/android.jar",
+		"--android-jar-pattern someotherdir/{version:major.minor?}/module-lib/android.jar",
+		"--android-jar-pattern somedir/{version:major.minor?}/system/android.jar",
+		"--android-jar-pattern someotherdir/{version:major.minor?}/system/android.jar",
+		"--android-jar-pattern somedir/{version:major.minor?}/public/android.jar",
+		"--android-jar-pattern someotherdir/{version:major.minor?}/public/android.jar",
 	}, patterns)
 }
 
@@ -303,7 +307,7 @@ func TestDroidstubsWithSdkExtensions(t *testing.T) {
 	m := ctx.ModuleForTests("baz-stubs", "android_common")
 	manifest := m.Output("metalava.sbox.textproto")
 	cmdline := String(android.RuleBuilderSboxProtoForTests(t, ctx, manifest).Commands[0].Command)
-	android.AssertStringDoesContain(t, "sdk-extensions-root present", cmdline, "--sdk-extensions-root sdk/extensions")
+	android.AssertStringDoesContain(t, "android-jar-pattern present", cmdline, "--android-jar-pattern sdk/extensions/{version:extension}/public/{module}.jar")
 	android.AssertStringDoesContain(t, "sdk-extensions-info present", cmdline, "--sdk-extensions-info sdk/extensions/info.txt")
 }
 

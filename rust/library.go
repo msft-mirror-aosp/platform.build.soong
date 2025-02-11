@@ -202,6 +202,9 @@ type libraryInterface interface {
 }
 
 func (library *libraryDecorator) nativeCoverage() bool {
+	if library.BuildStubs() {
+		return false
+	}
 	return true
 }
 
@@ -671,7 +674,10 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 
 	flags.RustFlags = append(flags.RustFlags, deps.depFlags...)
 	flags.LinkFlags = append(flags.LinkFlags, deps.depLinkFlags...)
-	flags.LinkFlags = append(flags.LinkFlags, deps.linkObjects...)
+	flags.LinkFlags = append(flags.LinkFlags, deps.rustLibObjects...)
+	flags.LinkFlags = append(flags.LinkFlags, deps.sharedLibObjects...)
+	flags.LinkFlags = append(flags.LinkFlags, deps.staticLibObjects...)
+	flags.LinkFlags = append(flags.LinkFlags, deps.wholeStaticLibObjects...)
 
 	if String(library.Properties.Version_script) != "" {
 		if String(library.Properties.Extra_exported_symbols) != "" {
@@ -708,7 +714,7 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 	if library.stubs() {
 		ccFlags := library.getApiStubsCcFlags(ctx)
 		stubObjs := library.compileModuleLibApiStubs(ctx, ccFlags)
-		cc.BuildRustStubs(ctx, outputFile, deps.CrtBegin, deps.CrtEnd, stubObjs, ccFlags)
+		cc.BuildRustStubs(ctx, outputFile, stubObjs, ccFlags)
 	} else if library.rlib() {
 		ret.kytheFile = TransformSrctoRlib(ctx, crateRootPath, deps, flags, outputFile).kytheFile
 	} else if library.dylib() {
@@ -719,9 +725,17 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 		ret.kytheFile = TransformSrctoShared(ctx, crateRootPath, deps, flags, outputFile).kytheFile
 	}
 
+	// rlibs and dylibs propagate their shared, whole static, and rustlib dependencies
 	if library.rlib() || library.dylib() {
 		library.flagExporter.exportLinkDirs(deps.linkDirs...)
-		library.flagExporter.exportLinkObjects(deps.linkObjects...)
+		library.flagExporter.exportRustLibs(deps.rustLibObjects...)
+		library.flagExporter.exportSharedLibs(deps.sharedLibObjects...)
+		library.flagExporter.exportWholeStaticLibs(deps.wholeStaticLibObjects...)
+	}
+
+	// rlibs also propagate their staticlibs dependencies
+	if library.rlib() {
+		library.flagExporter.exportStaticLibs(deps.staticLibObjects...)
 	}
 
 	// Since we have FFI rlibs, we need to collect their includes as well
@@ -756,6 +770,7 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 	}
 	cc.AddStubDependencyProviders(ctx)
 
+	// Set our flagexporter provider to export relevant Rust flags
 	library.flagExporter.setProvider(ctx)
 
 	return ret
@@ -856,6 +871,20 @@ func (library *libraryDecorator) Disabled() bool {
 
 func (library *libraryDecorator) SetDisabled() {
 	library.MutatedProperties.VariantIsDisabled = true
+}
+
+func (library *libraryDecorator) moduleInfoJSON(ctx ModuleContext, moduleInfoJSON *android.ModuleInfoJSON) {
+	library.baseCompiler.moduleInfoJSON(ctx, moduleInfoJSON)
+
+	if library.rlib() {
+		moduleInfoJSON.Class = []string{"RLIB_LIBRARIES"}
+	} else if library.dylib() {
+		moduleInfoJSON.Class = []string{"DYLIB_LIBRARIES"}
+	} else if library.static() {
+		moduleInfoJSON.Class = []string{"STATIC_LIBRARIES"}
+	} else if library.shared() {
+		moduleInfoJSON.Class = []string{"SHARED_LIBRARIES"}
+	}
 }
 
 var validCrateName = regexp.MustCompile("[^a-zA-Z0-9_]+")

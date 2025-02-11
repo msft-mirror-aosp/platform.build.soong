@@ -136,22 +136,6 @@ func TestFileSystemDeps(t *testing.T) {
 	}
 }
 
-func TestIncludeMakeBuiltFiles(t *testing.T) {
-	result := fixture.RunTestWithBp(t, `
-		android_filesystem {
-			name: "myfilesystem",
-			include_make_built_files: "system",
-		}
-	`)
-
-	output := result.ModuleForTests("myfilesystem", "android_common").Output("myfilesystem.img")
-
-	stampFile := "out/target/product/test_device/obj/PACKAGING/system_intermediates/staging_dir.stamp"
-	fileListFile := "out/target/product/test_device/obj/PACKAGING/system_intermediates/file_list.txt"
-	android.AssertStringListContains(t, "deps of filesystem must include the staging dir stamp file", output.Implicits.Strings(), stampFile)
-	android.AssertStringListContains(t, "deps of filesystem must include the staging dir file list", output.Implicits.Strings(), fileListFile)
-}
-
 func TestFileSystemFillsLinkerConfigWithStubLibs(t *testing.T) {
 	result := fixture.RunTestWithBp(t, `
 		android_system_image {
@@ -356,7 +340,7 @@ func TestFileSystemWithCoverageVariants(t *testing.T) {
 		inputs.Strings(),
 		"out/soong/.intermediates/libbar/android_arm64_armv8-a_shared_cov/libbar.so")
 
-	filesystemOutput := filesystem.Output("myfilesystem.img").Output
+	filesystemOutput := filesystem.OutputFiles(result.TestContext, t, "")[0]
 	prebuiltInput := result.ModuleForTests("prebuilt", "android_arm64_armv8-a").Rule("Cp").Input
 	if filesystemOutput != prebuiltInput {
 		t.Error("prebuilt should use cov variant of filesystem")

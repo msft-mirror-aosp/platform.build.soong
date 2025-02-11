@@ -185,6 +185,7 @@ func makeVarsSingletonFunc() Singleton {
 type makeVarsSingleton struct {
 	varsForTesting     []makeVarsVariable
 	installsForTesting []byte
+	lateForTesting     []byte
 }
 
 type makeVarsProvider struct {
@@ -220,7 +221,7 @@ type phony struct {
 
 type dist struct {
 	goals []string
-	paths []string
+	paths distCopies
 }
 
 func (s *makeVarsSingleton) GenerateBuildActions(ctx SingletonContext) {
@@ -285,6 +286,10 @@ func (s *makeVarsSingleton) GenerateBuildActions(ctx SingletonContext) {
 			katiVintfManifestInstalls = append(katiVintfManifestInstalls, info.KatiVintfInstalls...)
 			katiSymlinks = append(katiSymlinks, info.KatiSymlinks...)
 		}
+
+		if distInfo, ok := OtherModuleProvider(ctx, m, DistProvider); ok {
+			dists = append(dists, distInfo.Dists...)
+		}
 	})
 
 	compareKatiInstalls := func(a, b katiInstall) int {
@@ -330,7 +335,7 @@ func (s *makeVarsSingleton) GenerateBuildActions(ctx SingletonContext) {
 		return len(a) < len(b)
 	}
 	sort.Slice(dists, func(i, j int) bool {
-		return lessArr(dists[i].goals, dists[j].goals) || lessArr(dists[i].paths, dists[j].paths)
+		return lessArr(dists[i].goals, dists[j].goals) || lessArr(dists[i].paths.Strings(), dists[j].paths.Strings())
 	})
 
 	outBytes := s.writeVars(vars)
@@ -354,6 +359,7 @@ func (s *makeVarsSingleton) GenerateBuildActions(ctx SingletonContext) {
 	if ctx.Config().RunningInsideUnitTest() {
 		s.varsForTesting = vars
 		s.installsForTesting = installsBytes
+		s.lateForTesting = lateOutBytes
 	}
 }
 
@@ -458,7 +464,7 @@ func (s *makeVarsSingleton) writeLate(phonies []phony, dists []dist) []byte {
 	for _, dist := range dists {
 		fmt.Fprintf(buf, ".PHONY: %s\n", strings.Join(dist.goals, " "))
 		fmt.Fprintf(buf, "$(call dist-for-goals,%s,%s)\n",
-			strings.Join(dist.goals, " "), strings.Join(dist.paths, " "))
+			strings.Join(dist.goals, " "), strings.Join(dist.paths.Strings(), " "))
 	}
 
 	return buf.Bytes()
@@ -607,7 +613,7 @@ func (c *makeVarsContext) addPhony(name string, deps []string) {
 	c.phonies = append(c.phonies, phony{name, deps})
 }
 
-func (c *makeVarsContext) addDist(goals []string, paths []string) {
+func (c *makeVarsContext) addDist(goals []string, paths []distCopy) {
 	c.dists = append(c.dists, dist{
 		goals: goals,
 		paths: paths,
@@ -647,9 +653,16 @@ func (c *makeVarsContext) DistForGoalWithFilename(goal string, path Path, filena
 }
 
 func (c *makeVarsContext) DistForGoals(goals []string, paths ...Path) {
-	c.addDist(goals, Paths(paths).Strings())
+	var copies distCopies
+	for _, path := range paths {
+		copies = append(copies, distCopy{
+			from: path,
+			dest: path.Base(),
+		})
+	}
+	c.addDist(goals, copies)
 }
 
 func (c *makeVarsContext) DistForGoalsWithFilename(goals []string, path Path, filename string) {
-	c.addDist(goals, []string{path.String() + ":" + filename})
+	c.addDist(goals, distCopies{{from: path, dest: filename}})
 }

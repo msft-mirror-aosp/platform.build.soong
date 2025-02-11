@@ -26,6 +26,7 @@ import (
 )
 
 func TestAndroidAppImport(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, `
 		android_app_import {
 			name: "foo",
@@ -59,7 +60,48 @@ func TestAndroidAppImport(t *testing.T) {
 	android.AssertStringEquals(t, "Invalid args", "/system/app/foo/foo.apk", rule.Args["install_path"])
 }
 
+func TestAndroidAppImportWithDefaults(t *testing.T) {
+	t.Parallel()
+	ctx, _ := testJava(t, `
+		android_app_import {
+			name: "foo",
+			defaults: ["foo_defaults"],
+		}
+
+		java_defaults {
+			name: "foo_defaults",
+			apk: "prebuilts/apk/app.apk",
+			certificate: "platform",
+			dex_preopt: {
+				enabled: true,
+			},
+		}
+		`)
+
+	variant := ctx.ModuleForTests("foo", "android_common")
+
+	// Check dexpreopt outputs.
+	if variant.MaybeOutput("dexpreopt/foo/oat/arm64/package.vdex").Rule == nil ||
+		variant.MaybeOutput("dexpreopt/foo/oat/arm64/package.odex").Rule == nil {
+		t.Errorf("can't find dexpreopt outputs")
+	}
+
+	// Check cert signing flag.
+	signedApk := variant.Output("signed/foo.apk")
+	signingFlag := signedApk.Args["certificates"]
+	expected := "build/make/target/product/security/platform.x509.pem build/make/target/product/security/platform.pk8"
+	if expected != signingFlag {
+		t.Errorf("Incorrect signing flags, expected: %q, got: %q", expected, signingFlag)
+	}
+	rule := variant.Rule("genProvenanceMetaData")
+	android.AssertStringEquals(t, "Invalid input", "prebuilts/apk/app.apk", rule.Inputs[0].String())
+	android.AssertStringEquals(t, "Invalid output", "out/soong/.intermediates/provenance_metadata/foo/provenance_metadata.textproto", rule.Output.String())
+	android.AssertStringEquals(t, "Invalid args", "foo", rule.Args["module_name"])
+	android.AssertStringEquals(t, "Invalid args", "/system/app/foo/foo.apk", rule.Args["install_path"])
+}
+
 func TestAndroidAppImport_NoDexPreopt(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, `
 		android_app_import {
 			name: "foo",
@@ -87,6 +129,7 @@ func TestAndroidAppImport_NoDexPreopt(t *testing.T) {
 }
 
 func TestAndroidAppImport_Presigned(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, `
 		android_app_import {
 			name: "foo",
@@ -121,6 +164,7 @@ func TestAndroidAppImport_Presigned(t *testing.T) {
 }
 
 func TestAndroidAppImport_SigningLineage(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, `
 	  android_app_import {
 			name: "foo",
@@ -164,6 +208,7 @@ func TestAndroidAppImport_SigningLineage(t *testing.T) {
 }
 
 func TestAndroidAppImport_SigningLineageFilegroup(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, `
 	  android_app_import {
 			name: "foo",
@@ -196,6 +241,7 @@ func TestAndroidAppImport_SigningLineageFilegroup(t *testing.T) {
 }
 
 func TestAndroidAppImport_DefaultDevCert(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, `
 		android_app_import {
 			name: "foo",
@@ -231,6 +277,7 @@ func TestAndroidAppImport_DefaultDevCert(t *testing.T) {
 }
 
 func TestAndroidAppImport_DpiVariants(t *testing.T) {
+	t.Parallel()
 	bp := `
 		android_app_import {
 			name: "foo",
@@ -317,6 +364,7 @@ func TestAndroidAppImport_DpiVariants(t *testing.T) {
 }
 
 func TestAndroidAppImport_Filename(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, `
 		android_app_import {
 			name: "foo",
@@ -325,10 +373,25 @@ func TestAndroidAppImport_Filename(t *testing.T) {
 		}
 
 		android_app_import {
+			name: "foo_compressed",
+			apk: "prebuilts/apk/app.apk",
+			presigned: true,
+			compress_apk: true,
+		}
+
+		android_app_import {
 			name: "bar",
 			apk: "prebuilts/apk/app.apk",
 			presigned: true,
-			filename: "bar_sample.apk"
+			filename: "bar_sample.apk",
+		}
+
+		android_app_import {
+			name: "compressed_bar",
+			apk: "prebuilts/apk/app.apk",
+			presigned: true,
+			filename: "bar_sample.apk",
+			compress_apk: true,
 		}
 		`)
 
@@ -347,11 +410,25 @@ func TestAndroidAppImport_Filename(t *testing.T) {
 			expectedMetaDataPath: "out/soong/.intermediates/provenance_metadata/foo/provenance_metadata.textproto",
 		},
 		{
+			name:                 "foo_compressed",
+			expected:             "foo_compressed.apk.gz",
+			onDevice:             "/system/app/foo_compressed/foo_compressed.apk.gz",
+			expectedArtifactPath: "prebuilts/apk/app.apk",
+			expectedMetaDataPath: "out/soong/.intermediates/provenance_metadata/foo_compressed/provenance_metadata.textproto",
+		},
+		{
 			name:                 "bar",
 			expected:             "bar_sample.apk",
 			onDevice:             "/system/app/bar/bar_sample.apk",
 			expectedArtifactPath: "prebuilts/apk/app.apk",
 			expectedMetaDataPath: "out/soong/.intermediates/provenance_metadata/bar/provenance_metadata.textproto",
+		},
+		{
+			name:                 "compressed_bar",
+			expected:             "bar_sample.apk",
+			onDevice:             "/system/app/compressed_bar/bar_sample.apk",
+			expectedArtifactPath: "prebuilts/apk/app.apk",
+			expectedMetaDataPath: "out/soong/.intermediates/provenance_metadata/compressed_bar/provenance_metadata.textproto",
 		},
 	}
 
@@ -380,6 +457,7 @@ func TestAndroidAppImport_Filename(t *testing.T) {
 }
 
 func TestAndroidAppImport_ArchVariants(t *testing.T) {
+	t.Parallel()
 	// The test config's target arch is ARM64.
 	testCases := []struct {
 		name         string
@@ -505,6 +583,7 @@ func TestAndroidAppImport_ArchVariants(t *testing.T) {
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx, _ := testJava(t, test.bp)
 
 			variant := ctx.ModuleForTests("foo", "android_common")
@@ -530,6 +609,7 @@ func TestAndroidAppImport_ArchVariants(t *testing.T) {
 }
 
 func TestAndroidAppImport_SoongConfigVariables(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name         string
 		bp           string
@@ -572,6 +652,7 @@ func TestAndroidAppImport_SoongConfigVariables(t *testing.T) {
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			ctx := android.GroupFixturePreparers(
 				prepareForJavaTest,
 				android.PrepareForTestWithSoongConfigModuleBuildComponents,
@@ -607,6 +688,7 @@ func TestAndroidAppImport_SoongConfigVariables(t *testing.T) {
 }
 
 func TestAndroidAppImport_overridesDisabledAndroidApp(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, `
 		android_app {
 			name: "foo",
@@ -635,6 +717,7 @@ func TestAndroidAppImport_overridesDisabledAndroidApp(t *testing.T) {
 }
 
 func TestAndroidAppImport_relativeInstallPath(t *testing.T) {
+	t.Parallel()
 	bp := `
 		android_app_import {
 			name: "no_relative_install_path",
@@ -679,13 +762,17 @@ func TestAndroidAppImport_relativeInstallPath(t *testing.T) {
 		},
 	}
 	for _, testCase := range testCases {
-		ctx, _ := testJava(t, bp)
-		mod := ctx.ModuleForTests(testCase.name, "android_common").Module().(*AndroidAppImport)
-		android.AssertPathRelativeToTopEquals(t, testCase.errorMessage, testCase.expectedInstallPath, mod.installPath)
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, _ := testJava(t, bp)
+			mod := ctx.ModuleForTests(testCase.name, "android_common").Module().(*AndroidAppImport)
+			android.AssertPathRelativeToTopEquals(t, testCase.errorMessage, testCase.expectedInstallPath, mod.installPath)
+		})
 	}
 }
 
 func TestAndroidAppImport_ExtractApk(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, `
 		android_app_import {
 			name: "foo",
@@ -702,6 +789,7 @@ func TestAndroidAppImport_ExtractApk(t *testing.T) {
 	}
 }
 func TestAndroidTestImport(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, `
 		android_test_import {
 			name: "foo",
@@ -730,6 +818,7 @@ func TestAndroidTestImport(t *testing.T) {
 }
 
 func TestAndroidTestImport_NoJinUncompressForPresigned(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, `
 		android_test_import {
 			name: "foo",
@@ -767,6 +856,7 @@ func TestAndroidTestImport_NoJinUncompressForPresigned(t *testing.T) {
 }
 
 func TestAndroidTestImport_Preprocessed(t *testing.T) {
+	t.Parallel()
 	ctx, _ := testJava(t, `
 		android_test_import {
 			name: "foo",
@@ -793,9 +883,11 @@ func TestAndroidTestImport_Preprocessed(t *testing.T) {
 }
 
 func TestAndroidAppImport_Preprocessed(t *testing.T) {
+	t.Parallel()
 	for _, dontUncompressPrivAppDexs := range []bool{false, true} {
 		name := fmt.Sprintf("dontUncompressPrivAppDexs:%t", dontUncompressPrivAppDexs)
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			result := android.GroupFixturePreparers(
 				PrepareForTestWithJavaDefaultModules,
 				android.FixtureModifyProductVariables(func(variables android.FixtureProductVariables) {
@@ -870,6 +962,7 @@ func TestAndroidAppImport_Preprocessed(t *testing.T) {
 }
 
 func TestAndroidTestImport_UncompressDex(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name string
 		bp   string
@@ -933,6 +1026,7 @@ func TestAndroidTestImport_UncompressDex(t *testing.T) {
 				name := fmt.Sprintf("%s,unbundled:%t,dontUncompressPrivAppDexs:%t",
 					tt.name, unbundled, dontUncompressPrivAppDexs)
 				t.Run(name, func(t *testing.T) {
+					t.Parallel()
 					test(t, tt.bp, unbundled, dontUncompressPrivAppDexs)
 				})
 			}
@@ -941,6 +1035,7 @@ func TestAndroidTestImport_UncompressDex(t *testing.T) {
 }
 
 func TestAppImportMissingCertificateAllowMissingDependencies(t *testing.T) {
+	t.Parallel()
 	result := android.GroupFixturePreparers(
 		PrepareForTestWithJavaDefaultModules,
 		android.PrepareForTestWithAllowMissingDependencies,

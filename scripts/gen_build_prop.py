@@ -308,7 +308,15 @@ def append_additional_system_props(args):
     props.append(f"ro.sanitize.{sanitize_target}=true")
 
   # Sets the default value of ro.postinstall.fstab.prefix to /system.
-  # Device board config should override the value to /product when needed by:
+  #
+  # Device board configs can override this to /product to use a
+  # product-specific fstab.postinstall file (installed to
+  # /product/etc/fstab.postinstall). If not overridden, the
+  # system/extras/cppreopts/fstab.postinstall file (installed to
+  # /system/etc/fstab.postinstall) will be used.
+  # Note: The default fstab.postinstall is generic and may be slower
+  # because it tries different mount options line by line to ensure
+  # compatibility across various devices.
   #
   #     PRODUCT_PRODUCT_PROPERTIES += ro.postinstall.fstab.prefix=/product
   #
@@ -361,9 +369,6 @@ def append_additional_system_props(args):
       props = list(filter(lambda x: not x.startswith("ro.setupwizard.mode="), props))
       props.append("ro.setupwizard.mode=OPTIONAL")
 
-    if not config["SdkBuild"]:
-      # To speedup startup of non-preopted builds, don't verify or compile the boot image.
-      props.append("dalvik.vm.image-dex2oat-filter=extract")
     # b/323566535
     props.append("init.svc_debug.no_fatal.zygote=true")
 

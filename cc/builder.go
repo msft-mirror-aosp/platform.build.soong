@@ -474,13 +474,23 @@ func (a Objects) Append(b Objects) Objects {
 // Generate rules for compiling multiple .c, .cpp, or .S files to individual .o files
 func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles, noTidySrcs, timeoutTidySrcs android.Paths,
 	flags builderFlags, pathDeps android.Paths, cFlagsDeps android.Paths, sharedFlags *SharedFlags) Objects {
+
+	// Not all source files produce a .o; a Rust source provider
+	// may provide both a .c and a .rs file (e.g. rust_bindgen).
+	srcObjFiles := android.Paths{}
+	for _, src := range srcFiles {
+		if src.Ext() != ".rs" {
+			srcObjFiles = append(srcObjFiles, src)
+		}
+	}
+
 	// Source files are one-to-one with tidy, coverage, or kythe files, if enabled.
-	objFiles := make(android.Paths, len(srcFiles))
+	objFiles := make(android.Paths, len(srcObjFiles))
 	var tidyFiles android.Paths
 	noTidySrcsMap := make(map[string]bool)
 	var tidyVars string
 	if flags.tidy {
-		tidyFiles = make(android.Paths, 0, len(srcFiles))
+		tidyFiles = make(android.Paths, 0, len(srcObjFiles))
 		for _, path := range noTidySrcs {
 			noTidySrcsMap[path.String()] = true
 		}
@@ -495,11 +505,11 @@ func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles, no
 	}
 	var coverageFiles android.Paths
 	if flags.gcovCoverage {
-		coverageFiles = make(android.Paths, 0, len(srcFiles))
+		coverageFiles = make(android.Paths, 0, len(srcObjFiles))
 	}
 	var kytheFiles android.Paths
 	if flags.emitXrefs && ctx.Module() == ctx.PrimaryModule() {
-		kytheFiles = make(android.Paths, 0, len(srcFiles))
+		kytheFiles = make(android.Paths, 0, len(srcObjFiles))
 	}
 
 	// Produce fully expanded flags for use by C tools, C compiles, C++ tools, C++ compiles, and asm compiles
@@ -548,14 +558,14 @@ func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles, no
 
 	var sAbiDumpFiles android.Paths
 	if flags.sAbiDump {
-		sAbiDumpFiles = make(android.Paths, 0, len(srcFiles))
+		sAbiDumpFiles = make(android.Paths, 0, len(srcObjFiles))
 	}
 
 	// Multiple source files have build rules usually share the same cFlags or tidyFlags.
 	// SharedFlags provides one version for this module and shares it in multiple build rules.
 	// To simplify the code, the SharedFlags variables are all named as $flags<nnn>.
 	// Share flags only when there are multiple files or tidy rules.
-	var hasMultipleRules = len(srcFiles) > 1 || flags.tidy
+	var hasMultipleRules = len(srcObjFiles) > 1 || flags.tidy
 
 	var shareFlags = func(kind string, flags string) string {
 		if !hasMultipleRules || len(flags) < 60 {
@@ -574,7 +584,7 @@ func transformSourceToObj(ctx android.ModuleContext, subdir string, srcFiles, no
 		return "$" + kind + n
 	}
 
-	for i, srcFile := range srcFiles {
+	for i, srcFile := range srcObjFiles {
 		objFile := android.ObjPathWithExt(ctx, subdir, srcFile, "o")
 
 		objFiles[i] = objFile
@@ -852,7 +862,7 @@ func genRustStaticlibSrcFile(crateNames []string) string {
 }
 
 func BuildRustStubs(ctx android.ModuleContext, outputFile android.ModuleOutPath,
-	crtBegin, crtEnd android.Paths, stubObjs Objects, ccFlags Flags) {
+	stubObjs Objects, ccFlags Flags) {
 
 	// Instantiate paths
 	sharedLibs := android.Paths{}
@@ -862,6 +872,8 @@ func BuildRustStubs(ctx android.ModuleContext, outputFile android.ModuleOutPath,
 	deps := android.Paths{}
 	implicitOutputs := android.WritablePaths{}
 	validations := android.Paths{}
+	crtBegin := android.Paths{}
+	crtEnd := android.Paths{}
 	groupLate := false
 
 	builderFlags := flagsToBuilderFlags(ccFlags)
@@ -962,13 +974,18 @@ func transformObjToDynamicBinary(ctx android.ModuleContext,
 func transformDumpToLinkedDump(ctx android.ModuleContext, sAbiDumps android.Paths, soFile android.Path,
 	baseName string, exportedIncludeDirs []string, symbolFile android.OptionalPath,
 	excludedSymbolVersions, excludedSymbolTags, includedSymbolTags []string,
-	api string) android.Path {
+	api string, commonGlobalIncludes bool) android.Path {
 
 	outputFile := android.PathForModuleOut(ctx, baseName+".lsdump")
 
 	implicits := android.Paths{soFile}
 	symbolFilterStr := "-so " + soFile.String()
 	exportedHeaderFlags := android.JoinWithPrefix(exportedIncludeDirs, "-I")
+	// If this library does not export any include directory, do not append the flags
+	// so that the ABI tool dumps everything without filtering by the include directories.
+	if commonGlobalIncludes && len(exportedIncludeDirs) > 0 {
+		exportedHeaderFlags += " ${config.CommonGlobalIncludes}"
+	}
 
 	if symbolFile.Valid() {
 		implicits = append(implicits, symbolFile.Path())

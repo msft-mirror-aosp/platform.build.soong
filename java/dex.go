@@ -234,21 +234,29 @@ func (d *dexer) dexCommonFlags(ctx android.ModuleContext,
 		deps = append(deps, f)
 	}
 
-	var requestReleaseMode bool
+	var requestReleaseMode, requestDebugMode bool
 	requestReleaseMode, flags = android.RemoveFromList("--release", flags)
+	requestDebugMode, flags = android.RemoveFromList("--debug", flags)
 
 	if ctx.Config().Getenv("NO_OPTIMIZE_DX") != "" || ctx.Config().Getenv("GENERATE_DEX_DEBUG") != "" {
-		flags = append(flags, "--debug")
+		requestDebugMode = true
 		requestReleaseMode = false
 	}
 
 	// Don't strip out debug information for eng builds, unless the target
 	// explicitly provided the `--release` build flag. This allows certain
 	// test targets to remain optimized as part of eng test_suites builds.
-	if requestReleaseMode {
+	if requestDebugMode {
+		flags = append(flags, "--debug")
+	} else if requestReleaseMode {
 		flags = append(flags, "--release")
 	} else if ctx.Config().Eng() {
 		flags = append(flags, "--debug")
+	} else if !d.effectiveOptimizeEnabled() && d.dexProperties.Optimize.EnabledByDefault {
+		// D8 uses --debug by default, whereas R8 uses --release by default.
+		// For targets that default to R8 usage (e.g., apps), but override this default, we still
+		// want D8 to run in release mode, preserving semantics as much as possible between the two.
+		flags = append(flags, "--release")
 	}
 
 	// Supplying the platform build flag disables various features like API modeling and desugaring.
@@ -320,7 +328,7 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams, 
 	// TODO(b/360905238): Remove SdkSystemServer exception after resolving missing class references.
 	if !dexParams.sdkVersion.Stable() || dexParams.sdkVersion.Kind == android.SdkSystemServer {
 		var proguardRaiseDeps classpath
-		ctx.VisitDirectDepsWithTag(proguardRaiseTag, func(m android.Module) {
+		ctx.VisitDirectDepsProxyWithTag(proguardRaiseTag, func(m android.ModuleProxy) {
 			if dep, ok := android.OtherModuleProvider(ctx, m, JavaInfoProvider); ok {
 				proguardRaiseDeps = append(proguardRaiseDeps, dep.RepackagedHeaderJars...)
 			}
@@ -378,7 +386,7 @@ func (d *dexer) r8Flags(ctx android.ModuleContext, dexParams *compileDexParams, 
 		r8Flags = append(r8Flags, "--keep-runtime-invisible-annotations")
 	}
 
-	if BoolDefault(opt.Proguard_compatibility, true) {
+	if BoolDefault(opt.Proguard_compatibility, !ctx.Config().UseR8FullModeByDefault()) {
 		r8Flags = append(r8Flags, "--force-proguard-compatibility")
 	}
 

@@ -292,7 +292,6 @@ var (
 		"-Wno-error=deprecated",          // in external/googletest/googletest
 		// New warnings to be fixed after clang-r522817
 		"-Wno-error=invalid-offsetof",
-		"-Wno-error=thread-safety-reference-return",
 
 		// Allow using VLA CXX extension.
 		"-Wno-vla-cxx-extension",
@@ -383,8 +382,8 @@ var (
 
 	// prebuilts/clang default settings.
 	ClangDefaultBase         = "prebuilts/clang/host"
-	ClangDefaultVersion      = "clang-r536225"
-	ClangDefaultShortVersion = "19"
+	ClangDefaultVersion      = "clang-r547379"
+	ClangDefaultShortVersion = "20"
 
 	// Directories with warnings from Android.bp files.
 	WarningAllowedProjects = []string{

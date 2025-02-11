@@ -323,6 +323,13 @@ var (
 			Command:     `${keep-flagged-apis} ${in} > ${out}`,
 			CommandDeps: []string{"${keep-flagged-apis}"},
 		})
+
+	generateApiXMLRule = pctx.AndroidStaticRule("generateApiXMLRule",
+		blueprint.RuleParams{
+			Command:     `${config.JavaCmd} ${config.JavaVmFlags} -Xmx4g -jar ${config.MetalavaJar} jar-to-jdiff ${in} ${out}`,
+			CommandDeps: []string{"${config.JavaCmd}", "${config.MetalavaJar}"},
+			Description: "Converting API file to XML",
+		})
 )
 
 func init() {
@@ -750,9 +757,9 @@ func TransformJarToR8Rules(ctx android.ModuleContext, outputFile android.Writabl
 	jar android.Path) {
 
 	ctx.Build(pctx, android.BuildParams{
-		Rule:        extractR8Rules,
-		Output:      outputFile,
-		Input:       jar,
+		Rule:   extractR8Rules,
+		Output: outputFile,
+		Input:  jar,
 	})
 }
 
@@ -796,7 +803,7 @@ func TransformJarJarWithShards(ctx android.ModuleContext, outputFile android.Wri
 	totalStr := strconv.Itoa(totalShards)
 	for i := 0; i < totalShards; i++ {
 		iStr := strconv.Itoa(i)
-		tempOut := android.PathForOutput(ctx, outputFile.String()+"-"+iStr+".jar")
+		tempOut := outputFile.ReplaceExtension(ctx, "-"+iStr+".jar")
 		ctx.Build(pctx, android.BuildParams{
 			Rule:        jarjar,
 			Description: "jarjar (" + iStr + "/" + totalStr + ")",

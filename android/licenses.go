@@ -227,16 +227,18 @@ func licensesPropertyFlattener(ctx ModuleContext) {
 	}
 
 	var licenses []string
-	for _, module := range ctx.GetDirectDepsWithTag(licensesTag) {
-		if l, ok := module.(*licenseModule); ok {
+	var texts NamedPaths
+	var conditions []string
+	var kinds []string
+	for _, module := range ctx.GetDirectDepsProxyWithTag(licensesTag) {
+		if l, ok := OtherModuleProvider(ctx, module, LicenseInfoProvider); ok {
 			licenses = append(licenses, ctx.OtherModuleName(module))
-			if m.base().commonProperties.Effective_package_name == nil && l.properties.Package_name != nil {
-				m.base().commonProperties.Effective_package_name = l.properties.Package_name
+			if m.base().commonProperties.Effective_package_name == nil && l.PackageName != nil {
+				m.base().commonProperties.Effective_package_name = l.PackageName
 			}
-			mergeStringProps(&m.base().commonProperties.Effective_licenses, module.base().commonProperties.Effective_licenses...)
-			mergeNamedPathProps(&m.base().commonProperties.Effective_license_text, module.base().commonProperties.Effective_license_text...)
-			mergeStringProps(&m.base().commonProperties.Effective_license_kinds, module.base().commonProperties.Effective_license_kinds...)
-			mergeStringProps(&m.base().commonProperties.Effective_license_conditions, module.base().commonProperties.Effective_license_conditions...)
+			texts = append(texts, l.EffectiveLicenseText...)
+			kinds = append(kinds, l.EffectiveLicenseKinds...)
+			conditions = append(conditions, l.EffectiveLicenseConditions...)
 		} else {
 			propertyName := "licenses"
 			primaryProperty := m.base().primaryLicensesProperty
@@ -247,17 +249,15 @@ func licensesPropertyFlattener(ctx ModuleContext) {
 		}
 	}
 
+	m.base().commonProperties.Effective_license_text = SortedUniqueNamedPaths(texts)
+	m.base().commonProperties.Effective_license_kinds = SortedUniqueStrings(kinds)
+	m.base().commonProperties.Effective_license_conditions = SortedUniqueStrings(conditions)
+
 	// Make the license information available for other modules.
-	licenseInfo := LicenseInfo{
+	licenseInfo := LicensesInfo{
 		Licenses: licenses,
 	}
-	SetProvider(ctx, LicenseInfoProvider, licenseInfo)
-}
-
-// Update a property string array with a distinct union of its values and a list of new values.
-func mergeStringProps(prop *[]string, values ...string) {
-	*prop = append(*prop, values...)
-	*prop = SortedUniqueStrings(*prop)
+	SetProvider(ctx, LicensesInfoProvider, licenseInfo)
 }
 
 // Update a property NamedPath array with a distinct union of its values and a list of new values.
@@ -271,12 +271,6 @@ func namePathProps(prop *NamedPaths, name *string, values ...Path) {
 			*prop = append(*prop, NamedPath{value, *name})
 		}
 	}
-	*prop = SortedUniqueNamedPaths(*prop)
-}
-
-// Update a property NamedPath array with a distinct union of its values and a list of new values.
-func mergeNamedPathProps(prop *NamedPaths, values ...NamedPath) {
-	*prop = append(*prop, values...)
 	*prop = SortedUniqueNamedPaths(*prop)
 }
 
@@ -336,14 +330,14 @@ func exemptFromRequiredApplicableLicensesProperty(module Module) bool {
 	return true
 }
 
-// LicenseInfo contains information about licenses for a specific module.
-type LicenseInfo struct {
+// LicensesInfo contains information about licenses for a specific module.
+type LicensesInfo struct {
 	// The list of license modules this depends upon, either explicitly or through default package
 	// configuration.
 	Licenses []string
 }
 
-var LicenseInfoProvider = blueprint.NewProvider[LicenseInfo]()
+var LicensesInfoProvider = blueprint.NewProvider[LicensesInfo]()
 
 func init() {
 	RegisterMakeVarsProvider(pctx, licensesMakeVarsProvider)
