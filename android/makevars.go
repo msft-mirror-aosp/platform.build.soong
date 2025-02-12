@@ -185,6 +185,7 @@ func makeVarsSingletonFunc() Singleton {
 type makeVarsSingleton struct {
 	varsForTesting     []makeVarsVariable
 	installsForTesting []byte
+	lateForTesting     []byte
 }
 
 type makeVarsProvider struct {
@@ -265,6 +266,11 @@ func (s *makeVarsSingleton) GenerateBuildActions(ctx SingletonContext) {
 		dists = append(dists, mctx.dists...)
 	}
 
+	singletonDists := getSingletonDists(ctx.Config())
+	singletonDists.lock.Lock()
+	dists = append(dists, singletonDists.dists...)
+	singletonDists.lock.Unlock()
+
 	ctx.VisitAllModules(func(m Module) {
 		if provider, ok := m.(ModuleMakeVarsProvider); ok && m.Enabled(ctx) {
 			mctx := &makeVarsContext{
@@ -284,6 +290,10 @@ func (s *makeVarsSingleton) GenerateBuildActions(ctx SingletonContext) {
 			katiInitRcInstalls = append(katiInitRcInstalls, info.KatiInitRcInstalls...)
 			katiVintfManifestInstalls = append(katiVintfManifestInstalls, info.KatiVintfInstalls...)
 			katiSymlinks = append(katiSymlinks, info.KatiSymlinks...)
+		}
+
+		if distInfo, ok := OtherModuleProvider(ctx, m, DistProvider); ok {
+			dists = append(dists, distInfo.Dists...)
 		}
 	})
 
@@ -354,6 +364,7 @@ func (s *makeVarsSingleton) GenerateBuildActions(ctx SingletonContext) {
 	if ctx.Config().RunningInsideUnitTest() {
 		s.varsForTesting = vars
 		s.installsForTesting = installsBytes
+		s.lateForTesting = lateOutBytes
 	}
 }
 
@@ -651,6 +662,7 @@ func (c *makeVarsContext) DistForGoals(goals []string, paths ...Path) {
 	for _, path := range paths {
 		copies = append(copies, distCopy{
 			from: path,
+			dest: path.Base(),
 		})
 	}
 	c.addDist(goals, copies)

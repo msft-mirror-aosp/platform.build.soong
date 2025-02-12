@@ -1925,6 +1925,12 @@ type HostToolProviderInfo struct {
 
 var HostToolProviderInfoProvider = blueprint.NewProvider[HostToolProviderInfo]()
 
+type DistInfo struct {
+	Dists []dist
+}
+
+var DistProvider = blueprint.NewProvider[DistInfo]()
+
 type SourceFileGenerator interface {
 	GeneratedSourceFiles() Paths
 	GeneratedHeaderDirs() Paths
@@ -2222,6 +2228,13 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			Phonies: ctx.phonies,
 		})
 	}
+
+	if len(ctx.dists) > 0 {
+		SetProvider(ctx, DistProvider, DistInfo{
+			Dists: ctx.dists,
+		})
+	}
+
 	buildComplianceMetadataProvider(ctx, m)
 
 	commonData := CommonModuleInfo{

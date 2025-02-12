@@ -573,8 +573,8 @@ func (flagExporter *flagExporter) exportWholeStaticLibs(flags ...string) {
 	flagExporter.wholeStaticLibObjects = android.FirstUniqueStrings(append(flagExporter.wholeStaticLibObjects, flags...))
 }
 
-func (flagExporter *flagExporter) setProvider(ctx ModuleContext) {
-	android.SetProvider(ctx, FlagExporterInfoProvider, FlagExporterInfo{
+func (flagExporter *flagExporter) setRustProvider(ctx ModuleContext) {
+	android.SetProvider(ctx, RustFlagExporterInfoProvider, RustFlagExporterInfo{
 		LinkDirs:              flagExporter.linkDirs,
 		RustLibObjects:        flagExporter.rustLibPaths,
 		StaticLibObjects:      flagExporter.staticLibObjects,
@@ -589,7 +589,7 @@ func NewFlagExporter() *flagExporter {
 	return &flagExporter{}
 }
 
-type FlagExporterInfo struct {
+type RustFlagExporterInfo struct {
 	Flags                 []string
 	LinkDirs              []string
 	RustLibObjects        []string
@@ -598,7 +598,7 @@ type FlagExporterInfo struct {
 	SharedLibPaths        []string
 }
 
-var FlagExporterInfoProvider = blueprint.NewProvider[FlagExporterInfo]()
+var RustFlagExporterInfoProvider = blueprint.NewProvider[RustFlagExporterInfo]()
 
 func (mod *Module) isCoverageVariant() bool {
 	return mod.coverage.Properties.IsCoverageVariant
@@ -1199,10 +1199,11 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	// Define the linker info if compiler != nil because Rust currently
 	// does compilation and linking in one step. If this changes in the future,
 	// move this as appropriate.
+	baseCompilerProps := mod.compiler.baseCompilerProps()
 	ccInfo.LinkerInfo = &cc.LinkerInfo{
-		WholeStaticLibs: mod.compiler.baseCompilerProps().Whole_static_libs,
-		StaticLibs:      mod.compiler.baseCompilerProps().Static_libs,
-		SharedLibs:      mod.compiler.baseCompilerProps().Shared_libs,
+		WholeStaticLibs: baseCompilerProps.Whole_static_libs.GetOrDefault(ctx, nil),
+		StaticLibs:      baseCompilerProps.Static_libs.GetOrDefault(ctx, nil),
+		SharedLibs:      baseCompilerProps.Shared_libs.GetOrDefault(ctx, nil),
 	}
 
 	android.SetProvider(ctx, cc.CcInfoProvider, ccInfo)
@@ -1573,7 +1574,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				directSrcProvidersDeps = append(directSrcProvidersDeps, &dep)
 			}
 
-			exportedInfo, _ := android.OtherModuleProvider(ctx, dep, FlagExporterInfoProvider)
+			exportedInfo, _ := android.OtherModuleProvider(ctx, dep, RustFlagExporterInfoProvider)
 
 			//Append the dependencies exported objects, except for proc-macros which target a different arch/OS
 			if depTag != procMacroDepTag {
@@ -2123,6 +2124,9 @@ func (mod *Module) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool 
 }
 
 func (mod *Module) IncomingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
+	if mod.Host() {
+		return false
+	}
 	// TODO(b/362509506): remove once all apex_exclude uses are switched to stubs.
 	if mod.ApexExclude() {
 		return false
