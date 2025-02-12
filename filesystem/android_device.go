@@ -72,6 +72,7 @@ type DeviceProperties struct {
 
 	Ab_ota_updater    *bool
 	Ab_ota_partitions []string
+	Ab_ota_keys       []string
 }
 
 type androidDevice struct {
@@ -449,6 +450,10 @@ func (a *androidDevice) copyMetadataToTargetZip(ctx android.ModuleContext, build
 		abPartitionsSorted := android.SortedUniqueStrings(a.deviceProps.Ab_ota_partitions)
 		abPartitionsSortedString := proptools.ShellEscape(strings.Join(abPartitionsSorted, "\\n"))
 		builder.Command().Textf("echo -e").Flag(abPartitionsSortedString).Textf(" > %s/META/ab_partitions.txt", targetFilesDir.String())
+		// otakeys.txt
+		abOtaKeysSorted := android.SortedUniqueStrings(a.deviceProps.Ab_ota_keys)
+		abOtaKeysSortedString := proptools.ShellEscape(strings.Join(abOtaKeysSorted, "\\n"))
+		builder.Command().Textf("echo -e").Flag(abOtaKeysSortedString).Textf(" > %s/META/otakeys.txt", targetFilesDir.String())
 	}
 }
 
