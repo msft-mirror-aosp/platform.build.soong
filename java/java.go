@@ -1194,7 +1194,7 @@ func buildComplianceMetadata(ctx android.ModuleContext) {
 	for _, paths := range ctx.GetOutputFiles().TaggedOutputFiles {
 		builtFiles = append(builtFiles, paths.Strings()...)
 	}
-	complianceMetadataInfo.SetListValue(android.ComplianceMetadataProp.BUILT_FILES, android.FirstUniqueStrings(builtFiles))
+	complianceMetadataInfo.SetListValue(android.ComplianceMetadataProp.BUILT_FILES, android.SortedUniqueStrings(builtFiles))
 
 	// Static deps
 	staticDepNames := make([]string, 0)
@@ -1207,8 +1207,8 @@ func buildComplianceMetadata(ctx android.ModuleContext) {
 			staticDepFiles = append(staticDepFiles, dep.ResourceJars...)
 		}
 	})
-	complianceMetadataInfo.SetListValue(android.ComplianceMetadataProp.STATIC_DEPS, android.FirstUniqueStrings(staticDepNames))
-	complianceMetadataInfo.SetListValue(android.ComplianceMetadataProp.STATIC_DEP_FILES, android.FirstUniqueStrings(staticDepFiles.Strings()))
+	complianceMetadataInfo.SetListValue(android.ComplianceMetadataProp.STATIC_DEPS, android.SortedUniqueStrings(staticDepNames))
+	complianceMetadataInfo.SetListValue(android.ComplianceMetadataProp.STATIC_DEP_FILES, android.SortedUniqueStrings(staticDepFiles.Strings()))
 }
 
 func (j *Library) getJarInstallDir(ctx android.ModuleContext) android.InstallPath {
@@ -3546,7 +3546,6 @@ func DexImportFactory() android.Module {
 type Defaults struct {
 	android.ModuleBase
 	android.DefaultsModuleBase
-	android.ApexModuleBase
 }
 
 // java_defaults provides a set of properties that can be inherited by other java or android modules.

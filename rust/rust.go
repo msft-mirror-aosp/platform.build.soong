@@ -495,6 +495,10 @@ type PathDeps struct {
 	depFlags     []string
 	depLinkFlags []string
 
+	// track cc static-libs that have Rlib dependencies
+	reexportedCcRlibDeps []cc.RustRlibDep
+	ccRlibDeps           []cc.RustRlibDep
+
 	// linkDirs are link paths passed via -L to rustc. linkObjects are objects passed directly to the linker
 	// Both of these are exported and propagate to dependencies.
 	linkDirs              []string
@@ -573,8 +577,8 @@ func (flagExporter *flagExporter) exportWholeStaticLibs(flags ...string) {
 	flagExporter.wholeStaticLibObjects = android.FirstUniqueStrings(append(flagExporter.wholeStaticLibObjects, flags...))
 }
 
-func (flagExporter *flagExporter) setProvider(ctx ModuleContext) {
-	android.SetProvider(ctx, FlagExporterInfoProvider, FlagExporterInfo{
+func (flagExporter *flagExporter) setRustProvider(ctx ModuleContext) {
+	android.SetProvider(ctx, RustFlagExporterInfoProvider, RustFlagExporterInfo{
 		LinkDirs:              flagExporter.linkDirs,
 		RustLibObjects:        flagExporter.rustLibPaths,
 		StaticLibObjects:      flagExporter.staticLibObjects,
@@ -589,7 +593,7 @@ func NewFlagExporter() *flagExporter {
 	return &flagExporter{}
 }
 
-type FlagExporterInfo struct {
+type RustFlagExporterInfo struct {
 	Flags                 []string
 	LinkDirs              []string
 	RustLibObjects        []string
@@ -598,7 +602,7 @@ type FlagExporterInfo struct {
 	SharedLibPaths        []string
 }
 
-var FlagExporterInfoProvider = blueprint.NewProvider[FlagExporterInfo]()
+var RustFlagExporterInfoProvider = blueprint.NewProvider[RustFlagExporterInfo]()
 
 func (mod *Module) isCoverageVariant() bool {
 	return mod.coverage.Properties.IsCoverageVariant
@@ -1531,6 +1535,13 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					}
 				}
 
+				if !mod.Rlib() {
+					depPaths.ccRlibDeps = append(depPaths.ccRlibDeps, exportedInfo.RustRlibDeps...)
+				} else {
+					// rlibs need to reexport these
+					depPaths.reexportedCcRlibDeps = append(depPaths.reexportedCcRlibDeps, exportedInfo.RustRlibDeps...)
+				}
+
 			case depTag == procMacroDepTag:
 				directProcMacroDeps = append(directProcMacroDeps, linkableInfo)
 				mod.Properties.AndroidMkProcMacroLibs = append(mod.Properties.AndroidMkProcMacroLibs, makeLibName)
@@ -1574,7 +1585,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				directSrcProvidersDeps = append(directSrcProvidersDeps, &dep)
 			}
 
-			exportedInfo, _ := android.OtherModuleProvider(ctx, dep, FlagExporterInfoProvider)
+			exportedInfo, _ := android.OtherModuleProvider(ctx, dep, RustFlagExporterInfoProvider)
 
 			//Append the dependencies exported objects, except for proc-macros which target a different arch/OS
 			if depTag != procMacroDepTag {
@@ -1651,8 +1662,8 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				} else {
 					// Otherwise add to staticLibObjects, which only propagate through rlibs to their dependents.
 					depPaths.staticLibObjects = append(depPaths.staticLibObjects, ccLibPath.String())
-
 				}
+
 				depPaths.linkDirs = append(depPaths.linkDirs, linkPath)
 
 				exportedInfo, _ := android.OtherModuleProvider(ctx, dep, cc.FlagExporterInfoProvider)
@@ -1660,6 +1671,14 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				depPaths.depSystemIncludePaths = append(depPaths.depSystemIncludePaths, exportedInfo.SystemIncludeDirs...)
 				depPaths.depClangFlags = append(depPaths.depClangFlags, exportedInfo.Flags...)
 				depPaths.depGeneratedHeaders = append(depPaths.depGeneratedHeaders, exportedInfo.GeneratedHeaders...)
+
+				if !mod.Rlib() {
+					// rlibs don't need to build the generated static library, so they don't need to track these.
+					depPaths.ccRlibDeps = append(depPaths.ccRlibDeps, exportedInfo.RustRlibDeps...)
+				} else {
+					depPaths.reexportedCcRlibDeps = append(depPaths.reexportedCcRlibDeps, exportedInfo.RustRlibDeps...)
+				}
+
 				directStaticLibDeps = append(directStaticLibDeps, linkableInfo)
 
 				// Record baseLibName for snapshots.
@@ -1815,6 +1834,8 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	depPaths.depIncludePaths = android.FirstUniquePaths(depPaths.depIncludePaths)
 	depPaths.depSystemIncludePaths = android.FirstUniquePaths(depPaths.depSystemIncludePaths)
 	depPaths.depLinkFlags = android.FirstUniqueStrings(depPaths.depLinkFlags)
+	depPaths.reexportedCcRlibDeps = android.FirstUniqueFunc(depPaths.reexportedCcRlibDeps, cc.EqRustRlibDeps)
+	depPaths.ccRlibDeps = android.FirstUniqueFunc(depPaths.ccRlibDeps, cc.EqRustRlibDeps)
 
 	return depPaths
 }
@@ -2124,6 +2145,9 @@ func (mod *Module) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool 
 }
 
 func (mod *Module) IncomingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
+	if mod.Host() {
+		return false
+	}
 	// TODO(b/362509506): remove once all apex_exclude uses are switched to stubs.
 	if mod.ApexExclude() {
 		return false
