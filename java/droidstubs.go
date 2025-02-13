@@ -1429,6 +1429,16 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	d.setOutputFiles(ctx)
 
 	d.setPhonyRules(ctx)
+
+	if d.apiLintTimestamp != nil {
+		if d.apiLintReport != nil {
+			ctx.DistForGoalsWithFilename(
+				[]string{fmt.Sprintf("%s-api-lint", d.Name()), "droidcore"},
+				d.apiLintReport,
+				fmt.Sprintf("apilint/%s-lint-report.txt", d.Name()),
+			)
+		}
+	}
 }
 
 func setDroidInfo(ctx android.ModuleContext, d *Droidstubs, info *StubsInfo, typ StubsType) {
@@ -1523,18 +1533,6 @@ var (
 		"toolchain":     android.SdkToolchain,
 	}
 )
-
-func (d *Droidstubs) MakeVars(ctx android.MakeVarsModuleContext) {
-	if d.apiLintTimestamp != nil {
-		if d.apiLintReport != nil {
-			ctx.DistForGoalsWithFilename(
-				[]string{fmt.Sprintf("%s-api-lint", d.Name()), "droidcore"},
-				d.apiLintReport,
-				fmt.Sprintf("apilint/%s-lint-report.txt", d.Name()),
-			)
-		}
-	}
-}
 
 func StubsDefaultsFactory() android.Module {
 	module := &DocDefaults{}
