@@ -713,6 +713,17 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 				implicitDeps = append(implicitDeps, extraZip.zip)
 			}
 
+			var cpFlags = "-f"
+
+			// If this is a device file, copy while preserving timestamps. This is to support
+			// adb sync in soong-only builds. Because soong-only builds have 2 different staging
+			// directories, the out/target/product one and the out/soong/.intermediates one,
+			// we need to ensure the files in them have the same timestamps so that adb sync doesn't
+			// update the files on device.
+			if strings.Contains(fullInstallPath.String(), "target/product") {
+				cpFlags += " -p"
+			}
+
 			m.Build(pctx, BuildParams{
 				Rule:        rule,
 				Description: "install " + fullInstallPath.Base(),
@@ -722,7 +733,7 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 				OrderOnly:   orderOnlyDeps,
 				Args: map[string]string{
 					"extraCmds": extraCmds,
-					"cpFlags":   "-f",
+					"cpFlags":   cpFlags,
 				},
 			})
 		}
