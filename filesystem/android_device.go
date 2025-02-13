@@ -463,6 +463,29 @@ func (a *androidDevice) copyMetadataToTargetZip(ctx android.ModuleContext, build
 			builder.Command().Textf("cp").Input(a.getFsInfos(ctx)["system"].SelinuxFc).Textf(" %s/META/file_contexts.bin", targetFilesDir.String())
 		}
 	}
+	// Copy $partition_filesystem_config.txt
+	fsInfos := a.getFsInfos(ctx)
+	for _, partition := range android.SortedKeys(fsInfos) {
+		if fsInfos[partition].FilesystemConfig == nil {
+			continue
+		}
+		if android.InList(partition, []string{"userdata"}) {
+			continue
+		}
+		builder.Command().Textf("cp").Input(fsInfos[partition].FilesystemConfig).Textf(" %s/META/%s", targetFilesDir.String(), a.filesystemConfigNameForTargetFiles(partition))
+	}
+}
+
+// Filenames for the partition specific fs_config files.
+// Hardcode the ramdisk files to their boot image prefix
+func (a *androidDevice) filesystemConfigNameForTargetFiles(partition string) string {
+	name := partition + "_filesystem_config.txt"
+	if partition == "system" {
+		name = "filesystem_config.txt"
+	} else if partition == "ramdisk" {
+		name = "init_boot_filesystem_config.txt"
+	}
+	return name
 }
 
 func (a *androidDevice) getFilesystemInfo(ctx android.ModuleContext, depName string) FilesystemInfo {
