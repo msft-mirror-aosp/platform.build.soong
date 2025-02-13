@@ -26,6 +26,16 @@ import (
 
 var prepareForTestWithFsgenBuildComponents = android.FixtureRegisterWithContext(registerBuildComponents)
 
+var prepareMockRamdiksNodeList = android.FixtureMergeMockFs(android.MockFS{
+	"ramdisk_node_list/ramdisk_node_list": nil,
+	"ramdisk_node_list/Android.bp": []byte(`
+		filegroup {
+			name: "ramdisk_node_list",
+			srcs: ["ramdisk_node_list"],
+		}
+	`),
+})
+
 func TestFileSystemCreatorSystemImageProps(t *testing.T) {
 	result := android.GroupFixturePreparers(
 		android.PrepareForIntegrationTestWithAndroid,
@@ -45,6 +55,7 @@ func TestFileSystemCreatorSystemImageProps(t *testing.T) {
 					},
 				}
 		}),
+		prepareMockRamdiksNodeList,
 		android.FixtureMergeMockFs(android.MockFS{
 			"external/avb/test/data/testkey_rsa4096.pem": nil,
 			"external/avb/test/Android.bp": []byte(`
@@ -114,6 +125,7 @@ func TestFileSystemCreatorSetPartitionDeps(t *testing.T) {
 					},
 				}
 		}),
+		prepareMockRamdiksNodeList,
 		android.FixtureMergeMockFs(android.MockFS{
 			"external/avb/test/data/testkey_rsa4096.pem": nil,
 			"build/soong/fsgen/Android.bp": []byte(`
@@ -170,6 +182,7 @@ func TestFileSystemCreatorDepsWithNamespace(t *testing.T) {
 				}
 		}),
 		android.PrepareForNativeBridgeEnabled,
+		prepareMockRamdiksNodeList,
 		android.FixtureMergeMockFs(android.MockFS{
 			"external/avb/test/data/testkey_rsa4096.pem": nil,
 			"build/soong/fsgen/Android.bp": []byte(`
@@ -227,6 +240,7 @@ func TestRemoveOverriddenModulesFromDeps(t *testing.T) {
 		android.PrepareForTestWithAllowMissingDependencies,
 		prepareForTestWithFsgenBuildComponents,
 		java.PrepareForTestWithJavaBuildComponents,
+		prepareMockRamdiksNodeList,
 		android.FixtureMergeMockFs(android.MockFS{
 			"external/avb/test/data/testkey_rsa4096.pem": nil,
 			"build/soong/fsgen/Android.bp": []byte(`
@@ -279,6 +293,7 @@ func TestPrebuiltEtcModuleGen(t *testing.T) {
 					},
 				}
 		}),
+		prepareMockRamdiksNodeList,
 		android.FixtureMergeMockFs(android.MockFS{
 			"external/avb/test/data/testkey_rsa4096.pem": nil,
 			"build/soong/fsgen/Android.bp": []byte(`

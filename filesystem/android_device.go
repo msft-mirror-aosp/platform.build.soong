@@ -74,6 +74,8 @@ type DeviceProperties struct {
 	Ab_ota_partitions         []string
 	Ab_ota_keys               []string
 	Ab_ota_postinstall_config []string
+
+	Ramdisk_node_list *string `android:"path"`
 }
 
 type androidDevice struct {
@@ -474,6 +476,8 @@ func (a *androidDevice) copyMetadataToTargetZip(ctx android.ModuleContext, build
 		}
 		builder.Command().Textf("cp").Input(fsInfos[partition].FilesystemConfig).Textf(" %s/META/%s", targetFilesDir.String(), a.filesystemConfigNameForTargetFiles(partition))
 	}
+	// Copy ramdisk_node_list
+	builder.Command().Textf("cp").Input(android.PathForModuleSrc(ctx, proptools.String(a.deviceProps.Ramdisk_node_list))).Textf(" %s/META/", targetFilesDir.String())
 }
 
 // Filenames for the partition specific fs_config files.
