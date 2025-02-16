@@ -381,8 +381,9 @@ func (f *filesystemCreator) createDeviceModule(
 	partitionProps.Vbmeta_partitions = vbmetaPartitions
 
 	deviceProps := &filesystem.DeviceProperties{
-		Main_device:    proptools.BoolPtr(true),
-		Ab_ota_updater: proptools.BoolPtr(ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.AbOtaUpdater),
+		Main_device:       proptools.BoolPtr(true),
+		Ab_ota_updater:    proptools.BoolPtr(ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.AbOtaUpdater),
+		Ab_ota_partitions: ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.AbOtaPartitions,
 	}
 	if bootloader, ok := f.createBootloaderFilegroup(ctx); ok {
 		deviceProps.Bootloader = proptools.StringPtr(":" + bootloader)
@@ -1029,13 +1030,6 @@ func getAvbInfo(config android.Config, partitionType string) avbInfo {
 			result.avbAlgorithm = proptools.StringPtr(specificPartitionVars.BoardAvbAlgorithm)
 		} else if partitionVars.BoardAvbAlgorithm != "" {
 			result.avbAlgorithm = proptools.StringPtr(partitionVars.BoardAvbAlgorithm)
-		}
-		if specificPartitionVars.BoardAvbRollbackIndex != "" {
-			parsed, err := strconv.ParseInt(specificPartitionVars.BoardAvbRollbackIndex, 10, 64)
-			if err != nil {
-				panic(fmt.Sprintf("Rollback index must be an int, got %s", specificPartitionVars.BoardAvbRollbackIndex))
-			}
-			result.avbRollbackIndex = &parsed
 		}
 		if specificPartitionVars.BoardAvbRollbackIndex != "" {
 			parsed, err := strconv.ParseInt(specificPartitionVars.BoardAvbRollbackIndex, 10, 64)

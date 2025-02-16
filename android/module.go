@@ -1091,6 +1091,10 @@ var vintfDepTag = struct {
 	InstallAlwaysNeededDependencyTag
 }{}
 
+func IsVintfDepTag(depTag blueprint.DependencyTag) bool {
+	return depTag == vintfDepTag
+}
+
 func addVintfFragmentDeps(ctx BottomUpMutatorContext) {
 	// Vintf manifests in the recovery partition will be ignored.
 	if !ctx.Device() || ctx.Module().InstallInRecovery() {
@@ -1109,7 +1113,7 @@ func addVintfFragmentDeps(ctx BottomUpMutatorContext) {
 			// of nil pointer dereference errors, but we should resolve the missing dependencies.
 			continue
 		}
-		if vintfModule, ok := vintf.(*vintfFragmentModule); ok {
+		if vintfModule, ok := vintf.(*VintfFragmentModule); ok {
 			vintfPartition := vintfModule.PartitionTag(deviceConfig)
 			if modPartition != vintfPartition {
 				ctx.ModuleErrorf("Module %q(%q) and Vintf_fragment %q(%q) are installed to different partitions.",
@@ -1925,6 +1929,12 @@ type HostToolProviderInfo struct {
 
 var HostToolProviderInfoProvider = blueprint.NewProvider[HostToolProviderInfo]()
 
+type DistInfo struct {
+	Dists []dist
+}
+
+var DistProvider = blueprint.NewProvider[DistInfo]()
+
 type SourceFileGenerator interface {
 	GeneratedSourceFiles() Paths
 	GeneratedHeaderDirs() Paths
@@ -2222,6 +2232,13 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 			Phonies: ctx.phonies,
 		})
 	}
+
+	if len(ctx.dists) > 0 {
+		SetProvider(ctx, DistProvider, DistInfo{
+			Dists: ctx.dists,
+		})
+	}
+
 	buildComplianceMetadataProvider(ctx, m)
 
 	commonData := CommonModuleInfo{

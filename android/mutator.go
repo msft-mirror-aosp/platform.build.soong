@@ -15,9 +15,8 @@
 package android
 
 import (
-	"sync"
-
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/pool"
 )
 
 // Phases:
@@ -67,7 +66,6 @@ type registerMutatorsContext struct {
 }
 
 type RegisterMutatorsContext interface {
-	TopDown(name string, m TopDownMutator) MutatorHandle
 	BottomUp(name string, m BottomUpMutator) MutatorHandle
 	BottomUpBlueprint(name string, m blueprint.BottomUpMutator) MutatorHandle
 	Transition(name string, m VariationTransitionMutator) TransitionMutatorHandle
@@ -159,6 +157,7 @@ func registerArchMutator(ctx RegisterMutatorsContext) {
 
 var preDeps = []RegisterMutatorFunc{
 	registerArchMutator,
+	RegisterPrebuiltsPreDepsMutators,
 }
 
 var postDeps = []RegisterMutatorFunc{
@@ -192,17 +191,6 @@ func PostApexMutators(f RegisterMutatorFunc) {
 
 func FinalDepsMutators(f RegisterMutatorFunc) {
 	finalDeps = append(finalDeps, f)
-}
-
-type TopDownMutator func(TopDownMutatorContext)
-
-type TopDownMutatorContext interface {
-	BaseModuleContext
-}
-
-type topDownMutatorContext struct {
-	bp blueprint.TopDownMutatorContext
-	baseModuleContext
 }
 
 type BottomUpMutator func(BottomUpMutatorContext)
@@ -280,22 +268,12 @@ type BottomUpMutatorContext interface {
 }
 
 // An outgoingTransitionContextImpl and incomingTransitionContextImpl is created for every dependency of every module
-// for each transition mutator.  bottomUpMutatorContext and topDownMutatorContext are created once for every module
-// for every BottomUp or TopDown mutator.  Use a global pool for each to avoid reallocating every time.
+// for each transition mutator.  bottomUpMutatorContext is created once for every module for every BottomUp mutator.
+// Use a global pool for each to avoid reallocating every time.
 var (
-	outgoingTransitionContextPool = sync.Pool{
-		New: func() any { return &outgoingTransitionContextImpl{} },
-	}
-	incomingTransitionContextPool = sync.Pool{
-		New: func() any { return &incomingTransitionContextImpl{} },
-	}
-	bottomUpMutatorContextPool = sync.Pool{
-		New: func() any { return &bottomUpMutatorContext{} },
-	}
-
-	topDownMutatorContextPool = sync.Pool{
-		New: func() any { return &topDownMutatorContext{} },
-	}
+	outgoingTransitionContextPool = pool.New[outgoingTransitionContextImpl]()
+	incomingTransitionContextPool = pool.New[incomingTransitionContextImpl]()
+	bottomUpMutatorContextPool    = pool.New[bottomUpMutatorContext]()
 )
 
 type bottomUpMutatorContext struct {
@@ -306,10 +284,10 @@ type bottomUpMutatorContext struct {
 
 // callers must immediately follow the call to this function with defer bottomUpMutatorContextPool.Put(mctx).
 func bottomUpMutatorContextFactory(ctx blueprint.BottomUpMutatorContext, a Module,
-	finalPhase bool) BottomUpMutatorContext {
+	finalPhase bool) *bottomUpMutatorContext {
 
 	moduleContext := a.base().baseModuleContextFactory(ctx)
-	mctx := bottomUpMutatorContextPool.Get().(*bottomUpMutatorContext)
+	mctx := bottomUpMutatorContextPool.Get()
 	*mctx = bottomUpMutatorContext{
 		bp:                ctx,
 		baseModuleContext: moduleContext,
@@ -370,24 +348,6 @@ func (x *registerMutatorsContext) mutatorName(name string) string {
 	return name
 }
 
-func (x *registerMutatorsContext) TopDown(name string, m TopDownMutator) MutatorHandle {
-	f := func(ctx blueprint.TopDownMutatorContext) {
-		if a, ok := ctx.Module().(Module); ok {
-			moduleContext := a.base().baseModuleContextFactory(ctx)
-			actx := topDownMutatorContextPool.Get().(*topDownMutatorContext)
-			defer topDownMutatorContextPool.Put(actx)
-			*actx = topDownMutatorContext{
-				bp:                ctx,
-				baseModuleContext: moduleContext,
-			}
-			m(actx)
-		}
-	}
-	mutator := &mutator{name: x.mutatorName(name), topDownMutator: f}
-	x.mutators = append(x.mutators, mutator)
-	return mutator
-}
-
 func (mutator *mutator) componentName() string {
 	return mutator.name
 }
@@ -397,8 +357,6 @@ func (mutator *mutator) register(ctx *Context) {
 	var handle blueprint.MutatorHandle
 	if mutator.bottomUpMutator != nil {
 		handle = blueprintCtx.RegisterBottomUpMutator(mutator.name, mutator.bottomUpMutator)
-	} else if mutator.topDownMutator != nil {
-		handle = blueprintCtx.RegisterTopDownMutator(mutator.name, mutator.topDownMutator)
 	} else if mutator.transitionMutator != nil {
 		handle := blueprintCtx.RegisterTransitionMutator(mutator.name, mutator.transitionMutator)
 		if mutator.neverFar {
@@ -528,11 +486,11 @@ func registerDepsMutator(ctx RegisterMutatorsContext) {
 	ctx.BottomUp("deps", depsMutator).UsesReverseDependencies()
 }
 
-// android.topDownMutatorContext either has to embed blueprint.TopDownMutatorContext, in which case every method that
+// android.bottomUpMutatorContext either has to embed blueprint.BottomUpMutatorContext, in which case every method that
 // has an overridden version in android.BaseModuleContext has to be manually forwarded to BaseModuleContext to avoid
-// ambiguous method errors, or it has to store a blueprint.TopDownMutatorContext non-embedded, in which case every
+// ambiguous method errors, or it has to store a blueprint.BottomUpMutatorContext non-embedded, in which case every
 // non-overridden method has to be forwarded.  There are fewer non-overridden methods, so use the latter.  The following
-// methods forward to the identical blueprint versions for topDownMutatorContext and bottomUpMutatorContext.
+// methods forward to the identical blueprint versions for bottomUpMutatorContext.
 
 func (b *bottomUpMutatorContext) Rename(name string) {
 	b.bp.Rename(name)

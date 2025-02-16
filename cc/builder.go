@@ -817,7 +817,7 @@ func transformObjToStaticLib(ctx android.ModuleContext,
 }
 
 // Generate a Rust staticlib from a list of rlibDeps. Returns nil if TransformRlibstoStaticlib is nil or rlibDeps is empty.
-func generateRustStaticlib(ctx android.ModuleContext, rlibDeps []RustRlibDep) android.Path {
+func GenerateRustStaticlib(ctx android.ModuleContext, rlibDeps []RustRlibDep) android.Path {
 	if TransformRlibstoStaticlib == nil && len(rlibDeps) > 0 {
 		// This should only be reachable if a module defines Rust deps in static_libs and
 		// soong-rust hasn't been loaded alongside soong-cc (e.g. in soong-cc tests).
@@ -974,13 +974,18 @@ func transformObjToDynamicBinary(ctx android.ModuleContext,
 func transformDumpToLinkedDump(ctx android.ModuleContext, sAbiDumps android.Paths, soFile android.Path,
 	baseName string, exportedIncludeDirs []string, symbolFile android.OptionalPath,
 	excludedSymbolVersions, excludedSymbolTags, includedSymbolTags []string,
-	api string) android.Path {
+	api string, commonGlobalIncludes bool) android.Path {
 
 	outputFile := android.PathForModuleOut(ctx, baseName+".lsdump")
 
 	implicits := android.Paths{soFile}
 	symbolFilterStr := "-so " + soFile.String()
 	exportedHeaderFlags := android.JoinWithPrefix(exportedIncludeDirs, "-I")
+	// If this library does not export any include directory, do not append the flags
+	// so that the ABI tool dumps everything without filtering by the include directories.
+	if commonGlobalIncludes && len(exportedIncludeDirs) > 0 {
+		exportedHeaderFlags += " ${config.CommonGlobalIncludes}"
+	}
 
 	if symbolFile.Valid() {
 		implicits = append(implicits, symbolFile.Path())

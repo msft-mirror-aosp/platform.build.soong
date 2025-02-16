@@ -64,7 +64,6 @@ type AndroidMkDataProvider interface {
 type AndroidMkData struct {
 	Class           string
 	SubName         string
-	DistFiles       TaggedDistFiles
 	OutputFile      OptionalPath
 	Disabled        bool
 	Include         string
@@ -719,22 +718,26 @@ func AndroidMkSingleton() Singleton {
 
 type androidMkSingleton struct{}
 
-func (c *androidMkSingleton) GenerateBuildActions(ctx SingletonContext) {
-	var androidMkModulesList []blueprint.Module
+func allModulesSorted(ctx SingletonContext) []blueprint.Module {
+	var allModules []blueprint.Module
 
 	ctx.VisitAllModulesBlueprint(func(module blueprint.Module) {
-		androidMkModulesList = append(androidMkModulesList, module)
+		allModules = append(allModules, module)
 	})
 
 	// Sort the module list by the module names to eliminate random churns, which may erroneously
 	// invoke additional build processes.
-	sort.SliceStable(androidMkModulesList, func(i, j int) bool {
-		return ctx.ModuleName(androidMkModulesList[i]) < ctx.ModuleName(androidMkModulesList[j])
+	sort.SliceStable(allModules, func(i, j int) bool {
+		return ctx.ModuleName(allModules[i]) < ctx.ModuleName(allModules[j])
 	})
 
-	// If running in soong-only mode, do a different, more limited version of this singleton
+	return allModules
+}
+
+func (c *androidMkSingleton) GenerateBuildActions(ctx SingletonContext) {
+	// If running in soong-only mode, more limited version of this singleton is run as
+	// soong only androidmk singleton
 	if !ctx.Config().KatiEnabled() {
-		c.soongOnlyBuildActions(ctx, androidMkModulesList)
 		return
 	}
 
@@ -745,7 +748,7 @@ func (c *androidMkSingleton) GenerateBuildActions(ctx SingletonContext) {
 
 	moduleInfoJSON := PathForOutput(ctx, "module-info"+String(ctx.Config().productVariables.Make_suffix)+".json")
 
-	err := translateAndroidMk(ctx, absolutePath(transMk.String()), moduleInfoJSON, androidMkModulesList)
+	err := translateAndroidMk(ctx, absolutePath(transMk.String()), moduleInfoJSON, allModulesSorted(ctx))
 	if err != nil {
 		ctx.Errorf(err.Error())
 	}
@@ -756,11 +759,43 @@ func (c *androidMkSingleton) GenerateBuildActions(ctx SingletonContext) {
 	})
 }
 
+type soongOnlyAndroidMkSingleton struct {
+	Singleton
+}
+
+func soongOnlyAndroidMkSingletonFactory() Singleton {
+	return &soongOnlyAndroidMkSingleton{}
+}
+
+func (so *soongOnlyAndroidMkSingleton) GenerateBuildActions(ctx SingletonContext) {
+	if !ctx.Config().KatiEnabled() {
+		so.soongOnlyBuildActions(ctx, allModulesSorted(ctx))
+	}
+}
+
 // In soong-only mode, we don't do most of the androidmk stuff. But disted files are still largely
 // defined through the androidmk mechanisms, so this function is an alternate implementation of
 // the androidmk singleton that just focuses on getting the dist contributions
-func (c *androidMkSingleton) soongOnlyBuildActions(ctx SingletonContext, mods []blueprint.Module) {
+func (so *soongOnlyAndroidMkSingleton) soongOnlyBuildActions(ctx SingletonContext, mods []blueprint.Module) {
 	allDistContributions, moduleInfoJSONs := getSoongOnlyDataFromMods(ctx, mods)
+
+	for _, provider := range append(makeVarsInitProviders, *getSingletonMakevarsProviders(ctx.Config())...) {
+		mctx := &makeVarsContext{
+			SingletonContext: ctx,
+			pctx:             provider.pctx,
+		}
+		provider.call(mctx)
+		if contribution := distsToDistContributions(mctx.dists); contribution != nil {
+			allDistContributions = append(allDistContributions, *contribution)
+		}
+	}
+
+	singletonDists := getSingletonDists(ctx.Config())
+	singletonDists.lock.Lock()
+	if contribution := distsToDistContributions(singletonDists.dists); contribution != nil {
+		allDistContributions = append(allDistContributions, *contribution)
+	}
+	singletonDists.lock.Unlock()
 
 	// Build module-info.json. Only in builds with HasDeviceProduct(), as we need a named
 	// device to have a TARGET_OUT folder.
@@ -840,24 +875,24 @@ func writeValueIfChanged(ctx SingletonContext, path string, value string) {
 	}
 }
 
-func getMakeVarsDistContributions(mctx *makeVarsContext) *distContributions {
-	if len(mctx.dists) == 0 {
+func distsToDistContributions(dists []dist) *distContributions {
+	if len(dists) == 0 {
 		return nil
 	}
 
 	copyGoals := []*copiesForGoals{}
-	for _, dist := range mctx.dists {
+	for _, dist := range dists {
 		for _, goal := range dist.goals {
-			copy := &copiesForGoals{}
-			copy.goals = goal
-			copy.copies = dist.paths
-			copyGoals = append(copyGoals, copy)
+			copyGoals = append(copyGoals, &copiesForGoals{
+				goals:  goal,
+				copies: dist.paths,
+			})
 		}
 	}
 
-	contribution := &distContributions{}
-	contribution.copiesForGoals = copyGoals
-	return contribution
+	return &distContributions{
+		copiesForGoals: copyGoals,
+	}
 }
 
 // getSoongOnlyDataFromMods gathers data from the given modules needed in soong-only builds.
@@ -866,6 +901,12 @@ func getSoongOnlyDataFromMods(ctx fillInEntriesContext, mods []blueprint.Module)
 	var allDistContributions []distContributions
 	var moduleInfoJSONs []*ModuleInfoJSON
 	for _, mod := range mods {
+		if distInfo, ok := OtherModuleProvider(ctx, mod, DistProvider); ok {
+			if contribution := distsToDistContributions(distInfo.Dists); contribution != nil {
+				allDistContributions = append(allDistContributions, *contribution)
+			}
+		}
+
 		if amod, ok := mod.(Module); ok && shouldSkipAndroidMkProcessing(ctx, amod.base()) {
 			continue
 		}
@@ -892,13 +933,7 @@ func getSoongOnlyDataFromMods(ctx fillInEntriesContext, mods []blueprint.Module)
 				}
 			}
 		} else {
-			mctx := &makeVarsContext{
-				SingletonContext: ctx.(SingletonContext),
-				config:           ctx.Config(),
-				pctx:             pctx,
-			}
-			switch x := mod.(type) {
-			case AndroidMkDataProvider:
+			if x, ok := mod.(AndroidMkDataProvider); ok {
 				data := x.AndroidMk()
 
 				if data.Include == "" {
@@ -915,7 +950,8 @@ func getSoongOnlyDataFromMods(ctx fillInEntriesContext, mods []blueprint.Module)
 				if contribution := data.Entries.getDistContributions(mod); contribution != nil {
 					allDistContributions = append(allDistContributions, *contribution)
 				}
-			case AndroidMkEntriesProvider:
+			}
+			if x, ok := mod.(AndroidMkEntriesProvider); ok {
 				entriesList := x.AndroidMkEntries()
 				for _, entries := range entriesList {
 					entries.fillInEntries(ctx, mod)
@@ -929,23 +965,31 @@ func getSoongOnlyDataFromMods(ctx fillInEntriesContext, mods []blueprint.Module)
 						allDistContributions = append(allDistContributions, *contribution)
 					}
 				}
-			case ModuleMakeVarsProvider:
+			}
+			if x, ok := mod.(ModuleMakeVarsProvider); ok {
+				mctx := &makeVarsContext{
+					SingletonContext: ctx.(SingletonContext),
+					config:           ctx.Config(),
+					pctx:             pctx,
+				}
 				if !x.Enabled(ctx) {
 					continue
 				}
 				x.MakeVars(mctx)
-				if contribution := getMakeVarsDistContributions(mctx); contribution != nil {
+				if contribution := distsToDistContributions(mctx.dists); contribution != nil {
 					allDistContributions = append(allDistContributions, *contribution)
 				}
-
-			case SingletonMakeVarsProvider:
+			}
+			if x, ok := mod.(SingletonMakeVarsProvider); ok {
+				mctx := &makeVarsContext{
+					SingletonContext: ctx.(SingletonContext),
+					config:           ctx.Config(),
+					pctx:             pctx,
+				}
 				x.MakeVars(mctx)
-				if contribution := getMakeVarsDistContributions(mctx); contribution != nil {
+				if contribution := distsToDistContributions(mctx.dists); contribution != nil {
 					allDistContributions = append(allDistContributions, *contribution)
 				}
-
-			default:
-				// Not exported to make so no make variables to set.
 			}
 		}
 	}
@@ -1048,7 +1092,6 @@ func (data *AndroidMkData) fillInData(ctx fillInEntriesContext, mod blueprint.Mo
 	data.Entries = AndroidMkEntries{
 		Class:           data.Class,
 		SubName:         data.SubName,
-		DistFiles:       data.DistFiles,
 		OutputFile:      data.OutputFile,
 		Disabled:        data.Disabled,
 		Include:         data.Include,

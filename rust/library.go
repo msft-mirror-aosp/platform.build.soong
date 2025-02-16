@@ -737,12 +737,15 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 	if library.rlib() {
 		library.flagExporter.exportStaticLibs(deps.staticLibObjects...)
 	}
-
 	// Since we have FFI rlibs, we need to collect their includes as well
 	if library.static() || library.shared() || library.rlib() || library.stubs() {
-		android.SetProvider(ctx, cc.FlagExporterInfoProvider, cc.FlagExporterInfo{
+		ccExporter := cc.FlagExporterInfo{
 			IncludeDirs: android.FirstUniquePaths(library.includeDirs),
-		})
+		}
+		if library.rlib() {
+			ccExporter.RustRlibDeps = append(ccExporter.RustRlibDeps, deps.reexportedCcRlibDeps...)
+		}
+		android.SetProvider(ctx, cc.FlagExporterInfoProvider, ccExporter)
 	}
 
 	if library.shared() || library.stubs() {
@@ -771,7 +774,7 @@ func (library *libraryDecorator) compile(ctx ModuleContext, flags Flags, deps Pa
 	cc.AddStubDependencyProviders(ctx)
 
 	// Set our flagexporter provider to export relevant Rust flags
-	library.flagExporter.setProvider(ctx)
+	library.flagExporter.setRustProvider(ctx)
 
 	return ret
 }
@@ -945,6 +948,9 @@ func (libraryTransitionMutator) Split(ctx android.BaseModuleContext) []string {
 }
 
 func (libraryTransitionMutator) OutgoingTransition(ctx android.OutgoingTransitionContext, sourceVariation string) string {
+	if ctx.DepTag() == android.PrebuiltDepTag {
+		return sourceVariation
+	}
 	return ""
 }
 
@@ -1012,6 +1018,12 @@ func (libraryTransitionMutator) Mutate(ctx android.BottomUpMutatorContext, varia
 			},
 			sourceDepTag, ctx.ModuleName())
 	}
+
+	if prebuilt, ok := m.compiler.(*prebuiltLibraryDecorator); ok {
+		if Bool(prebuilt.Properties.Force_use_prebuilt) && len(prebuilt.prebuiltSrcs()) > 0 {
+			m.Prebuilt().SetUsePrebuilt(true)
+		}
+	}
 }
 
 type libstdTransitionMutator struct{}
@@ -1029,6 +1041,9 @@ func (libstdTransitionMutator) Split(ctx android.BaseModuleContext) []string {
 }
 
 func (libstdTransitionMutator) OutgoingTransition(ctx android.OutgoingTransitionContext, sourceVariation string) string {
+	if ctx.DepTag() == android.PrebuiltDepTag {
+		return sourceVariation
+	}
 	return ""
 }
 
