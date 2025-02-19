@@ -4056,7 +4056,23 @@ func (c *Module) AndroidMkWriteAdditionalDependenciesForSourceAbiDiff(w io.Write
 var _ android.ApexModule = (*Module)(nil)
 
 // Implements android.ApexModule
-func (c *Module) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
+func (c *Module) GetDepInSameApexChecker() android.DepInSameApexChecker {
+	return CcDepInSameApexChecker{
+		Static:           c.static(),
+		HasStubsVariants: c.HasStubsVariants(),
+		IsLlndk:          c.IsLlndk(),
+		Host:             c.Host(),
+	}
+}
+
+type CcDepInSameApexChecker struct {
+	Static           bool
+	HasStubsVariants bool
+	IsLlndk          bool
+	Host             bool
+}
+
+func (c CcDepInSameApexChecker) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
 	if depTag == StubImplDepTag {
 		// We don't track from an implementation library to its stubs.
 		return false
@@ -4069,7 +4085,7 @@ func (c *Module) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
 	}
 
 	libDepTag, isLibDepTag := depTag.(libraryDependencyTag)
-	if isLibDepTag && c.static() && libDepTag.shared() {
+	if isLibDepTag && c.Static && libDepTag.shared() {
 		// shared_lib dependency from a static lib is considered as crossing
 		// the APEX boundary because the dependency doesn't actually is
 		// linked; the dependency is used only during the compilation phase.
@@ -4083,11 +4099,11 @@ func (c *Module) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
 	return true
 }
 
-func (c *Module) IncomingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
-	if c.Host() {
+func (c CcDepInSameApexChecker) IncomingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
+	if c.Host {
 		return false
 	}
-	if c.HasStubsVariants() {
+	if c.HasStubsVariants {
 		if IsSharedDepTag(depTag) && !IsExplicitImplSharedDepTag(depTag) {
 			// dynamic dep to a stubs lib crosses APEX boundary
 			return false
@@ -4100,7 +4116,7 @@ func (c *Module) IncomingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
 			return false
 		}
 	}
-	if c.IsLlndk() {
+	if c.IsLlndk {
 		return false
 	}
 
@@ -4108,20 +4124,19 @@ func (c *Module) IncomingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
 }
 
 // Implements android.ApexModule
-func (c *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
-	sdkVersion android.ApiLevel) error {
+func (c *Module) MinSdkVersionSupported(ctx android.BaseModuleContext) android.ApiLevel {
 	// We ignore libclang_rt.* prebuilt libs since they declare sdk_version: 14(b/121358700)
 	if strings.HasPrefix(ctx.OtherModuleName(c), "libclang_rt") {
-		return nil
+		return android.MinApiLevel
 	}
 	// We don't check for prebuilt modules
 	if _, ok := c.linker.(prebuiltLinkerInterface); ok {
-		return nil
+		return android.MinApiLevel
 	}
 
 	minSdkVersion := c.MinSdkVersion()
 	if minSdkVersion == "apex_inherit" {
-		return nil
+		return android.MinApiLevel
 	}
 	if minSdkVersion == "" {
 		// JNI libs within APK-in-APEX fall into here
@@ -4130,14 +4145,16 @@ func (c *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 		// non-SDK variant resets sdk_version, which works too.
 		minSdkVersion = c.SdkVersion()
 	}
+
 	if minSdkVersion == "" {
-		return fmt.Errorf("neither min_sdk_version nor sdk_version specificed")
+		return android.NoneApiLevel
 	}
+
 	// Not using nativeApiLevelFromUser because the context here is not
 	// necessarily a native context.
-	ver, err := android.ApiLevelFromUser(ctx, minSdkVersion)
+	ver, err := android.ApiLevelFromUserWithConfig(ctx.Config(), minSdkVersion)
 	if err != nil {
-		return err
+		return android.NoneApiLevel
 	}
 
 	// A dependency only needs to support a min_sdk_version at least
@@ -4145,15 +4162,14 @@ func (c *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
 	// This allows introducing new architectures in the platform that
 	// need to be included in apexes that normally require an older
 	// min_sdk_version.
-	minApiForArch := MinApiForArch(ctx, c.Target().Arch.ArchType)
-	if sdkVersion.LessThan(minApiForArch) {
-		sdkVersion = minApiForArch
+	if c.Enabled(ctx) {
+		minApiForArch := MinApiForArch(ctx, c.Target().Arch.ArchType)
+		if ver.LessThanOrEqualTo(minApiForArch) {
+			ver = android.MinApiLevel
+		}
 	}
 
-	if ver.GreaterThan(sdkVersion) {
-		return fmt.Errorf("newer SDK(%v)", ver)
-	}
-	return nil
+	return ver
 }
 
 // Implements android.ApexModule

@@ -931,6 +931,8 @@ type commonSdkLibraryAndImportModule interface {
 	RootLibraryName() string
 }
 
+var _ android.ApexModule = (*SdkLibrary)(nil)
+
 func (m *SdkLibrary) RootLibraryName() string {
 	return m.BaseModuleName()
 }
@@ -1708,14 +1710,22 @@ func (module *SdkLibrary) compareAgainstLatestApi(apiScope *apiScope) bool {
 }
 
 // Implements android.ApexModule
-func (module *SdkLibrary) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
-	if depTag == xmlPermissionsFileTag {
+func (m *SdkLibrary) GetDepInSameApexChecker() android.DepInSameApexChecker {
+	return SdkLibraryDepInSameApexChecker{}
+}
+
+type SdkLibraryDepInSameApexChecker struct {
+	android.BaseDepInSameApexChecker
+}
+
+func (m SdkLibraryDepInSameApexChecker) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	if tag == xmlPermissionsFileTag {
 		return true
 	}
-	if depTag == implLibraryTag {
+	if tag == implLibraryTag {
 		return true
 	}
-	return module.Library.OutgoingDepIsInSameApex(depTag)
+	return depIsInSameApex(tag)
 }
 
 // Implements android.ApexModule
@@ -2126,8 +2136,16 @@ func (module *SdkLibraryImport) DepsMutator(ctx android.BottomUpMutatorContext) 
 var _ android.ApexModule = (*SdkLibraryImport)(nil)
 
 // Implements android.ApexModule
-func (module *SdkLibraryImport) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
-	if depTag == xmlPermissionsFileTag {
+func (m *SdkLibraryImport) GetDepInSameApexChecker() android.DepInSameApexChecker {
+	return SdkLibraryImportDepIsInSameApexChecker{}
+}
+
+type SdkLibraryImportDepIsInSameApexChecker struct {
+	android.BaseDepInSameApexChecker
+}
+
+func (m SdkLibraryImportDepIsInSameApexChecker) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	if tag == xmlPermissionsFileTag {
 		return true
 	}
 
@@ -2137,13 +2155,10 @@ func (module *SdkLibraryImport) OutgoingDepIsInSameApex(depTag blueprint.Depende
 }
 
 // Implements android.ApexModule
-func (module *SdkLibraryImport) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
-	sdkVersion android.ApiLevel) error {
-	// we don't check prebuilt modules for sdk_version
-	return nil
+func (m *SdkLibraryImport) MinSdkVersionSupported(ctx android.BaseModuleContext) android.ApiLevel {
+	return android.MinApiLevel
 }
 
-// Implements android.ApexModule
 func (module *SdkLibraryImport) UniqueApexVariations() bool {
 	return module.uniqueApexVariations()
 }

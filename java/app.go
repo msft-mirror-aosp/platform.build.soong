@@ -512,10 +512,14 @@ func (a *AndroidApp) checkJniLibsSdkVersion(ctx android.ModuleContext, minSdkVer
 		// The domain of cc.sdk_version is "current" and <number>
 		// We can rely on android.SdkSpec to convert it to <number> so that "current" is
 		// handled properly regardless of sdk finalization.
-		jniSdkVersion, err := android.SdkSpecFrom(ctx, commonInfo.MinSdkVersion).EffectiveVersion(ctx)
+		ver := ""
+		if !commonInfo.MinSdkVersion.IsPlatform {
+			ver = commonInfo.MinSdkVersion.ApiLevel.String()
+		}
+		jniSdkVersion, err := android.SdkSpecFrom(ctx, ver).EffectiveVersion(ctx)
 		if err != nil || minSdkVersion.LessThan(jniSdkVersion) {
 			ctx.OtherModuleErrorf(m, "min_sdk_version(%v) is higher than min_sdk_version(%v) of the containing android_app(%v)",
-				commonInfo.MinSdkVersion, minSdkVersion, ctx.ModuleName())
+				ver, minSdkVersion, ctx.ModuleName())
 			return
 		}
 
@@ -1256,7 +1260,7 @@ func (a *AndroidApp) WalkPayloadDeps(ctx android.BaseModuleContext, do android.P
 		// TODO(ccross): Should this use android.DepIsInSameApex?  Right now it is applying the android app
 		// heuristics to every transitive dependency, when it should probably be using the heuristics of the
 		// immediate parent.
-		isExternal := !a.OutgoingDepIsInSameApex(ctx.OtherModuleDependencyTag(child))
+		isExternal := !a.GetDepInSameApexChecker().OutgoingDepIsInSameApex(ctx.OtherModuleDependencyTag(child))
 		if am, ok := child.(android.ApexModule); ok {
 			if !do(ctx, parent, am, isExternal) {
 				return false
@@ -1277,7 +1281,7 @@ func (a *AndroidApp) buildAppDependencyInfo(ctx android.ModuleContext) {
 
 		// Skip dependencies that are only available to APEXes; they are developed with updatability
 		// in mind and don't need manual approval.
-		if to.(android.ApexModule).NotAvailableForPlatform() {
+		if android.OtherModuleProviderOrDefault(ctx, to, android.CommonModuleInfoKey).NotAvailableForPlatform {
 			return true
 		}
 
@@ -1287,18 +1291,9 @@ func (a *AndroidApp) buildAppDependencyInfo(ctx android.ModuleContext) {
 			depsInfo[depName] = info
 		} else {
 			toMinSdkVersion := "(no version)"
-			if m, ok := to.(interface {
-				MinSdkVersion(ctx android.EarlyModuleContext) android.ApiLevel
-			}); ok {
-				if v := m.MinSdkVersion(ctx); !v.IsNone() {
-					toMinSdkVersion = v.String()
-				}
-			} else if m, ok := to.(interface{ MinSdkVersion() string }); ok {
-				// TODO(b/175678607) eliminate the use of MinSdkVersion returning
-				// string
-				if v := m.MinSdkVersion(); v != "" {
-					toMinSdkVersion = v
-				}
+			if info, ok := android.OtherModuleProvider(ctx, to, android.CommonModuleInfoKey); ok &&
+				!info.MinSdkVersion.IsPlatform && info.MinSdkVersion.ApiLevel != nil {
+				toMinSdkVersion = info.MinSdkVersion.ApiLevel.String()
 			}
 			depsInfo[depName] = android.ApexModuleDepInfo{
 				To:            depName,
@@ -1333,11 +1328,19 @@ func (a *AndroidApp) getCertString(ctx android.BaseModuleContext) string {
 	return a.overridableAppProperties.Certificate.GetOrDefault(ctx, "")
 }
 
-func (a *AndroidApp) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+func (m *AndroidApp) GetDepInSameApexChecker() android.DepInSameApexChecker {
+	return AppDepInSameApexChecker{}
+}
+
+type AppDepInSameApexChecker struct {
+	android.BaseDepInSameApexChecker
+}
+
+func (m AppDepInSameApexChecker) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
 	if IsJniDepTag(tag) {
 		return true
 	}
-	return a.Library.OutgoingDepIsInSameApex(tag)
+	return depIsInSameApex(tag)
 }
 
 func (a *AndroidApp) Privileged() bool {
@@ -1623,6 +1626,10 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		pathInTestCases := android.PathForModuleInstall(ctx, ctx.Module().Name())
 		if a.testConfig != nil {
 			ctx.InstallFile(pathInTestCases, ctx.Module().Name()+".config", a.testConfig)
+		}
+		dynamicConfig := android.ExistentPathForSource(ctx, ctx.ModuleDir(), "DynamicConfig.xml")
+		if dynamicConfig.Valid() {
+			ctx.InstallFile(pathInTestCases, ctx.Module().Name()+".dynamic", dynamicConfig.Path())
 		}
 		testDeps := append(a.data, a.extraTestConfigs...)
 		for _, data := range android.SortedUniquePaths(testDeps) {

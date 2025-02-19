@@ -1625,14 +1625,21 @@ var _ UsesLibraryDependency = (*AARImport)(nil)
 var _ android.ApexModule = (*AARImport)(nil)
 
 // Implements android.ApexModule
-func (a *AARImport) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
-	return a.depIsInSameApex(tag)
+func (m *AARImport) GetDepInSameApexChecker() android.DepInSameApexChecker {
+	return AARImportDepInSameApexChecker{}
+}
+
+type AARImportDepInSameApexChecker struct {
+	android.BaseDepInSameApexChecker
+}
+
+func (m AARImportDepInSameApexChecker) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	return depIsInSameApex(tag)
 }
 
 // Implements android.ApexModule
-func (a *AARImport) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
-	sdkVersion android.ApiLevel) error {
-	return nil
+func (a *AARImport) MinSdkVersionSupported(ctx android.BaseModuleContext) android.ApiLevel {
+	return android.MinApiLevel
 }
 
 var _ android.PrebuiltInterface = (*AARImport)(nil)

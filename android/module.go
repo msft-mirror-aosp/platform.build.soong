@@ -1898,7 +1898,7 @@ type CommonModuleInfo struct {
 	SkipAndroidMkProcessing bool
 	BaseModuleName          string
 	CanHaveApexVariants     bool
-	MinSdkVersion           string
+	MinSdkVersion           ApiLevelOrPlatform
 	SdkVersion              string
 	NotAvailableForPlatform bool
 	// There some subtle differences between this one and the one above.
@@ -1912,6 +1912,13 @@ type CommonModuleInfo struct {
 	SkipInstall                      bool
 	IsStubsModule                    bool
 	Host                             bool
+	MinSdkVersionSupported           ApiLevel
+	ModuleWithMinSdkVersionCheck     bool
+}
+
+type ApiLevelOrPlatform struct {
+	ApiLevel   *ApiLevel
+	IsPlatform bool
 }
 
 var CommonModuleInfoKey = blueprint.NewProvider[CommonModuleInfo]()
@@ -2255,11 +2262,16 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		MinSdkVersion(ctx EarlyModuleContext) ApiLevel
 	}); ok {
 		ver := mm.MinSdkVersion(ctx)
-		if !ver.IsNone() {
-			commonData.MinSdkVersion = ver.String()
-		}
+		commonData.MinSdkVersion.ApiLevel = &ver
 	} else if mm, ok := m.module.(interface{ MinSdkVersion() string }); ok {
-		commonData.MinSdkVersion = mm.MinSdkVersion()
+		ver := mm.MinSdkVersion()
+		// Compile against the current platform
+		if ver == "" {
+			commonData.MinSdkVersion.IsPlatform = true
+		} else {
+			api := ApiLevelFrom(ctx, ver)
+			commonData.MinSdkVersion.ApiLevel = &api
+		}
 	}
 
 	if mm, ok := m.module.(interface {
@@ -2282,7 +2294,13 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		commonData.CanHaveApexVariants = am.CanHaveApexVariants()
 		commonData.NotAvailableForPlatform = am.NotAvailableForPlatform()
 		commonData.NotInPlatform = am.NotInPlatform()
+		commonData.MinSdkVersionSupported = am.MinSdkVersionSupported(ctx)
 	}
+
+	if _, ok := m.module.(ModuleWithMinSdkVersionCheck); ok {
+		commonData.ModuleWithMinSdkVersionCheck = true
+	}
+
 	if st, ok := m.module.(StubsAvailableModule); ok {
 		commonData.IsStubsModule = st.IsStubsModule()
 	}
@@ -3000,6 +3018,9 @@ func AddAncestors(ctx SingletonContext, dirMap map[string]Paths, mmName func(str
 
 func (c *buildTargetSingleton) GenerateBuildActions(ctx SingletonContext) {
 	var checkbuildDeps Paths
+
+	// Create a top level partialcompileclean target for modules to add dependencies to.
+	ctx.Phony("partialcompileclean")
 
 	mmTarget := func(dir string) string {
 		return "MODULES-IN-" + strings.Replace(filepath.Clean(dir), "/", "-", -1)
