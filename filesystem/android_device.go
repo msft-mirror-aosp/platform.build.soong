@@ -15,7 +15,9 @@
 package filesystem
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -247,6 +249,38 @@ func (a *androidDevice) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.distFiles(ctx)
 }
 
+// Returns a list of modules that are installed, which are collected from the dependency
+// filesystem and super_image modules.
+func (a *androidDevice) allInstalledModules(ctx android.ModuleContext) []android.Module {
+	fsInfoMap := a.getFsInfos(ctx)
+	allOwners := make(map[string][]string)
+	for _, partition := range android.SortedKeys(fsInfoMap) {
+		fsInfo := fsInfoMap[partition]
+		for _, owner := range fsInfo.Owners {
+			allOwners[owner.Name] = append(allOwners[owner.Name], owner.Variation)
+		}
+	}
+
+	ret := []android.Module{}
+	ctx.WalkDepsProxy(func(mod, _ android.ModuleProxy) bool {
+		if variations, ok := allOwners[mod.Name()]; ok && android.InList(ctx.OtherModuleSubDir(mod), variations) {
+			ret = append(ret, mod)
+		}
+		return true
+	})
+
+	// Remove duplicates
+	ret = android.FirstUniqueFunc(ret, func(a, b android.Module) bool {
+		return a.String() == b.String()
+	})
+
+	// Sort the modules by their names and variants
+	slices.SortFunc(ret, func(a, b android.Module) int {
+		return cmp.Compare(a.String(), b.String())
+	})
+	return ret
+}
+
 func (a *androidDevice) distFiles(ctx android.ModuleContext) {
 	if !ctx.Config().KatiEnabled() {
 		if proptools.Bool(a.deviceProps.Main_device) {
@@ -302,11 +336,6 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 		targetFilesZipCopy{a.partitionProps.Init_boot_partition_name, "INIT_BOOT/RAMDISK"},
 		targetFilesZipCopy{a.partitionProps.Vendor_boot_partition_name, "VENDOR_BOOT/RAMDISK"},
 	}
-	// TODO: Handle cases where recovery files are copied to BOOT/ or RECOVERY/
-	// https://cs.android.com/android/platform/superproject/main/+/main:build/make/core/Makefile;l=6211-6219?q=core%2FMakefile&ss=android%2Fplatform%2Fsuperproject%2Fmain
-	if ctx.DeviceConfig().BoardMoveRecoveryResourcesToVendorBoot() {
-		toCopy = append(toCopy, targetFilesZipCopy{a.partitionProps.Recovery_partition_name, "VENDOR_BOOT/RAMDISK"})
-	}
 
 	filesystemsToCopy := []targetFilesystemZipCopy{}
 	for _, zipCopy := range toCopy {
@@ -343,6 +372,12 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 			BuiltTool("acp").
 			Textf("-rd %s/. %s/%s", rootDirString, targetFilesDir, toCopy.destSubdir).
 			Implicit(toCopy.fsInfo.Output) // so that the staging dir is built
+		for _, extraRootDir := range toCopy.fsInfo.ExtraRootDirs {
+			builder.Command().
+				BuiltTool("acp").
+				Textf("-rd %s/. %s/%s", extraRootDir, targetFilesDir, toCopy.destSubdir).
+				Implicit(toCopy.fsInfo.Output) // so that the staging dir is built
+		}
 
 		if toCopy.destSubdir == "SYSTEM" {
 			// Create the ROOT partition in target_files.zip
