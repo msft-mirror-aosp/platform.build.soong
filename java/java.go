@@ -259,7 +259,6 @@ type AndroidLibraryDependencyInfo struct {
 }
 
 type UsesLibraryDependencyInfo struct {
-	DexJarBuildPath     OptionalDexJarPath
 	DexJarInstallPath   android.Path
 	ClassLoaderContexts dexpreopt.ClassLoaderContextMap
 }
@@ -403,13 +402,6 @@ type JavaInfo struct {
 
 	BuiltInstalled string
 
-	// ApexSystemServerDexpreoptInstalls stores the list of dexpreopt artifacts if this is a system server
-	// jar in an apex.
-	ApexSystemServerDexpreoptInstalls []DexpreopterInstall
-
-	// ApexSystemServerDexJars stores the list of dex jars if this is a system server jar in an apex.
-	ApexSystemServerDexJars android.Paths
-
 	// The config is used for two purposes:
 	// - Passing dexpreopt information about libraries from Soong to Make. This is needed when
 	//   a <uses-library> is defined in Android.bp, but used in Android.mk (see dex_preopt_config_merger.py).
@@ -417,10 +409,6 @@ type JavaInfo struct {
 	// - Dexpreopt post-processing (using dexpreopt artifacts from a prebuilt system image to incrementally
 	//   dexpreopt another partition).
 	ConfigPath android.WritablePath
-
-	// The path to the profile on host that dexpreopter generates. This is used as the input for
-	// dex2oat.
-	OutputProfilePathOnHost android.Path
 
 	LogtagsSrcs android.Paths
 
@@ -438,13 +426,38 @@ type JavaInfo struct {
 
 	// True if profile-guided optimization is actually enabled.
 	ProfileGuided bool
+
+	Stem string
+
+	DexJarBuildPath OptionalDexJarPath
+
+	DexpreopterInfo *DexpreopterInfo
 }
 
 var JavaInfoProvider = blueprint.NewProvider[*JavaInfo]()
 
-type JavaLibraryInfo struct{}
+type DexpreopterInfo struct {
+	// The path to the profile on host that dexpreopter generates. This is used as the input for
+	// dex2oat.
+	OutputProfilePathOnHost android.Path
+	// If the java module is to be installed into an APEX, this list contains information about the
+	// dexpreopt outputs to be installed on devices. Note that these dexpreopt outputs are installed
+	// outside of the APEX.
+	ApexSystemServerDexpreoptInstalls []DexpreopterInstall
+
+	// ApexSystemServerDexJars returns the list of dex jars if this is an apex system server jar.
+	ApexSystemServerDexJars android.Paths
+}
+
+type JavaLibraryInfo struct {
+	Prebuilt bool
+}
 
 var JavaLibraryInfoProvider = blueprint.NewProvider[JavaLibraryInfo]()
+
+type JavaDexImportInfo struct{}
+
+var JavaDexImportInfoProvider = blueprint.NewProvider[JavaDexImportInfo]()
 
 // SyspropPublicStubInfo contains info about the sysprop public stub library that corresponds to
 // the sysprop implementation library.
@@ -1127,7 +1140,9 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		TopLevelTarget: j.sourceProperties.Top_level_test_target,
 	})
 
-	android.SetProvider(ctx, JavaLibraryInfoProvider, JavaLibraryInfo{})
+	android.SetProvider(ctx, JavaLibraryInfoProvider, JavaLibraryInfo{
+		Prebuilt: false,
+	})
 
 	if javaInfo != nil {
 		setExtraJavaInfo(ctx, j, javaInfo)
@@ -1137,11 +1152,8 @@ func (j *Library) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		javaInfo.BootDexJarPath = j.bootDexJarPath
 		javaInfo.UncompressDexState = j.uncompressDexState
 		javaInfo.Active = j.active
-		javaInfo.ApexSystemServerDexpreoptInstalls = j.apexSystemServerDexpreoptInstalls
-		javaInfo.ApexSystemServerDexJars = j.apexSystemServerDexJars
 		javaInfo.BuiltInstalled = j.builtInstalled
 		javaInfo.ConfigPath = j.configPath
-		javaInfo.OutputProfilePathOnHost = j.outputProfilePathOnHost
 		javaInfo.LogtagsSrcs = j.logtagsSrcs
 		javaInfo.ProguardDictionary = j.proguardDictionary
 		javaInfo.ProguardUsageZip = j.proguardUsageZip
@@ -1909,6 +1921,10 @@ func (j *Test) generateAndroidBuildActionsWithConfig(ctx android.ModuleContext, 
 		pathInTestCases := android.PathForModuleInstall(ctx, "testcases", ctx.ModuleName())
 		if j.testConfig != nil {
 			ctx.InstallFile(pathInTestCases, ctx.ModuleName()+".config", j.testConfig)
+		}
+		dynamicConfig := android.ExistentPathForSource(ctx, ctx.ModuleDir(), "DynamicConfig.xml")
+		if dynamicConfig.Valid() {
+			ctx.InstallFile(pathInTestCases, ctx.ModuleName()+".dynamic", dynamicConfig.Path())
 		}
 		testDeps := append(j.data, j.extraTestConfigs...)
 		for _, data := range android.SortedUniquePaths(testDeps) {
@@ -3229,6 +3245,10 @@ func (j *Import) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	setExtraJavaInfo(ctx, j, javaInfo)
 	android.SetProvider(ctx, JavaInfoProvider, javaInfo)
 
+	android.SetProvider(ctx, JavaLibraryInfoProvider, JavaLibraryInfo{
+		Prebuilt: true,
+	})
+
 	ctx.SetOutputFiles(android.Paths{j.combinedImplementationFile}, "")
 	ctx.SetOutputFiles(android.Paths{j.combinedImplementationFile}, ".jar")
 
@@ -3279,26 +3299,29 @@ func (j *Import) ClassLoaderContexts() dexpreopt.ClassLoaderContextMap {
 var _ android.ApexModule = (*Import)(nil)
 
 // Implements android.ApexModule
-func (j *Import) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
-	return j.depIsInSameApex(tag)
+func (m *Import) GetDepInSameApexChecker() android.DepInSameApexChecker {
+	return JavaImportDepInSameApexChecker{}
+}
+
+type JavaImportDepInSameApexChecker struct {
+	android.BaseDepInSameApexChecker
+}
+
+func (m JavaImportDepInSameApexChecker) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	return depIsInSameApex(tag)
 }
 
 // Implements android.ApexModule
-func (j *Import) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
-	sdkVersion android.ApiLevel) error {
+func (j *Import) MinSdkVersionSupported(ctx android.BaseModuleContext) android.ApiLevel {
 	sdkVersionSpec := j.SdkVersion(ctx)
 	minSdkVersion := j.MinSdkVersion(ctx)
-	if !minSdkVersion.Specified() {
-		return fmt.Errorf("min_sdk_version is not specified")
-	}
+
 	// If the module is compiling against core (via sdk_version), skip comparison check.
 	if sdkVersionSpec.Kind == android.SdkCore {
-		return nil
+		return android.MinApiLevel
 	}
-	if minSdkVersion.GreaterThan(sdkVersion) {
-		return fmt.Errorf("newer SDK(%v)", minSdkVersion)
-	}
-	return nil
+
+	return minSdkVersion
 }
 
 // requiredFilesFromPrebuiltApexForImport returns information about the files that a java_import or
@@ -3505,6 +3528,12 @@ func (j *DexImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		ctx.InstallFile(android.PathForModuleInstall(ctx, "framework"),
 			j.Stem()+".jar", dexOutputFile)
 	}
+
+	javaInfo := &JavaInfo{}
+	setExtraJavaInfo(ctx, j, javaInfo)
+	android.SetProvider(ctx, JavaInfoProvider, javaInfo)
+
+	android.SetProvider(ctx, JavaDexImportInfoProvider, JavaDexImportInfo{})
 }
 
 func (j *DexImport) DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath {
@@ -3514,10 +3543,8 @@ func (j *DexImport) DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDex
 var _ android.ApexModule = (*DexImport)(nil)
 
 // Implements android.ApexModule
-func (j *DexImport) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
-	sdkVersion android.ApiLevel) error {
-	// we don't check prebuilt modules for sdk_version
-	return nil
+func (m *DexImport) MinSdkVersionSupported(ctx android.BaseModuleContext) android.ApiLevel {
+	return android.MinApiLevel
 }
 
 // dex_import imports a `.jar` file containing classes.dex files.
@@ -3694,7 +3721,7 @@ func addCLCFromDep(ctx android.ModuleContext, depModule android.ModuleProxy,
 			}
 		}
 		clcMap.AddContext(ctx, dexpreopt.AnySdkVersion, *sdkLib, optional,
-			dep.UsesLibraryDependencyInfo.DexJarBuildPath.PathOrNil(),
+			dep.DexJarBuildPath.PathOrNil(),
 			dep.UsesLibraryDependencyInfo.DexJarInstallPath, dep.UsesLibraryDependencyInfo.ClassLoaderContexts)
 	} else {
 		clcMap.AddContextMap(dep.UsesLibraryDependencyInfo.ClassLoaderContexts, depName)
@@ -3778,7 +3805,6 @@ func setExtraJavaInfo(ctx android.ModuleContext, module android.Module, javaInfo
 
 	if ulDep, ok := module.(UsesLibraryDependency); ok {
 		javaInfo.UsesLibraryDependencyInfo = &UsesLibraryDependencyInfo{
-			DexJarBuildPath:     ulDep.DexJarBuildPath(ctx),
 			DexJarInstallPath:   ulDep.DexJarInstallPath(),
 			ClassLoaderContexts: ulDep.ClassLoaderContexts(),
 		}
@@ -3805,6 +3831,24 @@ func setExtraJavaInfo(ctx android.ModuleContext, module android.Module, javaInfo
 		javaInfo.ModuleWithSdkDepInfo = &ModuleWithSdkDepInfo{
 			SdkLinkType: linkType,
 			Stubs:       stubs,
+		}
+	}
+
+	if st, ok := module.(ModuleWithStem); ok {
+		javaInfo.Stem = st.Stem()
+	}
+
+	if mm, ok := module.(interface {
+		DexJarBuildPath(ctx android.ModuleErrorfContext) OptionalDexJarPath
+	}); ok {
+		javaInfo.DexJarBuildPath = mm.DexJarBuildPath(ctx)
+	}
+
+	if di, ok := module.(DexpreopterInterface); ok {
+		javaInfo.DexpreopterInfo = &DexpreopterInfo{
+			OutputProfilePathOnHost:           di.OutputProfilePathOnHost(),
+			ApexSystemServerDexpreoptInstalls: di.ApexSystemServerDexpreoptInstalls(),
+			ApexSystemServerDexJars:           di.ApexSystemServerDexJars(),
 		}
 	}
 }

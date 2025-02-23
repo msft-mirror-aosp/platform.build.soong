@@ -1898,7 +1898,7 @@ type CommonModuleInfo struct {
 	SkipAndroidMkProcessing bool
 	BaseModuleName          string
 	CanHaveApexVariants     bool
-	MinSdkVersion           string
+	MinSdkVersion           ApiLevelOrPlatform
 	SdkVersion              string
 	NotAvailableForPlatform bool
 	// There some subtle differences between this one and the one above.
@@ -1908,10 +1908,22 @@ type CommonModuleInfo struct {
 	// is used to avoid adding install or packaging dependencies into libraries provided
 	// by apexes.
 	UninstallableApexPlatformVariant bool
-	HideFromMake                     bool
-	SkipInstall                      bool
-	IsStubsModule                    bool
-	Host                             bool
+	MinSdkVersionSupported           ApiLevel
+	ModuleWithMinSdkVersionCheck     bool
+	// Tests if this module can be installed to APEX as a file. For example, this would return
+	// true for shared libs while return false for static libs because static libs are not
+	// installable module (but it can still be mutated for APEX)
+	IsInstallableToApex bool
+	HideFromMake        bool
+	SkipInstall         bool
+	IsStubsModule       bool
+	Host                bool
+	IsApexModule        bool
+}
+
+type ApiLevelOrPlatform struct {
+	ApiLevel   *ApiLevel
+	IsPlatform bool
 }
 
 var CommonModuleInfoKey = blueprint.NewProvider[CommonModuleInfo]()
@@ -2245,7 +2257,6 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		ReplacedByPrebuilt:               m.commonProperties.ReplacedByPrebuilt,
 		Target:                           m.commonProperties.CompileTarget,
 		SkipAndroidMkProcessing:          shouldSkipAndroidMkProcessing(ctx, m),
-		BaseModuleName:                   m.BaseModuleName(),
 		UninstallableApexPlatformVariant: m.commonProperties.UninstallableApexPlatformVariant,
 		HideFromMake:                     m.commonProperties.HideFromMake,
 		SkipInstall:                      m.commonProperties.SkipInstall,
@@ -2255,11 +2266,16 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		MinSdkVersion(ctx EarlyModuleContext) ApiLevel
 	}); ok {
 		ver := mm.MinSdkVersion(ctx)
-		if !ver.IsNone() {
-			commonData.MinSdkVersion = ver.String()
-		}
+		commonData.MinSdkVersion.ApiLevel = &ver
 	} else if mm, ok := m.module.(interface{ MinSdkVersion() string }); ok {
-		commonData.MinSdkVersion = mm.MinSdkVersion()
+		ver := mm.MinSdkVersion()
+		// Compile against the current platform
+		if ver == "" {
+			commonData.MinSdkVersion.IsPlatform = true
+		} else {
+			api := ApiLevelFrom(ctx, ver)
+			commonData.MinSdkVersion.ApiLevel = &api
+		}
 	}
 
 	if mm, ok := m.module.(interface {
@@ -2282,9 +2298,20 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 		commonData.CanHaveApexVariants = am.CanHaveApexVariants()
 		commonData.NotAvailableForPlatform = am.NotAvailableForPlatform()
 		commonData.NotInPlatform = am.NotInPlatform()
+		commonData.MinSdkVersionSupported = am.MinSdkVersionSupported(ctx)
+		commonData.IsInstallableToApex = am.IsInstallableToApex()
+		commonData.IsApexModule = true
 	}
+
+	if _, ok := m.module.(ModuleWithMinSdkVersionCheck); ok {
+		commonData.ModuleWithMinSdkVersionCheck = true
+	}
+
 	if st, ok := m.module.(StubsAvailableModule); ok {
 		commonData.IsStubsModule = st.IsStubsModule()
+	}
+	if mm, ok := m.module.(interface{ BaseModuleName() string }); ok {
+		commonData.BaseModuleName = mm.BaseModuleName()
 	}
 	SetProvider(ctx, CommonModuleInfoKey, commonData)
 	if p, ok := m.module.(PrebuiltInterface); ok && p.Prebuilt() != nil {
@@ -3000,6 +3027,9 @@ func AddAncestors(ctx SingletonContext, dirMap map[string]Paths, mmName func(str
 
 func (c *buildTargetSingleton) GenerateBuildActions(ctx SingletonContext) {
 	var checkbuildDeps Paths
+
+	// Create a top level partialcompileclean target for modules to add dependencies to.
+	ctx.Phony("partialcompileclean")
 
 	mmTarget := func(dir string) string {
 		return "MODULES-IN-" + strings.Replace(filepath.Clean(dir), "/", "-", -1)

@@ -214,12 +214,12 @@ func TestConfiguredJarList(t *testing.T) {
 }
 
 func (p partialCompileFlags) updateEnabled(value bool) partialCompileFlags {
-	p.enabled = value
+	p.Enabled = value
 	return p
 }
 
 func (p partialCompileFlags) updateUseD8(value bool) partialCompileFlags {
-	p.use_d8 = value
+	p.Use_d8 = value
 	return p
 }
 
@@ -239,10 +239,10 @@ func TestPartialCompile(t *testing.T) {
 	}{
 		{"", true, defaultPartialCompileFlags},
 		{"false", true, partialCompileFlags{}},
-		{"true", true, defaultPartialCompileFlags.updateEnabled(true)},
+		{"true", true, enabledPartialCompileFlags},
 		{"true", false, partialCompileFlags{}},
-		{"true,use_d8", true, defaultPartialCompileFlags.updateEnabled(true).updateUseD8(true)},
-		{"true,-use_d8", true, defaultPartialCompileFlags.updateEnabled(true).updateUseD8(false)},
+		{"true,use_d8", true, enabledPartialCompileFlags.updateUseD8(true)},
+		{"true,-use_d8", true, enabledPartialCompileFlags.updateUseD8(false)},
 		{"use_d8,false", true, partialCompileFlags{}},
 		{"false,+use_d8", true, partialCompileFlags{}.updateUseD8(true)},
 	}

@@ -320,6 +320,26 @@ func (f *filesystemCreator) createBootloaderFilegroup(ctx android.LoadHookContex
 	return bootloaderFilegroupName, true
 }
 
+func (f *filesystemCreator) createReleaseToolsFilegroup(ctx android.LoadHookContext) (string, bool) {
+	releaseToolsDir := ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.ReleaseToolsExtensionDir
+	if releaseToolsDir == "" {
+		return "", false
+	}
+
+	releaseToolsFilegroupName := generatedModuleName(ctx.Config(), "releasetools")
+	filegroupProps := &struct {
+		Name       *string
+		Srcs       []string
+		Visibility []string
+	}{
+		Name:       proptools.StringPtr(releaseToolsFilegroupName),
+		Srcs:       []string{"releasetools.py"},
+		Visibility: []string{"//visibility:public"},
+	}
+	ctx.CreateModuleInDirectory(android.FileGroupFactory, releaseToolsDir, filegroupProps)
+	return releaseToolsFilegroupName, true
+}
+
 func (f *filesystemCreator) createDeviceModule(
 	ctx android.LoadHookContext,
 	partitions allGeneratedPartitionData,
@@ -357,7 +377,7 @@ func (f *filesystemCreator) createDeviceModule(
 	if modName := partitions.nameForType("userdata"); modName != "" {
 		partitionProps.Userdata_partition_name = proptools.StringPtr(modName)
 	}
-	if modName := partitions.nameForType("recovery"); modName != "" {
+	if modName := partitions.nameForType("recovery"); modName != "" && !ctx.DeviceConfig().BoardMoveRecoveryResourcesToVendorBoot() {
 		partitionProps.Recovery_partition_name = proptools.StringPtr(modName)
 	}
 	if modName := partitions.nameForType("system_dlkm"); modName != "" && !android.InList("system_dlkm", superImageSubPartitions) {
@@ -381,12 +401,18 @@ func (f *filesystemCreator) createDeviceModule(
 	partitionProps.Vbmeta_partitions = vbmetaPartitions
 
 	deviceProps := &filesystem.DeviceProperties{
-		Main_device:       proptools.BoolPtr(true),
-		Ab_ota_updater:    proptools.BoolPtr(ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.AbOtaUpdater),
-		Ab_ota_partitions: ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.AbOtaPartitions,
+		Main_device:               proptools.BoolPtr(true),
+		Ab_ota_updater:            proptools.BoolPtr(ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.AbOtaUpdater),
+		Ab_ota_partitions:         ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.AbOtaPartitions,
+		Ab_ota_postinstall_config: ctx.Config().ProductVariables().PartitionVarsForSoongMigrationOnlyDoNotUse.AbOtaPostInstallConfig,
+		Ramdisk_node_list:         proptools.StringPtr(":ramdisk_node_list"),
 	}
+
 	if bootloader, ok := f.createBootloaderFilegroup(ctx); ok {
 		deviceProps.Bootloader = proptools.StringPtr(":" + bootloader)
+	}
+	if releaseTools, ok := f.createReleaseToolsFilegroup(ctx); ok {
+		deviceProps.Releasetools_extension = proptools.StringPtr(":" + releaseTools)
 	}
 
 	ctx.CreateModule(filesystem.AndroidDeviceFactory, baseProps, partitionProps, deviceProps)

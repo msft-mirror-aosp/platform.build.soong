@@ -386,12 +386,23 @@ type config struct {
 
 type partialCompileFlags struct {
 	// Is partial compilation enabled at all?
-	enabled bool
+	Enabled bool
 
 	// Whether to use d8 instead of r8
-	use_d8 bool
+	Use_d8 bool
 
 	// Add others as needed.
+}
+
+// These are the flags when `SOONG_PARTIAL_COMPILE` is empty or not set.
+var defaultPartialCompileFlags = partialCompileFlags{
+	Enabled: false,
+}
+
+// These are the flags when `SOONG_PARTIAL_COMPILE=true`.
+var enabledPartialCompileFlags = partialCompileFlags{
+	Enabled: true,
+	Use_d8:  true,
 }
 
 type deviceConfig struct {
@@ -427,11 +438,6 @@ type jsonConfigurable interface {
 // To add a new feature to the list, add the field in the struct
 // `partialCompileFlags` above, and then add the name of the field in the
 // switch statement below.
-var defaultPartialCompileFlags = partialCompileFlags{
-	// Set any opt-out flags here.  Opt-in flags are off by default.
-	enabled: false,
-}
-
 func (c *config) parsePartialCompileFlags(isEngBuild bool) (partialCompileFlags, error) {
 	if !isEngBuild {
 		return partialCompileFlags{}, nil
@@ -472,15 +478,14 @@ func (c *config) parsePartialCompileFlags(isEngBuild bool) (partialCompileFlags,
 		}
 		switch tok {
 		case "true":
-			ret = defaultPartialCompileFlags
-			ret.enabled = true
+			ret = enabledPartialCompileFlags
 		case "false":
 			// Set everything to false.
 			ret = partialCompileFlags{}
 		case "enabled":
-			ret.enabled = makeVal(state, defaultPartialCompileFlags.enabled)
+			ret.Enabled = makeVal(state, defaultPartialCompileFlags.Enabled)
 		case "use_d8":
-			ret.use_d8 = makeVal(state, defaultPartialCompileFlags.use_d8)
+			ret.Use_d8 = makeVal(state, defaultPartialCompileFlags.Use_d8)
 		default:
 			return partialCompileFlags{}, fmt.Errorf("Unknown SOONG_PARTIAL_COMPILE value: %v", tok)
 		}

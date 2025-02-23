@@ -39,13 +39,11 @@ all_aconfig_declarations {
     visibility: [
         "//vendor:__subpackages__", // for vendor extensions
     ],
-    api_signature_files: select(soong_config_variable("android_aconfig", "opt_platform_api_srcs"), {
-        default: [
-            ":frameworks-base-api-current.txt",
-            ":frameworks-base-api-system-current.txt",
-            ":frameworks-base-api-system-server-current.txt",
-            ":frameworks-base-api-module-lib-current.txt",
-        ],
-    }),
+    api_signature_files: [
+        ":frameworks-base-api-current.txt",
+        ":frameworks-base-api-system-current.txt",
+        ":frameworks-base-api-system-server-current.txt",
+        ":frameworks-base-api-module-lib-current.txt",
+    ],
     finalized_flags_file: ":latest-finalized-flags",
 }

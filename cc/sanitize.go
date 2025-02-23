@@ -79,7 +79,7 @@ var (
 
 	minimalRuntimeFlags = []string{"-fsanitize-minimal-runtime", "-fno-sanitize-trap=integer,undefined",
 		"-fno-sanitize-recover=integer,undefined"}
-	memtagStackCommonFlags = []string{"-march=armv8-a+memtag"}
+	memtagStackCommonFlags = []string{"-Xclang -target-feature -Xclang +mte"}
 	memtagStackLlvmFlags   = []string{"-dom-tree-reachability-max-bbs-to-explore=128"}
 
 	hostOnlySanitizeFlags   = []string{"-fno-sanitize-recover=all"}
@@ -1901,6 +1901,8 @@ func (txt *sanitizerLibrariesTxtModule) GenerateAndroidBuildActions(ctx android.
 
 	ctx.SetOutputFiles(android.Paths{outputFile}, "")
 	txt.outputFile = outputFile
+
+	etc.SetCommonPrebuiltEtcInfo(ctx, txt)
 }
 
 func (txt *sanitizerLibrariesTxtModule) PrepareAndroidMKProviderInfo(config android.Config) *android.AndroidMkProviderInfo {

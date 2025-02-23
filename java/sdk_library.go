@@ -702,7 +702,7 @@ func (paths *scopePaths) extractStubsLibraryInfoFromDependency(ctx android.Modul
 		paths.stubsHeaderPath = lib.HeaderJars
 		paths.stubsImplPath = lib.ImplementationJars
 
-		libDep := android.OtherModuleProviderOrDefault(ctx, dep, JavaInfoProvider).UsesLibraryDependencyInfo
+		libDep := android.OtherModuleProviderOrDefault(ctx, dep, JavaInfoProvider)
 		paths.stubsDexJarPath = libDep.DexJarBuildPath
 		paths.exportableStubsDexJarPath = libDep.DexJarBuildPath
 		return nil
@@ -718,7 +718,7 @@ func (paths *scopePaths) extractEverythingStubsLibraryInfoFromDependency(ctx and
 			paths.stubsImplPath = lib.ImplementationJars
 		}
 
-		libDep := android.OtherModuleProviderOrDefault(ctx, dep, JavaInfoProvider).UsesLibraryDependencyInfo
+		libDep := android.OtherModuleProviderOrDefault(ctx, dep, JavaInfoProvider)
 		paths.stubsDexJarPath = libDep.DexJarBuildPath
 		return nil
 	} else {
@@ -732,7 +732,7 @@ func (paths *scopePaths) extractExportableStubsLibraryInfoFromDependency(ctx and
 			paths.stubsImplPath = lib.ImplementationJars
 		}
 
-		libDep := android.OtherModuleProviderOrDefault(ctx, dep, JavaInfoProvider).UsesLibraryDependencyInfo
+		libDep := android.OtherModuleProviderOrDefault(ctx, dep, JavaInfoProvider)
 		paths.exportableStubsDexJarPath = libDep.DexJarBuildPath
 		return nil
 	} else {
@@ -931,6 +931,8 @@ type commonSdkLibraryAndImportModule interface {
 	RootLibraryName() string
 }
 
+var _ android.ApexModule = (*SdkLibrary)(nil)
+
 func (m *SdkLibrary) RootLibraryName() string {
 	return m.BaseModuleName()
 }
@@ -1014,10 +1016,6 @@ func (c *commonToSdkLibraryAndImport) generateCommonBuildActions(ctx android.Mod
 		exportableStubPaths[kind] = exportableStubPath
 		removedApiFilePaths[kind] = removedApiFilePath
 	}
-
-	javaInfo := &JavaInfo{}
-	setExtraJavaInfo(ctx, ctx.Module(), javaInfo)
-	android.SetProvider(ctx, JavaInfoProvider, javaInfo)
 
 	return SdkLibraryInfo{
 		EverythingStubDexJarPaths: everythingStubPaths,
@@ -1225,6 +1223,8 @@ type SdkLibraryInfo struct {
 
 	// Whether if this can be used as a shared library.
 	SharedLibrary bool
+
+	Prebuilt bool
 }
 
 var SdkLibraryInfoProvider = blueprint.NewProvider[SdkLibraryInfo]()
@@ -1511,10 +1511,10 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		module.dexJarFile = makeDexJarPathFromPath(module.implLibraryInfo.DexJarFile.Path())
 		module.headerJarFile = module.implLibraryInfo.HeaderJars[0]
 		module.implementationAndResourcesJar = module.implLibraryInfo.ImplementationAndResourcesJars[0]
-		module.apexSystemServerDexpreoptInstalls = module.implLibraryInfo.ApexSystemServerDexpreoptInstalls
-		module.apexSystemServerDexJars = module.implLibraryInfo.ApexSystemServerDexJars
+		module.apexSystemServerDexpreoptInstalls = module.implLibraryInfo.DexpreopterInfo.ApexSystemServerDexpreoptInstalls
+		module.apexSystemServerDexJars = module.implLibraryInfo.DexpreopterInfo.ApexSystemServerDexJars
 		module.dexpreopter.configPath = module.implLibraryInfo.ConfigPath
-		module.dexpreopter.outputProfilePathOnHost = module.implLibraryInfo.OutputProfilePathOnHost
+		module.dexpreopter.outputProfilePathOnHost = module.implLibraryInfo.DexpreopterInfo.OutputProfilePathOnHost
 
 		// Properties required for Library.AndroidMkEntries
 		module.logtagsSrcs = module.implLibraryInfo.LogtagsSrcs
@@ -1580,7 +1580,12 @@ func (module *SdkLibrary) GenerateAndroidBuildActions(ctx android.ModuleContext)
 		setOutputFilesFromJavaInfo(ctx, module.implLibraryInfo)
 	}
 
+	javaInfo := &JavaInfo{}
+	setExtraJavaInfo(ctx, ctx.Module(), javaInfo)
+	android.SetProvider(ctx, JavaInfoProvider, javaInfo)
+
 	sdkLibInfo.GeneratingLibs = generatingLibs
+	sdkLibInfo.Prebuilt = false
 	android.SetProvider(ctx, SdkLibraryInfoProvider, sdkLibInfo)
 }
 
@@ -1708,14 +1713,22 @@ func (module *SdkLibrary) compareAgainstLatestApi(apiScope *apiScope) bool {
 }
 
 // Implements android.ApexModule
-func (module *SdkLibrary) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
-	if depTag == xmlPermissionsFileTag {
+func (m *SdkLibrary) GetDepInSameApexChecker() android.DepInSameApexChecker {
+	return SdkLibraryDepInSameApexChecker{}
+}
+
+type SdkLibraryDepInSameApexChecker struct {
+	android.BaseDepInSameApexChecker
+}
+
+func (m SdkLibraryDepInSameApexChecker) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	if tag == xmlPermissionsFileTag {
 		return true
 	}
-	if depTag == implLibraryTag {
+	if tag == implLibraryTag {
 		return true
 	}
-	return module.Library.OutgoingDepIsInSameApex(depTag)
+	return depIsInSameApex(tag)
 }
 
 // Implements android.ApexModule
@@ -2126,8 +2139,16 @@ func (module *SdkLibraryImport) DepsMutator(ctx android.BottomUpMutatorContext) 
 var _ android.ApexModule = (*SdkLibraryImport)(nil)
 
 // Implements android.ApexModule
-func (module *SdkLibraryImport) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
-	if depTag == xmlPermissionsFileTag {
+func (m *SdkLibraryImport) GetDepInSameApexChecker() android.DepInSameApexChecker {
+	return SdkLibraryImportDepIsInSameApexChecker{}
+}
+
+type SdkLibraryImportDepIsInSameApexChecker struct {
+	android.BaseDepInSameApexChecker
+}
+
+func (m SdkLibraryImportDepIsInSameApexChecker) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	if tag == xmlPermissionsFileTag {
 		return true
 	}
 
@@ -2137,13 +2158,10 @@ func (module *SdkLibraryImport) OutgoingDepIsInSameApex(depTag blueprint.Depende
 }
 
 // Implements android.ApexModule
-func (module *SdkLibraryImport) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
-	sdkVersion android.ApiLevel) error {
-	// we don't check prebuilt modules for sdk_version
-	return nil
+func (m *SdkLibraryImport) MinSdkVersionSupported(ctx android.BaseModuleContext) android.ApiLevel {
+	return android.MinApiLevel
 }
 
-// Implements android.ApexModule
 func (module *SdkLibraryImport) UniqueApexVariations() bool {
 	return module.uniqueApexVariations()
 }
@@ -2221,7 +2239,12 @@ func (module *SdkLibraryImport) GenerateAndroidBuildActions(ctx android.ModuleCo
 		setOutputFilesFromJavaInfo(ctx, module.implLibraryInfo)
 	}
 
+	javaInfo := &JavaInfo{}
+	setExtraJavaInfo(ctx, ctx.Module(), javaInfo)
+	android.SetProvider(ctx, JavaInfoProvider, javaInfo)
+
 	sdkLibInfo.GeneratingLibs = generatingLibs
+	sdkLibInfo.Prebuilt = true
 	android.SetProvider(ctx, SdkLibraryInfoProvider, sdkLibInfo)
 }
 

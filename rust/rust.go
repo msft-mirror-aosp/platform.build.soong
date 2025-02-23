@@ -841,7 +841,7 @@ func (mod *Module) getSharedFlags() *cc.SharedFlags {
 	return shared
 }
 
-func (mod *Module) ImplementationModuleNameForMake(ctx android.BaseModuleContext) string {
+func (mod *Module) ImplementationModuleNameForMake() string {
 	name := mod.BaseModuleName()
 	if versioned, ok := mod.compiler.(cc.VersionedInterface); ok {
 		name = versioned.ImplementationModuleName(name)
@@ -1411,7 +1411,7 @@ func rustMakeLibName(rustInfo *RustInfo, linkableInfo *cc.LinkableInfo, commonIn
 	if rustInfo != nil {
 		// Use base module name for snapshots when exporting to Makefile.
 		if rustInfo.SnapshotInfo != nil {
-			baseName := linkableInfo.BaseModuleName
+			baseName := commonInfo.BaseModuleName
 			return baseName + rustInfo.SnapshotInfo.SnapshotAndroidMkSuffix + rustInfo.AndroidMkSuffix
 		}
 	}
@@ -2085,26 +2085,23 @@ func (mod *Module) MinSdkVersion() string {
 }
 
 // Implements android.ApexModule
-func (mod *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersion android.ApiLevel) error {
+func (mod *Module) MinSdkVersionSupported(ctx android.BaseModuleContext) android.ApiLevel {
 	minSdkVersion := mod.MinSdkVersion()
 	if minSdkVersion == "apex_inherit" {
-		return nil
-	}
-	if minSdkVersion == "" {
-		return fmt.Errorf("min_sdk_version is not specificed")
+		return android.MinApiLevel
 	}
 
+	if minSdkVersion == "" {
+		return android.NoneApiLevel
+	}
 	// Not using nativeApiLevelFromUser because the context here is not
 	// necessarily a native context.
-	ver, err := android.ApiLevelFromUser(ctx, minSdkVersion)
+	ver, err := android.ApiLevelFromUserWithConfig(ctx.Config(), minSdkVersion)
 	if err != nil {
-		return err
+		return android.NoneApiLevel
 	}
 
-	if ver.GreaterThan(sdkVersion) {
-		return fmt.Errorf("newer SDK(%v)", ver)
-	}
-	return nil
+	return ver
 }
 
 // Implements android.ApexModule
@@ -2115,12 +2112,28 @@ func (mod *Module) AlwaysRequiresPlatformApexVariant() bool {
 }
 
 // Implements android.ApexModule
-func (mod *Module) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
+type RustDepInSameApexChecker struct {
+	Static           bool
+	HasStubsVariants bool
+	ApexExclude      bool
+	Host             bool
+}
+
+func (mod *Module) GetDepInSameApexChecker() android.DepInSameApexChecker {
+	return RustDepInSameApexChecker{
+		Static:           mod.Static(),
+		HasStubsVariants: mod.HasStubsVariants(),
+		ApexExclude:      mod.ApexExclude(),
+		Host:             mod.Host(),
+	}
+}
+
+func (r RustDepInSameApexChecker) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
 	if depTag == procMacroDepTag || depTag == customBindgenDepTag {
 		return false
 	}
 
-	if mod.Static() && cc.IsSharedDepTag(depTag) {
+	if r.Static && cc.IsSharedDepTag(depTag) {
 		// shared_lib dependency from a static lib is considered as crossing
 		// the APEX boundary because the dependency doesn't actually is
 		// linked; the dependency is used only during the compilation phase.
@@ -2137,23 +2150,23 @@ func (mod *Module) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool 
 	}
 
 	// TODO(b/362509506): remove once all apex_exclude uses are switched to stubs.
-	if mod.ApexExclude() {
+	if r.ApexExclude {
 		return false
 	}
 
 	return true
 }
 
-func (mod *Module) IncomingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
-	if mod.Host() {
+func (r RustDepInSameApexChecker) IncomingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
+	if r.Host {
 		return false
 	}
 	// TODO(b/362509506): remove once all apex_exclude uses are switched to stubs.
-	if mod.ApexExclude() {
+	if r.ApexExclude {
 		return false
 	}
 
-	if mod.HasStubsVariants() {
+	if r.HasStubsVariants {
 		if cc.IsSharedDepTag(depTag) && !cc.IsExplicitImplSharedDepTag(depTag) {
 			// dynamic dep to a stubs lib crosses APEX boundary
 			return false

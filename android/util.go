@@ -213,10 +213,12 @@ func PrettyConcat(list []string, quote bool, lastSep string) string {
 }
 
 // ListSetDifference checks if the two lists contain the same elements. It returns
-// a boolean which is true if there is a difference, and then returns lists of elements
+// a boolean which is true if there is a difference, and then returns lists of unique elements
 // that are in l1 but not l2, and l2 but not l1.
 func ListSetDifference[T comparable](l1, l2 []T) (bool, []T, []T) {
 	listsDiffer := false
+	l1 = firstUnique(l1)
+	l2 = firstUnique(l2)
 	diff1 := []T{}
 	diff2 := []T{}
 	m1 := setFromList(l1)
@@ -238,8 +240,13 @@ func ListSetDifference[T comparable](l1, l2 []T) (bool, []T, []T) {
 
 // Returns true if the two lists have common elements.
 func HasIntersection[T comparable](l1, l2 []T) bool {
-	_, a, b := ListSetDifference(l1, l2)
-	return len(a)+len(b) < len(setFromList(l1))+len(setFromList(l2))
+	m1 := setFromList(l1)
+	for _, x := range l2 {
+		if _, ok := m1[x]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // Returns true if the given string s is prefixed with any string in the given prefix list.

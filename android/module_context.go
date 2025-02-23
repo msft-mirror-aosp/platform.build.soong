@@ -81,6 +81,8 @@ type BuildParams struct {
 	Default bool
 	// Args is a key value mapping for replacements of variables within the Rule
 	Args map[string]string
+	// PhonyOutput marks this build as `phony_output = true`
+	PhonyOutput bool
 }
 
 type ModuleBuildParams BuildParams
@@ -369,6 +371,7 @@ func convertBuildParams(params BuildParams) blueprint.BuildParams {
 		Validations:     params.Validations.Strings(),
 		Args:            params.Args,
 		Default:         params.Default,
+		PhonyOutput:     params.PhonyOutput,
 	}
 
 	if params.Depfile != nil {
@@ -652,6 +655,7 @@ func (m *moduleContext) packageFile(fullInstallPath InstallPath, srcPath Path, e
 		owner:                 owner,
 		requiresFullInstall:   requiresFullInstall,
 		fullInstallPath:       fullInstallPath,
+		variation:             m.ModuleSubDir(),
 	}
 	m.packagingSpecs = append(m.packagingSpecs, spec)
 	return spec
@@ -713,6 +717,17 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 				implicitDeps = append(implicitDeps, extraZip.zip)
 			}
 
+			var cpFlags = "-f"
+
+			// If this is a device file, copy while preserving timestamps. This is to support
+			// adb sync in soong-only builds. Because soong-only builds have 2 different staging
+			// directories, the out/target/product one and the out/soong/.intermediates one,
+			// we need to ensure the files in them have the same timestamps so that adb sync doesn't
+			// update the files on device.
+			if strings.Contains(fullInstallPath.String(), "target/product") {
+				cpFlags += " -p"
+			}
+
 			m.Build(pctx, BuildParams{
 				Rule:        rule,
 				Description: "install " + fullInstallPath.Base(),
@@ -722,7 +737,7 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 				OrderOnly:   orderOnlyDeps,
 				Args: map[string]string{
 					"extraCmds": extraCmds,
-					"cpFlags":   "-f",
+					"cpFlags":   cpFlags,
 				},
 			})
 		}
@@ -792,6 +807,7 @@ func (m *moduleContext) InstallSymlink(installPath InstallPath, name string, src
 		owner:               owner,
 		requiresFullInstall: m.requiresFullInstall(),
 		fullInstallPath:     fullInstallPath,
+		variation:           m.ModuleSubDir(),
 	})
 
 	return fullInstallPath
@@ -816,7 +832,7 @@ func (m *moduleContext) InstallAbsoluteSymlink(installPath InstallPath, name str
 		})
 		if !m.Config().KatiEnabled() {
 			m.Build(pctx, BuildParams{
-				Rule:        Symlink,
+				Rule:        SymlinkWithBash,
 				Description: "install symlink " + fullInstallPath.Base() + " -> " + absPath,
 				Output:      fullInstallPath,
 				Args: map[string]string{
@@ -842,6 +858,7 @@ func (m *moduleContext) InstallAbsoluteSymlink(installPath InstallPath, name str
 		owner:               owner,
 		requiresFullInstall: m.requiresFullInstall(),
 		fullInstallPath:     fullInstallPath,
+		variation:           m.ModuleSubDir(),
 	})
 
 	return fullInstallPath

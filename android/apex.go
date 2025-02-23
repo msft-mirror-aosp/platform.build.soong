@@ -155,11 +155,9 @@ type ApexBundleInfo struct {
 
 var ApexBundleInfoProvider = blueprint.NewMutatorProvider[ApexBundleInfo]("apex_mutate")
 
-// DepIsInSameApex defines an interface that should be used to determine whether a given dependency
-// should be considered as part of the same APEX as the current module or not. Note: this was
-// extracted from ApexModule to make it easier to define custom subsets of the ApexModule interface
-// and improve code navigation within the IDE.
-type DepIsInSameApex interface {
+// DepInSameApexChecker defines an interface that should be used to determine whether a given dependency
+// should be considered as part of the same APEX as the current module or not.
+type DepInSameApexChecker interface {
 	// OutgoingDepIsInSameApex tests if the module depended on via 'tag' is considered as part of
 	// the same APEX as this module. For example, a static lib dependency usually returns true here, while a
 	// shared lib dependency to a stub library returns false.
@@ -181,6 +179,15 @@ type DepIsInSameApex interface {
 	IncomingDepIsInSameApex(tag blueprint.DependencyTag) bool
 }
 
+// DepInSameApexInfo is a provider that wraps around a DepInSameApexChecker that can be
+// used to check if a dependency belongs to the same apex as the module when walking
+// through the dependencies of a module.
+type DepInSameApexInfo struct {
+	Checker DepInSameApexChecker
+}
+
+var DepInSameApexInfoProvider = blueprint.NewMutatorProvider[DepInSameApexInfo]("apex_unique")
+
 func IsDepInSameApex(ctx BaseModuleContext, module, dep Module) bool {
 	depTag := ctx.OtherModuleDependencyTag(dep)
 	if _, ok := depTag.(ExcludeFromApexContentsTag); ok {
@@ -189,12 +196,23 @@ func IsDepInSameApex(ctx BaseModuleContext, module, dep Module) bool {
 		return false
 	}
 
-	if m, ok := module.(DepIsInSameApex); ok && !m.OutgoingDepIsInSameApex(depTag) {
-		return false
+	if !ctx.EqualModules(ctx.Module(), module) {
+		if moduleInfo, ok := OtherModuleProvider(ctx, module, DepInSameApexInfoProvider); ok {
+			if !moduleInfo.Checker.OutgoingDepIsInSameApex(depTag) {
+				return false
+			}
+		}
+	} else {
+		if m, ok := ctx.Module().(ApexModule); ok && !m.GetDepInSameApexChecker().OutgoingDepIsInSameApex(depTag) {
+			return false
+		}
 	}
-	if d, ok := dep.(DepIsInSameApex); ok && !d.IncomingDepIsInSameApex(depTag) {
-		return false
+	if depInfo, ok := OtherModuleProvider(ctx, dep, DepInSameApexInfoProvider); ok {
+		if !depInfo.Checker.IncomingDepIsInSameApex(depTag) {
+			return false
+		}
 	}
+
 	return true
 }
 
@@ -213,7 +231,6 @@ func IsDepInSameApex(ctx BaseModuleContext, module, dep Module) bool {
 // mergedName) when the two APEXes have the same min_sdk_version requirement.
 type ApexModule interface {
 	Module
-	DepIsInSameApex
 
 	apexModuleBase() *ApexModuleBase
 
@@ -265,16 +282,15 @@ type ApexModule interface {
 	// check-platform-availability mutator in the apex package.
 	SetNotAvailableForPlatform()
 
-	// Returns nil (success) if this module should support the given sdk version. Returns an
-	// error if not. No default implementation is provided for this method. A module type
-	// implementing this interface should provide an implementation. A module supports an sdk
-	// version when the module's min_sdk_version is equal to or less than the given sdk version.
-	ShouldSupportSdkVersion(ctx BaseModuleContext, sdkVersion ApiLevel) error
+	// Returns the min sdk version that the module supports, .
+	MinSdkVersionSupported(ctx BaseModuleContext) ApiLevel
 
 	// Returns true if this module needs a unique variation per apex, effectively disabling the
 	// deduping. This is turned on when, for example if use_apex_name_macro is set so that each
 	// apex variant should be built with different macro definitions.
 	UniqueApexVariations() bool
+
+	GetDepInSameApexChecker() DepInSameApexChecker
 }
 
 // Properties that are common to all module types implementing ApexModule interface.
@@ -331,7 +347,7 @@ func (m *ApexModuleBase) ApexTransitionMutatorSplit(ctx BaseModuleContext) []Ape
 }
 
 func (m *ApexModuleBase) ApexTransitionMutatorOutgoing(ctx OutgoingTransitionContext, info ApexInfo) ApexInfo {
-	if !ctx.Module().(DepIsInSameApex).OutgoingDepIsInSameApex(ctx.DepTag()) {
+	if !ctx.Module().(ApexModule).GetDepInSameApexChecker().OutgoingDepIsInSameApex(ctx.DepTag()) {
 		return ApexInfo{}
 	}
 	return info
@@ -343,7 +359,7 @@ func (m *ApexModuleBase) ApexTransitionMutatorIncoming(ctx IncomingTransitionCon
 		return ApexInfo{}
 	}
 
-	if !ctx.Module().(DepIsInSameApex).IncomingDepIsInSameApex(ctx.DepTag()) {
+	if !ctx.Module().(ApexModule).GetDepInSameApexChecker().IncomingDepIsInSameApex(ctx.DepTag()) {
 		return ApexInfo{}
 	}
 
@@ -460,19 +476,17 @@ func (m *ApexModuleBase) UniqueApexVariations() bool {
 }
 
 // Implements ApexModule
-func (m *ApexModuleBase) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
-	// By default, if there is a dependency from A to B, we try to include both in the same
-	// APEX, unless B is explicitly from outside of the APEX (i.e. a stubs lib). Thus, returning
-	// true. This is overridden by some module types like apex.ApexBundle, cc.Module,
-	// java.Module, etc.
+func (m *ApexModuleBase) GetDepInSameApexChecker() DepInSameApexChecker {
+	return BaseDepInSameApexChecker{}
+}
+
+type BaseDepInSameApexChecker struct{}
+
+func (m BaseDepInSameApexChecker) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
 	return true
 }
 
-func (m *ApexModuleBase) IncomingDepIsInSameApex(tag blueprint.DependencyTag) bool {
-	// By default, if there is a dependency from A to B, we try to include both in the same
-	// APEX, unless B is explicitly from outside of the APEX (i.e. a stubs lib). Thus, returning
-	// true. This is overridden by some module types like apex.ApexBundle, cc.Module,
-	// java.Module, etc.
+func (m BaseDepInSameApexChecker) IncomingDepIsInSameApex(tag blueprint.DependencyTag) bool {
 	return true
 }
 
@@ -712,22 +726,21 @@ func CheckMinSdkVersion(ctx ModuleContext, minSdkVersion ApiLevel, walk WalkPayl
 		if !IsDepInSameApex(ctx, from, to) {
 			return false
 		}
-		if m, ok := to.(ModuleWithMinSdkVersionCheck); ok {
-			// This dependency performs its own min_sdk_version check, just make sure it sets min_sdk_version
-			// to trigger the check.
-			if !m.MinSdkVersion(ctx).Specified() {
-				ctx.OtherModuleErrorf(m, "must set min_sdk_version")
+		if info, ok := OtherModuleProvider(ctx, to, CommonModuleInfoKey); ok && info.ModuleWithMinSdkVersionCheck {
+			if info.MinSdkVersion.ApiLevel == nil || !info.MinSdkVersion.ApiLevel.Specified() {
+				// This dependency performs its own min_sdk_version check, just make sure it sets min_sdk_version
+				// to trigger the check.
+				ctx.OtherModuleErrorf(to, "must set min_sdk_version")
 			}
 			return false
 		}
-		if err := to.ShouldSupportSdkVersion(ctx, minSdkVersion); err != nil {
-			toName := ctx.OtherModuleName(to)
+		if err := ShouldSupportSdkVersion(ctx, to, minSdkVersion); err != nil {
 			ctx.OtherModuleErrorf(to, "should support min_sdk_version(%v) for %q: %v."+
 				"\n\nDependency path: %s\n\n"+
 				"Consider adding 'min_sdk_version: %q' to %q",
 				minSdkVersion, ctx.ModuleName(), err.Error(),
 				ctx.GetPathString(false),
-				minSdkVersion, toName)
+				minSdkVersion, ctx.OtherModuleName(to))
 			return false
 		}
 		return true
@@ -738,6 +751,24 @@ type MinSdkVersionFromValueContext interface {
 	Config() Config
 	DeviceConfig() DeviceConfig
 	ModuleErrorContext
+}
+
+// Returns nil (success) if this module should support the given sdk version. Returns an
+// error if not. No default implementation is provided for this method. A module type
+// implementing this interface should provide an implementation. A module supports an sdk
+// version when the module's min_sdk_version is equal to or less than the given sdk version.
+func ShouldSupportSdkVersion(ctx BaseModuleContext, module Module, sdkVersion ApiLevel) error {
+	info, ok := OtherModuleProvider(ctx, module, CommonModuleInfoKey)
+	if !ok || info.MinSdkVersionSupported.IsNone() {
+		return fmt.Errorf("min_sdk_version is not specified")
+	}
+	minVer := info.MinSdkVersionSupported
+
+	if minVer.GreaterThan(sdkVersion) {
+		return fmt.Errorf("newer SDK(%v)", minVer)
+	}
+
+	return nil
 }
 
 // Construct ApiLevel object from min_sdk_version string value
