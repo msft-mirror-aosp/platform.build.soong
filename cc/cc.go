@@ -93,6 +93,9 @@ type BinaryDecoratorInfo struct{}
 type LibraryDecoratorInfo struct {
 	ExportIncludeDirs []string
 	InjectBsslHash    bool
+	// Location of the static library in the sysroot. Empty if the library is
+	// not included in the NDK.
+	NdkSysrootPath android.Path
 }
 
 type SnapshotInfo struct {
@@ -104,12 +107,25 @@ type TestBinaryInfo struct {
 }
 type BenchmarkDecoratorInfo struct{}
 
-type StubDecoratorInfo struct{}
+type StubDecoratorInfo struct {
+	AbiDumpPath  android.OutputPath
+	HasAbiDump   bool
+	AbiDiffPaths android.Paths
+	InstallPath  android.Path
+}
 
-type ObjectLinkerInfo struct{}
+type ObjectLinkerInfo struct {
+	// Location of the object in the sysroot. Empty if the object is not
+	// included in the NDK.
+	NdkSysrootPath android.Path
+}
 
 type LibraryInfo struct {
 	BuildStubs bool
+}
+
+type InstallerInfo struct {
+	StubDecoratorInfo *StubDecoratorInfo
 }
 
 // Common info about the cc module.
@@ -122,6 +138,7 @@ type CcInfo struct {
 	LinkerInfo             *LinkerInfo
 	SnapshotInfo           *SnapshotInfo
 	LibraryInfo            *LibraryInfo
+	InstallerInfo          *InstallerInfo
 }
 
 var CcInfoProvider = blueprint.NewProvider[*CcInfo]()
@@ -162,6 +179,7 @@ type LinkableInfo struct {
 	OnlyInVendorRamdisk bool
 	InRecovery          bool
 	OnlyInRecovery      bool
+	InVendor            bool
 	Installable         *bool
 	// RelativeInstallPath returns the relative install path for this module.
 	RelativeInstallPath string
@@ -173,7 +191,8 @@ type LinkableInfo struct {
 	ImplementationModuleNameForMake string
 	IsStubsImplementationRequired   bool
 	// Symlinks returns a list of symlinks that should be created for this module.
-	Symlinks []string
+	Symlinks               []string
+	APIListCoverageXMLPath android.ModuleOutPath
 }
 
 var LinkableInfoProvider = blueprint.NewProvider[*LinkableInfo]()
@@ -751,6 +770,10 @@ type linker interface {
 
 	// Get the deps that have been explicitly specified in the properties.
 	linkerSpecifiedDeps(ctx android.ConfigurableEvaluatorContext, module *Module, specifiedDeps specifiedDeps) specifiedDeps
+
+	// Gets a list of files that will be disted when using the dist property without specifying
+	// an output file tag.
+	defaultDistFiles() []android.Path
 
 	moduleInfoJSON(ctx ModuleContext, moduleInfoJSON *android.ModuleInfoJSON)
 }
@@ -2332,6 +2355,7 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		case *libraryDecorator:
 			ccInfo.LinkerInfo.LibraryDecoratorInfo = &LibraryDecoratorInfo{
 				InjectBsslHash: Bool(c.linker.(*libraryDecorator).Properties.Inject_bssl_hash),
+				NdkSysrootPath: c.linker.(*libraryDecorator).ndkSysrootPath,
 			}
 		case *testBinary:
 			ccInfo.LinkerInfo.TestBinaryInfo = &TestBinaryInfo{
@@ -2340,7 +2364,9 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		case *benchmarkDecorator:
 			ccInfo.LinkerInfo.BenchmarkDecoratorInfo = &BenchmarkDecoratorInfo{}
 		case *objectLinker:
-			ccInfo.LinkerInfo.ObjectLinkerInfo = &ObjectLinkerInfo{}
+			ccInfo.LinkerInfo.ObjectLinkerInfo = &ObjectLinkerInfo{
+				NdkSysrootPath: c.linker.(*objectLinker).ndkSysrootPath,
+			}
 		case *stubDecorator:
 			ccInfo.LinkerInfo.StubDecoratorInfo = &StubDecoratorInfo{}
 		}
@@ -2358,6 +2384,17 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 	if c.library != nil {
 		ccInfo.LibraryInfo = &LibraryInfo{
 			BuildStubs: c.library.BuildStubs(),
+		}
+	}
+	if c.installer != nil {
+		ccInfo.InstallerInfo = &InstallerInfo{}
+		if installer, ok := c.installer.(*stubDecorator); ok {
+			ccInfo.InstallerInfo.StubDecoratorInfo = &StubDecoratorInfo{
+				HasAbiDump:   installer.hasAbiDump,
+				AbiDumpPath:  installer.abiDumpPath,
+				AbiDiffPaths: installer.abiDiffPaths,
+				InstallPath:  installer.installPath,
+			}
 		}
 	}
 	android.SetProvider(ctx, CcInfoProvider, &ccInfo)
@@ -2392,6 +2429,7 @@ func CreateCommonLinkableInfo(ctx android.ModuleContext, mod VersionedLinkableIn
 		OnlyInVendorRamdisk:  mod.OnlyInVendorRamdisk(),
 		InRecovery:           mod.InRecovery(),
 		OnlyInRecovery:       mod.OnlyInRecovery(),
+		InVendor:             mod.InVendor(),
 		Installable:          mod.Installable(),
 		RelativeInstallPath:  mod.RelativeInstallPath(),
 		// TODO(b/362509506): remove this once all apex_exclude uses are switched to stubs.
@@ -2401,16 +2439,14 @@ func CreateCommonLinkableInfo(ctx android.ModuleContext, mod VersionedLinkableIn
 		ImplementationModuleNameForMake: mod.ImplementationModuleNameForMake(),
 		Symlinks:                        mod.Symlinks(),
 	}
-	if mod.VersionedInterface() != nil {
-		info.IsStubsImplementationRequired = mod.VersionedInterface().IsStubsImplementationRequired()
-	}
-	return info
-}
 
-func setOutputFilesIfNotEmpty(ctx ModuleContext, files android.Paths, tag string) {
-	if len(files) > 0 {
-		ctx.SetOutputFiles(files, tag)
+	vi := mod.VersionedInterface()
+	if vi != nil {
+		info.IsStubsImplementationRequired = vi.IsStubsImplementationRequired()
+		info.APIListCoverageXMLPath = vi.GetAPIListCoverageXMLPath()
 	}
+
+	return info
 }
 
 func (c *Module) setOutputFiles(ctx ModuleContext) {
@@ -2422,6 +2458,10 @@ func (c *Module) setOutputFiles(ctx ModuleContext) {
 	if c.linker != nil {
 		ctx.SetOutputFiles(android.PathsIfNonNil(c.linker.unstrippedOutputFilePath()), "unstripped")
 		ctx.SetOutputFiles(android.PathsIfNonNil(c.linker.strippedAllOutputFilePath()), "stripped_all")
+		defaultDistFiles := c.linker.defaultDistFiles()
+		if len(defaultDistFiles) > 0 {
+			ctx.SetOutputFiles(defaultDistFiles, android.DefaultDistTag)
+		}
 	}
 }
 
@@ -4042,15 +4082,6 @@ func installable(c LinkableInterface, apexInfo android.ApexInfo) bool {
 	// be installable because it will likely to be included in the APEX and won't appear
 	// in the system partition.
 	if apexInfo.IsForPlatform() {
-		return ret
-	}
-
-	// Special case for modules that are configured to be installed to /data, which includes
-	// test modules. For these modules, both APEX and non-APEX variants are considered as
-	// installable. This is because even the APEX variants won't be included in the APEX, but
-	// will anyway be installed to /data/*.
-	// See b/146995717
-	if c.InstallInData() {
 		return ret
 	}
 

@@ -274,7 +274,7 @@ func createNonUpdatableFrameworkAidl(ctx android.SingletonContext) {
 func createFrameworkAidl(stubsModules []string, path android.WritablePath, ctx android.SingletonContext) *android.RuleBuilder {
 	stubsJars := make([]android.Paths, len(stubsModules))
 
-	ctx.VisitAllModules(func(module android.Module) {
+	ctx.VisitAllModuleProxies(func(module android.ModuleProxy) {
 		// Collect dex jar paths for the modules listed above.
 		if j, ok := android.OtherModuleProvider(ctx, module, JavaInfoProvider); ok {
 			name := ctx.ModuleName(module)
@@ -358,7 +358,7 @@ func createAPIFingerprint(ctx android.SingletonContext) {
 			"api_fingerprint",
 		}
 		count := 0
-		ctx.VisitAllModules(func(module android.Module) {
+		ctx.VisitAllModuleProxies(func(module android.ModuleProxy) {
 			name := ctx.ModuleName(module)
 			if android.InList(name, apiTxtFileModules) {
 				cmd.Inputs(android.OutputFilesForModule(ctx, module, ""))
