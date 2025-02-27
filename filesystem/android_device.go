@@ -588,6 +588,10 @@ func (a *androidDevice) copyMetadataToTargetZip(ctx android.ModuleContext, build
 			continue
 		}
 		builder.Command().Textf("cp").Input(fsInfos[partition].FilesystemConfig).Textf(" %s/META/%s", targetFilesDir.String(), a.filesystemConfigNameForTargetFiles(partition))
+		if partition == "ramdisk" {
+			// Create an additional copy at boot_filesystem_config.txt
+			builder.Command().Textf("cp").Input(fsInfos[partition].FilesystemConfig).Textf(" %s/META/boot_filesystem_config.txt", targetFilesDir.String())
+		}
 	}
 	// Copy ramdisk_node_list
 	if ramdiskNodeList := android.PathForModuleSrc(ctx, proptools.String(a.deviceProps.Ramdisk_node_list)); ramdiskNodeList != nil {
