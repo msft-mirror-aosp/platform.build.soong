@@ -622,6 +622,17 @@ func (a *androidDevice) copyMetadataToTargetZip(ctx android.ModuleContext, build
 	installedApexKeys = android.SortedUniquePaths(installedApexKeys) // Sort by keypath to match make
 	builder.Command().Text("cat").Inputs(installedApexKeys).Textf(" >> %s/META/apexkeys.txt", targetFilesDir.String())
 
+	if a.partitionProps.Super_partition_name != nil {
+		superPartition := ctx.GetDirectDepProxyWithTag(*a.partitionProps.Super_partition_name, superPartitionDepTag)
+		if info, ok := android.OtherModuleProvider(ctx, superPartition, SuperImageProvider); ok {
+			// dynamic_partitions_info.txt
+			// TODO (b/390192334): Add `building_super_empty_partition=true`
+			builder.Command().Text("cp").Input(info.DynamicPartitionsInfo).Textf(" %s/META/", targetFilesDir.String())
+		} else {
+			ctx.ModuleErrorf("Super partition %s does set SuperImageProvider\n", superPartition.Name())
+		}
+	}
+
 }
 
 type ApexKeyPathInfo struct {
