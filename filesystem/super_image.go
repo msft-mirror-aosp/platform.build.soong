@@ -78,6 +78,8 @@ type SuperImageProperties struct {
 		// specified we default to COW version 2 in update_engine for backwards compatibility
 		Cow_version *int64
 	}
+	// Whether the super image will be disted in the update package
+	Super_image_in_update_package *bool
 }
 
 type PartitionGroupsInfo struct {
@@ -303,6 +305,9 @@ func (s *superImage) dumpDynamicPartitionInfo(ctx android.ModuleContext, sb *str
 	addStr("super_metadata_device", proptools.String(s.properties.Metadata_device))
 	if len(s.properties.Block_devices) > 0 {
 		addStr("super_block_devices", strings.Join(s.properties.Block_devices, " "))
+	}
+	if proptools.Bool(s.properties.Super_image_in_update_package) {
+		addStr("super_image_in_update_package", "true")
 	}
 	addStr("super_partition_size", strconv.Itoa(proptools.Int(s.properties.Size)))
 	// TODO: In make, there's more complicated logic than just this surrounding super_*_device_size
