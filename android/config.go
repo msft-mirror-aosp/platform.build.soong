@@ -2176,14 +2176,6 @@ func (c *config) UseOptimizedResourceShrinkingByDefault() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_USE_OPTIMIZED_RESOURCE_SHRINKING_BY_DEFAULT")
 }
 
-func (c *config) UseResourceProcessorByDefault() bool {
-	return c.productVariables.GetBuildFlagBool("RELEASE_USE_RESOURCE_PROCESSOR_BY_DEFAULT")
-}
-
-func (c *config) UseTransitiveJarsInClasspath() bool {
-	return c.productVariables.GetBuildFlagBool("RELEASE_USE_TRANSITIVE_JARS_IN_CLASSPATH")
-}
-
 func (c *config) UseR8FullModeByDefault() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_R8_FULL_MODE_BY_DEFAULT")
 }
@@ -2194,6 +2186,10 @@ func (c *config) UseR8OnlyRuntimeVisibleAnnotations() bool {
 
 func (c *config) UseR8StoreStoreFenceConstructorInlining() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_R8_STORE_STORE_FENCE_CONSTRUCTOR_INLINING")
+}
+
+func (c *config) UseR8GlobalCheckNotNullFlags() bool {
+	return c.productVariables.GetBuildFlagBool("RELEASE_R8_GLOBAL_CHECK_NOT_NULL_FLAGS")
 }
 
 func (c *config) UseDexV41() bool {
@@ -2226,7 +2222,6 @@ var (
 		"RELEASE_APEX_CONTRIBUTIONS_NFC":                     "com.android.nfcservices",
 		"RELEASE_APEX_CONTRIBUTIONS_ONDEVICEPERSONALIZATION": "com.android.ondevicepersonalization",
 		"RELEASE_APEX_CONTRIBUTIONS_PERMISSION":              "com.android.permission",
-		"RELEASE_APEX_CONTRIBUTIONS_PRIMARY_LIBS":            "",
 		"RELEASE_APEX_CONTRIBUTIONS_PROFILING":               "com.android.profiling",
 		"RELEASE_APEX_CONTRIBUTIONS_REMOTEKEYPROVISIONING":   "com.android.rkpd",
 		"RELEASE_APEX_CONTRIBUTIONS_RESOLV":                  "com.android.resolv",
@@ -2279,10 +2274,18 @@ func (c *config) OemProperties() []string {
 }
 
 func (c *config) UseDebugArt() bool {
+	// If the ArtTargetIncludeDebugBuild product variable is set then return its value.
 	if c.productVariables.ArtTargetIncludeDebugBuild != nil {
 		return Bool(c.productVariables.ArtTargetIncludeDebugBuild)
 	}
 
+	// If the RELEASE_APEX_CONTRIBUTIONS_ART build flag is set to use a prebuilt ART apex
+	// then don't use the debug apex.
+	if val, ok := c.GetBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ART"); ok && val != "" {
+		return false
+	}
+
+	// Default to the debug apex for eng builds.
 	return Bool(c.productVariables.Eng)
 }
 

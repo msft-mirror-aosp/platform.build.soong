@@ -17,15 +17,23 @@ package filesystem
 import (
 	"cmp"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
 
 	"android/soong/android"
+	"android/soong/java"
 
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 )
+
+var proguardDictToProto = pctx.AndroidStaticRule("proguard_dict_to_proto", blueprint.RuleParams{
+	Command:     `${symbols_map} -r8 $in -location $location -write_if_changed $out`,
+	Restat:      true,
+	CommandDeps: []string{"${symbols_map}"},
+}, "location")
 
 type PartitionNameProperties struct {
 	// Name of the super partition filesystem module
@@ -89,6 +97,10 @@ type androidDevice struct {
 	deviceProps DeviceProperties
 
 	allImagesZip android.Path
+
+	proguardDictZip     android.Path
+	proguardDictMapping android.Path
+	proguardUsageZip    android.Path
 }
 
 func AndroidDeviceFactory() android.Module {
@@ -161,7 +173,11 @@ func (a *androidDevice) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		}
 	}
 
+	allInstalledModules := a.allInstalledModules(ctx)
+
 	a.buildTargetFilesZip(ctx)
+	a.buildProguardZips(ctx, allInstalledModules)
+
 	var deps []android.Path
 	if proptools.String(a.partitionProps.Super_partition_name) != "" {
 		superImage := ctx.GetDirectDepProxyWithTag(*a.partitionProps.Super_partition_name, superPartitionDepTag)
@@ -214,7 +230,7 @@ func (a *androidDevice) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	allImagesZip := android.PathForModuleOut(ctx, "all_images.zip")
 	allImagesZipBuilder := android.NewRuleBuilder(pctx, ctx)
-	cmd := allImagesZipBuilder.Command().BuiltTool("soong_zip").Flag("--sort_entries")
+	cmd := allImagesZipBuilder.Command().BuiltTool("soong_zip")
 	for _, dep := range deps {
 		cmd.FlagWithArg("-e ", dep.Base())
 		cmd.FlagWithInput("-f ", dep)
@@ -281,28 +297,89 @@ func (a *androidDevice) allInstalledModules(ctx android.ModuleContext) []android
 	return ret
 }
 
+func insertBeforeExtension(file, insertion string) string {
+	ext := filepath.Ext(file)
+	return strings.TrimSuffix(file, ext) + insertion + ext
+}
+
 func (a *androidDevice) distFiles(ctx android.ModuleContext) {
-	if !ctx.Config().KatiEnabled() {
-		if proptools.Bool(a.deviceProps.Main_device) {
-			fsInfoMap := a.getFsInfos(ctx)
-			for _, partition := range android.SortedKeys(fsInfoMap) {
-				fsInfo := fsInfoMap[partition]
-				if fsInfo.InstalledFiles.Json != nil {
-					ctx.DistForGoal("droidcore-unbundled", fsInfo.InstalledFiles.Json)
-				}
-				if fsInfo.InstalledFiles.Txt != nil {
-					ctx.DistForGoal("droidcore-unbundled", fsInfo.InstalledFiles.Txt)
-				}
+	if !ctx.Config().KatiEnabled() && proptools.Bool(a.deviceProps.Main_device) {
+		fsInfoMap := a.getFsInfos(ctx)
+		for _, partition := range android.SortedKeys(fsInfoMap) {
+			fsInfo := fsInfoMap[partition]
+			if fsInfo.InstalledFiles.Json != nil {
+				ctx.DistForGoal("droidcore-unbundled", fsInfo.InstalledFiles.Json)
 			}
+			if fsInfo.InstalledFiles.Txt != nil {
+				ctx.DistForGoal("droidcore-unbundled", fsInfo.InstalledFiles.Txt)
+			}
+		}
+
+		namePrefix := ""
+		if ctx.Config().HasDeviceProduct() {
+			namePrefix = ctx.Config().DeviceProduct() + "-"
+		}
+		ctx.DistForGoalWithFilename("droidcore-unbundled", a.proguardDictZip, namePrefix+insertBeforeExtension(a.proguardDictZip.Base(), "-FILE_NAME_TAG_PLACEHOLDER"))
+		ctx.DistForGoalWithFilename("droidcore-unbundled", a.proguardDictMapping, namePrefix+insertBeforeExtension(a.proguardDictMapping.Base(), "-FILE_NAME_TAG_PLACEHOLDER"))
+		ctx.DistForGoalWithFilename("droidcore-unbundled", a.proguardUsageZip, namePrefix+insertBeforeExtension(a.proguardUsageZip.Base(), "-FILE_NAME_TAG_PLACEHOLDER"))
+	}
+}
+
+func (a *androidDevice) MakeVars(_ android.MakeVarsModuleContext) []android.ModuleMakeVarsValue {
+	if proptools.Bool(a.deviceProps.Main_device) {
+		return []android.ModuleMakeVarsValue{{"SOONG_ONLY_ALL_IMAGES_ZIP", a.allImagesZip.String()}}
+	}
+	return nil
+}
+
+func (a *androidDevice) buildProguardZips(ctx android.ModuleContext, allInstalledModules []android.Module) {
+	dictZip := android.PathForModuleOut(ctx, "proguard-dict.zip")
+	dictZipBuilder := android.NewRuleBuilder(pctx, ctx)
+	dictZipCmd := dictZipBuilder.Command().BuiltTool("soong_zip").Flag("-d").FlagWithOutput("-o ", dictZip)
+
+	dictMapping := android.PathForModuleOut(ctx, "proguard-dict-mapping.textproto")
+	dictMappingBuilder := android.NewRuleBuilder(pctx, ctx)
+	dictMappingCmd := dictMappingBuilder.Command().BuiltTool("symbols_map").Flag("-merge").Output(dictMapping)
+
+	protosDir := android.PathForModuleOut(ctx, "proguard_mapping_protos")
+
+	usageZip := android.PathForModuleOut(ctx, "proguard-usage.zip")
+	usageZipBuilder := android.NewRuleBuilder(pctx, ctx)
+	usageZipCmd := usageZipBuilder.Command().BuiltTool("merge_zips").Output(usageZip)
+
+	for _, mod := range allInstalledModules {
+		if proguardInfo, ok := android.OtherModuleProvider(ctx, mod, java.ProguardProvider); ok {
+			// Maintain these out/target/common paths for backwards compatibility. They may be able
+			// to be changed if tools look up file locations from the protobuf, but I'm not
+			// exactly sure how that works.
+			dictionaryFakePath := fmt.Sprintf("out/target/common/obj/%s/%s_intermediates/proguard_dictionary", proguardInfo.Class, proguardInfo.ModuleName)
+			dictZipCmd.FlagWithArg("-e ", dictionaryFakePath)
+			dictZipCmd.FlagWithInput("-f ", proguardInfo.ProguardDictionary)
+			dictZipCmd.Textf("-e out/target/common/obj/%s/%s_intermediates/classes.jar", proguardInfo.Class, proguardInfo.ModuleName)
+			dictZipCmd.FlagWithInput("-f ", proguardInfo.ClassesJar)
+
+			protoFile := protosDir.Join(ctx, filepath.Dir(dictionaryFakePath), "proguard_dictionary.textproto")
+			ctx.Build(pctx, android.BuildParams{
+				Rule:   proguardDictToProto,
+				Input:  proguardInfo.ProguardDictionary,
+				Output: protoFile,
+				Args: map[string]string{
+					"location": dictionaryFakePath,
+				},
+			})
+			dictMappingCmd.Input(protoFile)
+
+			usageZipCmd.Input(proguardInfo.ProguardUsageZip)
 		}
 	}
 
-}
+	dictZipBuilder.Build("proguard_dict_zip", "Building proguard dictionary zip")
+	dictMappingBuilder.Build("proguard_dict_mapping_proto", "Building proguard mapping proto")
+	usageZipBuilder.Build("proguard_usage_zip", "Building proguard usage zip")
 
-func (a *androidDevice) MakeVars(ctx android.MakeVarsModuleContext) {
-	if proptools.Bool(a.deviceProps.Main_device) {
-		ctx.StrictRaw("SOONG_ONLY_ALL_IMAGES_ZIP", a.allImagesZip.String())
-	}
+	a.proguardDictZip = dictZip
+	a.proguardDictMapping = dictMapping
+	a.proguardUsageZip = usageZip
 }
 
 // Helper structs for target_files.zip creation
@@ -351,7 +428,7 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext) {
 	if a.partitionProps.Super_partition_name != nil {
 		superPartition := ctx.GetDirectDepProxyWithTag(*a.partitionProps.Super_partition_name, superPartitionDepTag)
 		if info, ok := android.OtherModuleProvider(ctx, superPartition, SuperImageProvider); ok {
-			for _, partition := range android.SortedStringKeys(info.SubImageInfo) {
+			for _, partition := range android.SortedKeys(info.SubImageInfo) {
 				filesystemsToCopy = append(
 					filesystemsToCopy,
 					targetFilesystemZipCopy{info.SubImageInfo[partition], strings.ToUpper(partition)},

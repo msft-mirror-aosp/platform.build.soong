@@ -452,6 +452,16 @@ func (a *AndroidApp) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	android.SetProvider(ctx, AppInfoProvider, appInfo)
 
 	a.requiredModuleNames = a.getRequiredModuleNames(ctx)
+
+	if a.dexer.proguardDictionary.Valid() {
+		android.SetProvider(ctx, ProguardProvider, ProguardInfo{
+			ModuleName:         ctx.ModuleName(),
+			Class:              "APPS",
+			ProguardDictionary: a.dexer.proguardDictionary.Path(),
+			ProguardUsageZip:   a.dexer.proguardUsageZip.Path(),
+			ClassesJar:         a.implementationAndResourcesJar,
+		})
+	}
 }
 
 func (a *AndroidApp) getRequiredModuleNames(ctx android.ModuleContext) []string {
@@ -1114,6 +1124,11 @@ func (a *AndroidApp) generateAndroidBuildActions(ctx android.ModuleContext) {
 		android.SetProvider(ctx, JavaInfoProvider, javaInfo)
 	}
 
+	android.SetProvider(ctx, android.ApexBundleDepsDataProvider, android.ApexBundleDepsData{
+		FlatListPath: a.FlatListPath(),
+		Updatable:    a.Updatable(),
+	})
+
 	moduleInfoJSON := ctx.ModuleInfoJSON()
 	moduleInfoJSON.Class = []string{"APPS"}
 	if !a.embeddedJniLibs {
@@ -1636,6 +1651,7 @@ func (a *AndroidTest) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.data = append(a.data, android.PathsForModuleSrc(ctx, a.testProperties.Device_common_data)...)
 	a.data = append(a.data, android.PathsForModuleSrc(ctx, a.testProperties.Device_first_data)...)
 	a.data = append(a.data, android.PathsForModuleSrc(ctx, a.testProperties.Device_first_prefer32_data)...)
+	a.data = append(a.data, android.PathsForModuleSrc(ctx, a.testProperties.Host_common_data)...)
 
 	// Install test deps
 	if !ctx.Config().KatiEnabled() {
