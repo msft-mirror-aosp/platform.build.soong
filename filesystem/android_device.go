@@ -652,6 +652,8 @@ func (a *androidDevice) copyMetadataToTargetZip(ctx android.ModuleContext, build
 	if a.miscInfo != nil {
 		builder.Command().Textf("cp").Input(a.miscInfo).Textf(" %s/META/", targetFilesDir.String())
 	}
+	// apex_info.pb, care_map.pb, vbmeta_digest.txt
+	a.addImgToTargetFiles(ctx, builder, targetFilesDir.String())
 
 	if a.partitionProps.Super_partition_name != nil {
 		superPartition := ctx.GetDirectDepProxyWithTag(*a.partitionProps.Super_partition_name, superPartitionDepTag)
@@ -701,6 +703,22 @@ func (a *androidDevice) addMiscInfo(ctx android.ModuleContext) android.Path {
 	builder.Build("misc_info", "Building misc_info")
 
 	return miscInfo
+}
+
+// addImgToTargetFiles invokes `add_img_to_target_files` and creates the following files in META/
+// - apex_info.pb
+// - care_map.pb
+// - vbmeta_digest.txt
+func (a *androidDevice) addImgToTargetFiles(ctx android.ModuleContext, builder *android.RuleBuilder, targetFilesDir string) {
+	mkbootimg := ctx.Config().HostToolPath(ctx, "mkbootimg")
+	builder.Command().
+		Textf("PATH=%s:$PATH", ctx.Config().HostToolDir()).
+		Textf("MKBOOTIMG=%s", mkbootimg).
+		Implicit(mkbootimg).
+		BuiltTool("add_img_to_target_files").
+		Flag("-a -v -p").
+		Flag(ctx.Config().HostToolDir()).
+		Text(targetFilesDir)
 }
 
 type ApexKeyPathInfo struct {
