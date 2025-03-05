@@ -18,6 +18,7 @@ package apex
 
 import (
 	"fmt"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -1849,7 +1850,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 		return false
 	}
 	depName := ctx.OtherModuleName(child)
-	if ctx.EqualModules(parent, ctx.Module()) {
+	if android.EqualModules(parent, ctx.Module()) {
 		switch depTag {
 		case sharedLibTag, jniLibTag:
 			isJniLib := depTag == jniLibTag
@@ -2258,11 +2259,14 @@ func (a *apexBundle) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.enforcePartitionTagOnApexSystemServerJar(ctx)
 
 	a.verifyNativeImplementationLibs(ctx)
+	a.enforceNoVintfInUpdatable(ctx)
 
 	android.SetProvider(ctx, android.ApexBundleDepsDataProvider, android.ApexBundleDepsData{
 		FlatListPath: a.FlatListPath(),
 		Updatable:    a.Updatable(),
 	})
+
+	android.SetProvider(ctx, filesystem.ApexKeyPathInfoProvider, filesystem.ApexKeyPathInfo{a.apexKeysPath})
 }
 
 // Set prebuiltInfoProvider. This will be used by `apex_prebuiltinfo_singleton` to print out a metadata file
@@ -2891,7 +2895,7 @@ func (a *apexBundle) verifyNativeImplementationLibs(ctx android.ModuleContext) {
 
 				tag := ctx.OtherModuleDependencyTag(child)
 
-				if ctx.EqualModules(parent, ctx.Module()) {
+				if android.EqualModules(parent, ctx.Module()) {
 					if !checkApexTag(tag) {
 						return false
 					}
@@ -2913,6 +2917,19 @@ func (a *apexBundle) verifyNativeImplementationLibs(ctx android.ModuleContext) {
 				}
 				return
 			}
+		}
+	}
+}
+
+// TODO(b/399527905) libvintf is not forward compatible.
+func (a *apexBundle) enforceNoVintfInUpdatable(ctx android.ModuleContext) {
+	if !a.Updatable() {
+		return
+	}
+	for _, fi := range a.filesInfo {
+		if match, _ := path.Match("etc/vintf/*", fi.path()); match {
+			ctx.ModuleErrorf("VINTF fragment (%s) is not supported in updatable APEX.", fi.path())
+			break
 		}
 	}
 }
