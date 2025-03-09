@@ -611,7 +611,7 @@ func getAconfigFilePaths(ctx android.ModuleContext) (aconfigTextFilePaths androi
 	ctx.VisitDirectDepsProxy(func(dep android.ModuleProxy) {
 		tag := ctx.OtherModuleDependencyTag(dep)
 		switch tag {
-		case staticLibTag:
+		case staticLibTag, rroDepTag:
 			if flagPackages, ok := android.OtherModuleProvider(ctx, dep, FlagsPackagesProvider); ok {
 				aconfigTextFilePaths = append(aconfigTextFilePaths, flagPackages.AconfigTextFiles...)
 			}
@@ -1175,7 +1175,7 @@ func collectAppDeps(ctx android.ModuleContext, app appDepsInterface,
 			apkInApex := ctx.Module().(android.ApexModule).NotInPlatform()
 			childLinkable, _ := android.OtherModuleProvider(ctx, child, cc.LinkableInfoProvider)
 			parentIsLinkable := false
-			if ctx.EqualModules(ctx.Module(), parent) {
+			if android.EqualModules(ctx.Module(), parent) {
 				parentLinkable, _ := ctx.Module().(cc.LinkableInterface)
 				parentIsLinkable = parentLinkable != nil
 			} else {

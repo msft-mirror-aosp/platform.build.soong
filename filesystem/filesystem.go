@@ -208,11 +208,6 @@ type FilesystemProperties struct {
 	// Install aconfig_flags.pb file for the modules installed in this partition.
 	Gen_aconfig_flags_pb *bool
 
-	// List of names of other filesystem partitions to import their aconfig flags from.
-	// This is used for the system partition to import system_ext's aconfig flags, as currently
-	// those are considered one "container": aosp/3261300
-	Import_aconfig_flags_from []string
-
 	Fsverity fsverityProperties
 
 	// If this property is set to true, the filesystem will call ctx.UncheckedModule(), causing
@@ -359,9 +354,6 @@ func (f *filesystem) DepsMutator(ctx android.BottomUpMutatorContext) {
 	if f.properties.Android_filesystem_deps.System_ext != nil {
 		ctx.AddDependency(ctx.Module(), interPartitionDependencyTag, proptools.String(f.properties.Android_filesystem_deps.System_ext))
 	}
-	for _, partition := range f.properties.Import_aconfig_flags_from {
-		ctx.AddDependency(ctx.Module(), importAconfigDependencyTag, partition)
-	}
 	for _, partition := range f.properties.Include_files_of {
 		ctx.AddDependency(ctx.Module(), interPartitionInstallDependencyTag, partition)
 	}
@@ -444,6 +436,8 @@ type FilesystemInfo struct {
 	FilesystemConfig android.Path
 
 	Owners []InstalledModuleInfo
+
+	UseAvb bool
 }
 
 // FullInstallPathInfo contains information about the "full install" paths of all the files
@@ -474,11 +468,7 @@ type FullInstallPathInfo struct {
 
 var FilesystemProvider = blueprint.NewProvider[FilesystemInfo]()
 
-type FilesystemDefaultsInfo struct {
-	// Identifies which partition this is for //visibility:any_system_image (and others) visibility
-	// checks, and will be used in the future for API surface checks.
-	PartitionType string
-}
+type FilesystemDefaultsInfo struct{}
 
 var FilesystemDefaultsInfoProvider = blueprint.NewProvider[FilesystemDefaultsInfo]()
 
@@ -692,9 +682,14 @@ func (f *filesystem) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		SelinuxFc:          f.selinuxFc,
 		FilesystemConfig:   f.generateFilesystemConfig(ctx, rootDir, rebasedDir),
 		Owners:             f.gatherOwners(specs),
+		UseAvb:             proptools.Bool(f.properties.Use_avb),
 	}
 
 	android.SetProvider(ctx, FilesystemProvider, fsInfo)
+
+	android.SetProvider(ctx, android.PartitionTypeInfoProvider, android.PartitionTypeInfo{
+		PartitionType: f.PartitionType(),
+	})
 
 	f.fileListFile = fileListFile
 
@@ -822,11 +817,12 @@ func validatePartitionType(ctx android.ModuleContext, p partition) {
 	}
 
 	ctx.VisitDirectDepsProxyWithTag(android.DefaultsDepTag, func(m android.ModuleProxy) {
-		if fdm, ok := android.OtherModuleProvider(ctx, m, FilesystemDefaultsInfoProvider); ok {
-			if p.PartitionType() != fdm.PartitionType {
+		if _, ok := android.OtherModuleProvider(ctx, m, FilesystemDefaultsInfoProvider); ok {
+			partitionInfo := android.OtherModuleProviderOrDefault(ctx, m, android.PartitionTypeInfoProvider)
+			if p.PartitionType() != partitionInfo.PartitionType {
 				ctx.PropertyErrorf("partition_type",
 					"%s doesn't match with the partition type %s of the filesystem default module %s",
-					p.PartitionType(), fdm.PartitionType, m.Name())
+					p.PartitionType(), partitionInfo.PartitionType, m.Name())
 			}
 		}
 	})
@@ -1413,7 +1409,8 @@ var _ partition = (*filesystemDefaults)(nil)
 
 func (f *filesystemDefaults) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	validatePartitionType(ctx, f)
-	android.SetProvider(ctx, FilesystemDefaultsInfoProvider, FilesystemDefaultsInfo{
+	android.SetProvider(ctx, FilesystemDefaultsInfoProvider, FilesystemDefaultsInfo{})
+	android.SetProvider(ctx, android.PartitionTypeInfoProvider, android.PartitionTypeInfo{
 		PartitionType: f.PartitionType(),
 	})
 }
