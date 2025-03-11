@@ -391,21 +391,16 @@ func TestClasspath(t *testing.T) {
 
 	t.Run("basic", func(t *testing.T) {
 		t.Parallel()
-		testClasspathTestCases(t, classpathTestcases, false, false)
+		testClasspathTestCases(t, classpathTestcases, false)
 	})
 
 	t.Run("Always_use_prebuilt_sdks=true", func(t *testing.T) {
 		t.Parallel()
-		testClasspathTestCases(t, classpathTestcases, true, false)
-	})
-
-	t.Run("UseTransitiveJarsInClasspath", func(t *testing.T) {
-		t.Parallel()
-		testClasspathTestCases(t, classpathTestcases, false, true)
+		testClasspathTestCases(t, classpathTestcases, true)
 	})
 }
 
-func testClasspathTestCases(t *testing.T, classpathTestcases []classpathTestCase, alwaysUsePrebuiltSdks, useTransitiveJarsInClasspath bool) {
+func testClasspathTestCases(t *testing.T, classpathTestcases []classpathTestCase, alwaysUsePrebuiltSdks bool) {
 	for _, testcase := range classpathTestcases {
 		if testcase.forAlwaysUsePrebuiltSdks != nil && *testcase.forAlwaysUsePrebuiltSdks != alwaysUsePrebuiltSdks {
 			continue
@@ -446,10 +441,8 @@ func testClasspathTestCases(t *testing.T, classpathTestcases []classpathTestCase
 					switch {
 					case e == `""`, strings.HasSuffix(e, ".jar"):
 						ret[i] = e
-					case useTransitiveJarsInClasspath:
-						ret[i] = filepath.Join("out", "soong", ".intermediates", defaultJavaDir, e, "android_common", "turbine", e+".jar")
 					default:
-						ret[i] = filepath.Join("out", "soong", ".intermediates", defaultJavaDir, e, "android_common", "turbine-combined", e+".jar")
+						ret[i] = filepath.Join("out", "soong", ".intermediates", defaultJavaDir, e, "android_common", "turbine", e+".jar")
 					}
 				}
 				return ret
@@ -501,7 +494,7 @@ func testClasspathTestCases(t *testing.T, classpathTestcases []classpathTestCase
 			}
 
 			checkClasspath := func(t *testing.T, result *android.TestResult, isJava8 bool) {
-				foo := result.ModuleForTests("foo", variant(result))
+				foo := result.ModuleForTests(t, "foo", variant(result))
 				javac := foo.Rule("javac")
 				var deps []string
 
@@ -544,9 +537,6 @@ func testClasspathTestCases(t *testing.T, classpathTestcases []classpathTestCase
 					variables.Always_use_prebuilt_sdks = proptools.BoolPtr(true)
 				})
 			}
-			if useTransitiveJarsInClasspath {
-				preparer = PrepareForTestWithTransitiveClasspathEnabled
-			}
 
 			fixtureFactory := android.GroupFixturePreparers(
 				prepareForJavaTest,
@@ -579,7 +569,7 @@ func testClasspathTestCases(t *testing.T, classpathTestcases []classpathTestCase
 				checkClasspath(t, result, true /* isJava8 */)
 
 				if testcase.host != android.Host {
-					aidl := result.ModuleForTests("foo", variant(result)).Rule("aidl")
+					aidl := result.ModuleForTests(t, "foo", variant(result)).Rule("aidl")
 
 					android.AssertStringDoesContain(t, "aidl command", aidl.RuleParams.Command, testcase.aidl+" -I.")
 				}
@@ -593,7 +583,7 @@ func testClasspathTestCases(t *testing.T, classpathTestcases []classpathTestCase
 				checkClasspath(t, result, false /* isJava8 */)
 
 				if testcase.host != android.Host {
-					aidl := result.ModuleForTests("foo", variant(result)).Rule("aidl")
+					aidl := result.ModuleForTests(t, "foo", variant(result)).Rule("aidl")
 
 					android.AssertStringDoesContain(t, "aidl command", aidl.RuleParams.Command, testcase.aidl+" -I.")
 				}

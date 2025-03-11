@@ -21,6 +21,7 @@ import (
 
 	"android/soong/android"
 	"android/soong/dexpreopt"
+	"android/soong/filesystem"
 	"android/soong/java"
 	"android/soong/provenance"
 
@@ -245,6 +246,7 @@ func (p *prebuiltCommon) installApexSystemServerFiles(ctx android.ModuleContext)
 		}
 		p.extraInstalledFiles = append(p.extraInstalledFiles, installedFile)
 		p.extraInstalledPairs = append(p.extraInstalledPairs, installPair{install.OutputPathOnHost, installedFile})
+		ctx.PackageFile(install.InstallDirOnDevice, install.InstallFileOnDevice, install.OutputPathOnHost)
 	}
 
 	for _, dexJar := range p.systemServerDexJars {
@@ -301,13 +303,17 @@ func (p *prebuiltCommon) prebuiltApexContentsDeps(ctx android.BottomUpMutatorCon
 }
 
 // Implements android.DepInInSameApex
-func (p *prebuiltCommon) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
-	_, ok := tag.(exportedDependencyTag)
-	return ok
+func (m *prebuiltCommon) GetDepInSameApexChecker() android.DepInSameApexChecker {
+	return ApexPrebuiltDepInSameApexChecker{}
 }
 
-func (p *prebuiltCommon) IncomingDepIsInSameApex(tag blueprint.DependencyTag) bool {
-	return true
+type ApexPrebuiltDepInSameApexChecker struct {
+	android.BaseDepInSameApexChecker
+}
+
+func (m ApexPrebuiltDepInSameApexChecker) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+	_, ok := tag.(exportedDependencyTag)
+	return ok
 }
 
 func (p *prebuiltCommon) checkExportedDependenciesArePrebuilts(ctx android.ModuleContext) {
@@ -672,6 +678,8 @@ func (p *Prebuilt) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	ctx.SetOutputFiles(android.Paths{p.outputApex}, "")
+
+	android.SetProvider(ctx, filesystem.ApexKeyPathInfoProvider, filesystem.ApexKeyPathInfo{p.apexKeysPath})
 }
 
 func (p *Prebuilt) ProvenanceMetaDataFile() android.Path {
@@ -868,4 +876,6 @@ func (a *ApexSet) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	}
 
 	ctx.SetOutputFiles(android.Paths{a.outputApex}, "")
+
+	android.SetProvider(ctx, filesystem.ApexKeyPathInfoProvider, filesystem.ApexKeyPathInfo{a.apexKeysPath})
 }

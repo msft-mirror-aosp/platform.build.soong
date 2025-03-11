@@ -428,8 +428,6 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Path {
 		ctx.PropertyErrorf("file_contexts", "cannot find file_contexts file: %q", fileContexts.String())
 	}
 
-	useFileContextsAsIs := proptools.Bool(a.properties.Use_file_contexts_as_is)
-
 	output := android.PathForModuleOut(ctx, "file_contexts")
 	rule := android.NewRuleBuilder(pctx, ctx)
 
@@ -446,11 +444,9 @@ func (a *apexBundle) buildFileContexts(ctx android.ModuleContext) android.Path {
 	rule.Command().Text("cat").Input(fileContexts).Text(">>").Output(output)
 	// new line
 	rule.Command().Text("echo").Text(">>").Output(output)
-	if !useFileContextsAsIs {
-		// force-label /apex_manifest.pb and /
-		rule.Command().Text("echo").Text("/apex_manifest\\\\.pb").Text(labelForManifest).Text(">>").Output(output)
-		rule.Command().Text("echo").Text("/").Text(labelForRoot).Text(">>").Output(output)
-	}
+	// force-label /apex_manifest.pb and /
+	rule.Command().Text("echo").Text("/apex_manifest\\\\.pb").Text(labelForManifest).Text(">>").Output(output)
+	rule.Command().Text("echo").Text("/").Text(labelForRoot).Text(">>").Output(output)
 
 	rule.Build("file_contexts."+a.Name(), "Generate file_contexts")
 	return output
@@ -592,6 +588,7 @@ func (a *apexBundle) installApexSystemServerFiles(ctx android.ModuleContext) {
 			}
 			a.extraInstalledFiles = append(a.extraInstalledFiles, installedFile)
 			a.extraInstalledPairs = append(a.extraInstalledPairs, installPair{install.OutputPathOnHost, installedFile})
+			ctx.PackageFile(install.InstallDirOnDevice, install.InstallFileOnDevice, install.OutputPathOnHost)
 		}
 		if performInstalls {
 			for _, dexJar := range fi.systemServerDexJars {
@@ -1105,7 +1102,7 @@ func (a *apexBundle) buildApexDependencyInfo(ctx android.ModuleContext) {
 	}
 
 	depInfos := android.DepNameToDepInfoMap{}
-	a.WalkPayloadDeps(ctx, func(ctx android.BaseModuleContext, from android.Module, to android.ApexModule, externalDep bool) bool {
+	a.WalkPayloadDeps(ctx, func(ctx android.BaseModuleContext, from, to android.ModuleProxy, externalDep bool) bool {
 		if from.Name() == to.Name() {
 			// This can happen for cc.reuseObjTag. We are not interested in tracking this.
 			// As soon as the dependency graph crosses the APEX boundary, don't go further.
@@ -1114,7 +1111,7 @@ func (a *apexBundle) buildApexDependencyInfo(ctx android.ModuleContext) {
 
 		// Skip dependencies that are only available to APEXes; they are developed with updatability
 		// in mind and don't need manual approval.
-		if android.OtherModuleProviderOrDefault(ctx, to, android.CommonModuleInfoKey).NotAvailableForPlatform {
+		if android.OtherModuleProviderOrDefault(ctx, to, android.CommonModuleInfoProvider).NotAvailableForPlatform {
 			return !externalDep
 		}
 
@@ -1132,10 +1129,9 @@ func (a *apexBundle) buildApexDependencyInfo(ctx android.ModuleContext) {
 			depInfos[to.Name()] = info
 		} else {
 			toMinSdkVersion := "(no version)"
-			if info, ok := android.OtherModuleProvider(ctx, to, android.CommonModuleInfoKey); ok {
-				if v := info.MinSdkVersion; v != "" {
-					toMinSdkVersion = v
-				}
+			if info, ok := android.OtherModuleProvider(ctx, to, android.CommonModuleInfoProvider); ok &&
+				!info.MinSdkVersion.IsPlatform && info.MinSdkVersion.ApiLevel != nil {
+				toMinSdkVersion = info.MinSdkVersion.ApiLevel.String()
 			}
 			depInfos[to.Name()] = android.ApexModuleDepInfo{
 				To:            to.Name(),

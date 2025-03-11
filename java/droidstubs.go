@@ -821,19 +821,17 @@ func generateRevertAnnotationArgs(ctx android.ModuleContext, cmd *android.RuleBu
 		}
 	}
 
-	if len(aconfigFlagsPaths) == 0 {
-		// This argument should not be added for "everything" stubs
-		cmd.Flag("--revert-annotation android.annotation.FlaggedApi")
-		return
-	}
+	// If aconfigFlagsPaths is empty then it is still important to generate the
+	// Metalava flags config file, albeit with an empty set of flags, so that all
+	// flagged APIs will be reverted.
 
-	releasedFlaggedApisFile := android.PathForModuleOut(ctx, fmt.Sprintf("released-flagged-apis-%s.txt", stubsType.String()))
-	revertAnnotationsFile := android.PathForModuleOut(ctx, fmt.Sprintf("revert-annotations-%s.txt", stubsType.String()))
+	releasedFlagsFile := android.PathForModuleOut(ctx, fmt.Sprintf("released-flags-%s.pb", stubsType.String()))
+	metalavaFlagsConfigFile := android.PathForModuleOut(ctx, fmt.Sprintf("flags-config-%s.xml", stubsType.String()))
 
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        gatherReleasedFlaggedApisRule,
 		Inputs:      aconfigFlagsPaths,
-		Output:      releasedFlaggedApisFile,
+		Output:      releasedFlagsFile,
 		Description: fmt.Sprintf("%s gather aconfig flags", stubsType),
 		Args: map[string]string{
 			"flags_path":  android.JoinPathsWithPrefix(aconfigFlagsPaths, "--cache "),
@@ -843,12 +841,12 @@ func generateRevertAnnotationArgs(ctx android.ModuleContext, cmd *android.RuleBu
 
 	ctx.Build(pctx, android.BuildParams{
 		Rule:        generateMetalavaRevertAnnotationsRule,
-		Input:       releasedFlaggedApisFile,
-		Output:      revertAnnotationsFile,
-		Description: fmt.Sprintf("%s revert annotations", stubsType),
+		Input:       releasedFlagsFile,
+		Output:      metalavaFlagsConfigFile,
+		Description: fmt.Sprintf("%s metalava flags config", stubsType),
 	})
 
-	cmd.FlagWithInput("@", revertAnnotationsFile)
+	cmd.FlagWithInput("--config-file ", metalavaFlagsConfigFile)
 }
 
 func (d *Droidstubs) commonMetalavaStubCmd(ctx android.ModuleContext, rule *android.RuleBuilder,
@@ -1245,7 +1243,7 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 
 	// Add options for the other optional tasks: API-lint and check-released.
 	// We generate separate timestamp files for them.
-	doApiLint := BoolDefault(d.properties.Check_api.Api_lint.Enabled, false)
+	doApiLint := BoolDefault(d.properties.Check_api.Api_lint.Enabled, false) && !ctx.Config().PartialCompileFlags().Disable_api_lint
 	doCheckReleased := apiCheckEnabled(ctx, d.properties.Check_api.Last_released, "last_released")
 
 	writeSdkValues := Bool(d.properties.Write_sdk_values)
@@ -1429,6 +1427,16 @@ func (d *Droidstubs) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	d.setOutputFiles(ctx)
 
 	d.setPhonyRules(ctx)
+
+	if d.apiLintTimestamp != nil {
+		if d.apiLintReport != nil {
+			ctx.DistForGoalsWithFilename(
+				[]string{fmt.Sprintf("%s-api-lint", d.Name()), "droidcore"},
+				d.apiLintReport,
+				fmt.Sprintf("apilint/%s-lint-report.txt", d.Name()),
+			)
+		}
+	}
 }
 
 func setDroidInfo(ctx android.ModuleContext, d *Droidstubs, info *StubsInfo, typ StubsType) {
@@ -1523,18 +1531,6 @@ var (
 		"toolchain":     android.SdkToolchain,
 	}
 )
-
-func (d *Droidstubs) MakeVars(ctx android.MakeVarsModuleContext) {
-	if d.apiLintTimestamp != nil {
-		if d.apiLintReport != nil {
-			ctx.DistForGoalsWithFilename(
-				[]string{fmt.Sprintf("%s-api-lint", d.Name()), "droidcore"},
-				d.apiLintReport,
-				fmt.Sprintf("apilint/%s-lint-report.txt", d.Name()),
-			)
-		}
-	}
-}
 
 func StubsDefaultsFactory() android.Module {
 	module := &DocDefaults{}

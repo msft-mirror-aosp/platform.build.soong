@@ -354,6 +354,12 @@ func (a *AndroidAppImport) stripEmbeddedJniLibsUnusedArch(
 
 func (a *AndroidAppImport) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.generateAndroidBuildActions(ctx)
+
+	appInfo := &AppInfo{
+		Prebuilt: true,
+	}
+	setCommonAppInfo(appInfo, a)
+	android.SetProvider(ctx, AppInfoProvider, appInfo)
 }
 
 func (a *AndroidAppImport) InstallApkName() string {
@@ -628,7 +634,15 @@ func (a *AndroidAppImport) Privileged() bool {
 	return Bool(a.properties.Privileged)
 }
 
-func (a *AndroidAppImport) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
+func (m *AndroidAppImport) GetDepInSameApexChecker() android.DepInSameApexChecker {
+	return AppImportDepInSameApexChecker{}
+}
+
+type AppImportDepInSameApexChecker struct {
+	android.BaseDepInSameApexChecker
+}
+
+func (m AppImportDepInSameApexChecker) OutgoingDepIsInSameApex(tag blueprint.DependencyTag) bool {
 	// android_app_import might have extra dependencies via uses_libs property.
 	// Don't track the dependency as we don't automatically add those libraries
 	// to the classpath. It should be explicitly added to java_libs property of APEX
@@ -646,10 +660,8 @@ func (a *AndroidAppImport) MinSdkVersion(ctx android.EarlyModuleContext) android
 var _ android.ApexModule = (*AndroidAppImport)(nil)
 
 // Implements android.ApexModule
-func (j *AndroidAppImport) ShouldSupportSdkVersion(ctx android.BaseModuleContext,
-	sdkVersion android.ApiLevel) error {
-	// Do not check for prebuilts against the min_sdk_version of enclosing APEX
-	return nil
+func (m *AndroidAppImport) MinSdkVersionSupported(ctx android.BaseModuleContext) android.ApiLevel {
+	return android.MinApiLevel
 }
 
 func createVariantGroupType(variants []string, variantGroupName string) reflect.Type {

@@ -86,6 +86,8 @@ func (l *linkerConfig) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	ctx.InstallFile(l.installDirPath, l.outputFilePath.Base(), l.outputFilePath)
 
 	ctx.SetOutputFiles(android.Paths{l.outputFilePath}, "")
+
+	etc.SetCommonPrebuiltEtcInfo(ctx, l)
 }
 
 func BuildLinkerConfig(
@@ -125,7 +127,7 @@ func BuildLinkerConfig(
 	for _, m := range requireModules {
 		if _, ok := android.OtherModuleProvider(ctx, m, cc.CcInfoProvider); ok {
 			if android.OtherModuleProviderOrDefault(ctx, m, cc.LinkableInfoProvider).HasStubsVariants &&
-				!android.OtherModuleProviderOrDefault(ctx, m, android.CommonModuleInfoKey).Host {
+				!android.OtherModuleProviderOrDefault(ctx, m, android.CommonModuleInfoProvider).Host {
 				name := ctx.OtherModuleName(m)
 				if ccInfo, ok := android.OtherModuleProvider(ctx, m, cc.CcInfoProvider); ok && ccInfo.LinkerInfo != nil && ccInfo.LinkerInfo.ImplementationModuleName != nil {
 					name = *ccInfo.LinkerInfo.ImplementationModuleName

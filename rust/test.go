@@ -46,8 +46,15 @@ type TestProperties struct {
 	// the test
 	Data []string `android:"path,arch_variant"`
 
-	// Same as data, but will add dependencies on the device's
+	// Same as data, but adds dependencies on modules using the device's os variant, and common
+	// architecture's variant. Can be useful to add device-built apps to the data of a host
+	// test.
 	Device_common_data []string `android:"path_device_common"`
+
+	// Same as data, but will add dependencies on modules using the host's os variation and
+	// the common arch variation. Useful for a device test that wants to depend on a host
+	// module, for example to include a custom Tradefed test runner.
+	Host_common_data []string `android:"path_host_common"`
 
 	// list of shared library modules that should be installed alongside the test
 	Data_libs []string `android:"arch_variant"`
@@ -147,6 +154,7 @@ func (test *testDecorator) install(ctx ModuleContext) {
 
 	dataSrcPaths := android.PathsForModuleSrc(ctx, test.Properties.Data)
 	dataSrcPaths = append(dataSrcPaths, android.PathsForModuleSrc(ctx, test.Properties.Device_common_data)...)
+	dataSrcPaths = append(dataSrcPaths, android.PathsForModuleSrc(ctx, test.Properties.Host_common_data)...)
 
 	ctx.VisitDirectDepsProxyWithTag(dataLibDepTag, func(dep android.ModuleProxy) {
 		depName := ctx.OtherModuleName(dep)
@@ -157,7 +165,7 @@ func (test *testDecorator) install(ctx ModuleContext) {
 		if linkableDep.OutputFile.Valid() {
 			// Copy the output in "lib[64]" so that it's compatible with
 			// the default rpath values.
-			commonInfo := android.OtherModuleProviderOrDefault(ctx, dep, android.CommonModuleInfoKey)
+			commonInfo := android.OtherModuleProviderOrDefault(ctx, dep, android.CommonModuleInfoProvider)
 			libDir := "lib"
 			if commonInfo.Target.Arch.ArchType.Multilib == "lib64" {
 				libDir = "lib64"
@@ -208,6 +216,10 @@ func (test *testDecorator) install(ctx ModuleContext) {
 			if test.testConfig != nil {
 				ctx.InstallFile(testCases, ctx.ModuleName()+".config", test.testConfig)
 			}
+			dynamicConfig := android.ExistentPathForSource(ctx, ctx.ModuleDir(), "DynamicConfig.xml")
+			if dynamicConfig.Valid() {
+				ctx.InstallFile(testCases, ctx.ModuleName()+".dynamic", dynamicConfig.Path())
+			}
 		}
 		// Install tests and data in arch specific subdir $PRODUCT_OUT/testcases/$module/$arch
 		testCases = testCases.Join(ctx, ctx.Target().Arch.ArchType.String())
@@ -229,6 +241,10 @@ func (test *testDecorator) compilerFlags(ctx ModuleContext, flags Flags) Flags {
 	if ctx.Device() {
 		flags.RustFlags = append(flags.RustFlags, "-Z panic_abort_tests")
 	}
+
+	// Add a default rpath to allow tests to dlopen libraries specified in data_libs.
+	flags.GlobalLinkFlags = append(flags.GlobalLinkFlags, `-Wl,-rpath,\$$ORIGIN/lib64`)
+	flags.GlobalLinkFlags = append(flags.GlobalLinkFlags, `-Wl,-rpath,\$$ORIGIN/lib`)
 
 	return flags
 }

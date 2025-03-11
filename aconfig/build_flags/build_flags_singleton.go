@@ -15,8 +15,9 @@
 package build_flags
 
 import (
-	"android/soong/android"
 	"fmt"
+
+	"android/soong/android"
 )
 
 // A singleton module that collects all of the build flags declared in the
@@ -42,7 +43,7 @@ func (this *allBuildFlagDeclarationsSingleton) GenerateBuildActions(ctx android.
 	var flagsFiles android.Paths
 	// Find all of the release_config_contribution modules
 	var contributionDirs android.Paths
-	ctx.VisitAllModules(func(module android.Module) {
+	ctx.VisitAllModuleProxies(func(module android.ModuleProxy) {
 		decl, ok := android.OtherModuleProvider(ctx, module, BuildFlagDeclarationsProviderKey)
 		if ok {
 			flagsFiles = append(flagsFiles, decl.IntermediateCacheOutputPath)
@@ -111,9 +112,7 @@ func (this *allBuildFlagDeclarationsSingleton) GenerateBuildActions(ctx android.
 		this.configsBinaryProtoPath,
 		this.configsTextProtoPath,
 	)
-}
 
-func (this *allBuildFlagDeclarationsSingleton) MakeVars(ctx android.MakeVarsContext) {
 	ctx.DistForGoal("droid", this.flagsBinaryProtoPath)
 	for _, goal := range []string{"docs", "droid", "sdk", "release_config_metadata"} {
 		ctx.DistForGoalWithFilename(goal, this.flagsBinaryProtoPath, "build_flags/all_flags.pb")

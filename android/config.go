@@ -385,13 +385,28 @@ type config struct {
 }
 
 type partialCompileFlags struct {
-	// Is partial compilation enabled at all?
-	enabled bool
-
 	// Whether to use d8 instead of r8
-	use_d8 bool
+	Use_d8 bool
+
+	// Whether to disable stub validation.  This is slightly more surgical
+	// than DISABLE_STUB_VALIDATION, in that it only applies to partial
+	// compile builds.
+	Disable_stub_validation bool
+
+	// Whether to disable api lint.
+	Disable_api_lint bool
 
 	// Add others as needed.
+}
+
+// These are the flags when `SOONG_PARTIAL_COMPILE` is empty or not set.
+var defaultPartialCompileFlags = partialCompileFlags{}
+
+// These are the flags when `SOONG_PARTIAL_COMPILE=true`.
+var enabledPartialCompileFlags = partialCompileFlags{
+	Use_d8:                  true,
+	Disable_stub_validation: false,
+	Disable_api_lint:        false,
 }
 
 type deviceConfig struct {
@@ -427,11 +442,6 @@ type jsonConfigurable interface {
 // To add a new feature to the list, add the field in the struct
 // `partialCompileFlags` above, and then add the name of the field in the
 // switch statement below.
-var defaultPartialCompileFlags = partialCompileFlags{
-	// Set any opt-out flags here.  Opt-in flags are off by default.
-	enabled: false,
-}
-
 func (c *config) parsePartialCompileFlags(isEngBuild bool) (partialCompileFlags, error) {
 	if !isEngBuild {
 		return partialCompileFlags{}, nil
@@ -471,16 +481,31 @@ func (c *config) parsePartialCompileFlags(isEngBuild bool) (partialCompileFlags,
 			state = "+"
 		}
 		switch tok {
+		case "all":
+			// Turn on **all** of the flags.
+			ret = partialCompileFlags{
+				Use_d8:                  true,
+				Disable_stub_validation: true,
+				Disable_api_lint:        true,
+			}
 		case "true":
-			ret = defaultPartialCompileFlags
-			ret.enabled = true
+			ret = enabledPartialCompileFlags
 		case "false":
 			// Set everything to false.
 			ret = partialCompileFlags{}
-		case "enabled":
-			ret.enabled = makeVal(state, defaultPartialCompileFlags.enabled)
+
+		case "api_lint", "enable_api_lint":
+			ret.Disable_api_lint = !makeVal(state, !defaultPartialCompileFlags.Disable_api_lint)
+		case "disable_api_lint":
+			ret.Disable_api_lint = makeVal(state, defaultPartialCompileFlags.Disable_api_lint)
+
+		case "stub_validation", "enable_stub_validation":
+			ret.Disable_stub_validation = !makeVal(state, !defaultPartialCompileFlags.Disable_stub_validation)
+		case "disable_stub_validation":
+			ret.Disable_stub_validation = makeVal(state, defaultPartialCompileFlags.Disable_stub_validation)
+
 		case "use_d8":
-			ret.use_d8 = makeVal(state, defaultPartialCompileFlags.use_d8)
+			ret.Use_d8 = makeVal(state, defaultPartialCompileFlags.Use_d8)
 		default:
 			return partialCompileFlags{}, fmt.Errorf("Unknown SOONG_PARTIAL_COMPILE value: %v", tok)
 		}
@@ -809,11 +834,18 @@ func (c *config) HostCcSharedLibPath(ctx PathContext, lib string) Path {
 func (c *config) PrebuiltOS() string {
 	switch runtime.GOOS {
 	case "linux":
-		return "linux-x86"
+		switch runtime.GOARCH {
+		case "amd64":
+			return "linux-x86"
+		case "arm64":
+			return "linux-arm64"
+		default:
+			panic(fmt.Errorf("Unknown GOARCH %s", runtime.GOARCH))
+		}
 	case "darwin":
 		return "darwin-x86"
 	default:
-		panic("Unknown GOOS")
+		panic(fmt.Errorf("Unknown GOOS %s", runtime.GOOS))
 	}
 }
 
@@ -2171,14 +2203,6 @@ func (c *config) UseOptimizedResourceShrinkingByDefault() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_USE_OPTIMIZED_RESOURCE_SHRINKING_BY_DEFAULT")
 }
 
-func (c *config) UseResourceProcessorByDefault() bool {
-	return c.productVariables.GetBuildFlagBool("RELEASE_USE_RESOURCE_PROCESSOR_BY_DEFAULT")
-}
-
-func (c *config) UseTransitiveJarsInClasspath() bool {
-	return c.productVariables.GetBuildFlagBool("RELEASE_USE_TRANSITIVE_JARS_IN_CLASSPATH")
-}
-
 func (c *config) UseR8FullModeByDefault() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_R8_FULL_MODE_BY_DEFAULT")
 }
@@ -2189,6 +2213,10 @@ func (c *config) UseR8OnlyRuntimeVisibleAnnotations() bool {
 
 func (c *config) UseR8StoreStoreFenceConstructorInlining() bool {
 	return c.productVariables.GetBuildFlagBool("RELEASE_R8_STORE_STORE_FENCE_CONSTRUCTOR_INLINING")
+}
+
+func (c *config) UseR8GlobalCheckNotNullFlags() bool {
+	return c.productVariables.GetBuildFlagBool("RELEASE_R8_GLOBAL_CHECK_NOT_NULL_FLAGS")
 }
 
 func (c *config) UseDexV41() bool {
@@ -2221,7 +2249,6 @@ var (
 		"RELEASE_APEX_CONTRIBUTIONS_NFC":                     "com.android.nfcservices",
 		"RELEASE_APEX_CONTRIBUTIONS_ONDEVICEPERSONALIZATION": "com.android.ondevicepersonalization",
 		"RELEASE_APEX_CONTRIBUTIONS_PERMISSION":              "com.android.permission",
-		"RELEASE_APEX_CONTRIBUTIONS_PRIMARY_LIBS":            "",
 		"RELEASE_APEX_CONTRIBUTIONS_PROFILING":               "com.android.profiling",
 		"RELEASE_APEX_CONTRIBUTIONS_REMOTEKEYPROVISIONING":   "com.android.rkpd",
 		"RELEASE_APEX_CONTRIBUTIONS_RESOLV":                  "com.android.resolv",
@@ -2274,10 +2301,18 @@ func (c *config) OemProperties() []string {
 }
 
 func (c *config) UseDebugArt() bool {
+	// If the ArtTargetIncludeDebugBuild product variable is set then return its value.
 	if c.productVariables.ArtTargetIncludeDebugBuild != nil {
 		return Bool(c.productVariables.ArtTargetIncludeDebugBuild)
 	}
 
+	// If the RELEASE_APEX_CONTRIBUTIONS_ART build flag is set to use a prebuilt ART apex
+	// then don't use the debug apex.
+	if val, ok := c.GetBuildFlag("RELEASE_APEX_CONTRIBUTIONS_ART"); ok && val != "" {
+		return false
+	}
+
+	// Default to the debug apex for eng builds.
 	return Bool(c.productVariables.Eng)
 }
 

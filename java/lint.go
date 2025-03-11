@@ -595,12 +595,12 @@ func (l *lintSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 	l.copyLintDependencies(ctx)
 }
 
-func findModuleOrErr(ctx android.SingletonContext, moduleName string) android.Module {
-	var res android.Module
-	ctx.VisitAllModules(func(m android.Module) {
+func findModuleOrErr(ctx android.SingletonContext, moduleName string) *android.ModuleProxy {
+	var res *android.ModuleProxy
+	ctx.VisitAllModuleProxies(func(m android.ModuleProxy) {
 		if ctx.ModuleName(m) == moduleName {
 			if res == nil {
-				res = m
+				res = &m
 			} else {
 				ctx.Errorf("lint: multiple %s modules found: %s and %s", moduleName,
 					ctx.ModuleSubDir(m), ctx.ModuleSubDir(res))
@@ -635,13 +635,13 @@ func (l *lintSingleton) copyLintDependencies(ctx android.SingletonContext) {
 
 		ctx.Build(pctx, android.BuildParams{
 			Rule:   android.CpIfChanged,
-			Input:  android.OutputFileForModule(ctx, sdkAnnotations, ""),
+			Input:  android.OutputFileForModule(ctx, *sdkAnnotations, ""),
 			Output: copiedLintDatabaseFilesPath(ctx, files.annotationCopiedName),
 		})
 
 		ctx.Build(pctx, android.BuildParams{
 			Rule:   android.CpIfChanged,
-			Input:  android.OutputFileForModule(ctx, apiVersionsDb, ".api_versions.xml"),
+			Input:  android.OutputFileForModule(ctx, *apiVersionsDb, ".api_versions.xml"),
 			Output: copiedLintDatabaseFilesPath(ctx, files.apiVersionsCopiedName),
 		})
 	}
@@ -658,12 +658,13 @@ func (l *lintSingleton) generateLintReportZips(ctx android.SingletonContext) {
 
 	var outputs []*LintInfo
 	var dirs []string
-	ctx.VisitAllModules(func(m android.Module) {
-		if ctx.Config().KatiEnabled() && !m.ExportedToMake() {
+	ctx.VisitAllModuleProxies(func(m android.ModuleProxy) {
+		commonInfo, _ := android.OtherModuleProvider(ctx, m, android.CommonModuleInfoProvider)
+		if ctx.Config().KatiEnabled() && !commonInfo.ExportedToMake {
 			return
 		}
 
-		if apex, ok := m.(android.ApexModule); ok && apex.NotAvailableForPlatform() {
+		if commonInfo.IsApexModule && commonInfo.NotAvailableForPlatform {
 			apexInfo, _ := android.OtherModuleProvider(ctx, m, android.ApexInfoProvider)
 			if apexInfo.IsForPlatform() {
 				// There are stray platform variants of modules in apexes that are not available for
@@ -704,15 +705,11 @@ func (l *lintSingleton) generateLintReportZips(ctx android.SingletonContext) {
 	zip(l.referenceBaselineZip, func(l *LintInfo) android.Path { return l.ReferenceBaseline })
 
 	ctx.Phony("lint-check", l.htmlZip, l.textZip, l.xmlZip, l.referenceBaselineZip)
-}
 
-func (l *lintSingleton) MakeVars(ctx android.MakeVarsContext) {
 	if !ctx.Config().UnbundledBuild() {
 		ctx.DistForGoal("lint-check", l.htmlZip, l.textZip, l.xmlZip, l.referenceBaselineZip)
 	}
 }
-
-var _ android.SingletonMakeVarsProvider = (*lintSingleton)(nil)
 
 func init() {
 	android.RegisterParallelSingletonType("lint",

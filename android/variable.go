@@ -216,6 +216,7 @@ type ProductVariables struct {
 	Platform_display_version_name          *string  `json:",omitempty"`
 	Platform_version_name                  *string  `json:",omitempty"`
 	Platform_sdk_version                   *int     `json:",omitempty"`
+	Platform_sdk_minor_version             *int     `json:",omitempty"`
 	Platform_sdk_codename                  *string  `json:",omitempty"`
 	Platform_sdk_version_or_codename       *string  `json:",omitempty"`
 	Platform_sdk_final                     *bool    `json:",omitempty"`
@@ -664,6 +665,10 @@ type PartitionVariables struct {
 	ProductVirtualAbCompressionFactor string                                   `json:",omitempty"`
 	ProductVirtualAbCowVersion        string                                   `json:",omitempty"`
 	AbOtaUpdater                      bool                                     `json:",omitempty"`
+	AbOtaPartitions                   []string                                 `json:",omitempty"`
+	AbOtaKeys                         []string                                 `json:",omitempty"`
+	AbOtaPostInstallConfig            []string                                 `json:",omitempty"`
+	BoardSuperImageInUpdatePackage    bool                                     `json:",omitempty"`
 
 	// Avb (android verified boot) stuff
 	BoardAvbEnable          bool                                `json:",omitempty"`
@@ -710,6 +715,10 @@ type PartitionVariables struct {
 	ProductFsCasefold    string `json:",omitempty"`
 	ProductQuotaProjid   string `json:",omitempty"`
 	ProductFsCompression string `json:",omitempty"`
+
+	ReleaseToolsExtensionDir string `json:",omitempty"`
+
+	BoardFastbootInfoFile string `json:",omitempty"`
 }
 
 func boolPtr(v bool) *bool {

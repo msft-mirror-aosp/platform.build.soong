@@ -357,6 +357,17 @@ func IsModulePreferred(module Module) bool {
 	return true
 }
 
+func IsModulePreferredProxy(ctx OtherModuleProviderContext, module ModuleProxy) bool {
+	if OtherModuleProviderOrDefault(ctx, module, CommonModuleInfoProvider).ReplacedByPrebuilt {
+		// A source module that has been replaced by a prebuilt counterpart.
+		return false
+	}
+	if p, ok := OtherModuleProvider(ctx, module, PrebuiltModuleInfoProvider); ok {
+		return p.UsePrebuilt
+	}
+	return true
+}
+
 // IsModulePrebuilt returns true if the module implements PrebuiltInterface and
 // has been initialized as a prebuilt and so returns a non-nil value from the
 // PrebuiltInterface.Prebuilt() method.
@@ -386,7 +397,7 @@ func GetEmbeddedPrebuilt(module Module) *Prebuilt {
 // the right module. This function is only safe to call after all TransitionMutators
 // have run, e.g. in GenerateAndroidBuildActions.
 func PrebuiltGetPreferred(ctx BaseModuleContext, module Module) Module {
-	if !OtherModuleProviderOrDefault(ctx, module, CommonModuleInfoKey).ReplacedByPrebuilt {
+	if !OtherModuleProviderOrDefault(ctx, module, CommonModuleInfoProvider).ReplacedByPrebuilt {
 		return module
 	}
 	if _, ok := OtherModuleProvider(ctx, module, PrebuiltModuleInfoProvider); ok {
@@ -401,7 +412,7 @@ func PrebuiltGetPreferred(ctx BaseModuleContext, module Module) Module {
 		if prebuiltMod != nil {
 			return false
 		}
-		if ctx.EqualModules(parent, ctx.Module()) {
+		if EqualModules(parent, ctx.Module()) {
 			// First level: Only recurse if the module is found as a direct dependency.
 			sourceModDepFound = child == module
 			return sourceModDepFound

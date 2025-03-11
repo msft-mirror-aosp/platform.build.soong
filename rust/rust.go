@@ -60,6 +60,8 @@ type RustInfo struct {
 	CompilerInfo                  *CompilerInfo
 	SnapshotInfo                  *cc.SnapshotInfo
 	SourceProviderInfo            *SourceProviderInfo
+	XrefRustFiles                 android.Paths
+	DocTimestampFile              android.OptionalPath
 }
 
 var RustInfoProvider = blueprint.NewProvider[*RustInfo]()
@@ -496,8 +498,9 @@ type PathDeps struct {
 	depLinkFlags []string
 
 	// track cc static-libs that have Rlib dependencies
-	reexportedCcRlibDeps []cc.RustRlibDep
-	ccRlibDeps           []cc.RustRlibDep
+	reexportedCcRlibDeps      []cc.RustRlibDep
+	reexportedWholeCcRlibDeps []cc.RustRlibDep
+	ccRlibDeps                []cc.RustRlibDep
 
 	// linkDirs are link paths passed via -L to rustc. linkObjects are objects passed directly to the linker
 	// Both of these are exported and propagate to dependencies.
@@ -555,6 +558,7 @@ type flagExporter struct {
 	staticLibObjects      []string
 	sharedLibObjects      []string
 	wholeStaticLibObjects []string
+	wholeRustRlibDeps     []cc.RustRlibDep
 }
 
 func (flagExporter *flagExporter) exportLinkDirs(dirs ...string) {
@@ -584,6 +588,7 @@ func (flagExporter *flagExporter) setRustProvider(ctx ModuleContext) {
 		StaticLibObjects:      flagExporter.staticLibObjects,
 		WholeStaticLibObjects: flagExporter.wholeStaticLibObjects,
 		SharedLibPaths:        flagExporter.sharedLibObjects,
+		WholeRustRlibDeps:     flagExporter.wholeRustRlibDeps,
 	})
 }
 
@@ -600,6 +605,7 @@ type RustFlagExporterInfo struct {
 	StaticLibObjects      []string
 	WholeStaticLibObjects []string
 	SharedLibPaths        []string
+	WholeRustRlibDeps     []cc.RustRlibDep
 }
 
 var RustFlagExporterInfoProvider = blueprint.NewProvider[RustFlagExporterInfo]()
@@ -841,7 +847,7 @@ func (mod *Module) getSharedFlags() *cc.SharedFlags {
 	return shared
 }
 
-func (mod *Module) ImplementationModuleNameForMake(ctx android.BaseModuleContext) string {
+func (mod *Module) ImplementationModuleNameForMake() string {
 	name := mod.BaseModuleName()
 	if versioned, ok := mod.compiler.(cc.VersionedInterface); ok {
 		name = versioned.ImplementationModuleName(name)
@@ -1167,6 +1173,8 @@ func (mod *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		AndroidMkSuffix:               mod.AndroidMkSuffix(),
 		RustSubName:                   mod.Properties.RustSubName,
 		TransitiveAndroidMkSharedLibs: mod.transitiveAndroidMkSharedLibs,
+		XrefRustFiles:                 mod.XrefRustFiles(),
+		DocTimestampFile:              mod.docTimestampFile,
 	}
 	if mod.compiler != nil {
 		rustInfo.CompilerInfo = &CompilerInfo{
@@ -1411,7 +1419,7 @@ func rustMakeLibName(rustInfo *RustInfo, linkableInfo *cc.LinkableInfo, commonIn
 	if rustInfo != nil {
 		// Use base module name for snapshots when exporting to Makefile.
 		if rustInfo.SnapshotInfo != nil {
-			baseName := linkableInfo.BaseModuleName
+			baseName := commonInfo.BaseModuleName
 			return baseName + rustInfo.SnapshotInfo.SnapshotAndroidMkSuffix + rustInfo.AndroidMkSuffix
 		}
 	}
@@ -1472,7 +1480,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 		rustInfo, hasRustInfo := android.OtherModuleProvider(ctx, dep, RustInfoProvider)
 		ccInfo, _ := android.OtherModuleProvider(ctx, dep, cc.CcInfoProvider)
 		linkableInfo, hasLinkableInfo := android.OtherModuleProvider(ctx, dep, cc.LinkableInfoProvider)
-		commonInfo := android.OtherModuleProviderOrDefault(ctx, dep, android.CommonModuleInfoKey)
+		commonInfo := android.OtherModuleProviderOrDefault(ctx, dep, android.CommonModuleInfoProvider)
 		if hasRustInfo && !linkableInfo.Static && !linkableInfo.Shared {
 			//Handle Rust Modules
 			makeLibName := rustMakeLibName(rustInfo, linkableInfo, &commonInfo, depName+rustInfo.RustSubName)
@@ -1585,8 +1593,8 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				directSrcProvidersDeps = append(directSrcProvidersDeps, &dep)
 			}
 
+			exportedRustInfo, _ := android.OtherModuleProvider(ctx, dep, RustFlagExporterInfoProvider)
 			exportedInfo, _ := android.OtherModuleProvider(ctx, dep, RustFlagExporterInfoProvider)
-
 			//Append the dependencies exported objects, except for proc-macros which target a different arch/OS
 			if depTag != procMacroDepTag {
 				depPaths.depFlags = append(depPaths.depFlags, exportedInfo.Flags...)
@@ -1595,6 +1603,11 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				depPaths.staticLibObjects = append(depPaths.staticLibObjects, exportedInfo.StaticLibObjects...)
 				depPaths.wholeStaticLibObjects = append(depPaths.wholeStaticLibObjects, exportedInfo.WholeStaticLibObjects...)
 				depPaths.linkDirs = append(depPaths.linkDirs, exportedInfo.LinkDirs...)
+
+				depPaths.reexportedWholeCcRlibDeps = append(depPaths.reexportedWholeCcRlibDeps, exportedRustInfo.WholeRustRlibDeps...)
+				if !mod.Rlib() {
+					depPaths.ccRlibDeps = append(depPaths.ccRlibDeps, exportedRustInfo.WholeRustRlibDeps...)
+				}
 			}
 
 			if depTag == dylibDepTag || depTag == rlibDepTag || depTag == procMacroDepTag {
@@ -1656,17 +1669,26 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 					}
 				}
 
+				exportedInfo, _ := android.OtherModuleProvider(ctx, dep, cc.FlagExporterInfoProvider)
 				if cc.IsWholeStaticLib(depTag) {
 					// Add whole staticlibs to wholeStaticLibObjects to propagate to Rust all dependents.
 					depPaths.wholeStaticLibObjects = append(depPaths.wholeStaticLibObjects, ccLibPath.String())
+
+					// We also propagate forward whole-static'd cc staticlibs with rust_ffi_rlib dependencies
+					// We don't need to check a hypothetical exportedRustInfo.WholeRustRlibDeps because we
+					// wouldn't expect a rust_ffi_rlib to be listed in `static_libs` (Soong explicitly disallows this)
+					depPaths.reexportedWholeCcRlibDeps = append(depPaths.reexportedWholeCcRlibDeps, exportedInfo.RustRlibDeps...)
 				} else {
-					// Otherwise add to staticLibObjects, which only propagate through rlibs to their dependents.
+					// If not whole_static, add to staticLibObjects, which only propagate through rlibs to their dependents.
 					depPaths.staticLibObjects = append(depPaths.staticLibObjects, ccLibPath.String())
+
+					if mod.Rlib() {
+						// rlibs propagate their inherited rust_ffi_rlibs forward.
+						depPaths.reexportedCcRlibDeps = append(depPaths.reexportedCcRlibDeps, exportedInfo.RustRlibDeps...)
+					}
 				}
 
 				depPaths.linkDirs = append(depPaths.linkDirs, linkPath)
-
-				exportedInfo, _ := android.OtherModuleProvider(ctx, dep, cc.FlagExporterInfoProvider)
 				depPaths.depIncludePaths = append(depPaths.depIncludePaths, exportedInfo.IncludeDirs...)
 				depPaths.depSystemIncludePaths = append(depPaths.depSystemIncludePaths, exportedInfo.SystemIncludeDirs...)
 				depPaths.depClangFlags = append(depPaths.depClangFlags, exportedInfo.Flags...)
@@ -1675,8 +1697,6 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 				if !mod.Rlib() {
 					// rlibs don't need to build the generated static library, so they don't need to track these.
 					depPaths.ccRlibDeps = append(depPaths.ccRlibDeps, exportedInfo.RustRlibDeps...)
-				} else {
-					depPaths.reexportedCcRlibDeps = append(depPaths.reexportedCcRlibDeps, exportedInfo.RustRlibDeps...)
 				}
 
 				directStaticLibDeps = append(directStaticLibDeps, linkableInfo)
@@ -1835,6 +1855,7 @@ func (mod *Module) depsToPaths(ctx android.ModuleContext) PathDeps {
 	depPaths.depSystemIncludePaths = android.FirstUniquePaths(depPaths.depSystemIncludePaths)
 	depPaths.depLinkFlags = android.FirstUniqueStrings(depPaths.depLinkFlags)
 	depPaths.reexportedCcRlibDeps = android.FirstUniqueFunc(depPaths.reexportedCcRlibDeps, cc.EqRustRlibDeps)
+	depPaths.reexportedWholeCcRlibDeps = android.FirstUniqueFunc(depPaths.reexportedWholeCcRlibDeps, cc.EqRustRlibDeps)
 	depPaths.ccRlibDeps = android.FirstUniqueFunc(depPaths.ccRlibDeps, cc.EqRustRlibDeps)
 
 	return depPaths
@@ -2085,26 +2106,23 @@ func (mod *Module) MinSdkVersion() string {
 }
 
 // Implements android.ApexModule
-func (mod *Module) ShouldSupportSdkVersion(ctx android.BaseModuleContext, sdkVersion android.ApiLevel) error {
+func (mod *Module) MinSdkVersionSupported(ctx android.BaseModuleContext) android.ApiLevel {
 	minSdkVersion := mod.MinSdkVersion()
 	if minSdkVersion == "apex_inherit" {
-		return nil
-	}
-	if minSdkVersion == "" {
-		return fmt.Errorf("min_sdk_version is not specificed")
+		return android.MinApiLevel
 	}
 
+	if minSdkVersion == "" {
+		return android.NoneApiLevel
+	}
 	// Not using nativeApiLevelFromUser because the context here is not
 	// necessarily a native context.
-	ver, err := android.ApiLevelFromUser(ctx, minSdkVersion)
+	ver, err := android.ApiLevelFromUserWithConfig(ctx.Config(), minSdkVersion)
 	if err != nil {
-		return err
+		return android.NoneApiLevel
 	}
 
-	if ver.GreaterThan(sdkVersion) {
-		return fmt.Errorf("newer SDK(%v)", ver)
-	}
-	return nil
+	return ver
 }
 
 // Implements android.ApexModule
@@ -2115,12 +2133,28 @@ func (mod *Module) AlwaysRequiresPlatformApexVariant() bool {
 }
 
 // Implements android.ApexModule
-func (mod *Module) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
+type RustDepInSameApexChecker struct {
+	Static           bool
+	HasStubsVariants bool
+	ApexExclude      bool
+	Host             bool
+}
+
+func (mod *Module) GetDepInSameApexChecker() android.DepInSameApexChecker {
+	return RustDepInSameApexChecker{
+		Static:           mod.Static(),
+		HasStubsVariants: mod.HasStubsVariants(),
+		ApexExclude:      mod.ApexExclude(),
+		Host:             mod.Host(),
+	}
+}
+
+func (r RustDepInSameApexChecker) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
 	if depTag == procMacroDepTag || depTag == customBindgenDepTag {
 		return false
 	}
 
-	if mod.Static() && cc.IsSharedDepTag(depTag) {
+	if r.Static && cc.IsSharedDepTag(depTag) {
 		// shared_lib dependency from a static lib is considered as crossing
 		// the APEX boundary because the dependency doesn't actually is
 		// linked; the dependency is used only during the compilation phase.
@@ -2137,23 +2171,23 @@ func (mod *Module) OutgoingDepIsInSameApex(depTag blueprint.DependencyTag) bool 
 	}
 
 	// TODO(b/362509506): remove once all apex_exclude uses are switched to stubs.
-	if mod.ApexExclude() {
+	if r.ApexExclude {
 		return false
 	}
 
 	return true
 }
 
-func (mod *Module) IncomingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
-	if mod.Host() {
+func (r RustDepInSameApexChecker) IncomingDepIsInSameApex(depTag blueprint.DependencyTag) bool {
+	if r.Host {
 		return false
 	}
 	// TODO(b/362509506): remove once all apex_exclude uses are switched to stubs.
-	if mod.ApexExclude() {
+	if r.ApexExclude {
 		return false
 	}
 
-	if mod.HasStubsVariants() {
+	if r.HasStubsVariants {
 		if cc.IsSharedDepTag(depTag) && !cc.IsExplicitImplSharedDepTag(depTag) {
 			// dynamic dep to a stubs lib crosses APEX boundary
 			return false
@@ -2206,9 +2240,9 @@ type kytheExtractRustSingleton struct {
 
 func (k kytheExtractRustSingleton) GenerateBuildActions(ctx android.SingletonContext) {
 	var xrefTargets android.Paths
-	ctx.VisitAllModules(func(module android.Module) {
-		if rustModule, ok := module.(xref); ok {
-			xrefTargets = append(xrefTargets, rustModule.XrefRustFiles()...)
+	ctx.VisitAllModuleProxies(func(module android.ModuleProxy) {
+		if rustModule, ok := android.OtherModuleProvider(ctx, module, RustInfoProvider); ok {
+			xrefTargets = append(xrefTargets, rustModule.XrefRustFiles...)
 		}
 	})
 	if len(xrefTargets) > 0 {

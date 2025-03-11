@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 
 	"android/soong/android"
@@ -60,9 +61,11 @@ func RegisterPrebuiltEtcBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("prebuilt_usr_keychars", PrebuiltUserKeyCharsFactory)
 	ctx.RegisterModuleType("prebuilt_usr_idc", PrebuiltUserIdcFactory)
 	ctx.RegisterModuleType("prebuilt_usr_srec", PrebuiltUserSrecFactory)
+	ctx.RegisterModuleType("prebuilt_usr_odml", PrebuiltUserOdmlFactory)
 	ctx.RegisterModuleType("prebuilt_font", PrebuiltFontFactory)
 	ctx.RegisterModuleType("prebuilt_overlay", PrebuiltOverlayFactory)
 	ctx.RegisterModuleType("prebuilt_firmware", PrebuiltFirmwareFactory)
+	ctx.RegisterModuleType("prebuilt_gpu", PrebuiltGPUFactory)
 	ctx.RegisterModuleType("prebuilt_dsp", PrebuiltDSPFactory)
 	ctx.RegisterModuleType("prebuilt_rfsa", PrebuiltRFSAFactory)
 	ctx.RegisterModuleType("prebuilt_renderscript_bitcode", PrebuiltRenderScriptBitcodeFactory)
@@ -71,6 +74,7 @@ func RegisterPrebuiltEtcBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("prebuilt_bin", PrebuiltBinaryFactory)
 	ctx.RegisterModuleType("prebuilt_wallpaper", PrebuiltWallpaperFactory)
 	ctx.RegisterModuleType("prebuilt_priv_app", PrebuiltPrivAppFactory)
+	ctx.RegisterModuleType("prebuilt_radio", PrebuiltRadioFactory)
 	ctx.RegisterModuleType("prebuilt_rfs", PrebuiltRfsFactory)
 	ctx.RegisterModuleType("prebuilt_framework", PrebuiltFrameworkFactory)
 	ctx.RegisterModuleType("prebuilt_res", PrebuiltResFactory)
@@ -89,6 +93,15 @@ func RegisterPrebuiltEtcBuildComponents(ctx android.RegistrationContext) {
 	ctx.RegisterModuleType("prebuilt_defaults", defaultsFactory)
 
 }
+
+type PrebuiltEtcInfo struct {
+	// Returns the base install directory, such as "etc", "usr/share".
+	BaseDir string
+	// Returns the sub install directory relative to BaseDir().
+	SubDir string
+}
+
+var PrebuiltEtcInfoProvider = blueprint.NewProvider[PrebuiltEtcInfo]()
 
 var PrepareForTestWithPrebuiltEtc = android.FixtureRegisterWithContext(RegisterPrebuiltEtcBuildComponents)
 
@@ -502,6 +515,15 @@ func (p *PrebuiltEtc) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	p.updateModuleInfoJSON(ctx)
 
 	ctx.SetOutputFiles(p.outputFilePaths.Paths(), "")
+
+	SetCommonPrebuiltEtcInfo(ctx, p)
+}
+
+func SetCommonPrebuiltEtcInfo(ctx android.ModuleContext, p PrebuiltEtcModule) {
+	android.SetProvider(ctx, PrebuiltEtcInfoProvider, PrebuiltEtcInfo{
+		BaseDir: p.BaseDir(),
+		SubDir:  p.SubDir(),
+	})
 }
 
 func (p *PrebuiltEtc) updateModuleInfoJSON(ctx android.ModuleContext) {
@@ -767,6 +789,17 @@ func PrebuiltUserSrecFactory() android.Module {
 	return module
 }
 
+// prebuilt_usr_odml is for a prebuilt artifact that is installed in
+// <partition>/usr/odml/<sub_dir> directory.
+func PrebuiltUserOdmlFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "usr/odml")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
+	android.InitDefaultableModule(module)
+	return module
+}
+
 // prebuilt_font installs a font in <partition>/fonts directory.
 func PrebuiltFontFactory() android.Module {
 	module := &PrebuiltEtc{}
@@ -797,6 +830,15 @@ func PrebuiltFirmwareFactory() android.Module {
 	// This module is device-only
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
 	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_gpu is for a prebuilt artifact in <partition>/gpu directory.
+func PrebuiltGPUFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "gpu")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibFirst)
 	return module
 }
 
@@ -884,6 +926,16 @@ func PrebuiltWallpaperFactory() android.Module {
 func PrebuiltPrivAppFactory() android.Module {
 	module := &PrebuiltEtc{}
 	InitPrebuiltEtcModule(module, "priv-app")
+	// This module is device-only
+	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
+	android.InitDefaultableModule(module)
+	return module
+}
+
+// prebuilt_radio installs files in <partition>/radio directory.
+func PrebuiltRadioFactory() android.Module {
+	module := &PrebuiltEtc{}
+	InitPrebuiltEtcModule(module, "radio")
 	// This module is device-only
 	android.InitAndroidArchModule(module, android.DeviceSupported, android.MultilibCommon)
 	android.InitDefaultableModule(module)

@@ -78,6 +78,8 @@ type SuperImageProperties struct {
 		// specified we default to COW version 2 in update_engine for backwards compatibility
 		Cow_version *int64
 	}
+	// Whether the super image will be disted in the update package
+	Super_image_in_update_package *bool
 }
 
 type PartitionGroupsInfo struct {
@@ -114,6 +116,8 @@ type SuperImageInfo struct {
 	// Mapping from the sub-partition type to its re-exported FileSystemInfo providers from the
 	// sub-partitions.
 	SubImageInfo map[string]FilesystemInfo
+
+	DynamicPartitionsInfo android.Path
 }
 
 var SuperImageProvider = blueprint.NewProvider[SuperImageInfo]()
@@ -173,11 +177,14 @@ func (s *superImage) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		Output(output)
 	builder.Build("build_super_image", fmt.Sprintf("Creating super image %s", s.BaseModuleName()))
 	android.SetProvider(ctx, SuperImageProvider, SuperImageInfo{
-		SuperImage:   output,
-		SubImageInfo: subImageInfos,
+		SuperImage:            output,
+		SubImageInfo:          subImageInfos,
+		DynamicPartitionsInfo: s.generateDynamicPartitionsInfo(ctx),
 	})
 	ctx.SetOutputFiles([]android.Path{output}, "")
 	ctx.CheckbuildFile(output)
+
+	buildComplianceMetadata(ctx, subImageDepTag)
 }
 
 func (s *superImage) installFileName() string {
@@ -186,11 +193,110 @@ func (s *superImage) installFileName() string {
 
 func (s *superImage) buildMiscInfo(ctx android.ModuleContext) (android.Path, android.Paths, map[string]FilesystemInfo) {
 	var miscInfoString strings.Builder
+	partitionList := s.dumpDynamicPartitionInfo(ctx, &miscInfoString)
 	addStr := func(name string, value string) {
 		miscInfoString.WriteString(name)
 		miscInfoString.WriteRune('=')
 		miscInfoString.WriteString(value)
 		miscInfoString.WriteRune('\n')
+	}
+	addStr("ab_update", strconv.FormatBool(proptools.Bool(s.properties.Ab_update)))
+
+	subImageInfo := make(map[string]FilesystemInfo)
+	var deps android.Paths
+
+	missingPartitionErrorMessage := ""
+	handleSubPartition := func(partitionType string, name *string) {
+		if proptools.String(name) == "" {
+			missingPartitionErrorMessage += fmt.Sprintf("%s image listed in partition groups, but its module was not specified. ", partitionType)
+			return
+		}
+		mod := ctx.GetDirectDepWithTag(*name, subImageDepTag)
+		if mod == nil {
+			ctx.ModuleErrorf("Could not get dep %q", *name)
+			return
+		}
+		info, ok := android.OtherModuleProvider(ctx, mod, FilesystemProvider)
+		if !ok {
+			ctx.ModuleErrorf("Expected dep %q to provide FilesystemInfo", *name)
+			return
+		}
+		addStr(partitionType+"_image", info.Output.String())
+		deps = append(deps, info.Output)
+		if _, ok := subImageInfo[partitionType]; ok {
+			ctx.ModuleErrorf("Already set subimageInfo for %q", partitionType)
+		}
+		subImageInfo[partitionType] = info
+	}
+
+	// Build partitionToImagePath, because system partition may need system_other
+	// partition image path
+	for _, p := range partitionList {
+		switch p {
+		case "system":
+			handleSubPartition("system", s.partitionProps.System_partition)
+		case "system_dlkm":
+			handleSubPartition("system_dlkm", s.partitionProps.System_dlkm_partition)
+		case "system_ext":
+			handleSubPartition("system_ext", s.partitionProps.System_ext_partition)
+		case "product":
+			handleSubPartition("product", s.partitionProps.Product_partition)
+		case "vendor":
+			handleSubPartition("vendor", s.partitionProps.Vendor_partition)
+		case "vendor_dlkm":
+			handleSubPartition("vendor_dlkm", s.partitionProps.Vendor_dlkm_partition)
+		case "odm":
+			handleSubPartition("odm", s.partitionProps.Odm_partition)
+		case "odm_dlkm":
+			handleSubPartition("odm_dlkm", s.partitionProps.Odm_dlkm_partition)
+		default:
+			ctx.ModuleErrorf("partition %q is not a super image supported partition", p)
+		}
+	}
+
+	if s.properties.System_other_partition != nil {
+		if !slices.Contains(partitionList, "system") {
+			ctx.PropertyErrorf("system_other_partition", "Must have a system partition to use a system_other partition")
+		}
+		systemOther := ctx.GetDirectDepProxyWithTag(*s.properties.System_other_partition, systemOtherDepTag)
+		systemOtherFiles := android.OutputFilesForModule(ctx, systemOther, "")
+		if len(systemOtherFiles) != 1 {
+			ctx.PropertyErrorf("system_other_partition", "Expected 1 output file from module %q", *&s.properties.System_other_partition)
+		} else {
+			handleSubPartition("system_other", s.partitionProps.System_other_partition)
+		}
+	}
+
+	// Delay the error message until execution time because on aosp-main-future-without-vendor,
+	// BUILDING_VENDOR_IMAGE is false so we don't get the vendor image, but it's still listed in
+	// BOARD_GOOGLE_DYNAMIC_PARTITIONS_PARTITION_LIST.
+	missingPartitionErrorMessageFile := android.PathForModuleOut(ctx, "missing_partition_error.txt")
+	if missingPartitionErrorMessage != "" {
+		ctx.Build(pctx, android.BuildParams{
+			Rule:   android.ErrorRule,
+			Output: missingPartitionErrorMessageFile,
+			Args: map[string]string{
+				"error": missingPartitionErrorMessage,
+			},
+		})
+	} else {
+		ctx.Build(pctx, android.BuildParams{
+			Rule:   android.Touch,
+			Output: missingPartitionErrorMessageFile,
+		})
+	}
+
+	miscInfo := android.PathForModuleOut(ctx, "misc_info.txt")
+	android.WriteFileRule(ctx, miscInfo, miscInfoString.String(), missingPartitionErrorMessageFile)
+	return miscInfo, deps, subImageInfo
+}
+
+func (s *superImage) dumpDynamicPartitionInfo(ctx android.ModuleContext, sb *strings.Builder) []string {
+	addStr := func(name string, value string) {
+		sb.WriteString(name)
+		sb.WriteRune('=')
+		sb.WriteString(value)
+		sb.WriteRune('\n')
 	}
 
 	addStr("build_super_partition", "true")
@@ -202,6 +308,9 @@ func (s *superImage) buildMiscInfo(ctx android.ModuleContext) (android.Path, and
 	addStr("super_metadata_device", proptools.String(s.properties.Metadata_device))
 	if len(s.properties.Block_devices) > 0 {
 		addStr("super_block_devices", strings.Join(s.properties.Block_devices, " "))
+	}
+	if proptools.Bool(s.properties.Super_image_in_update_package) {
+		addStr("super_image_in_update_package", "true")
 	}
 	addStr("super_partition_size", strconv.Itoa(proptools.Int(s.properties.Size)))
 	// TODO: In make, there's more complicated logic than just this surrounding super_*_device_size
@@ -220,8 +329,6 @@ func (s *superImage) buildMiscInfo(ctx android.ModuleContext) (android.Path, and
 	}
 	addStr("super_partition_groups", strings.Join(groups, " "))
 	addStr("dynamic_partition_list", strings.Join(partitionList, " "))
-
-	addStr("ab_update", strconv.FormatBool(proptools.Bool(s.properties.Ab_update)))
 
 	if proptools.Bool(s.properties.Virtual_ab.Enable) {
 		addStr("virtual_ab", "true")
@@ -258,94 +365,13 @@ func (s *superImage) buildMiscInfo(ctx android.ModuleContext) (android.Path, and
 		}
 	}
 
-	subImageInfo := make(map[string]FilesystemInfo)
-	var deps android.Paths
+	return partitionList
+}
 
-	missingPartitionErrorMessage := ""
-	handleSubPartition := func(partitionType string, name *string) {
-		if proptools.String(name) == "" {
-			missingPartitionErrorMessage += fmt.Sprintf("%s image listed in partition groups, but its module was not specified. ", partitionType)
-			return
-		}
-		mod := ctx.GetDirectDepWithTag(*name, subImageDepTag)
-		if mod == nil {
-			ctx.ModuleErrorf("Could not get dep %q", *name)
-			return
-		}
-		info, ok := android.OtherModuleProvider(ctx, mod, FilesystemProvider)
-		if !ok {
-			ctx.ModuleErrorf("Expected dep %q to provide FilesystemInfo", *name)
-			return
-		}
-		addStr(partitionType+"_image", info.Output.String())
-		deps = append(deps, info.Output)
-		if _, ok := subImageInfo[partitionType]; ok {
-			ctx.ModuleErrorf("Already set subimageInfo for %q", partitionType)
-		}
-		subImageInfo[partitionType] = info
-	}
-
-	// Build partitionToImagePath, because system partition may need system_other
-	// partition image path
-	for _, p := range partitionList {
-		switch p {
-		case "system":
-			handleSubPartition("system", s.partitionProps.System_partition)
-			// TODO: add system_other to deps after it can be generated
-			//getFsInfo("system_other", s.partitionProps.System_other_partition, &subImageInfo.System_other)
-		case "system_dlkm":
-			handleSubPartition("system_dlkm", s.partitionProps.System_dlkm_partition)
-		case "system_ext":
-			handleSubPartition("system_ext", s.partitionProps.System_ext_partition)
-		case "product":
-			handleSubPartition("product", s.partitionProps.Product_partition)
-		case "vendor":
-			handleSubPartition("vendor", s.partitionProps.Vendor_partition)
-		case "vendor_dlkm":
-			handleSubPartition("vendor_dlkm", s.partitionProps.Vendor_dlkm_partition)
-		case "odm":
-			handleSubPartition("odm", s.partitionProps.Odm_partition)
-		case "odm_dlkm":
-			handleSubPartition("odm_dlkm", s.partitionProps.Odm_dlkm_partition)
-		default:
-			ctx.ModuleErrorf("partition %q is not a super image supported partition", p)
-		}
-	}
-
-	if s.properties.System_other_partition != nil {
-		if !slices.Contains(partitionList, "system") {
-			ctx.PropertyErrorf("system_other_partition", "Must have a system partition to use a system_other partition")
-		}
-		systemOther := ctx.GetDirectDepProxyWithTag(*s.properties.System_other_partition, systemOtherDepTag)
-		systemOtherFiles := android.OutputFilesForModule(ctx, systemOther, "")
-		if len(systemOtherFiles) != 1 {
-			ctx.PropertyErrorf("system_other_partition", "Expected 1 output file from module %q", *&s.properties.System_other_partition)
-		} else {
-			addStr("system_other_image", systemOtherFiles[0].String())
-			deps = append(deps, systemOtherFiles[0])
-		}
-	}
-
-	// Delay the error message until execution time because on aosp-main-future-without-vendor,
-	// BUILDING_VENDOR_IMAGE is false so we don't get the vendor image, but it's still listed in
-	// BOARD_GOOGLE_DYNAMIC_PARTITIONS_PARTITION_LIST.
-	missingPartitionErrorMessageFile := android.PathForModuleOut(ctx, "missing_partition_error.txt")
-	if missingPartitionErrorMessage != "" {
-		ctx.Build(pctx, android.BuildParams{
-			Rule:   android.ErrorRule,
-			Output: missingPartitionErrorMessageFile,
-			Args: map[string]string{
-				"error": missingPartitionErrorMessage,
-			},
-		})
-	} else {
-		ctx.Build(pctx, android.BuildParams{
-			Rule:   android.Touch,
-			Output: missingPartitionErrorMessageFile,
-		})
-	}
-
-	miscInfo := android.PathForModuleOut(ctx, "misc_info.txt")
-	android.WriteFileRule(ctx, miscInfo, miscInfoString.String(), missingPartitionErrorMessageFile)
-	return miscInfo, deps, subImageInfo
+func (s *superImage) generateDynamicPartitionsInfo(ctx android.ModuleContext) android.Path {
+	var contents strings.Builder
+	s.dumpDynamicPartitionInfo(ctx, &contents)
+	dynamicPartitionsInfo := android.PathForModuleOut(ctx, "dynamic_partitions_info.txt")
+	android.WriteFileRule(ctx, dynamicPartitionsInfo, contents.String())
+	return dynamicPartitionsInfo
 }
