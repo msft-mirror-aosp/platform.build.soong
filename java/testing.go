@@ -424,7 +424,6 @@ func gatherRequiredDepsForTest() string {
 		"kotlin-stdlib-jdk8",
 		"kotlin-annotations",
 		"stub-annotations",
-
 		"aconfig-annotations-lib",
 		"aconfig_storage_stub",
 		"unsupportedappusage",

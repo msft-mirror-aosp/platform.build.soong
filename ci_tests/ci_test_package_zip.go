@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"android/soong/android"
+
 	"github.com/google/blueprint"
 	"github.com/google/blueprint/proptools"
 )
@@ -149,7 +150,7 @@ func (p *testPackageZip) GenerateAndroidBuildActions(ctx android.ModuleContext) 
 
 	// dist the test output
 	if ctx.ModuleName() == "platform_tests" {
-		distedName := ctx.Config().Getenv("TARGET_PRODUCT") + "-tests-" + ctx.Config().BuildId() + ".zip"
+		distedName := ctx.Config().Getenv("TARGET_PRODUCT") + "-tests-FILE_NAME_TAG_PLACEHOLDER.zip"
 		ctx.DistForGoalWithFilename("platform_tests", p.output, distedName)
 	}
 }
@@ -214,7 +215,13 @@ func extendBuilderCommand(ctx android.ModuleContext, m android.Module, builder *
 		ctx.ModuleErrorf("Module %s doesn't set InstallFilesProvider", m.Name())
 	}
 
-	for _, installedFile := range installedFilesInfo.InstallFiles {
+	for _, spec := range installedFilesInfo.PackagingSpecs {
+		if spec.SrcPath() == nil {
+			// Probably a symlink
+			continue
+		}
+		installedFile := spec.FullInstallPath()
+
 		ext := installedFile.Ext()
 		// there are additional installed files for some app-class modules, we only need the .apk, .odex and .vdex files in the test package
 		excludeInstalledFile := ext != ".apk" && ext != ".odex" && ext != ".vdex"
@@ -236,23 +243,26 @@ func extendBuilderCommand(ctx android.ModuleContext, m android.Module, builder *
 		if strings.HasPrefix(f, "out") {
 			continue
 		}
-		f = strings.ReplaceAll(f, "system/", "DATA/")
+		if strings.HasPrefix(f, "system/") {
+			f = strings.Replace(f, "system/", "DATA/", 1)
+		}
 		f = strings.ReplaceAll(f, filepath.Join("testcases", name, arch), filepath.Join("DATA", class, name))
 		f = strings.ReplaceAll(f, filepath.Join("testcases", name, secondArch), filepath.Join("DATA", class, name))
-		f = strings.ReplaceAll(f, "testcases", filepath.Join("DATA", class))
-		f = strings.ReplaceAll(f, "data/", "DATA/")
+		if strings.HasPrefix(f, "testcases") {
+			f = strings.Replace(f, "testcases", filepath.Join("DATA", class), 1)
+		}
+		if strings.HasPrefix(f, "data/") {
+			f = strings.Replace(f, "data/", "DATA/", 1)
+		}
 		f = strings.ReplaceAll(f, "DATA_other", "system_other")
 		f = strings.ReplaceAll(f, "system_other/DATA", "system_other/system")
 		dir := filepath.Dir(f)
 
-		// ignore the additional installed files from test
-		if strings.Contains(dir, "DATA/native_tests") || strings.Count(dir, "DATA") > 1 {
-			continue
-		}
-
 		tempOut := android.PathForModuleOut(ctx, "STAGING", f)
 		builder.Command().Text("mkdir").Flag("-p").Text(filepath.Join(stagingDir.String(), dir))
-		builder.Command().Text("cp").Flag("-Rf").Input(installedFile).Output(tempOut)
+		// Copy srcPath instead of installedFile because some rules like target-files.zip
+		// are non-hermetic and would be affected if we built the installed files.
+		builder.Command().Text("cp").Flag("-Rf").Input(spec.SrcPath()).Output(tempOut)
 		builder.Temporary(tempOut)
 	}
 }
