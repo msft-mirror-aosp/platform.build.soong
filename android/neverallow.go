@@ -251,6 +251,7 @@ func createInstallInRootAllowingRules() []Rule {
 			NotModuleType("prebuilt_system").
 			NotModuleType("prebuilt_first_stage_ramdisk").
 			NotModuleType("prebuilt_res").
+			NotModuleType("prebuilt_any").
 			Because("install_in_root is only for init_first_stage or librecovery_ui_ext."),
 	}
 }
@@ -363,6 +364,7 @@ func createKotlinPluginRule() []Rule {
 func createPrebuiltEtcBpDefineRule() Rule {
 	return NeverAllow().
 		ModuleType(
+			"prebuilt_any",
 			"prebuilt_usr_srec",
 			"prebuilt_priv_app",
 			"prebuilt_rfs",
