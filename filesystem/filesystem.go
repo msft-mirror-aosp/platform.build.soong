@@ -1064,28 +1064,7 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 			addPath("avb_key_path", key)
 		}
 		addStr("partition_name", f.partitionName())
-		avb_add_hashtree_footer_args := ""
-		if !proptools.BoolDefault(f.properties.Use_fec, true) {
-			avb_add_hashtree_footer_args += " --do_not_generate_fec"
-		}
-		hashAlgorithm := proptools.StringDefault(f.properties.Avb_hash_algorithm, "sha256")
-		avb_add_hashtree_footer_args += " --hash_algorithm " + hashAlgorithm
-		if f.properties.Rollback_index != nil {
-			rollbackIndex := proptools.Int(f.properties.Rollback_index)
-			if rollbackIndex < 0 {
-				ctx.PropertyErrorf("rollback_index", "Rollback index must be non-negative")
-			}
-			avb_add_hashtree_footer_args += " --rollback_index " + strconv.Itoa(rollbackIndex)
-		}
-		avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.os_version:%s", f.partitionName(), ctx.Config().PlatformVersionLastStable())
-		// We're not going to add BuildFingerPrintFile as a dep. If it changed, it's likely because
-		// the build number changed, and we don't want to trigger rebuilds solely based on the build
-		// number.
-		avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.fingerprint:{CONTENTS_OF:%s}", f.partitionName(), ctx.Config().BuildFingerprintFile(ctx))
-		if f.properties.Security_patch != nil && proptools.String(f.properties.Security_patch) != "" {
-			avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.security_patch:%s", f.partitionName(), proptools.String(f.properties.Security_patch))
-		}
-		addStr("avb_add_hashtree_footer_args", avb_add_hashtree_footer_args)
+		addStr("avb_add_hashtree_footer_args", f.getAvbAddHashtreeFooterArgs(ctx))
 	}
 
 	if f.properties.File_contexts != nil && f.properties.Precompiled_file_contexts != nil {
@@ -1163,6 +1142,31 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 		Output: propFile,
 	})
 	return propFile, deps
+}
+
+func (f *filesystem) getAvbAddHashtreeFooterArgs(ctx android.ModuleContext) string {
+	avb_add_hashtree_footer_args := ""
+	if !proptools.BoolDefault(f.properties.Use_fec, true) {
+		avb_add_hashtree_footer_args += " --do_not_generate_fec"
+	}
+	hashAlgorithm := proptools.StringDefault(f.properties.Avb_hash_algorithm, "sha256")
+	avb_add_hashtree_footer_args += " --hash_algorithm " + hashAlgorithm
+	if f.properties.Rollback_index != nil {
+		rollbackIndex := proptools.Int(f.properties.Rollback_index)
+		if rollbackIndex < 0 {
+			ctx.PropertyErrorf("rollback_index", "Rollback index must be non-negative")
+		}
+		avb_add_hashtree_footer_args += " --rollback_index " + strconv.Itoa(rollbackIndex)
+	}
+	avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.os_version:%s", f.partitionName(), ctx.Config().PlatformVersionLastStable())
+	// We're not going to add BuildFingerPrintFile as a dep. If it changed, it's likely because
+	// the build number changed, and we don't want to trigger rebuilds solely based on the build
+	// number.
+	avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.fingerprint:{CONTENTS_OF:%s}", f.partitionName(), ctx.Config().BuildFingerprintFile(ctx))
+	if f.properties.Security_patch != nil && proptools.String(f.properties.Security_patch) != "" {
+		avb_add_hashtree_footer_args += fmt.Sprintf(" --prop com.android.build.%s.security_patch:%s", f.partitionName(), proptools.String(f.properties.Security_patch))
+	}
+	return avb_add_hashtree_footer_args
 }
 
 // This method checks if there is any property set for the fstype(s) other than
