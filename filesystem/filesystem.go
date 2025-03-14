@@ -375,6 +375,20 @@ func (fs fsType) IsUnknown() bool {
 	return fs == unknown
 }
 
+// Type string that build_image.py accepts.
+func (t fsType) String() string {
+	switch t {
+	// TODO(372522486): add more types like f2fs, erofs, etc.
+	case ext4Type:
+		return "ext4"
+	case erofsType:
+		return "erofs"
+	case f2fsType:
+		return "f2fs"
+	}
+	panic(fmt.Errorf("unsupported fs type %d", t))
+}
+
 type InstalledFilesStruct struct {
 	Txt  android.Path
 	Json android.Path
@@ -1031,21 +1045,7 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 		deps = append(deps, path)
 	}
 
-	// Type string that build_image.py accepts.
-	fsTypeStr := func(t fsType) string {
-		switch t {
-		// TODO(372522486): add more types like f2fs, erofs, etc.
-		case ext4Type:
-			return "ext4"
-		case erofsType:
-			return "erofs"
-		case f2fsType:
-			return "f2fs"
-		}
-		panic(fmt.Errorf("unsupported fs type %v", t))
-	}
-
-	addStr("fs_type", fsTypeStr(f.fsType(ctx)))
+	addStr("fs_type", f.fsType(ctx).String())
 	addStr("mount_point", proptools.StringDefault(f.properties.Mount_point, "/"))
 	addStr("use_dynamic_partition_size", "true")
 	addPath("ext_mkuserimg", ctx.Config().HostToolPath(ctx, "mkuserimg_mke2fs"))
@@ -1113,7 +1113,7 @@ func (f *filesystem) buildPropFile(ctx android.ModuleContext) (android.Path, and
 			addStr("f2fs_sparse_flag", "-S")
 		}
 	}
-	f.checkFsTypePropertyError(ctx, fst, fsTypeStr(fst))
+	f.checkFsTypePropertyError(ctx, fst, fst.String())
 
 	if f.properties.Partition_size != nil {
 		addStr("partition_size", strconv.FormatInt(*f.properties.Partition_size, 10))
