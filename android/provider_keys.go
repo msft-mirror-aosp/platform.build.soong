@@ -1,4 +1,4 @@
-// Copyright 2024 Google Inc. All rights reserved.
+// Copyright 2025 Google Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,17 +14,11 @@
 
 package android
 
-import "encoding/gob"
+import "github.com/google/blueprint"
 
-func init() {
-	gob.Register(applicableLicensesPropertyImpl{})
-	gob.Register(extraFilesZip{})
-	gob.Register(InstallPath{})
-	gob.Register(ModuleGenPath{})
-	gob.Register(ModuleObjPath{})
-	gob.Register(ModuleOutPath{})
-	gob.Register(OutputPath{})
-	gob.Register(PhonyPath{})
-	gob.Register(SourcePath{})
-	gob.Register(unstableInfo{})
+// Providers of package filesystem
+type AndroidDeviceInfo struct {
+	Main_device bool
 }
+
+var AndroidDeviceInfoProvider = blueprint.NewProvider[AndroidDeviceInfo]()

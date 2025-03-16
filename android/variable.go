@@ -216,6 +216,7 @@ type ProductVariables struct {
 	Platform_display_version_name          *string  `json:",omitempty"`
 	Platform_version_name                  *string  `json:",omitempty"`
 	Platform_sdk_version                   *int     `json:",omitempty"`
+	Platform_sdk_minor_version             *int     `json:",omitempty"`
 	Platform_sdk_codename                  *string  `json:",omitempty"`
 	Platform_sdk_version_or_codename       *string  `json:",omitempty"`
 	Platform_sdk_final                     *bool    `json:",omitempty"`
@@ -553,6 +554,8 @@ type ProductVariables struct {
 	OdmManifestFiles       []string `json:",omitempty"`
 
 	UseSoongNoticeXML *bool `json:",omitempty"`
+
+	StripByDefault *bool `json:",omitempty"`
 }
 
 type PartitionQualifiedVariablesType struct {
@@ -653,6 +656,7 @@ type PartitionVariables struct {
 	ProductUseDynamicPartitions       bool                                     `json:",omitempty"`
 	ProductRetrofitDynamicPartitions  bool                                     `json:",omitempty"`
 	ProductBuildSuperPartition        bool                                     `json:",omitempty"`
+	BuildingSuperEmptyImage           bool                                     `json:",omitempty"`
 	BoardSuperPartitionSize           string                                   `json:",omitempty"`
 	BoardSuperPartitionMetadataDevice string                                   `json:",omitempty"`
 	BoardSuperPartitionBlockDevices   []string                                 `json:",omitempty"`

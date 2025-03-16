@@ -505,6 +505,7 @@ func partitionSpecificFsProps(ctx android.EarlyModuleContext, partitions allGene
 		}
 		fsProps.Security_patch = proptools.StringPtr(ctx.Config().PlatformSecurityPatch())
 		fsProps.Stem = proptools.StringPtr("system_ext.img")
+		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
 	case "product":
 		fsProps.Gen_aconfig_flags_pb = proptools.BoolPtr(true)
 		fsProps.Android_filesystem_deps.System = proptools.StringPtr(partitions.nameForType("system"))
@@ -853,19 +854,29 @@ func (f *filesystemCreator) createVendorBuildProp(ctx android.LoadHookContext) {
 		Product_config *string
 		Android_info   *string
 		Licenses       []string
+		Dist           android.Dist
 	}{
 		Name:           proptools.StringPtr(generatedModuleName(ctx.Config(), "vendor-build.prop")),
 		Vendor:         proptools.BoolPtr(true),
 		Stem:           proptools.StringPtr("build.prop"),
 		Product_config: proptools.StringPtr(":product_config"),
 		Android_info:   proptools.StringPtr(":" + generatedModuleName(ctx.Config(), "android_info.prop")),
-		Licenses:       []string{"Android-Apache-2.0"},
+		Dist: android.Dist{
+			Targets: []string{"droidcore-unbundled"},
+			Dest:    proptools.StringPtr("build.prop-vendor"),
+		},
+		Licenses: []string{"Android-Apache-2.0"},
 	}
 	vendorBuildProp := ctx.CreateModule(
 		android.BuildPropFactory,
 		vendorBuildProps,
 	)
-	vendorBuildProp.HideFromMake()
+	// We don't want this to conflict with the make-built vendor build.prop, but unfortunately
+	// calling HideFromMake() prevents disting files, even in soong-only mode. So only call
+	// HideFromMake() on soong+make builds.
+	if ctx.Config().KatiEnabled() {
+		vendorBuildProp.HideFromMake()
+	}
 }
 
 func createRecoveryBuildProp(ctx android.LoadHookContext) string {

@@ -80,6 +80,8 @@ type SuperImageProperties struct {
 	}
 	// Whether the super image will be disted in the update package
 	Super_image_in_update_package *bool
+	// Whether a super_empty.img should be created
+	Create_super_empty *bool
 }
 
 type PartitionGroupsInfo struct {
@@ -118,6 +120,8 @@ type SuperImageInfo struct {
 	SubImageInfo map[string]FilesystemInfo
 
 	DynamicPartitionsInfo android.Path
+
+	SuperEmptyImage android.Path
 }
 
 var SuperImageProvider = blueprint.NewProvider[SuperImageInfo]()
@@ -163,7 +167,7 @@ func (s *superImage) DepsMutator(ctx android.BottomUpMutatorContext) {
 }
 
 func (s *superImage) GenerateAndroidBuildActions(ctx android.ModuleContext) {
-	miscInfo, deps, subImageInfos := s.buildMiscInfo(ctx)
+	miscInfo, deps, subImageInfos := s.buildMiscInfo(ctx, false)
 	builder := android.NewRuleBuilder(pctx, ctx)
 	output := android.PathForModuleOut(ctx, s.installFileName())
 	lpMake := ctx.Config().HostToolPath(ctx, "lpmake")
@@ -176,20 +180,39 @@ func (s *superImage) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 		Implicits(deps).
 		Output(output)
 	builder.Build("build_super_image", fmt.Sprintf("Creating super image %s", s.BaseModuleName()))
+	var superEmptyImage android.WritablePath
+	if proptools.Bool(s.properties.Create_super_empty) {
+		superEmptyImageBuilder := android.NewRuleBuilder(pctx, ctx)
+		superEmptyImage = android.PathForModuleOut(ctx, "super_empty.img")
+		superEmptyMiscInfo, superEmptyDeps, _ := s.buildMiscInfo(ctx, true)
+		if superEmptyDeps != nil {
+			ctx.ModuleErrorf("TODO: Handle additional deps when building super_empty.img")
+		}
+		superEmptyImageBuilder.Command().Textf("PATH=%s:\\$PATH", lpMakeDir).
+			BuiltTool("build_super_image").
+			Text("-v").
+			Input(superEmptyMiscInfo).
+			Implicit(lpMake).
+			Output(superEmptyImage)
+		superEmptyImageBuilder.Build("build_super_empty_image", fmt.Sprintf("Creating super empty image %s", s.BaseModuleName()))
+	}
 	android.SetProvider(ctx, SuperImageProvider, SuperImageInfo{
 		SuperImage:            output,
 		SubImageInfo:          subImageInfos,
 		DynamicPartitionsInfo: s.generateDynamicPartitionsInfo(ctx),
+		SuperEmptyImage:       superEmptyImage,
 	})
 	ctx.SetOutputFiles([]android.Path{output}, "")
 	ctx.CheckbuildFile(output)
+
+	buildComplianceMetadata(ctx, subImageDepTag)
 }
 
 func (s *superImage) installFileName() string {
 	return "super.img"
 }
 
-func (s *superImage) buildMiscInfo(ctx android.ModuleContext) (android.Path, android.Paths, map[string]FilesystemInfo) {
+func (s *superImage) buildMiscInfo(ctx android.ModuleContext, superEmpty bool) (android.Path, android.Paths, map[string]FilesystemInfo) {
 	var miscInfoString strings.Builder
 	partitionList := s.dumpDynamicPartitionInfo(ctx, &miscInfoString)
 	addStr := func(name string, value string) {
@@ -197,6 +220,12 @@ func (s *superImage) buildMiscInfo(ctx android.ModuleContext) (android.Path, and
 		miscInfoString.WriteRune('=')
 		miscInfoString.WriteString(value)
 		miscInfoString.WriteRune('\n')
+	}
+	addStr("ab_update", strconv.FormatBool(proptools.Bool(s.properties.Ab_update)))
+	if superEmpty {
+		miscInfo := android.PathForModuleOut(ctx, "misc_info_super_empty.txt")
+		android.WriteFileRule(ctx, miscInfo, miscInfoString.String())
+		return miscInfo, nil, nil
 	}
 
 	subImageInfo := make(map[string]FilesystemInfo)
@@ -297,6 +326,9 @@ func (s *superImage) dumpDynamicPartitionInfo(ctx android.ModuleContext, sb *str
 	}
 
 	addStr("build_super_partition", "true")
+	if proptools.Bool(s.properties.Create_super_empty) {
+		addStr("build_super_empty_partition", "true")
+	}
 	addStr("use_dynamic_partitions", strconv.FormatBool(proptools.Bool(s.properties.Use_dynamic_partitions)))
 	if proptools.Bool(s.properties.Retrofit) {
 		addStr("dynamic_partition_retrofit", "true")
@@ -326,8 +358,6 @@ func (s *superImage) dumpDynamicPartitionInfo(ctx android.ModuleContext, sb *str
 	}
 	addStr("super_partition_groups", strings.Join(groups, " "))
 	addStr("dynamic_partition_list", strings.Join(partitionList, " "))
-
-	addStr("ab_update", strconv.FormatBool(proptools.Bool(s.properties.Ab_update)))
 
 	if proptools.Bool(s.properties.Virtual_ab.Enable) {
 		addStr("virtual_ab", "true")
