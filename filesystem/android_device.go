@@ -760,6 +760,24 @@ func (a *androidDevice) addMiscInfo(ctx android.ModuleContext) android.Path {
 		Textf("&& echo recovery_api_version=%s >> %s", ctx.Config().VendorConfig("recovery").String("recovery_api_version"), miscInfo).
 		Textf("&& echo fstab_version=%s >> %s", ctx.Config().VendorConfig("recovery").String("recovery_fstab_version"), miscInfo).
 		ImplicitOutput(miscInfo)
+	if len(ctx.Config().ExtraOtaRecoveryKeys()) > 0 {
+		builder.Command().Textf(`echo "extra_recovery_keys=%s" >> %s`, strings.Join(ctx.Config().ExtraOtaRecoveryKeys(), ""), miscInfo)
+	} else {
+		if a.partitionProps.Boot_partition_name != nil {
+			builder.Command().
+				Textf("echo mkbootimg_args='--header_version %s' >> %s", a.getBootimgHeaderVersion(ctx, a.partitionProps.Boot_partition_name), miscInfo).
+				// TODO: Use boot's header version for recovery for now since cuttlefish does not set `BOARD_RECOVERY_MKBOOTIMG_ARGS`
+				Textf(" && echo recovery_mkbootimg_args='--header_version %s' >> %s", a.getBootimgHeaderVersion(ctx, a.partitionProps.Boot_partition_name), miscInfo)
+		}
+		if a.partitionProps.Init_boot_partition_name != nil {
+			builder.Command().
+				Textf("echo mkbootimg_init_args='--header_version' %s >> %s", a.getBootimgHeaderVersion(ctx, a.partitionProps.Init_boot_partition_name), miscInfo)
+		}
+		builder.Command().
+			Textf("echo mkbootimg_version_args='--os_version %s --os_patch_level %s' >> %s", ctx.Config().PlatformVersionLastStable(), ctx.Config().PlatformSecurityPatch(), miscInfo).
+			Textf(" && echo multistage_support=1 >> %s", miscInfo).
+			Textf(" && echo blockimgdiff_versions=3,4 >> %s", miscInfo)
+	}
 
 	if a.partitionProps.Recovery_partition_name == nil {
 		builder.Command().Textf("echo no_recovery=true >> %s", miscInfo)
@@ -811,6 +829,12 @@ func (a *androidDevice) addMiscInfo(ctx android.ModuleContext) android.Path {
 	builder.Build("misc_info", "Building misc_info")
 
 	return miscInfo
+}
+
+func (a *androidDevice) getBootimgHeaderVersion(ctx android.ModuleContext, bootImgName *string) string {
+	bootImg := ctx.GetDirectDepProxyWithTag(proptools.String(bootImgName), filesystemDepTag)
+	bootImgInfo, _ := android.OtherModuleProvider(ctx, bootImg, BootimgInfoProvider)
+	return bootImgInfo.HeaderVersion
 }
 
 // addImgToTargetFiles invokes `add_img_to_target_files` and creates the following files in META/
