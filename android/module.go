@@ -128,6 +128,9 @@ type Module interface {
 	// WARNING: This should not be used outside build/soong/fsgen
 	// Overrides returns the list of modules which should not be installed if this module is installed.
 	Overrides() []string
+
+	// If this is true, the module must not read product-specific configurations.
+	UseGenericConfig() bool
 }
 
 // Qualified id for a module
@@ -507,6 +510,10 @@ type commonProperties struct {
 	// List of module names that are prevented from being installed when this module gets
 	// installed.
 	Overrides []string
+
+	// Set to true if this module must be generic and does not require product-specific information.
+	// To be included in the system image, this property must be set to true.
+	Use_generic_config *bool
 }
 
 // Properties common to all modules inheriting from ModuleBase. Unlike commonProperties, these
@@ -1002,8 +1009,16 @@ func (m *ModuleBase) baseDepsMutator(ctx BottomUpMutatorContext) {
 	pv := ctx.Config().productVariables
 	fullManifest := pv.DeviceArch != nil && pv.DeviceName != nil
 	if fullManifest {
-		addRequiredDeps(ctx)
 		addVintfFragmentDeps(ctx)
+	}
+}
+
+// required property can be overridden too; handle it separately
+func (m *ModuleBase) baseOverridablePropertiesDepsMutator(ctx BottomUpMutatorContext) {
+	pv := ctx.Config().productVariables
+	fullManifest := pv.DeviceArch != nil && pv.DeviceName != nil
+	if fullManifest {
+		addRequiredDeps(ctx)
 	}
 }
 
@@ -1488,7 +1503,7 @@ func (m *ModuleBase) computeInstallDeps(ctx ModuleContext) ([]depset.DepSet[Inst
 			// Installation is still handled by Make, so anything hidden from Make is not
 			// installable.
 			info := OtherModuleProviderOrDefault(ctx, dep, InstallFilesProvider)
-			commonInfo := OtherModuleProviderOrDefault(ctx, dep, CommonModuleInfoProvider)
+			commonInfo := OtherModulePointerProviderOrDefault(ctx, dep, CommonModuleInfoProvider)
 			if !commonInfo.HideFromMake && !commonInfo.SkipInstall {
 				installDeps = append(installDeps, info.TransitiveInstallFiles)
 			}
@@ -1505,7 +1520,7 @@ func (m *ModuleBase) computeInstallDeps(ctx ModuleContext) ([]depset.DepSet[Inst
 // should also install the output files of the given dependency and dependency tag.
 func isInstallDepNeeded(ctx ModuleContext, dep ModuleProxy) bool {
 	// Don't add a dependency from the platform to a library provided by an apex.
-	if OtherModuleProviderOrDefault(ctx, dep, CommonModuleInfoProvider).UninstallableApexPlatformVariant {
+	if OtherModulePointerProviderOrDefault(ctx, dep, CommonModuleInfoProvider).UninstallableApexPlatformVariant {
 		return false
 	}
 	// Only install modules if the dependency tag is an InstallDepNeeded tag.
@@ -1928,7 +1943,7 @@ type ApiLevelOrPlatform struct {
 	IsPlatform bool
 }
 
-var CommonModuleInfoProvider = blueprint.NewProvider[CommonModuleInfo]()
+var CommonModuleInfoProvider = blueprint.NewProvider[*CommonModuleInfo]()
 
 type PrebuiltModuleInfo struct {
 	SourceExists bool
@@ -2336,7 +2351,7 @@ func (m *ModuleBase) GenerateBuildActions(blueprintCtx blueprint.ModuleContext) 
 	if mm, ok := m.module.(interface{ BaseModuleName() string }); ok {
 		commonData.BaseModuleName = mm.BaseModuleName()
 	}
-	SetProvider(ctx, CommonModuleInfoProvider, commonData)
+	SetProvider(ctx, CommonModuleInfoProvider, &commonData)
 	if p, ok := m.module.(PrebuiltInterface); ok && p.Prebuilt() != nil {
 		SetProvider(ctx, PrebuiltModuleInfoProvider, PrebuiltModuleInfo{
 			SourceExists: p.Prebuilt().SourceExists(),
@@ -2580,6 +2595,10 @@ func (m *ModuleBase) Overrides() []string {
 	return m.commonProperties.Overrides
 }
 
+func (m *ModuleBase) UseGenericConfig() bool {
+	return proptools.Bool(m.commonProperties.Use_generic_config)
+}
+
 type ConfigContext interface {
 	Config() Config
 }
@@ -2654,6 +2673,8 @@ func (e configurationEvalutor) EvaluateConfiguration(condition proptools.Configu
 			return proptools.ConfigurableValueBool(ctx.Config().UseDebugArt())
 		case "selinux_ignore_neverallows":
 			return proptools.ConfigurableValueBool(ctx.Config().SelinuxIgnoreNeverallows())
+		case "always_use_prebuilt_sdks":
+			return proptools.ConfigurableValueBool(ctx.Config().AlwaysUsePrebuiltSdks())
 		default:
 			// TODO(b/323382414): Might add these on a case-by-case basis
 			ctx.OtherModulePropertyErrorf(m, property, fmt.Sprintf("TODO(b/323382414): Product variable %q is not yet supported in selects", variable))

@@ -569,19 +569,6 @@ const (
 	shBinary
 )
 
-var (
-	classes = map[string]apexFileClass{
-		"app":              app,
-		"appSet":           appSet,
-		"etc":              etc,
-		"javaSharedLib":    javaSharedLib,
-		"nativeExecutable": nativeExecutable,
-		"nativeSharedLib":  nativeSharedLib,
-		"nativeTest":       nativeTest,
-		"shBinary":         shBinary,
-	}
-)
-
 // apexFile represents a file in an APEX bundle. This is created during the first half of
 // GenerateAndroidBuildActions by traversing the dependencies of the APEX. Then in the second half
 // of the function, this is used to create commands that copies the files into a staging directory,
@@ -1502,7 +1489,7 @@ func apexFileForJavaModule(ctx android.ModuleContext, module android.Module, jav
 func apexFileForJavaModuleWithFile(ctx android.ModuleContext, module android.Module,
 	javaInfo *java.JavaInfo, dexImplementationJar android.Path) apexFile {
 	dirInApex := "javalib"
-	commonInfo := android.OtherModuleProviderOrDefault(ctx, module, android.CommonModuleInfoProvider)
+	commonInfo := android.OtherModulePointerProviderOrDefault(ctx, module, android.CommonModuleInfoProvider)
 	af := newApexFile(ctx, dexImplementationJar, commonInfo.BaseModuleName, dirInApex, javaSharedLib, module)
 	af.jacocoReportClassesFile = javaInfo.JacocoReportClassesFile
 	if lintInfo, ok := android.OtherModuleProvider(ctx, module, java.LintProvider); ok {
@@ -1608,7 +1595,7 @@ func apexFileForFilesystem(ctx android.BaseModuleContext, buildFile android.Path
 // modules. This is used in check* functions below.
 func (a *apexBundle) WalkPayloadDeps(ctx android.BaseModuleContext, do android.PayloadDepsCallback) {
 	ctx.WalkDepsProxy(func(child, parent android.ModuleProxy) bool {
-		if !android.OtherModuleProviderOrDefault(ctx, child, android.CommonModuleInfoProvider).CanHaveApexVariants {
+		if !android.OtherModulePointerProviderOrDefault(ctx, child, android.CommonModuleInfoProvider).CanHaveApexVariants {
 			return false
 		}
 		// Filter-out unwanted depedendencies
@@ -1821,7 +1808,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 	if _, ok := depTag.(android.ExcludeFromApexContentsTag); ok {
 		return false
 	}
-	commonInfo := android.OtherModuleProviderOrDefault(ctx, child, android.CommonModuleInfoProvider)
+	commonInfo := android.OtherModulePointerProviderOrDefault(ctx, child, android.CommonModuleInfoProvider)
 	if !commonInfo.Enabled {
 		return false
 	}
@@ -1839,7 +1826,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 				if ch.IsStubs {
 					ctx.PropertyErrorf(propertyName, "%q is a stub. Remove it from the list.", depName)
 				}
-				fi := apexFileForNativeLibrary(ctx, child, &commonInfo, ch, vctx.handleSpecialLibs)
+				fi := apexFileForNativeLibrary(ctx, child, commonInfo, ch, vctx.handleSpecialLibs)
 				fi.isJniLib = isJniLib
 				vctx.filesInfo = append(vctx.filesInfo, fi)
 				// Collect the list of stub-providing libs except:
@@ -1856,11 +1843,11 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 
 		case executableTag:
 			if ccInfo, ok := android.OtherModuleProvider(ctx, child, cc.CcInfoProvider); ok {
-				vctx.filesInfo = append(vctx.filesInfo, apexFileForExecutable(ctx, child, &commonInfo, ccInfo))
+				vctx.filesInfo = append(vctx.filesInfo, apexFileForExecutable(ctx, child, commonInfo, ccInfo))
 				return true // track transitive dependencies
 			}
 			if _, ok := android.OtherModuleProvider(ctx, child, rust.RustInfoProvider); ok {
-				vctx.filesInfo = append(vctx.filesInfo, apexFileForRustExecutable(ctx, child, &commonInfo))
+				vctx.filesInfo = append(vctx.filesInfo, apexFileForRustExecutable(ctx, child, commonInfo))
 				return true // track transitive dependencies
 			} else {
 				ctx.PropertyErrorf("binaries",
@@ -1868,7 +1855,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			}
 		case shBinaryTag:
 			if csh, ok := android.OtherModuleProvider(ctx, child, sh.ShBinaryInfoProvider); ok {
-				vctx.filesInfo = append(vctx.filesInfo, apexFileForShBinary(ctx, child, &commonInfo, &csh))
+				vctx.filesInfo = append(vctx.filesInfo, apexFileForShBinary(ctx, child, commonInfo, &csh))
 			} else {
 				ctx.PropertyErrorf("sh_binaries", "%q is not a sh_binary module", depName)
 			}
@@ -1922,7 +1909,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 					af.certificate = java.PresignedCertificate
 					vctx.filesInfo = append(vctx.filesInfo, af)
 				} else {
-					vctx.filesInfo = append(vctx.filesInfo, apexFilesForAndroidApp(ctx, child, &commonInfo, appInfo)...)
+					vctx.filesInfo = append(vctx.filesInfo, apexFilesForAndroidApp(ctx, child, commonInfo, appInfo)...)
 					if !appInfo.Prebuilt && !appInfo.TestHelperApp {
 						return true // track transitive dependencies
 					}
@@ -1969,8 +1956,12 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			}
 		case testTag:
 			if ccInfo, ok := android.OtherModuleProvider(ctx, child, cc.CcInfoProvider); ok {
-				af := apexFileForExecutable(ctx, child, &commonInfo, ccInfo)
-				af.class = nativeTest
+				af := apexFileForExecutable(ctx, child, commonInfo, ccInfo)
+				// We make this a nativeExecutable instead of a nativeTest because we don't want
+				// the androidmk modules generated in AndroidMkForFiles to be treated as real
+				// tests that are then packaged into suites. Our AndroidMkForFiles does not
+				// implement enough functionality to support real tests.
+				af.class = nativeExecutable
 				vctx.filesInfo = append(vctx.filesInfo, af)
 				return true // track transitive dependencies
 			} else {
@@ -2006,7 +1997,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 	// tags used below are private (e.g. `cc.sharedDepTag`).
 	if cc.IsSharedDepTag(depTag) || cc.IsRuntimeDepTag(depTag) {
 		if ch, ok := android.OtherModuleProvider(ctx, child, cc.LinkableInfoProvider); ok {
-			af := apexFileForNativeLibrary(ctx, child, &commonInfo, ch, vctx.handleSpecialLibs)
+			af := apexFileForNativeLibrary(ctx, child, commonInfo, ch, vctx.handleSpecialLibs)
 			af.transitiveDep = true
 
 			if ch.IsStubs || ch.HasStubsVariants {
@@ -2068,7 +2059,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			}
 
 			linkableInfo := android.OtherModuleProviderOrDefault(ctx, child, cc.LinkableInfoProvider)
-			af := apexFileForNativeLibrary(ctx, child, &commonInfo, linkableInfo, vctx.handleSpecialLibs)
+			af := apexFileForNativeLibrary(ctx, child, commonInfo, linkableInfo, vctx.handleSpecialLibs)
 			af.transitiveDep = true
 			vctx.filesInfo = append(vctx.filesInfo, af)
 			return true // track transitive dependencies
@@ -2100,7 +2091,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 			javaInfo := android.OtherModuleProviderOrDefault(ctx, child, java.JavaInfoProvider)
 			af := apexFileForJavaModule(ctx, child, javaInfo)
 			vctx.filesInfo = append(vctx.filesInfo, af)
-			if profileAf := apexFileForJavaModuleProfile(ctx, &commonInfo, javaInfo); profileAf != nil {
+			if profileAf := apexFileForJavaModuleProfile(ctx, commonInfo, javaInfo); profileAf != nil {
 				vctx.filesInfo = append(vctx.filesInfo, *profileAf)
 			}
 			return true // track transitive dependencies
@@ -2116,7 +2107,7 @@ func (a *apexBundle) depVisitor(vctx *visitorContext, ctx android.ModuleContext,
 		ctx.ModuleErrorf("unexpected tag %s for indirect dependency %q", android.PrettyPrintTag(depTag), depName)
 	} else if android.IsVintfDepTag(depTag) {
 		if vf, ok := android.OtherModuleProvider(ctx, child, android.VintfFragmentInfoProvider); ok {
-			apexFile := apexFileForVintfFragment(ctx, child, &commonInfo, &vf)
+			apexFile := apexFileForVintfFragment(ctx, child, commonInfo, &vf)
 			vctx.filesInfo = append(vctx.filesInfo, apexFile)
 		}
 	}

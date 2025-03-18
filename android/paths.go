@@ -683,7 +683,7 @@ func getPathsFromModuleDep(ctx ModuleWithDepsPathContext, path, moduleName, tag 
 	if module == nil {
 		return nil, missingDependencyError{[]string{moduleName}}
 	}
-	if !OtherModuleProviderOrDefault(ctx, *module, CommonModuleInfoProvider).Enabled {
+	if !OtherModulePointerProviderOrDefault(ctx, *module, CommonModuleInfoProvider).Enabled {
 		return nil, missingDependencyError{[]string{moduleName}}
 	}
 
@@ -2054,7 +2054,7 @@ func pathForInstall(ctx PathContext, os OsType, arch ArchType, partition string,
 	var partitionPaths []string
 
 	if os.Class == Device {
-		partitionPaths = []string{"target", "product", ctx.Config().DeviceName(), partition}
+		partitionPaths = []string{"target", "product", *ctx.Config().deviceNameToInstall, partition}
 	} else {
 		osName := os.String()
 		if os == Linux {
