@@ -90,6 +90,10 @@ type DeviceProperties struct {
 	Releasetools_extension *string `android:"path"`
 	FastbootInfo           *string `android:"path"`
 
+	Partial_ota_update_partitions []string
+	Flash_block_size              *string
+	Bootloader_in_update_package  *bool
+
 	// The kernel version in the build. Will be verified against the actual kernel.
 	// If not provided, will attempt to extract it from the loose kernel or the kernel inside
 	// the boot image. The version is later used to decide whether or not to enable uffd_gc
@@ -892,6 +896,14 @@ func (a *androidDevice) addMiscInfo(ctx android.ModuleContext) android.Path {
 		bootImgInfo, _ := android.OtherModuleProvider(ctx, bootImg, BootimgInfoProvider)
 		// cat avb_ metadata of the boot images
 		builder.Command().Text("cat").Input(bootImgInfo.PropFileForMiscInfo).Textf(" >> %s", miscInfo)
+	}
+
+	builder.Command().Textf("echo blocksize=%s >> %s", proptools.String(a.deviceProps.Flash_block_size), miscInfo)
+	if proptools.Bool(a.deviceProps.Bootloader_in_update_package) {
+		builder.Command().Textf("echo bootloader_in_update_package=true >> %s", miscInfo)
+	}
+	if len(a.deviceProps.Partial_ota_update_partitions) > 0 {
+		builder.Command().Textf("echo partial_ota_update_partitions_list=%s >> %s", strings.Join(a.deviceProps.Partial_ota_update_partitions, " "), miscInfo)
 	}
 
 	// Sort and dedup
