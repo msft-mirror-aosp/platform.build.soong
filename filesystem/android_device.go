@@ -90,6 +90,10 @@ type DeviceProperties struct {
 	Releasetools_extension *string `android:"path"`
 	FastbootInfo           *string `android:"path"`
 
+	Partial_ota_update_partitions []string
+	Flash_block_size              *string
+	Bootloader_in_update_package  *bool
+
 	// The kernel version in the build. Will be verified against the actual kernel.
 	// If not provided, will attempt to extract it from the loose kernel or the kernel inside
 	// the boot image. The version is later used to decide whether or not to enable uffd_gc
@@ -116,6 +120,8 @@ type androidDevice struct {
 	rootDirForFsConfig          string
 	rootDirForFsConfigTimestamp android.Path
 	apkCertsInfo                android.Path
+	targetFilesZip              android.Path
+	updatePackage               android.Path
 }
 
 func AndroidDeviceFactory() android.Module {
@@ -195,6 +201,7 @@ func (a *androidDevice) GenerateAndroidBuildActions(ctx android.ModuleContext) {
 	a.miscInfo = a.addMiscInfo(ctx)
 	a.buildTargetFilesZip(ctx, allInstalledModules)
 	a.buildProguardZips(ctx, allInstalledModules)
+	a.buildUpdatePackage(ctx)
 
 	var deps []android.Path
 	if proptools.String(a.partitionProps.Super_partition_name) != "" {
@@ -297,11 +304,13 @@ func buildComplianceMetadata(ctx android.ModuleContext, tags ...blueprint.Depend
 	// Collect metadata from deps
 	filesContained := make([]string, 0)
 	prebuiltFilesCopied := make([]string, 0)
+	platformGeneratedFiles := make([]string, 0)
 	for _, tag := range tags {
 		ctx.VisitDirectDepsProxyWithTag(tag, func(m android.ModuleProxy) {
 			if complianceMetadataInfo, ok := android.OtherModuleProvider(ctx, m, android.ComplianceMetadataProvider); ok {
 				filesContained = append(filesContained, complianceMetadataInfo.GetFilesContained()...)
 				prebuiltFilesCopied = append(prebuiltFilesCopied, complianceMetadataInfo.GetPrebuiltFilesCopied()...)
+				platformGeneratedFiles = append(platformGeneratedFiles, complianceMetadataInfo.GetPlatformGeneratedFiles()...)
 			}
 		})
 	}
@@ -314,23 +323,44 @@ func buildComplianceMetadata(ctx android.ModuleContext, tags ...blueprint.Depend
 	prebuiltFilesCopied = append(prebuiltFilesCopied, complianceMetadataInfo.GetPrebuiltFilesCopied()...)
 	sort.Strings(prebuiltFilesCopied)
 	complianceMetadataInfo.SetPrebuiltFilesCopied(prebuiltFilesCopied)
+
+	platformGeneratedFiles = append(platformGeneratedFiles, complianceMetadataInfo.GetPlatformGeneratedFiles()...)
+	sort.Strings(platformGeneratedFiles)
+	complianceMetadataInfo.SetPlatformGeneratedFiles(platformGeneratedFiles)
+}
+
+type installedOwnerInfo struct {
+	Variation string
+	Prebuilt  bool
 }
 
 // Returns a list of modules that are installed, which are collected from the dependency
 // filesystem and super_image modules.
 func (a *androidDevice) allInstalledModules(ctx android.ModuleContext) []android.Module {
 	fsInfoMap := a.getFsInfos(ctx)
-	allOwners := make(map[string][]string)
+	allOwners := make(map[string][]installedOwnerInfo)
+
 	for _, partition := range android.SortedKeys(fsInfoMap) {
 		fsInfo := fsInfoMap[partition]
-		for _, owner := range fsInfo.Owners {
-			allOwners[owner.Name] = append(allOwners[owner.Name], owner.Variation)
+		for _, owner := range fsInfo.Owners.ToList() {
+			allOwners[owner.Name] = append(allOwners[owner.Name], installedOwnerInfo{
+				Variation: owner.Variation,
+				Prebuilt:  owner.Prebuilt,
+			})
 		}
 	}
 
 	ret := []android.Module{}
 	ctx.WalkDepsProxy(func(mod, _ android.ModuleProxy) bool {
-		if variations, ok := allOwners[ctx.OtherModuleName(mod)]; ok && android.InList(ctx.OtherModuleSubDir(mod), variations) {
+		commonInfo, ok := android.OtherModuleProvider(ctx, mod, android.CommonModuleInfoProvider)
+		if !(ok && commonInfo.ExportedToMake) {
+			return false
+		}
+		if variations, ok := allOwners[ctx.OtherModuleName(mod)]; ok &&
+			android.InList(installedOwnerInfo{
+				Variation: ctx.OtherModuleSubDir(mod),
+				Prebuilt:  commonInfo.IsPrebuilt,
+			}, variations) {
 			ret = append(ret, mod)
 		}
 		return true
@@ -391,6 +421,19 @@ func (a *androidDevice) distFiles(ctx android.ModuleContext) {
 		if a.deviceProps.Android_info != nil {
 			ctx.DistForGoal("droidcore-unbundled", android.PathForModuleSrc(ctx, *a.deviceProps.Android_info))
 		}
+		if a.miscInfo != nil {
+			ctx.DistForGoal("droidcore-unbundled", a.miscInfo)
+			if a.partitionProps.Super_partition_name != nil {
+				ctx.DistForGoalWithFilename("dist_files", a.miscInfo, "super_misc_info.txt")
+			}
+		}
+		if a.targetFilesZip != nil {
+			ctx.DistForGoalWithFilename("target-files-package", a.targetFilesZip, namePrefix+insertBeforeExtension(a.targetFilesZip.Base(), "-FILE_NAME_TAG_PLACEHOLDER"))
+		}
+		if a.updatePackage != nil {
+			ctx.DistForGoalWithFilename("updatepackage", a.updatePackage, namePrefix+insertBeforeExtension(a.updatePackage.Base(), "-FILE_NAME_TAG_PLACEHOLDER"))
+		}
+
 	}
 }
 
@@ -579,6 +622,7 @@ func (a *androidDevice) buildTargetFilesZip(ctx android.ModuleContext, allInstal
 	a.copyImagesToTargetZip(ctx, builder, targetFilesDir)
 	a.copyMetadataToTargetZip(ctx, builder, targetFilesDir, allInstalledModules)
 
+	a.targetFilesZip = targetFilesZip
 	builder.Command().
 		BuiltTool("soong_zip").
 		Text("-d").
@@ -840,6 +884,26 @@ func (a *androidDevice) addMiscInfo(ctx android.ModuleContext) android.Path {
 			Textf("echo avb_enable=true >> %s", miscInfo).
 			Textf("&& echo avb_building_vbmeta_image=true >> %s", miscInfo).
 			Textf("&& echo avb_avbtool=avbtool >> %s", miscInfo)
+
+		var allChainedVbmetaPartitionTypes []string
+		for _, vbmetaPartitionName := range a.partitionProps.Vbmeta_partitions {
+			img := ctx.GetDirectDepProxyWithTag(vbmetaPartitionName, filesystemDepTag)
+			if provider, ok := android.OtherModuleProvider(ctx, img, vbmetaPartitionProvider); ok {
+				builder.Command().Text("cat").Input(provider.PropFileForMiscInfo).Textf(" >> %s", miscInfo)
+				if provider.FilesystemPartitionType != "" { // the top-level vbmeta.img
+					allChainedVbmetaPartitionTypes = append(allChainedVbmetaPartitionTypes, provider.FilesystemPartitionType)
+				}
+			} else {
+				ctx.ModuleErrorf("vbmeta dep %s does not set vbmetaPartitionProvider\n", vbmetaPartitionName)
+			}
+		}
+		// Determine the custom vbmeta partitions by removing system and vendor
+		customVbmetaPartitionTypes := android.RemoveListFromList(allChainedVbmetaPartitionTypes, []string{"system", "vendor"})
+		builder.Command().Textf("echo avb_custom_vbmeta_images_partition_list=%s >> %s",
+			strings.Join(android.SortedUniqueStrings(customVbmetaPartitionTypes), " "),
+			miscInfo,
+		)
+
 	}
 	if a.partitionProps.Boot_partition_name != nil {
 		builder.Command().Textf("echo boot_images=boot.img >> %s", miscInfo)
@@ -874,6 +938,14 @@ func (a *androidDevice) addMiscInfo(ctx android.ModuleContext) android.Path {
 		builder.Command().Text("cat").Input(bootImgInfo.PropFileForMiscInfo).Textf(" >> %s", miscInfo)
 	}
 
+	builder.Command().Textf("echo blocksize=%s >> %s", proptools.String(a.deviceProps.Flash_block_size), miscInfo)
+	if proptools.Bool(a.deviceProps.Bootloader_in_update_package) {
+		builder.Command().Textf("echo bootloader_in_update_package=true >> %s", miscInfo)
+	}
+	if len(a.deviceProps.Partial_ota_update_partitions) > 0 {
+		builder.Command().Textf("echo partial_ota_update_partitions_list=%s >> %s", strings.Join(a.deviceProps.Partial_ota_update_partitions, " "), miscInfo)
+	}
+
 	// Sort and dedup
 	builder.Command().Textf("sort -u %s -o %s", miscInfo, miscInfo)
 
@@ -902,6 +974,38 @@ func (a *androidDevice) addImgToTargetFiles(ctx android.ModuleContext, builder *
 		Flag("-a -v -p").
 		Flag(ctx.Config().HostToolDir()).
 		Text(targetFilesDir)
+}
+
+func (a *androidDevice) buildUpdatePackage(ctx android.ModuleContext) {
+	var exclusions []string
+	fsInfos := a.getFsInfos(ctx)
+	// Exclude the partitions that are not supported by flashall
+	for _, partition := range android.SortedKeys(fsInfos) {
+		if fsInfos[partition].NoFlashall {
+			exclusions = append(exclusions, fmt.Sprintf("IMAGES/%s.img", partition))
+			exclusions = append(exclusions, fmt.Sprintf("IMAGES/%s.map", partition))
+		}
+	}
+
+	updatePackage := android.PathForModuleOut(ctx, "img.zip")
+	rule := android.NewRuleBuilder(pctx, ctx)
+
+	buildSuperImage := ctx.Config().HostToolPath(ctx, "build_super_image")
+	zip2zip := ctx.Config().HostToolPath(ctx, "zip2zip")
+
+	rule.Command().
+		BuiltTool("img_from_target_files").
+		Text("--additional IMAGES/VerifiedBootParams.textproto:VerifiedBootParams.textproto").
+		FlagForEachArg("--exclude ", exclusions).
+		FlagWithArg("--build_super_image ", buildSuperImage.String()).
+		Implicit(buildSuperImage).
+		Implicit(zip2zip).
+		Input(a.targetFilesZip).
+		Output(updatePackage)
+
+	rule.Build("updatepackage", "Building updatepackage")
+
+	a.updatePackage = updatePackage
 }
 
 type ApexKeyPathInfo struct {
@@ -1046,6 +1150,7 @@ func (a *androidDevice) buildApkCertsInfo(ctx android.ModuleContext, allInstalle
 	}
 
 	apkCerts := []string{}
+	var apkCertsFiles android.Paths
 	for _, installedModule := range allInstalledModules {
 		partition := ""
 		if commonInfo, ok := android.OtherModuleProvider(ctx, installedModule, android.CommonModuleInfoProvider); ok {
@@ -1054,7 +1159,11 @@ func (a *androidDevice) buildApkCertsInfo(ctx android.ModuleContext, allInstalle
 			ctx.ModuleErrorf("%s does not set CommonModuleInfoKey", installedModule.Name())
 		}
 		if info, ok := android.OtherModuleProvider(ctx, installedModule, java.AppInfoProvider); ok {
-			apkCerts = append(apkCerts, formatLine(info.Certificate, info.InstallApkName+".apk", partition))
+			if info.AppSet {
+				apkCertsFiles = append(apkCertsFiles, info.ApkCertsFile)
+			} else {
+				apkCerts = append(apkCerts, formatLine(info.Certificate, info.InstallApkName+".apk", partition))
+			}
 		} else if info, ok := android.OtherModuleProvider(ctx, installedModule, java.AppInfosProvider); ok {
 			for _, certInfo := range info {
 				// Partition information of apk-in-apex is not exported to the legacy Make packaging system.
@@ -1075,7 +1184,14 @@ func (a *androidDevice) buildApkCertsInfo(ctx android.ModuleContext, allInstalle
 		}
 	}
 
+	apkCertsInfoWithoutAppSets := android.PathForModuleOut(ctx, "apkcerts_without_app_sets.txt")
+	android.WriteFileRuleVerbatim(ctx, apkCertsInfoWithoutAppSets, strings.Join(apkCerts, "\n")+"\n")
 	apkCertsInfo := android.PathForModuleOut(ctx, "apkcerts.txt")
-	android.WriteFileRuleVerbatim(ctx, apkCertsInfo, strings.Join(apkCerts, "\n")+"\n")
+	ctx.Build(pctx, android.BuildParams{
+		Rule:        android.Cat,
+		Description: "combine apkcerts.txt",
+		Output:      apkCertsInfo,
+		Inputs:      append(apkCertsFiles, apkCertsInfoWithoutAppSets),
+	})
 	return apkCertsInfo
 }

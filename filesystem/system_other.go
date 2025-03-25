@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/google/blueprint"
+	"github.com/google/blueprint/depset"
 	"github.com/google/blueprint/proptools"
 )
 
@@ -93,7 +94,7 @@ func (m *systemOtherImage) GenerateAndroidBuildActions(ctx android.ModuleContext
 	}
 
 	output := android.PathForModuleOut(ctx, "system_other.img")
-	stagingDir := android.PathForModuleOut(ctx, "staging_dir")
+	stagingDir := android.PathForModuleOut(ctx, "system_other")
 	stagingDirTimestamp := android.PathForModuleOut(ctx, "staging_dir.timestamp")
 
 	builder := android.NewRuleBuilder(pctx, ctx)
@@ -120,8 +121,11 @@ func (m *systemOtherImage) GenerateAndroidBuildActions(ctx android.ModuleContext
 	// TOOD: CopySpecsToDir only exists on PackagingBase, but doesn't use any fields from it. Clean this up.
 	(&android.PackagingBase{}).CopySpecsToDir(ctx, builder, specs, stagingDir)
 
+	fullInstallPaths := []string{}
 	if len(m.properties.Preinstall_dexpreopt_files_from) > 0 {
 		builder.Command().Textf("touch %s", filepath.Join(stagingDir.String(), "system-other-odex-marker"))
+		installPath := android.PathForModuleInPartitionInstall(ctx, "system_other", "system-other-odex-marker")
+		fullInstallPaths = append(fullInstallPaths, installPath.String())
 	}
 	builder.Command().Textf("touch").Output(stagingDirTimestamp)
 	builder.Build("assemble_filesystem_staging_dir", "Assemble filesystem staging dir")
@@ -180,12 +184,21 @@ func (m *systemOtherImage) GenerateAndroidBuildActions(ctx android.ModuleContext
 		RootDir:             stagingDir,
 		FilesystemConfig:    m.generateFilesystemConfig(ctx, stagingDir, stagingDirTimestamp),
 		PropFileForMiscInfo: m.buildPropFileForMiscInfo(ctx),
+		InstalledFilesDepSet: depset.New(
+			depset.POSTORDER,
+			[]InstalledFilesStruct{buildInstalledFiles(ctx, "system-other", stagingDir, output)},
+			nil,
+		),
 	}
 
 	android.SetProvider(ctx, FilesystemProvider, fsInfo)
 
 	ctx.SetOutputFiles(android.Paths{output}, "")
 	ctx.CheckbuildFile(output)
+
+	// Dump compliance metadata
+	complianceMetadataInfo := ctx.ComplianceMetadataInfo()
+	complianceMetadataInfo.SetFilesContained(fullInstallPaths)
 }
 
 func (s *systemOtherImage) generateFilesystemConfig(ctx android.ModuleContext, stagingDir, stagingDirTimestamp android.Path) android.Path {
