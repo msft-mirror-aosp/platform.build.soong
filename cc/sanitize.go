@@ -308,6 +308,12 @@ func (sanitize *sanitize) props() []interface{} {
 func (sanitize *sanitize) begin(ctx BaseModuleContext) {
 	s := &sanitize.Properties.Sanitize
 
+	// Disable sanitizer on Android 13 Cuttlefish
+	if s != nil {
+		s.Never = BoolPtr(true)
+		return
+	}
+
 	// Don't apply sanitizers to NDK code.
 	if ctx.useSdk() {
 		s.Never = BoolPtr(true)

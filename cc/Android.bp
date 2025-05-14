@@ -98,7 +98,7 @@ bootstrap_go_package {
         "object_test.go",
         "prebuilt_test.go",
         "proto_test.go",
-        "sanitize_test.go",
+        //"sanitize_test.go", // Disable sanitizer on Android 13 Cuttlefish
         "test_data_test.go",
         "vendor_public_library_test.go",
         "vendor_snapshot_test.go",

@@ -1394,6 +1394,8 @@ var prepareForTestOfRuntimeApexWithHwasan = android.GroupFixturePreparers(
 	android.FixtureAddFile("system/sepolicy/apex/com.android.runtime-file_contexts", nil),
 )
 
+// Disable sanitizer on Android 13 Cuttlefish
+/*
 func TestRuntimeApexShouldInstallHwasanIfLibcDependsOnIt(t *testing.T) {
 	result := android.GroupFixturePreparers(prepareForTestOfRuntimeApexWithHwasan).RunTestWithBp(t, `
 		cc_library {
@@ -1489,6 +1491,7 @@ func TestRuntimeApexShouldInstallHwasanIfHwaddressSanitized(t *testing.T) {
 	ensureEquals(t, symlink.Args["fromPath"], "/apex/com.android.runtime/lib64/bionic/libclang_rt.hwasan-aarch64-android.so")
 	ensureContains(t, symlink.Output.String(), "/system/lib64/libclang_rt.hwasan-aarch64-android.so")
 }
+*/
 
 func TestApexDependsOnLLNDKTransitively(t *testing.T) {
 	testcases := []struct {
@@ -1984,6 +1987,8 @@ var prepareForTestWithSantitizeHwaddress = android.FixtureModifyProductVariables
 	},
 )
 
+// Disable sanitizer on Cuttlefish
+/*
 func TestQApexesUseLatestStubsInBundledBuildsAndHWASAN(t *testing.T) {
 	ctx := testApex(t, `
 		apex {
@@ -2022,6 +2027,7 @@ func TestQApexesUseLatestStubsInBundledBuildsAndHWASAN(t *testing.T) {
 	}
 	expectLink("libx", "shared_hwasan_apex29", "libbar", "shared_current")
 }
+*/
 
 func TestQTargetApexUsesStaticUnwinder(t *testing.T) {
 	ctx := testApex(t, `

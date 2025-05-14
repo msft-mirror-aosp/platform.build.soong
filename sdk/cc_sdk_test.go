@@ -248,6 +248,7 @@ func TestSdkWithCc(t *testing.T) {
 }
 
 func TestSnapshotWithObject(t *testing.T) {
+	// Remove sanitizer on Android 13 Cuttlefish
 	result := testSdkWithCc(t, `
 		sdk {
 			name: "mysdk",
@@ -258,9 +259,6 @@ func TestSnapshotWithObject(t *testing.T) {
 			name: "crtobj",
 			stl: "none",
 			system_shared_libs: [],
-			sanitize: {
-				never: true,
-			},
 		}
 	`)
 
@@ -276,9 +274,6 @@ cc_prebuilt_object {
     stl: "none",
     compile_multilib: "both",
     system_shared_libs: [],
-    sanitize: {
-        never: true,
-    },
     arch: {
         arm64: {
             srcs: ["arm64/lib/crtobj.o"],
@@ -301,9 +296,6 @@ cc_prebuilt_object {
     stl: "none",
     compile_multilib: "both",
     system_shared_libs: [],
-    sanitize: {
-        never: true,
-    },
     arch: {
         arm64: {
             srcs: ["arm64/lib/crtobj.o"],
@@ -445,6 +437,7 @@ myinclude/Test.h -> include/myinclude/Test.h
 // handling is tested with the sanitize clauses (but note there's a lot of
 // built-in logic in sanitize.go that can affect those flags).
 func TestSnapshotWithCcSharedLibraryCommonProperties(t *testing.T) {
+	// Remove sanitizer on Android 13 Cuttlefish
 	result := testSdkWithCc(t, `
 		sdk {
 			name: "mysdk",
@@ -458,17 +451,9 @@ func TestSnapshotWithCcSharedLibraryCommonProperties(t *testing.T) {
 				"aidl/foo/bar/Test.aidl",
 			],
 			export_include_dirs: ["myinclude"],
-			sanitize: {
-				fuzzer: false,
-				integer_overflow: true,
-				diag: { undefined: false },
-			},
 			arch: {
 				arm64: {
 					export_system_include_dirs: ["arm64/include"],
-					sanitize: {
-						integer_overflow: false,
-					},
 				},
 			},
 			stl: "none",
@@ -487,25 +472,13 @@ cc_prebuilt_library_shared {
     stl: "none",
     compile_multilib: "both",
     export_include_dirs: ["include/myinclude"],
-    sanitize: {
-        fuzzer: false,
-        diag: {
-            undefined: false,
-        },
-    },
     arch: {
         arm64: {
             srcs: ["arm64/lib/mynativelib.so"],
             export_system_include_dirs: ["arm64/include/arm64/include"],
-            sanitize: {
-                integer_overflow: false,
-            },
         },
         arm: {
             srcs: ["arm/lib/mynativelib.so"],
-            sanitize: {
-                integer_overflow: true,
-            },
         },
     },
 }
@@ -2705,6 +2678,8 @@ sdk_snapshot {
 	)
 }
 
+// Remove sanitizer on Android 13 Cuttlefish
+/*
 func TestNoSanitizerMembers(t *testing.T) {
 	result := testSdkWithCc(t, `
 		sdk {
@@ -2755,3 +2730,4 @@ arm64/include/Arm64Test.h -> arm64/include/arm64/include/Arm64Test.h
 `),
 	)
 }
+*/

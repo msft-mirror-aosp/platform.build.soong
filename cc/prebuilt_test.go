@@ -320,6 +320,8 @@ func TestPrebuiltSymlinkedHostBinary(t *testing.T) {
 	assertString(t, libfooDep.String(), "out/soong/.intermediates/libfoo/linux_glibc_x86_64_shared/libfoo.so")
 }
 
+// Disable sanitizer on Android 13 Cuttlefish
+/*
 func TestPrebuiltLibrarySanitized(t *testing.T) {
 	bp := `cc_prebuilt_library {
 	name: "libtest",
@@ -380,6 +382,7 @@ func TestPrebuiltLibrarySanitized(t *testing.T) {
 	static2 = ctx.ModuleForTests("libtest_static", "android_arm64_armv8-a_static_hwasan").Module().(*Module)
 	assertString(t, static2.OutputFile().Path().Base(), "libf.hwasan.a")
 }
+*/
 
 func TestPrebuiltLibrarySharedWithBazelWithoutToc(t *testing.T) {
 	const bp = `

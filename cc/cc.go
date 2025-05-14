@@ -1136,7 +1136,8 @@ func (c *Module) Init() android.Module {
 		c.AddProperties(c.stl.props()...)
 	}
 	if c.sanitize != nil {
-		c.AddProperties(c.sanitize.props()...)
+		// Disable sanitizer on Android 13 Cuttlefish
+		//c.AddProperties(c.sanitize.props()...)
 	}
 	if c.coverage != nil {
 		c.AddProperties(c.coverage.props()...)
@@ -1405,8 +1406,10 @@ func (c *Module) XrefCcFiles() android.Paths {
 }
 
 func (c *Module) isCfiAssemblySupportEnabled() bool {
-	return c.sanitize != nil &&
-		Bool(c.sanitize.Properties.Sanitize.Config.Cfi_assembly_support)
+	// Disable sanitizer on Android 13 Cuttlefish
+	//return c.sanitize != nil &&
+	//	Bool(c.sanitize.Properties.Sanitize.Config.Cfi_assembly_support)
+	return false
 }
 
 func (c *Module) InstallInRoot() bool {
@@ -1852,7 +1855,8 @@ func (c *Module) GenerateAndroidBuildActions(actx android.ModuleContext) {
 		flags = c.stl.flags(ctx, flags)
 	}
 	if c.sanitize != nil {
-		flags = c.sanitize.flags(ctx, flags)
+		// Disable sanitizer on Android 13 Cuttlefish
+		//flags = c.sanitize.flags(ctx, flags)
 	}
 	if c.coverage != nil {
 		flags, deps = c.coverage.flags(ctx, flags, deps)
@@ -3160,7 +3164,9 @@ func (c *Module) InstallInSanitizerDir() bool {
 		return false
 	}
 	if c.sanitize != nil && c.sanitize.inSanitizerDir() {
-		return true
+		// Disable sanitizer on Android 13 Cuttlefish
+		//return true
+		return false
 	}
 	return c.installer.inSanitizerDir()
 }

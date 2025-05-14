@@ -1200,9 +1200,10 @@ var versioningMacroNamesListMutex sync.Mutex
 
 func (library *libraryDecorator) linkerInit(ctx BaseModuleContext) {
 	location := InstallInSystem
-	if library.baseLinker.sanitize.inSanitizerDir() {
-		location = InstallInSanitizerDir
-	}
+	// Disable sanitizer on Android 13 Cuttlefish
+	//if library.baseLinker.sanitize.inSanitizerDir() {
+	//	location = InstallInSanitizerDir
+	//}
 	library.baseInstaller.location = location
 	library.baseLinker.linkerInit(ctx)
 	// Let baseLinker know whether this variant is for stubs or not, so that
