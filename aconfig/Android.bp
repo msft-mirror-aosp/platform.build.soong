@@ -31,9 +31,6 @@ bootstrap_go_package {
     pluginFor: ["soong_build"],
 }
 
-// All FlaggedApi flags associated with platform API.
-// By default this uses the platform APIs associated with android.jar
-// but other verticals/platforms can override via soong config setting.
 all_aconfig_declarations {
     name: "all_aconfig_declarations",
     visibility: [
