@@ -14,10 +14,13 @@
 
 package android
 
-import "path/filepath"
+import (
+	"github.com/google/blueprint/proptools"
+)
 
 func init() {
 	RegisterModuleType("prebuilt_build_tool", NewPrebuiltBuildTool)
+	RegisterModuleType("prebuilt_build_tool_defaults", PrebuiltBuildToolsDefaultsFactory)
 }
 
 type prebuiltBuildToolProperties struct {
@@ -30,9 +33,13 @@ type prebuiltBuildToolProperties struct {
 	// Create a make variable with the specified name that contains the path to
 	// this prebuilt built tool, relative to the root of the source tree.
 	Export_to_make_var *string
+
+	// Whether to install the binary in $(HOST_OUT)/bin or not. Defaults to false.
+	Installable *bool
 }
 
 type prebuiltBuildTool struct {
+	DefaultableModuleBase
 	ModuleBase
 	prebuilt Prebuilt
 
@@ -56,29 +63,31 @@ func (t *prebuiltBuildTool) DepsMutator(ctx BottomUpMutatorContext) {
 }
 
 func (t *prebuiltBuildTool) GenerateAndroidBuildActions(ctx ModuleContext) {
+	if proptools.Bool(t.properties.Installable) && len(t.properties.Deps) > 0 {
+		ctx.ModuleErrorf("installable and deps properties cannot be used together")
+	}
+
 	sourcePath := t.prebuilt.SingleSourcePath(ctx)
 	installedPath := PathForModuleOut(ctx, t.BaseModuleName())
 	deps := PathsForModuleSrc(ctx, t.properties.Deps)
 
-	var fromPath = sourcePath.String()
-	if !filepath.IsAbs(fromPath) {
-		fromPath = "$$PWD/" + fromPath
-	}
-
 	ctx.Build(pctx, BuildParams{
-		Rule:      Symlink,
+		Rule:      CpExecutableWithBashBootstrap,
 		Output:    installedPath,
 		Input:     sourcePath,
 		Implicits: deps,
-		Args: map[string]string{
-			"fromPath": fromPath,
-		},
 	})
 
-	packagingDir := PathForModuleInstall(ctx, t.BaseModuleName())
-	ctx.PackageFile(packagingDir, sourcePath.String(), sourcePath)
-	for _, dep := range deps {
-		ctx.PackageFile(packagingDir, dep.String(), dep)
+	if proptools.BoolDefault(t.properties.Installable, false) {
+		installDir := PathForModuleInstall(ctx, "bin")
+		ctx.InstallExecutableWithBootstrap(installDir, installedPath.Base(), installedPath)
+
+	} else {
+		packagingDir := PathForModuleInstall(ctx, t.BaseModuleName())
+		ctx.PackageFile(packagingDir, sourcePath.String(), sourcePath)
+		for _, dep := range deps {
+			ctx.PackageFile(packagingDir, dep.String(), dep)
+		}
 	}
 
 	t.toolPath = OptionalPathForPath(installedPath)
@@ -105,5 +114,21 @@ func NewPrebuiltBuildTool() Module {
 	module.AddProperties(&module.properties)
 	InitSingleSourcePrebuiltModule(module, &module.properties, "Src")
 	InitAndroidArchModule(module, HostSupportedNoCross, MultilibFirst)
+	InitDefaultableModule(module)
+
+	return module
+}
+
+type PrebuiltBuildToolDefaults struct {
+	ModuleBase
+	DefaultsModuleBase
+}
+
+func PrebuiltBuildToolsDefaultsFactory() Module {
+	module := &PrebuiltBuildToolDefaults{}
+	module.AddProperties(
+		&prebuiltBuildToolProperties{},
+	)
+	InitDefaultsModule(module)
 	return module
 }

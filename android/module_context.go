@@ -120,6 +120,18 @@ type ModuleContext interface {
 	// dependency tags for which IsInstallDepNeeded returns true.
 	InstallExecutable(installPath InstallPath, name string, srcPath Path, deps ...InstallPath) InstallPath
 
+	// InstallExecutableWithBootstrap creates a rule to copy srcPath to name in the
+	// installPath directory, with the given additional dependencies. The file is
+	// marked executable after copying. It is functionally the same as [InstallExecutable], but
+	// the rule uses the toybox commands from source rather than the ones installed in $HOST_OUT
+	// as the command deps. This is mostly used to install the toybox commands themselves.
+	//
+	// The installed file can be accessed by InstallFilesInfo.InstallFiles, and the PackagingSpec
+	// for the installed file can be accessed by InstallFilesInfo.PackagingSpecs on this module
+	// or by InstallFilesInfo.TransitivePackagingSpecs on modules that depend on this module through
+	// dependency tags for which IsInstallDepNeeded returns true.
+	InstallExecutableWithBootstrap(installPath InstallPath, name string, srcPath Path, deps ...InstallPath) InstallPath
+
 	// InstallFile creates a rule to copy srcPath to name in the installPath directory,
 	// with the given additional dependencies.
 	//
@@ -596,22 +608,27 @@ func (m *moduleContext) requiresFullInstall() bool {
 
 func (m *moduleContext) InstallFile(installPath InstallPath, name string, srcPath Path,
 	deps ...InstallPath) InstallPath {
-	return m.installFile(installPath, name, srcPath, deps, false, true, true, nil)
+	return m.installFile(installPath, name, srcPath, deps, false, true, true, false, nil)
 }
 
 func (m *moduleContext) InstallFileWithoutCheckbuild(installPath InstallPath, name string, srcPath Path,
 	deps ...InstallPath) InstallPath {
-	return m.installFile(installPath, name, srcPath, deps, false, true, false, nil)
+	return m.installFile(installPath, name, srcPath, deps, false, true, false, false, nil)
 }
 
 func (m *moduleContext) InstallExecutable(installPath InstallPath, name string, srcPath Path,
 	deps ...InstallPath) InstallPath {
-	return m.installFile(installPath, name, srcPath, deps, true, true, true, nil)
+	return m.installFile(installPath, name, srcPath, deps, true, true, true, false, nil)
+}
+
+func (m *moduleContext) InstallExecutableWithBootstrap(installPath InstallPath, name string, srcPath Path,
+	deps ...InstallPath) InstallPath {
+	return m.installFile(installPath, name, srcPath, deps, true, true, true, true, nil)
 }
 
 func (m *moduleContext) InstallFileWithExtraFilesZip(installPath InstallPath, name string, srcPath Path,
 	extraZip Path, deps ...InstallPath) InstallPath {
-	return m.installFile(installPath, name, srcPath, deps, false, true, true, &extraFilesZip{
+	return m.installFile(installPath, name, srcPath, deps, false, true, true, false, &extraFilesZip{
 		zip: extraZip,
 		dir: installPath,
 	})
@@ -667,8 +684,20 @@ func (m *moduleContext) packageFile(fullInstallPath InstallPath, srcPath Path, e
 	return spec
 }
 
+type ruleKey struct {
+	executable bool
+	bootstrap  bool
+}
+
+var ruleMap = map[ruleKey]blueprint.Rule{
+	{executable: true, bootstrap: true}:   CpExecutableWithBashBootstrap,
+	{executable: true, bootstrap: false}:  CpExecutableWithBash,
+	{executable: false, bootstrap: true}:  CpWithBashBootstrap,
+	{executable: false, bootstrap: false}: CpWithBash,
+}
+
 func (m *moduleContext) installFile(installPath InstallPath, name string, srcPath Path, deps []InstallPath,
-	executable bool, hooks bool, checkbuild bool, extraZip *extraFilesZip) InstallPath {
+	executable bool, hooks bool, checkbuild bool, bootstrap bool, extraZip *extraFilesZip) InstallPath {
 	if _, ok := srcPath.(InstallPath); ok {
 		m.ModuleErrorf("Src path cannot be another installed file. Please use a path from source or intermediates instead.")
 	}
@@ -710,10 +739,7 @@ func (m *moduleContext) installFile(installPath InstallPath, name string, srcPat
 			extraFiles:    extraZip,
 		})
 		if !m.Config().KatiEnabled() {
-			rule := CpWithBash
-			if executable {
-				rule = CpExecutableWithBash
-			}
+			rule := ruleMap[ruleKey{executable: executable, bootstrap: bootstrap}]
 
 			extraCmds := ""
 			if extraZip != nil {
@@ -881,7 +907,7 @@ func (m *moduleContext) InstallTestData(installPath InstallPath, data []DataPath
 	ret := make(InstallPaths, 0, len(data))
 	for _, d := range data {
 		relPath := d.ToRelativeInstallPath()
-		installed := m.installFile(installPath, relPath, d.SrcPath, nil, false, false, true, nil)
+		installed := m.installFile(installPath, relPath, d.SrcPath, nil, false, false, true, false, nil)
 		ret = append(ret, installed)
 	}
 
